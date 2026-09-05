@@ -1,0 +1,13 @@
+[
+  {
+    "blocks": [
+      {"kind": "text", "text": "Let me check that with the echo tool."},
+      {"kind": "tool_call", "call": {"call_id": "call_1", "name": "echo", "arguments": "{\"text\":\"the timeout is 30s\"}"}}
+    ]
+  },
+  {
+    "blocks": [
+      {"kind": "text", "text": "The tool returned: the timeout is 30s."}
+    ]
+  }
+]
