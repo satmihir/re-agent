@@ -3,6 +3,7 @@ package reagent
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,9 +33,92 @@ func TestMain_UsageErrors(t *testing.T) {
 	cases := map[string][]string{
 		"no subcommand": {},
 		"no prompt":     {"run", "--scripted", "x.json"},
-		"no script":     {"run", "a prompt"},
 		"missing file":  {"run", "--scripted", "absent.json", "a prompt"},
 		"zero steps":    {"run", "--scripted", "x.json", "--max-steps", "0", "a prompt"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Main(context.Background(), args, &stdout, &stderr); code != exitUsage {
+				t.Fatalf("exit %d, want %d", code, exitUsage)
+			}
+		})
+	}
+}
+
+// The preview must be the request itself, not a description of it, so it is
+// compared byte for byte against the encoder the live path will use (v0 §6.1).
+func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("REAGENT_MODEL", "")
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run",
+		"--workspace", root, "--show-context", "Where is the timeout set?"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewRegistry(NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := PreviewRequest(Config{
+		Model: resolveModel(""), Registry: registry, WorkspacePath: ws.Root(),
+		MaxSteps: 20, MaxToolCalls: 40,
+	}, "Where is the timeout set?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.TrimSuffix(stdout.Bytes(), []byte("\n")); !bytes.Equal(got, want) {
+		t.Fatalf("preview differs from the encoder output\ngot  %s\nwant %s", got, want)
+	}
+}
+
+// A preview contacts nothing and needs no credentials.
+func TestMain_ShowContextNeedsNoCredentials(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "secret-key-value")
+	var stdout, stderr bytes.Buffer
+
+	if code := Main(context.Background(), []string{"run",
+		"--workspace", t.TempDir(), "--show-context", "a task"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "secret-key-value") {
+		t.Fatal("the preview leaked the API key")
+	}
+	if strings.Contains(stdout.String(), "Authorization") {
+		t.Fatal("the preview carries a transport header")
+	}
+}
+
+func TestMain_ShowContextReportsAnOversizedRequest(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run",
+		"--workspace", t.TempDir(), "--show-context",
+		strings.Repeat("x ", MaxRequestBytes/2)}, &stdout, &stderr)
+
+	if code != exitRunFail {
+		t.Fatalf("exit %d, want %d", code, exitRunFail)
+	}
+	if !strings.Contains(stderr.String(), "over the") || stdout.Len() != 0 {
+		t.Fatalf("stdout %d bytes, stderr: %s", stdout.Len(), stderr.String())
+	}
+}
+
+func TestMain_ConflictingAndMissingModes(t *testing.T) {
+	cases := map[string][]string{
+		"script with model":   {"run", "--scripted", "x.json", "--model", "m", "a task"},
+		"script with preview": {"run", "--scripted", "x.json", "--show-context", "a task"},
+		"no model source":     {"run", "a task"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {

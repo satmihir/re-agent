@@ -21,7 +21,9 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("reagent run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	workspace := fs.String("workspace", ".", "directory the read tools may see")
+	modelName := fs.String("model", "", "model to request; defaults to REAGENT_MODEL, then "+DefaultModel)
 	script := fs.String("scripted", "", "replay model responses from a JSON script instead of calling a provider")
+	showContext := fs.Bool("show-context", false, "print the request the first step would send, then exit")
 	traceFile := fs.String("trace-file", "", "write the run's JSONL trace here instead of the default cache location")
 	maxSteps := fs.Int("max-steps", 20, "maximum model requests in one run")
 	maxToolCalls := fs.Int("max-tool-calls", 40, "maximum accepted tool calls in one run")
@@ -37,26 +39,18 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	switch {
 	case prompt == "":
-		fmt.Fprintln(stderr, "error: a prompt is required")
-		return exitUsage
-	case *script == "":
-		// The live adapter arrives in V0-C; until then a run needs a script.
-		fmt.Fprintln(stderr, "error: --scripted is required until the live model adapter exists")
-		return exitUsage
+		return usage(stderr, "a prompt is required")
 	case *maxSteps < 1 || *maxToolCalls < 1:
-		fmt.Fprintln(stderr, "error: --max-steps and --max-tool-calls must be positive")
-		return exitUsage
+		return usage(stderr, "--max-steps and --max-tool-calls must be positive")
+	case *script != "" && *modelName != "":
+		return usage(stderr, "--scripted replays recorded responses, so it takes no --model")
+	case *script != "" && *showContext:
+		return usage(stderr, "--show-context previews a live request, so it cannot be combined with --scripted")
 	}
 
-	model, err := LoadScript(*script)
-	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return exitUsage
-	}
 	ws, err := OpenWorkspace(*workspace)
 	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return exitUsage
+		return usage(stderr, err.Error())
 	}
 	tools := []Tool{NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws)}
 	if *script != "" {
@@ -66,27 +60,57 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	registry, err := NewRegistry(tools...)
 	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return exitUsage
+		return usage(stderr, err.Error())
+	}
+
+	cfg := Config{
+		Model: resolveModel(*modelName), Registry: registry, WorkspacePath: ws.Root(),
+		MaxSteps: *maxSteps, MaxToolCalls: *maxToolCalls,
+	}
+	if *script != "" {
+		cfg.Model = "scripted"
+	}
+
+	// The preview is built before any live dependency exists, which is why it
+	// needs no credentials and creates no trace (v0 §6.1).
+	if *showContext {
+		body, err := PreviewRequest(cfg, prompt)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return exitRunFail
+		}
+		if _, err := stdout.Write(append(body, '\n')); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return exitRunFail
+		}
+		return exitOK
+	}
+	if *script == "" {
+		return usage(stderr, "the live model adapter arrives in V0-C2; use --scripted or --show-context")
+	}
+
+	model, err := LoadScript(*script)
+	if err != nil {
+		return usage(stderr, err.Error())
 	}
 
 	sessionID, runID := NewID(), NewID()
 	tracePath := *traceFile
 	if tracePath == "" {
 		if tracePath, err = DefaultTracePath(runID); err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return exitUsage
+			return usage(stderr, err.Error())
 		}
 	}
 	trace := OpenTrace(tracePath, sessionID, runID, stderr)
 	defer trace.Close()
 
-	cfg := Config{
-		Model: model.Name(), Registry: registry, WorkspacePath: ws.Root(),
-		MaxSteps: *maxSteps, MaxToolCalls: *maxToolCalls,
-	}
 	result := NewRun(cfg, model, trace, sessionID, runID, stderr).Execute(ctx, prompt)
 	return report(result, stdout, stderr)
+}
+
+func usage(stderr io.Writer, message string) int {
+	fmt.Fprintf(stderr, "error: %s\n", message)
+	return exitUsage
 }
 
 // report prints the reply, then a summary that never dresses a failure up as an
