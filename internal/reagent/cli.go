@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -85,24 +86,30 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return exitOK
 	}
-	if *script == "" {
-		return usage(stderr, "the live model adapter arrives in V0-C2; use --scripted or --show-context")
-	}
-
-	model, err := LoadScript(*script)
-	if err != nil {
-		return usage(stderr, err.Error())
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if *script == "" && apiKey == "" {
+		return usage(stderr, "OPENAI_API_KEY is not set; use --scripted or --show-context to work offline")
 	}
 
 	sessionID, runID := NewID(), NewID()
 	tracePath := *traceFile
 	if tracePath == "" {
+		var err error
 		if tracePath, err = DefaultTracePath(runID); err != nil {
 			return usage(stderr, err.Error())
 		}
 	}
 	trace := OpenTrace(tracePath, sessionID, runID, stderr)
 	defer trace.Close()
+
+	// The adapter holds the trace so every attempt's exact bytes are recorded
+	// without transport detail leaking into the transcript (v1 §5.1).
+	var model Model = NewOpenAIModel(apiKey, "", NewHTTPClient(), trace)
+	if *script != "" {
+		if model, err = LoadScript(*script); err != nil {
+			return usage(stderr, err.Error())
+		}
+	}
 
 	result := NewRun(cfg, model, trace, sessionID, runID, stderr).Execute(ctx, prompt)
 	return report(result, stdout, stderr)

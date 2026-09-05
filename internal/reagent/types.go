@@ -117,10 +117,13 @@ func (u *Usage) Add(o Usage) {
 }
 
 // ModelError is a typed failure from a Model. Status selects the run's terminal
-// status, so the loop never has to guess why generation failed.
+// status, so the loop never has to guess why generation failed. Usage carries
+// whatever the provider reported, because a rejected response can still have
+// cost tokens (v1 §9.6).
 type ModelError struct {
 	Status  RunStatus
 	Message string
+	Usage   Usage
 }
 
 func (e *ModelError) Error() string { return e.Message }

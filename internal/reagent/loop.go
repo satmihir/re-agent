@@ -81,8 +81,12 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 
 		resp, err := r.model.Generate(ctx, req)
 		if err != nil {
+			// A failed request can still have cost tokens, so account what the
+			// provider reported before stopping.
+			status, usage := classifyModelError(err)
+			r.usage.Add(usage)
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": err.Error()})
-			return r.finish(statusForModelError(err), err.Error(), "")
+			return r.finish(status, err.Error(), "")
 		}
 		if reason := r.validateResponse(resp); reason != "" {
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": reason, "response": resp})
@@ -238,12 +242,15 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 	return result
 }
 
-func statusForModelError(err error) RunStatus {
+// classifyModelError reads the terminal status and any reported usage from a
+// typed model failure. An untyped error is a provider failure with no
+// accounting, which makes the run's usage total unknown.
+func classifyModelError(err error) (RunStatus, Usage) {
 	var modelErr *ModelError
 	if errors.As(err, &modelErr) {
-		return modelErr.Status
+		return modelErr.Status, modelErr.Usage
 	}
-	return StatusProviderError
+	return StatusProviderError, Usage{}
 }
 
 // toolCalls collects the calls of one response in output order.
