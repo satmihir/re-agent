@@ -20,6 +20,7 @@ const (
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("reagent run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	workspace := fs.String("workspace", ".", "directory the read tools may see")
 	script := fs.String("scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	traceFile := fs.String("trace-file", "", "write the run's JSONL trace here instead of the default cache location")
 	maxSteps := fs.Int("max-steps", 20, "maximum model requests in one run")
@@ -52,7 +53,18 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return exitUsage
 	}
-	registry, err := NewRegistry(NewEchoTool())
+	ws, err := OpenWorkspace(*workspace)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return exitUsage
+	}
+	tools := []Tool{NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws)}
+	if *script != "" {
+		// The fake tool rides along with a script so orchestration can be
+		// exercised without touching the workspace (v0 §10).
+		tools = append(tools, NewEchoTool())
+	}
+	registry, err := NewRegistry(tools...)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return exitUsage
@@ -69,7 +81,10 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	trace := OpenTrace(tracePath, sessionID, runID, stderr)
 	defer trace.Close()
 
-	cfg := Config{Model: model.Name(), Registry: registry, MaxSteps: *maxSteps, MaxToolCalls: *maxToolCalls}
+	cfg := Config{
+		Model: model.Name(), Registry: registry, WorkspacePath: ws.Root(),
+		MaxSteps: *maxSteps, MaxToolCalls: *maxToolCalls,
+	}
 	result := NewRun(cfg, model, trace, sessionID, runID, stderr).Execute(ctx, prompt)
 	return report(result, stdout, stderr)
 }

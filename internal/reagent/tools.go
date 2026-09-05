@@ -67,6 +67,26 @@ func decodeArgs(args json.RawMessage, dst any) *ToolOutcome {
 	return nil
 }
 
+// optionalInt reads an optional count. An omitted field takes def; an explicit
+// null is rejected, because v0 tool arguments do not use null to mean absence
+// (v0 §5).
+func optionalInt(raw json.RawMessage, field string, def, least int) (int, *ToolOutcome) {
+	if len(raw) == 0 {
+		return def, nil
+	}
+	if string(raw) == "null" {
+		return 0, failPtr("invalid_arguments", field+" must be omitted rather than null")
+	}
+	var n int
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return 0, failPtr("invalid_arguments", field+" must be an integer")
+	}
+	if n < least {
+		return 0, failPtr("invalid_arguments", fmt.Sprintf("%s must be at least %d", field, least))
+	}
+	return n, nil
+}
+
 // okOutcome builds a successful outcome. A marshalling failure is an
 // implementation defect, not something the model can act on, so it is an error.
 func okOutcome(data any) (ToolOutcome, error) {

@@ -2,6 +2,8 @@ package reagent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -367,4 +369,42 @@ type brokenModel struct{}
 func (brokenModel) Name() string { return "broken" }
 func (brokenModel) Generate(context.Context, ModelRequest) (ModelResponse, error) {
 	return ModelResponse{}, errors.New("connection reset")
+}
+
+// The read tools working through the real loop: a search picks the file, a
+// ranged read produces the evidence, and the digest in that observation
+// describes the bytes actually on disk.
+func TestLoop_SearchThenReadWithRealTools(t *testing.T) {
+	content := "package main\n\nconst timeout = 30\n"
+	ws := testWorkspace(t, map[string]string{"main.go": content})
+	registry, err := NewRegistry(NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Model: "test", Registry: registry, WorkspacePath: ws.Root(), MaxSteps: 20, MaxToolCalls: 40}
+
+	run, result := runScript(t, cfg,
+		turn(callBlock("call_1", "search_text", `{"path":".","query":"timeout"}`)),
+		turn(callBlock("call_2", "read_file", `{"path":"main.go","start_line":3,"max_lines":1}`)),
+		turn(textBlock("main.go:3 sets the timeout to 30.")))
+
+	if result.Status != StatusCompleted || result.ToolCalls != 2 {
+		t.Fatalf("got %s after %d calls: %s", result.Status, result.ToolCalls, result.Reason)
+	}
+
+	var found searchTextResult
+	data(t, results(run)[0].Outcome, &found)
+	if matchLocations(found.Matches) != "main.go:3" {
+		t.Fatalf("search found %q", matchLocations(found.Matches))
+	}
+
+	var read readFileResult
+	data(t, results(run)[1].Outcome, &read)
+	sum := sha256.Sum256([]byte(content))
+	if read.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatal("the digest in the observation does not describe the file on disk")
+	}
+	if read.Lines[0].Text != "const timeout = 30" {
+		t.Fatalf("got %+v", read.Lines)
+	}
 }

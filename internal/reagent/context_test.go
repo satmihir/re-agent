@@ -7,6 +7,7 @@ import (
 
 func TestBuildContext_IsPureAndOrdered(t *testing.T) {
 	cfg := testConfig(t, NewEchoTool(), countingTool{runs: new(int)})
+	cfg.WorkspacePath = "/tmp/example"
 	history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}}
 	scope := RequestScope{SessionID: "s", RunID: "r", Step: 1}
 
@@ -18,6 +19,9 @@ func TestBuildContext_IsPureAndOrdered(t *testing.T) {
 	}
 	if len(req.Tools) != 2 || req.Tools[0].Name != "counter" || req.Tools[1].Name != "echo" {
 		t.Fatalf("tools are not sorted by name: %+v", req.Tools)
+	}
+	if !strings.Contains(req.Instructions, "Workspace: "+cfg.WorkspacePath) {
+		t.Fatal("the runtime section does not name the workspace")
 	}
 	if req.Scope != scope || req.Model != cfg.Model {
 		t.Fatalf("got %+v", req)
