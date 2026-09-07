@@ -31,7 +31,7 @@ func testWorkspace(t *testing.T, files map[string]string) *Workspace {
 }
 
 // exec runs a tool and fails the test on an unexpected implementation error.
-func exec(t *testing.T, tool Tool, args string) ToolOutcome {
+func runTool(t *testing.T, tool Tool, args string) ToolOutcome {
 	t.Helper()
 	outcome, err := tool.Execute(context.Background(), json.RawMessage(args))
 	if err != nil {

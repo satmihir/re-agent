@@ -221,6 +221,17 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			return StatusToolInternalError, err.Error()
 		}
 		r.recordResult(call, outcome)
+
+		// Once an effect is uncertain, no further work can be reasoned about:
+		// the run stops rather than trying again or reporting a clean state
+		// (v0 §9). This is v0's one uncertain-effect rule.
+		if outcome.Effect == EffectUnknown {
+			r.recordNotExecuted(calls[i+1:], "run stopped")
+			if ctx.Err() != nil {
+				return StatusCancelled, "cancelled while " + call.Name + " was running; its effects are unknown"
+			}
+			return StatusEffectUnknown, call.Name + " left uncertain effects: " + outcome.Message
+		}
 	}
 	return "", ""
 }

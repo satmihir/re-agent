@@ -22,7 +22,7 @@ func TestListFiles_SortedAndPaginated(t *testing.T) {
 	tool := NewListFilesTool(ws)
 
 	var first listFilesResult
-	data(t, exec(t, tool, `{"path":".","limit":2}`), &first)
+	data(t, runTool(t, tool, `{"path":".","limit":2}`), &first)
 	if got := listedNames(first.Entries); got != "a.txt,b.txt" {
 		t.Fatalf("got %q, want the first two names in order", got)
 	}
@@ -31,7 +31,7 @@ func TestListFiles_SortedAndPaginated(t *testing.T) {
 	}
 
 	var second listFilesResult
-	data(t, exec(t, tool, `{"path":".","offset":2}`), &second)
+	data(t, runTool(t, tool, `{"path":".","offset":2}`), &second)
 	if got := listedNames(second.Entries); got != "c.txt,sub" {
 		t.Fatalf("got %q", got)
 	}
@@ -46,7 +46,7 @@ func TestListFiles_SortedAndPaginated(t *testing.T) {
 func TestListFiles_ExcludesGitAndCountsIt(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x", ".git/config": "x"})
 	var got listFilesResult
-	data(t, exec(t, NewListFilesTool(ws), `{"path":"."}`), &got)
+	data(t, runTool(t, NewListFilesTool(ws), `{"path":"."}`), &got)
 
 	if listedNames(got.Entries) != "a.txt" || got.SkippedEntries != 1 {
 		t.Fatalf("got %+v", got)
@@ -55,7 +55,7 @@ func TestListFiles_ExcludesGitAndCountsIt(t *testing.T) {
 
 func TestListFiles_OffsetBeyondEndIsAnEmptyPage(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
-	outcome := exec(t, NewListFilesTool(ws), `{"path":".","offset":50}`)
+	outcome := runTool(t, NewListFilesTool(ws), `{"path":".","offset":50}`)
 
 	var got listFilesResult
 	data(t, outcome, &got)
@@ -75,7 +75,7 @@ func TestListFiles_Errors(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := exec(t, NewListFilesTool(ws), c.args); got.OK || got.Code != c.code {
+			if got := runTool(t, NewListFilesTool(ws), c.args); got.OK || got.Code != c.code {
 				t.Fatalf("got %s (%s), want %s", got.Code, got.Message, c.code)
 			}
 		})
@@ -88,7 +88,7 @@ func TestListFiles_ReportsSymlinkKind(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	var got listFilesResult
-	data(t, exec(t, NewListFilesTool(ws), `{"path":"."}`), &got)
+	data(t, runTool(t, NewListFilesTool(ws), `{"path":"."}`), &got)
 
 	if len(got.Entries) != 2 || got.Entries[1].Kind != "symlink" {
 		t.Fatalf("got %+v", got.Entries)

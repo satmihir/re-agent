@@ -12,7 +12,7 @@ const fiveLines = "one\ntwo\nthree\nfour\nfive\n"
 
 func TestReadFile_RangeCarriesDigestAndContinuation(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": fiveLines})
-	outcome := exec(t, NewReadFileTool(ws), `{"path":"a.txt","start_line":2,"max_lines":2}`)
+	outcome := runTool(t, NewReadFileTool(ws), `{"path":"a.txt","start_line":2,"max_lines":2}`)
 
 	var got readFileResult
 	data(t, outcome, &got)
@@ -34,7 +34,7 @@ func TestReadFile_RangeCarriesDigestAndContinuation(t *testing.T) {
 
 func TestReadFile_WholeFileReachesEOF(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": fiveLines})
-	outcome := exec(t, NewReadFileTool(ws), `{"path":"a.txt"}`)
+	outcome := runTool(t, NewReadFileTool(ws), `{"path":"a.txt"}`)
 
 	var got readFileResult
 	data(t, outcome, &got)
@@ -47,7 +47,7 @@ func TestReadFile_WholeFileReachesEOF(t *testing.T) {
 func TestReadFile_EmptyFileIsNotOutOfRange(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"empty.txt": ""})
 	var got readFileResult
-	data(t, exec(t, NewReadFileTool(ws), `{"path":"empty.txt"}`), &got)
+	data(t, runTool(t, NewReadFileTool(ws), `{"path":"empty.txt"}`), &got)
 
 	if got.TotalLines != 0 || len(got.Lines) != 0 || !got.EOF {
 		t.Fatalf("got %+v", got)
@@ -58,7 +58,7 @@ func TestReadFile_CRLFIsStrippedForDisplayOnly(t *testing.T) {
 	content := "a\r\nb"
 	ws := testWorkspace(t, map[string]string{"a.txt": content})
 	var got readFileResult
-	data(t, exec(t, NewReadFileTool(ws), `{"path":"a.txt"}`), &got)
+	data(t, runTool(t, NewReadFileTool(ws), `{"path":"a.txt"}`), &got)
 
 	if got.Lines[0].Text != "a" || got.Lines[1].Text != "b" {
 		t.Fatalf("got %+v", got.Lines)
@@ -88,7 +88,7 @@ func TestReadFile_Errors(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := exec(t, NewReadFileTool(ws), c.args); got.OK || got.Code != c.code {
+			if got := runTool(t, NewReadFileTool(ws), c.args); got.OK || got.Code != c.code {
 				t.Fatalf("got %s (%s), want %s", got.Code, got.Message, c.code)
 			}
 		})
@@ -99,7 +99,7 @@ func TestReadFile_Errors(t *testing.T) {
 func TestReadFile_TrimsToTheResultBudget(t *testing.T) {
 	line := strings.Repeat("x", 1000) + "\n"
 	ws := testWorkspace(t, map[string]string{"big.txt": strings.Repeat(line, 100)})
-	outcome := exec(t, NewReadFileTool(ws), `{"path":"big.txt","max_lines":100}`)
+	outcome := runTool(t, NewReadFileTool(ws), `{"path":"big.txt","max_lines":100}`)
 
 	var got readFileResult
 	data(t, outcome, &got)
@@ -121,14 +121,14 @@ func TestReadFile_TrimsToTheResultBudget(t *testing.T) {
 // advance (v0 §4).
 func TestReadFile_SingleLineTooLong(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"long.txt": strings.Repeat("x", MaxResultBytes+1)})
-	if got := exec(t, NewReadFileTool(ws), `{"path":"long.txt"}`); got.Code != "line_too_long" {
+	if got := runTool(t, NewReadFileTool(ws), `{"path":"long.txt"}`); got.Code != "line_too_long" {
 		t.Fatalf("got %s (%s)", got.Code, got.Message)
 	}
 }
 
 func TestReadFile_FileTooLarge(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"huge.txt": strings.Repeat("a\n", MaxFileBytes)})
-	got := exec(t, NewReadFileTool(ws), `{"path":"huge.txt"}`)
+	got := runTool(t, NewReadFileTool(ws), `{"path":"huge.txt"}`)
 	if got.Code != "file_too_large" || !strings.Contains(got.Message, fmt.Sprint(MaxFileBytes)) {
 		t.Fatalf("got %s (%s)", got.Code, got.Message)
 	}
@@ -142,7 +142,7 @@ func TestReadFile_MalformedArguments(t *testing.T) {
 		"wrong type":    `{"path":"a.txt","start_line":"2"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := exec(t, NewReadFileTool(ws), args); got.Code != "invalid_arguments" {
+			if got := runTool(t, NewReadFileTool(ws), args); got.Code != "invalid_arguments" {
 				t.Fatalf("got %s (%s)", got.Code, got.Message)
 			}
 		})

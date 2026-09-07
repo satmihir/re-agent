@@ -26,6 +26,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	script := fs.String("scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	showContext := fs.Bool("show-context", false, "print the request the first step would send, then exit")
 	allowWrite := fs.Bool("allow-write", false, "let the model change workspace files with edit_file")
+	allowExec := fs.Bool("allow-exec", false, "let the model run commands with exec; requires --allow-write")
 	traceFile := fs.String("trace-file", "", "write the run's JSONL trace here instead of the default cache location")
 	maxSteps := fs.Int("max-steps", 20, "maximum model requests in one run")
 	maxToolCalls := fs.Int("max-tool-calls", 40, "maximum accepted tool calls in one run")
@@ -48,6 +49,10 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return usage(stderr, "--scripted replays recorded responses, so it takes no --model")
 	case *script != "" && *showContext:
 		return usage(stderr, "--show-context previews a live request, so it cannot be combined with --scripted")
+	case *allowExec && !*allowWrite:
+		// Commands can write, so enabling them without acknowledging writes
+		// would understate the authority being granted (v1 §10.3).
+		return usage(stderr, "--allow-exec also permits writing, so it requires --allow-write")
 	}
 
 	ws, err := OpenWorkspace(*workspace)
@@ -56,15 +61,22 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	// Every tool this build has is offered to the registry; the mode decides
 	// which of them the model is told about (v1 §10.3).
-	tools := []Tool{NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewEditFileTool(ws)}
+	tools := []Tool{
+		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws),
+		NewEditFileTool(ws), NewExecTool(ws),
+	}
 	if *script != "" {
 		// The fake tool rides along with a script so orchestration can be
 		// exercised without touching the workspace (v0 §10).
 		tools = append(tools, NewEchoTool())
 	}
-	registry, err := NewRegistry(Mode{AllowWrite: *allowWrite}, tools...)
+	mode := Mode{AllowWrite: *allowWrite, AllowExec: *allowExec}
+	registry, err := NewRegistry(mode, tools...)
 	if err != nil {
 		return usage(stderr, err.Error())
+	}
+	if mode.AllowExec && !*showContext {
+		fmt.Fprintf(stderr, "exec mode: commands run as you, in %s, and can read, write, and use the network\n", ws.Root())
 	}
 
 	cfg := Config{

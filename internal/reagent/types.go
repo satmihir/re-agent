@@ -238,6 +238,7 @@ const (
 	StatusIncompleteResp    RunStatus = "incomplete_response"
 	StatusProtocolError     RunStatus = "protocol_error"
 	StatusToolInternalError RunStatus = "tool_internal_error"
+	StatusEffectUnknown     RunStatus = "effect_unknown"
 )
 
 // RunResult is the terminal outcome of one run.

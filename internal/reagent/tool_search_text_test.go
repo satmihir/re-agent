@@ -22,7 +22,7 @@ func TestSearchText_LiteralCaseSensitiveMatches(t *testing.T) {
 		"sub/b.txt": "no match\ntimeout again\n",
 	})
 	var got searchTextResult
-	data(t, exec(t, NewSearchTextTool(ws), `{"path":".","query":"timeout"}`), &got)
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"timeout"}`), &got)
 
 	// One match per matching line, in traversal order, case-sensitive.
 	if want := "a.txt:1 a.txt:3 sub/b.txt:2"; matchLocations(got.Matches) != want {
@@ -37,7 +37,7 @@ func TestSearchText_LiteralCaseSensitiveMatches(t *testing.T) {
 func TestSearchText_DoesNotInterpretRegularExpressions(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "a.c\nabc\n"})
 	var got searchTextResult
-	data(t, exec(t, NewSearchTextTool(ws), `{"path":".","query":"a.c"}`), &got)
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"a.c"}`), &got)
 
 	if matchLocations(got.Matches) != "a.txt:1" {
 		t.Fatalf("got %q", matchLocations(got.Matches))
@@ -47,7 +47,7 @@ func TestSearchText_DoesNotInterpretRegularExpressions(t *testing.T) {
 func TestSearchText_ZeroMatchesIsComplete(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "nothing here\n"})
 	var got searchTextResult
-	data(t, exec(t, NewSearchTextTool(ws), `{"path":".","query":"absent"}`), &got)
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"absent"}`), &got)
 
 	if len(got.Matches) != 0 || !got.Complete {
 		t.Fatalf("got %+v", got)
@@ -64,13 +64,13 @@ func TestSearchText_ExcludedDirectoryIsReachableAsARoot(t *testing.T) {
 	tool := NewSearchTextTool(ws)
 
 	var walked searchTextResult
-	data(t, exec(t, tool, `{"path":".","query":"target"}`), &walked)
+	data(t, runTool(t, tool, `{"path":".","query":"target"}`), &walked)
 	if matchLocations(walked.Matches) != "a.txt:1" {
 		t.Fatalf("walk reached an excluded directory: %q", matchLocations(walked.Matches))
 	}
 
 	var direct searchTextResult
-	data(t, exec(t, tool, `{"path":"node_modules","query":"target"}`), &direct)
+	data(t, runTool(t, tool, `{"path":"node_modules","query":"target"}`), &direct)
 	if matchLocations(direct.Matches) != "node_modules/dep/x.txt:1" {
 		t.Fatalf("got %q", matchLocations(direct.Matches))
 	}
@@ -78,7 +78,7 @@ func TestSearchText_ExcludedDirectoryIsReachableAsARoot(t *testing.T) {
 
 func TestSearchText_MaxResultsReportsIncompleteness(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "hit\nhit\nhit\n"})
-	outcome := exec(t, NewSearchTextTool(ws), `{"path":".","query":"hit","max_results":2}`)
+	outcome := runTool(t, NewSearchTextTool(ws), `{"path":".","query":"hit","max_results":2}`)
 
 	var got searchTextResult
 	data(t, outcome, &got)
@@ -99,12 +99,12 @@ func TestSearchText_UnreadableFileErrorsWhenNamedAndSkipsWhenWalked(t *testing.T
 	})
 	tool := NewSearchTextTool(ws)
 
-	if got := exec(t, tool, `{"path":"binary","query":"target"}`); got.Code != "binary_file" {
+	if got := runTool(t, tool, `{"path":"binary","query":"target"}`); got.Code != "binary_file" {
 		t.Fatalf("got %s (%s)", got.Code, got.Message)
 	}
 
 	var walked searchTextResult
-	data(t, exec(t, tool, `{"path":".","query":"target"}`), &walked)
+	data(t, runTool(t, tool, `{"path":".","query":"target"}`), &walked)
 	if walked.SkippedFiles != 1 || walked.Complete {
 		t.Fatalf("a skipped file must make the search incomplete: %+v", walked)
 	}
@@ -113,7 +113,7 @@ func TestSearchText_UnreadableFileErrorsWhenNamedAndSkipsWhenWalked(t *testing.T
 func TestSearchText_TrimsToTheResultBudget(t *testing.T) {
 	line := strings.Repeat("y", 900) + " hit\n"
 	ws := testWorkspace(t, map[string]string{"a.txt": strings.Repeat(line, 100)})
-	outcome := exec(t, NewSearchTextTool(ws), `{"path":".","query":"hit"}`)
+	outcome := runTool(t, NewSearchTextTool(ws), `{"path":".","query":"hit"}`)
 
 	var got searchTextResult
 	data(t, outcome, &got)
@@ -133,7 +133,7 @@ func TestSearchText_TrimsToTheResultBudget(t *testing.T) {
 func TestSearchText_ShortensAnOversizedMatch(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "hit" + strings.Repeat("z", MaxResultBytes*2)})
 	var got searchTextResult
-	data(t, exec(t, NewSearchTextTool(ws), `{"path":".","query":"hit"}`), &got)
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"hit"}`), &got)
 
 	if len(got.Matches) != 1 || !got.Matches[0].PreviewTruncated {
 		t.Fatalf("got %+v", got.Matches)
@@ -153,7 +153,7 @@ func TestSearchText_InvalidQueries(t *testing.T) {
 		"zero limit": `{"path":".","query":"x","max_results":0}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := exec(t, NewSearchTextTool(ws), args); got.Code != "invalid_arguments" {
+			if got := runTool(t, NewSearchTextTool(ws), args); got.Code != "invalid_arguments" {
 				t.Fatalf("got %s (%s)", got.Code, got.Message)
 			}
 		})
@@ -163,7 +163,7 @@ func TestSearchText_InvalidQueries(t *testing.T) {
 func TestSearchText_SearchesOneNamedFile(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "hit\nmiss\n", "b.txt": "hit\n"})
 	var got searchTextResult
-	data(t, exec(t, NewSearchTextTool(ws), `{"path":"a.txt","query":"hit"}`), &got)
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":"a.txt","query":"hit"}`), &got)
 
 	if matchLocations(got.Matches) != "a.txt:1" || got.FilesScanned != 1 || !got.Complete {
 		t.Fatalf("got %+v", got)
@@ -178,7 +178,7 @@ func TestSearchText_SymlinkIsSkippedAndCounted(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	var got searchTextResult
-	data(t, exec(t, NewSearchTextTool(ws), `{"path":".","query":"hit"}`), &got)
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"hit"}`), &got)
 
 	if got.SkippedFiles != 1 || got.Complete {
 		t.Fatalf("got %+v", got)
@@ -189,7 +189,7 @@ func TestSearchText_SymlinkIsSkippedAndCounted(t *testing.T) {
 func TestSearchText_ExactMaxResultsIsStillIncomplete(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "hit\nhit\n"})
 	var got searchTextResult
-	data(t, exec(t, NewSearchTextTool(ws), `{"path":".","query":"hit","max_results":2}`), &got)
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"hit","max_results":2}`), &got)
 
 	if len(got.Matches) != 2 || got.Complete {
 		t.Fatalf("got %+v", got)
@@ -198,14 +198,14 @@ func TestSearchText_ExactMaxResultsIsStillIncomplete(t *testing.T) {
 
 func TestSearchText_MalformedArguments(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
-	if got := exec(t, NewSearchTextTool(ws), `{"path":".",`); got.Code != "invalid_arguments" {
+	if got := runTool(t, NewSearchTextTool(ws), `{"path":".",`); got.Code != "invalid_arguments" {
 		t.Fatalf("got %s", got.Code)
 	}
 }
 
 func TestSearchText_RejectsEscapingPath(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
-	if got := exec(t, NewSearchTextTool(ws), `{"path":"../outside","query":"x"}`); got.Code != "invalid_path" {
+	if got := runTool(t, NewSearchTextTool(ws), `{"path":"../outside","query":"x"}`); got.Code != "invalid_path" {
 		t.Fatalf("got %s (%s)", got.Code, got.Message)
 	}
 }

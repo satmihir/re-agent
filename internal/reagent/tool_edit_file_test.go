@@ -34,7 +34,7 @@ func TestEditFile_ReplacesTheUniqueMatch(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"main.go": source})
 	before := digestOfFile(t, ws, "main.go")
 
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+before+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+before+
 		`","old_text":"const timeout = 0","new_text":"const timeout = 30"}`)
 
 	var got editFileResult
@@ -65,7 +65,7 @@ func TestEditFile_StaleDigestChangesNothing(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"main.go": source})
 	stale := strings.Repeat("a", 64)
 
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+stale+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+stale+
 		`","old_text":"const timeout = 0","new_text":"const timeout = 30"}`)
 
 	if outcome.OK || outcome.Code != "stale_file" || outcome.Effect != EffectNone {
@@ -110,7 +110,7 @@ func TestEditFile_RejectedEditsLeaveTheFileAlone(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			outcome := exec(t, NewEditFileTool(ws), c.args)
+			outcome := runTool(t, NewEditFileTool(ws), c.args)
 			if outcome.OK || outcome.Code != c.code {
 				t.Fatalf("got %s (%s), want %s", outcome.Code, outcome.Message, c.code)
 			}
@@ -128,7 +128,7 @@ func TestEditFile_RejectedEditsLeaveTheFileAlone(t *testing.T) {
 // pick a position the model did not choose.
 func TestEditFile_OverlappingMatchesAreAmbiguous(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "aaa"})
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
 		digestOfFile(t, ws, "a.txt")+`","old_text":"aa","new_text":"b"}`)
 
 	if outcome.Code != "ambiguous_edit" {
@@ -145,7 +145,7 @@ func TestEditFile_NoOpDoesNotRewriteTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+
 		digestOfFile(t, ws, "main.go")+`","old_text":"timeout","new_text":"timeout"}`)
 
 	var got editFileResult
@@ -167,7 +167,7 @@ func TestEditFile_NoOpDoesNotRewriteTheFile(t *testing.T) {
 
 func TestEditFile_EmptyNewTextDeletesTheMatch(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "keep\nremove\n"})
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
 		digestOfFile(t, ws, "a.txt")+`","old_text":"remove\n","new_text":""}`)
 
 	var got editFileResult
@@ -184,7 +184,7 @@ func TestEditFile_PreservesPermissionBits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exec(t, NewEditFileTool(ws), `{"path":"script.sh","expected_sha256":"`+
+	runTool(t, NewEditFileTool(ws), `{"path":"script.sh","expected_sha256":"`+
 		digestOfFile(t, ws, "script.sh")+`","old_text":"old","new_text":"new"}`)
 
 	info, err := os.Stat(path)
@@ -201,7 +201,7 @@ func TestEditFile_RefusesASymlinkTarget(t *testing.T) {
 	if err := os.Symlink(filepath.Join(ws.Root(), "real.txt"), filepath.Join(ws.Root(), "link.txt")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"link.txt","expected_sha256":"`+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"link.txt","expected_sha256":"`+
 		digestOfFile(t, ws, "real.txt")+`","old_text":"hello","new_text":"goodbye"}`)
 
 	if outcome.Code != "symlink_target" {
@@ -214,7 +214,7 @@ func TestEditFile_RefusesASymlinkTarget(t *testing.T) {
 
 func TestEditFile_RefusesAnUnreadableTarget(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"binary": "before\x00after"})
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"binary","expected_sha256":"`+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"binary","expected_sha256":"`+
 		digestOfFile(t, ws, "binary")+`","old_text":"before","new_text":"x"}`)
 
 	if outcome.Code != "binary_file" || outcome.Effect != EffectNone {
@@ -225,7 +225,7 @@ func TestEditFile_RefusesAnUnreadableTarget(t *testing.T) {
 // A NUL byte is the one way a replacement can stop the file being text.
 func TestEditFile_RefusesAResultWithNulBytes(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "hello\n"})
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
 		digestOfFile(t, ws, "a.txt")+`","old_text":"hello","new_text":"he\u0000llo"}`)
 
 	if outcome.Code != "binary_file" || outcome.Effect != EffectNone {
@@ -246,7 +246,7 @@ func TestEditFile_FailedPublicationAppliesNothing(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(ws.Root(), 0o700) })
 
-	outcome := exec(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
 		digest+`","old_text":"hello","new_text":"goodbye"}`)
 
 	if outcome.OK || outcome.Effect != EffectNone {
