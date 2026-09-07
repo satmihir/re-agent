@@ -15,9 +15,10 @@ var defaultInstructions string
 // differs, which is what makes two recorded requests worth comparing.
 func BuildContext(cfg Config, scope RequestScope, history []Entry) ModelRequest {
 	return ModelRequest{
-		Scope:        scope,
-		Model:        cfg.Model,
-		Instructions: instructions(cfg),
+		Scope:           scope,
+		Model:           cfg.Model,
+		ReasoningEffort: cfg.ReasoningEffort,
+		Instructions:    instructions(cfg),
 		// Copied so a later append to the run's history cannot reach a request
 		// that was already built (v1 §5.2).
 		History: append([]Entry(nil), history...),

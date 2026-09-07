@@ -73,7 +73,8 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, err := PreviewRequest(Config{
-		Model: resolveModel(""), Registry: registry, WorkspacePath: ws.Root(),
+		Model: resolveModel(""), ReasoningEffort: DefaultReasoningEffort,
+		Registry: registry, WorkspacePath: ws.Root(),
 		MaxSteps: 20, MaxToolCalls: 40,
 	}, "Where is the timeout set?")
 	if err != nil {

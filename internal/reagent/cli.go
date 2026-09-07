@@ -23,6 +23,8 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	workspace := fs.String("workspace", ".", "directory the read tools may see")
 	modelName := fs.String("model", "", "model to request; defaults to REAGENT_MODEL, then "+DefaultModel)
+	reasoning := fs.String("reasoning-effort", DefaultReasoningEffort,
+		"reasoning effort to request; empty leaves the model at its own default")
 	script := fs.String("scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	showContext := fs.Bool("show-context", false, "print the request the first step would send, then exit")
 	allowWrite := fs.Bool("allow-write", false, "let the model change workspace files with edit_file")
@@ -80,7 +82,8 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	cfg := Config{
-		Model: resolveModel(*modelName), Registry: registry, WorkspacePath: ws.Root(),
+		Model: resolveModel(*modelName), ReasoningEffort: *reasoning,
+		Registry: registry, WorkspacePath: ws.Root(),
 		MaxSteps: *maxSteps, MaxToolCalls: *maxToolCalls,
 	}
 	if *script != "" {

@@ -14,11 +14,12 @@ import (
 
 // Config is the fixed configuration of one run.
 type Config struct {
-	Model         string
-	Registry      *Registry
-	WorkspacePath string
-	MaxSteps      int
-	MaxToolCalls  int
+	Model           string
+	ReasoningEffort string
+	Registry        *Registry
+	WorkspacePath   string
+	MaxSteps        int
+	MaxToolCalls    int
 }
 
 // Run executes one user submission to a terminal outcome. One Run owns one

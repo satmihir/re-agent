@@ -62,11 +62,12 @@ type Model interface {
 
 // ModelRequest is everything one step gives the model.
 type ModelRequest struct {
-	Scope        RequestScope `json:"scope"`
-	Model        string       `json:"model"`
-	Instructions string       `json:"instructions"`
-	History      []Entry      `json:"history"`
-	Tools        []ToolSpec   `json:"tools"`
+	Scope           RequestScope `json:"scope"`
+	Model           string       `json:"model"`
+	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	Instructions    string       `json:"instructions"`
+	History         []Entry      `json:"history"`
+	Tools           []ToolSpec   `json:"tools"`
 }
 
 // RequestScope identifies which step of which run produced a request.

@@ -122,7 +122,9 @@ Use the default instruction source from v1 §8.2, selecting only instructions re
 
 Keep transport encoding separate from context selection. Expose a pure adapter function such as `EncodeRequest(ModelRequest) ([]byte, error)`. Both live `Generate` and the CLI preview call that function. This is an ordinary function, not a new capability interface.
 
-Adopt the Responses request and continuation contracts from v1 §§9.1–9.5 with three changes: `strict: false`, the reduced v0 tool definitions, and no configured output-token limit. Omit run-timeout, model-timeout, and reasoning-setting flags. The injected `http.Client` carries one fixed `Timeout`, `HTTPTimeout = 120 * time.Second`, so a stalled connection ends one attempt instead of hanging the run until Ctrl-C. It is a constant, not a flag. Keep the configured model resolution from v1 §9.3; do not build model selection or fallback logic.
+Adopt the Responses request and continuation contracts from v1 §§9.1–9.5 with three changes: `strict: false`, the reduced v0 tool definitions, and no configured output-token limit. Omit run-timeout and model-timeout flags.
+
+**Amendment (2026-09-06):** v0 originally omitted the reasoning setting as well. It is now configured, because the default model reasons at medium effort unless told otherwise, and this harness's tasks do not need it. `--reasoning-effort` defaults to `low`; an empty value omits the parameter and leaves the model at its own default, as in v1 §9.2. The value is passed through unchecked: an effort the model does not support fails clearly rather than being quietly dropped. The injected `http.Client` carries one fixed `Timeout`, `HTTPTimeout = 120 * time.Second`, so a stalled connection ends one attempt instead of hanging the run until Ctrl-C. It is a constant, not a flag. Keep the configured model resolution from v1 §9.3; do not build model selection or fallback logic.
 
 **Relaxation:** Output-token configuration and model-call deadlines return in v1 §§9.2, 15.1, and 18.2; the only v0 model-input bound is `MaxRequestBytes`, and the only v0 model-time bound is the per-attempt `HTTPTimeout`.
 

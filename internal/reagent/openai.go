@@ -11,6 +11,12 @@ import (
 // of the design, so changing it is expected as cheaper or better models appear.
 const DefaultModel = "gpt-5.6-luna"
 
+// DefaultReasoningEffort is what v0 asks for when nothing says otherwise. The
+// default model reasons at medium effort on its own, which these tasks do not
+// need. An empty value omits the parameter and leaves the model's own default
+// in place (v1 §9.2).
+const DefaultReasoningEffort = "low"
+
 // MaxRequestBytes is the largest encoded request v0 will send. It is a byte
 // bound, not a token estimate: the provider may still refuse a smaller body for
 // its own context limit (v1 §8.5).
@@ -32,16 +38,22 @@ func resolveModel(flagValue string) string {
 // responsesRequest is the Responses body v0 sends (v1 §9.2). Every field is
 // fixed except the model, instructions, input, and tools.
 type responsesRequest struct {
-	Model             string          `json:"model"`
-	Instructions      string          `json:"instructions"`
-	Input             []any           `json:"input"`
-	Tools             []responsesTool `json:"tools"`
-	ToolChoice        string          `json:"tool_choice"`
-	ParallelToolCalls bool            `json:"parallel_tool_calls"`
-	Store             bool            `json:"store"`
-	Include           []string        `json:"include"`
-	Truncation        string          `json:"truncation"`
-	Stream            bool            `json:"stream"`
+	Model             string              `json:"model"`
+	Instructions      string              `json:"instructions"`
+	Input             []any               `json:"input"`
+	Tools             []responsesTool     `json:"tools"`
+	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+	ToolChoice        string              `json:"tool_choice"`
+	ParallelToolCalls bool                `json:"parallel_tool_calls"`
+	Store             bool                `json:"store"`
+	Include           []string            `json:"include"`
+	Truncation        string              `json:"truncation"`
+	Stream            bool                `json:"stream"`
+}
+
+// responsesReasoning is encoded once, and only when an effort is configured.
+type responsesReasoning struct {
+	Effort string `json:"effort"`
 }
 
 // responsesTool is one native function declaration. v0 sets strict to false so
@@ -95,11 +107,19 @@ func EncodeRequest(req ModelRequest) ([]byte, error) {
 		}
 	}
 
+	// An unconfigured effort omits the whole parameter rather than sending a
+	// value the model may not accept.
+	var reasoning *responsesReasoning
+	if req.ReasoningEffort != "" {
+		reasoning = &responsesReasoning{Effort: req.ReasoningEffort}
+	}
+
 	body, err := json.Marshal(responsesRequest{
 		Model:             req.Model,
 		Instructions:      req.Instructions,
 		Input:             input,
 		Tools:             tools,
+		Reasoning:         reasoning,
 		ToolChoice:        "auto",
 		ParallelToolCalls: false,
 		Store:             false,

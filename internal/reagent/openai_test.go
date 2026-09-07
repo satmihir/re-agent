@@ -10,16 +10,17 @@ import (
 // decodedRequest keeps input items raw so a test can assert that provider items
 // were passed through unchanged.
 type decodedRequest struct {
-	Model             string            `json:"model"`
-	Instructions      string            `json:"instructions"`
-	Input             []json.RawMessage `json:"input"`
-	Tools             []responsesTool   `json:"tools"`
-	ToolChoice        string            `json:"tool_choice"`
-	ParallelToolCalls bool              `json:"parallel_tool_calls"`
-	Store             bool              `json:"store"`
-	Include           []string          `json:"include"`
-	Truncation        string            `json:"truncation"`
-	Stream            bool              `json:"stream"`
+	Model             string              `json:"model"`
+	Instructions      string              `json:"instructions"`
+	Input             []json.RawMessage   `json:"input"`
+	Tools             []responsesTool     `json:"tools"`
+	Reasoning         *responsesReasoning `json:"reasoning"`
+	ToolChoice        string              `json:"tool_choice"`
+	ParallelToolCalls bool                `json:"parallel_tool_calls"`
+	Store             bool                `json:"store"`
+	Include           []string            `json:"include"`
+	Truncation        string              `json:"truncation"`
+	Stream            bool                `json:"stream"`
 }
 
 func encode(t *testing.T, req ModelRequest) ([]byte, decodedRequest) {
@@ -155,5 +156,23 @@ func TestResolveModel_FlagThenEnvironmentThenDefault(t *testing.T) {
 	t.Setenv("REAGENT_MODEL", "")
 	if got := resolveModel(""); got != DefaultModel {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The reasoning setting is encoded once when configured, and the parameter is
+// absent entirely when it is not (v1 §9.2).
+func TestEncodeRequest_ReasoningEffort(t *testing.T) {
+	body, got := encode(t, ModelRequest{Model: "m", ReasoningEffort: "low"})
+	if got.Reasoning == nil || got.Reasoning.Effort != "low" {
+		t.Fatalf("got %+v", got.Reasoning)
+	}
+	if strings.Count(string(body), `"reasoning":`) != 1 {
+		t.Fatalf("reasoning appears more than once: %s", body)
+	}
+
+	// The include list mentions reasoning too, so look for the key itself.
+	body, got = encode(t, ModelRequest{Model: "m"})
+	if got.Reasoning != nil || strings.Contains(string(body), `"reasoning":`) {
+		t.Fatalf("an unset effort still sent a parameter: %s", body)
 	}
 }
