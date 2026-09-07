@@ -164,7 +164,7 @@ func (s *scan) skip() {
 // within that line.
 func (s *scan) scanFile(path string, snap *snapshot) {
 	s.files++
-	s.bytes += snap.size
+	s.bytes += len(snap.content)
 	for i, line := range snap.lines {
 		if s.full() {
 			s.stop("max_results")

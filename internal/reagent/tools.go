@@ -9,29 +9,46 @@ import (
 	"strings"
 )
 
-var toolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+var (
+	toolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	digestPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
-// Registry is the fixed set of tools available for one run. It is built once at
+// Registry is the set of tools available for one run. It is built once at
 // startup and never changes while the run is in progress.
+//
+// It keeps the names of tools this build has but this mode does not allow, so
+// a call for one of them can be refused for the right reason instead of being
+// reported as a tool that does not exist (v1 §10.3).
 type Registry struct {
-	byName map[string]Tool
-	specs  []ToolSpec
+	mode     Mode
+	byName   map[string]Tool
+	inactive map[string]bool
+	specs    []ToolSpec
 }
 
-// NewRegistry validates the given tools and freezes them in name order. Sorting
-// keeps the declaration the model sees stable across runs.
-func NewRegistry(tools ...Tool) (*Registry, error) {
-	r := &Registry{byName: make(map[string]Tool, len(tools))}
+// NewRegistry keeps the tools this mode allows and freezes them in name order.
+// Sorting keeps the declaration the model sees stable across runs.
+func NewRegistry(mode Mode, tools ...Tool) (*Registry, error) {
+	r := &Registry{
+		mode:     mode,
+		byName:   make(map[string]Tool, len(tools)),
+		inactive: make(map[string]bool),
+	}
 	for _, t := range tools {
 		spec := t.Spec()
-		if !toolNamePattern.MatchString(spec.Name) {
+		switch {
+		case !toolNamePattern.MatchString(spec.Name):
 			return nil, fmt.Errorf("invalid tool name %q", spec.Name)
-		}
-		if _, dup := r.byName[spec.Name]; dup {
+		case r.known(spec.Name):
 			return nil, fmt.Errorf("duplicate tool name %q", spec.Name)
-		}
-		if !json.Valid(spec.InputSchema) {
+		case !json.Valid(spec.InputSchema):
 			return nil, fmt.Errorf("tool %q has an invalid input schema", spec.Name)
+		}
+		if !mode.allows(spec.Effect) {
+			// Absent from the declaration the model sees, but remembered.
+			r.inactive[spec.Name] = true
+			continue
 		}
 		r.byName[spec.Name] = t
 		r.specs = append(r.specs, spec)
@@ -40,6 +57,9 @@ func NewRegistry(tools ...Tool) (*Registry, error) {
 	return r, nil
 }
 
+// Mode is the authority this registry was built for.
+func (r *Registry) Mode() Mode { return r.mode }
+
 // Specs returns the model-visible declarations, sorted by name.
 func (r *Registry) Specs() []ToolSpec { return r.specs }
 
@@ -47,6 +67,13 @@ func (r *Registry) Specs() []ToolSpec { return r.specs }
 func (r *Registry) Lookup(name string) (Tool, bool) {
 	t, found := r.byName[name]
 	return t, found
+}
+
+// known reports whether this build has a tool by that name at all, active or
+// not. It is what separates "no such tool" from "not enabled here".
+func (r *Registry) known(name string) bool {
+	_, active := r.byName[name]
+	return active || r.inactive[name]
 }
 
 // decodeArgs parses exactly one JSON object into dst, rejecting unknown fields

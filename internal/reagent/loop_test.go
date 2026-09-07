@@ -41,7 +41,7 @@ func testConfig(t *testing.T, tools ...Tool) Config {
 	if len(tools) == 0 {
 		tools = []Tool{NewEchoTool()}
 	}
-	registry, err := NewRegistry(tools...)
+	registry, err := NewRegistry(Mode{}, tools...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func (brokenModel) Generate(context.Context, ModelRequest) (ModelResponse, error
 func TestLoop_SearchThenReadWithRealTools(t *testing.T) {
 	content := "package main\n\nconst timeout = 30\n"
 	ws := testWorkspace(t, map[string]string{"main.go": content})
-	registry, err := NewRegistry(NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
+	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}

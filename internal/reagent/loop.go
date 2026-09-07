@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -33,6 +34,7 @@ type Run struct {
 
 	history   []Entry
 	seenCalls map[string]bool
+	effects   []EffectRecord
 	steps     int
 	calls     int
 	usage     Usage
@@ -196,7 +198,14 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 
 		tool, found := r.cfg.Registry.Lookup(call.Name)
 		if !found {
-			r.recordResult(call, failOutcome("tool_unavailable", "no tool named "+call.Name))
+			// A tool this build has but this mode withholds is refused for that
+			// reason; only an unknown name is reported as missing (v1 §10.3).
+			if r.cfg.Registry.known(call.Name) {
+				r.recordResult(call, failOutcome("permission_denied",
+					call.Name+" is not enabled; the run was started in "+r.cfg.Registry.Mode().String()+" mode"))
+			} else {
+				r.recordResult(call, failOutcome("tool_unavailable", "no tool named "+call.Name))
+			}
 			continue
 		}
 
@@ -220,6 +229,14 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 // result becomes part of the next model request (I09).
 func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 	result := ToolResult{CallID: call.CallID, Name: call.Name, Outcome: outcome}
+	if outcome.Effect != EffectNone {
+		// Recorded from the outcome, so a failed run still reports what it
+		// actually changed (v1 §19.3).
+		r.effects = append(r.effects, EffectRecord{
+			Step: r.steps, CallID: call.CallID, Tool: call.Name,
+			Summary: argumentSummary(call.Arguments), Effect: outcome.Effect,
+		})
+	}
 	r.trace.Write("tool.finished", r.steps, result)
 	r.history = append(r.history, Entry{Kind: EntryTool, Tool: &result})
 	fmt.Fprintf(r.progress, "· %s %s\n", call.Name, outcome.Code)
@@ -237,6 +254,7 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 	result := RunResult{
 		Status: status, Reason: reason, Reply: reply,
 		Steps: r.steps, ToolCalls: r.calls, Usage: r.usage, TracePath: r.trace.Path(),
+		Effects: r.effects,
 	}
 	r.trace.Write("run.finished", r.steps, result)
 	return result
@@ -262,6 +280,29 @@ func toolCalls(resp ModelResponse) []*ToolCall {
 		}
 	}
 	return calls
+}
+
+// argumentSummary names what a call acted on, keeping only its short scalar
+// arguments. It knows nothing about particular tools: a path or an argv shows
+// up, while replacement text and digests are too long to include.
+func argumentSummary(arguments string) string {
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(arguments), &fields); err != nil {
+		return truncateUTF8(arguments, 60)
+	}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var parts []string
+	for _, key := range keys {
+		if value := fmt.Sprint(fields[key]); len(value) <= 60 {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // blockText joins the visible blocks of one kind, in order.

@@ -27,8 +27,9 @@ func BuildContext(cfg Config, scope RequestScope, history []Entry) ModelRequest 
 
 // instructions is the embedded text plus a labelled runtime section. The tools
 // array is what actually authorizes anything; this section only tells the model
-// where it is working (v1 §8.2). The operating mode joins it once write and
-// exec modes exist.
+// where it is working and with what authority (v1 §8.2).
 func instructions(cfg Config) string {
-	return defaultInstructions + "\n# Runtime\n\nWorkspace: " + cfg.WorkspacePath + "\n"
+	return defaultInstructions +
+		"\n# Runtime\n\nWorkspace: " + cfg.WorkspacePath +
+		"\nMode: " + cfg.Registry.Mode().String() + "\n"
 }

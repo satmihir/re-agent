@@ -24,7 +24,7 @@ func TestNewRegistry_RejectsBadNames(t *testing.T) {
 	}
 	for name, tools := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewRegistry(tools...); err == nil {
+			if _, err := NewRegistry(Mode{}, tools...); err == nil {
 				t.Fatal("want an error")
 			}
 		})

@@ -3,6 +3,7 @@ package reagent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,7 +68,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := NewRegistry(NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
+	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,5 +128,37 @@ func TestMain_ConflictingAndMissingModes(t *testing.T) {
 				t.Fatalf("exit %d, want %d", code, exitUsage)
 			}
 		})
+	}
+}
+
+// Write mode is granted at launch, and the preview shows exactly which tools
+// that grant declared.
+func TestMain_AllowWriteDeclaresTheEditTool(t *testing.T) {
+	t.Setenv("REAGENT_MODEL", "")
+	root := t.TempDir()
+
+	declared := func(args ...string) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		full := append([]string{"run", "--workspace", root, "--show-context"}, args...)
+		if code := Main(context.Background(), append(full, "a task"), &stdout, &stderr); code != exitOK {
+			t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+		}
+		var request decodedRequest
+		if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &request); err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, tool := range request.Tools {
+			names = append(names, tool.Name)
+		}
+		return strings.Join(names, ",") + " | " + request.Instructions[strings.Index(request.Instructions, "Mode: "):]
+	}
+
+	if got := declared(); got != "list_files,read_file,search_text | Mode: read only\n" {
+		t.Fatalf("read-only run declared %q", got)
+	}
+	if got := declared("--allow-write"); got != "edit_file,list_files,read_file,search_text | Mode: read and write\n" {
+		t.Fatalf("write run declared %q", got)
 	}
 }

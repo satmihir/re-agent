@@ -77,9 +77,9 @@ func (w *Workspace) relative(abs string) string {
 // reports from one snapshot, so a digest can never describe bytes other than
 // the ones shown (v1 §11.3).
 type snapshot struct {
-	size   int
-	sha256 string
-	lines  []string
+	content []byte
+	sha256  string
+	lines   []string
 }
 
 func readSnapshot(abs string) (*snapshot, *ToolOutcome) {
@@ -115,7 +115,7 @@ func readSnapshot(abs string) (*snapshot, *ToolOutcome) {
 	}
 
 	sum := sha256.Sum256(data)
-	return &snapshot{size: len(data), sha256: hex.EncodeToString(sum[:]), lines: splitLines(data)}, nil
+	return &snapshot{content: data, sha256: hex.EncodeToString(sum[:]), lines: splitLines(data)}, nil
 }
 
 // splitLines splits on LF. A trailing newline does not create a phantom line,
@@ -146,4 +146,38 @@ func osOutcome(err error) *ToolOutcome {
 		return failPtr("io_error", pathErr.Err.Error())
 	}
 	return failPtr("io_error", err.Error())
+}
+
+// publish replaces a file by writing the new bytes beside it and renaming over
+// it, so the target is never observed half-written.
+//
+// v0 stops there: it does not sync, re-check the digest immediately before the
+// rename, or reconcile an interrupted publication (v1 §13.4 restores those).
+func publish(abs string, content []byte, mode os.FileMode) error {
+	temp, err := os.CreateTemp(filepath.Dir(abs), ".reagent-*")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	// Harmless once the rename has consumed the temporary file.
+	defer os.Remove(name)
+
+	if _, err := temp.Write(content); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(name, mode); err != nil {
+		return err
+	}
+	return os.Rename(name, abs)
+}
+
+// digestOf is the same SHA-256 a snapshot reports, for bytes about to be
+// written rather than bytes just read.
+func digestOf(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
 }

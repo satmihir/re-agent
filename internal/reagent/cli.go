@@ -25,6 +25,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	modelName := fs.String("model", "", "model to request; defaults to REAGENT_MODEL, then "+DefaultModel)
 	script := fs.String("scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	showContext := fs.Bool("show-context", false, "print the request the first step would send, then exit")
+	allowWrite := fs.Bool("allow-write", false, "let the model change workspace files with edit_file")
 	traceFile := fs.String("trace-file", "", "write the run's JSONL trace here instead of the default cache location")
 	maxSteps := fs.Int("max-steps", 20, "maximum model requests in one run")
 	maxToolCalls := fs.Int("max-tool-calls", 40, "maximum accepted tool calls in one run")
@@ -53,13 +54,15 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return usage(stderr, err.Error())
 	}
-	tools := []Tool{NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws)}
+	// Every tool this build has is offered to the registry; the mode decides
+	// which of them the model is told about (v1 §10.3).
+	tools := []Tool{NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewEditFileTool(ws)}
 	if *script != "" {
 		// The fake tool rides along with a script so orchestration can be
 		// exercised without touching the workspace (v0 §10).
 		tools = append(tools, NewEchoTool())
 	}
-	registry, err := NewRegistry(tools...)
+	registry, err := NewRegistry(Mode{AllowWrite: *allowWrite}, tools...)
 	if err != nil {
 		return usage(stderr, err.Error())
 	}
@@ -130,6 +133,9 @@ func report(result RunResult, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s\n", result.Status, result.Reason)
 	}
 	fmt.Fprintf(stderr, "%s in %d steps, %d tool calls\n", result.Status, result.Steps, result.ToolCalls)
+	for _, effect := range result.Effects {
+		fmt.Fprintf(stderr, "changed: %s %s [%s]\n", effect.Tool, effect.Summary, effect.Effect)
+	}
 	if result.TracePath == "" {
 		fmt.Fprintln(stderr, "trace: not recorded")
 	} else {

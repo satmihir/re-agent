@@ -118,7 +118,7 @@ func readFileData(path string, snap *snapshot, start int, lines []string) readFi
 		next = &after
 	}
 	return readFileResult{
-		Path: path, SHA256: snap.sha256, SizeBytes: snap.size, TotalLines: len(snap.lines),
+		Path: path, SHA256: snap.sha256, SizeBytes: len(snap.content), TotalLines: len(snap.lines),
 		Lines: numbered, NextLine: next, EOF: end == len(snap.lines),
 	}
 }

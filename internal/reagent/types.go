@@ -147,6 +147,49 @@ const (
 	EffectUnknown EffectState = "unknown"
 )
 
+// Mode is the authority the human granted at launch. Nothing the model sends
+// can widen it: not prompt text, not tool output, not a hallucinated call
+// (v1 §10.3).
+type Mode struct {
+	AllowWrite bool
+	AllowExec  bool
+}
+
+// String is the explanatory line the model sees. The tools array is what
+// actually authorizes anything.
+func (m Mode) String() string {
+	switch {
+	case m.AllowExec:
+		return "read, write, and execute"
+	case m.AllowWrite:
+		return "read and write"
+	default:
+		return "read only"
+	}
+}
+
+// allows reports whether this mode permits a tool of the given effect class.
+func (m Mode) allows(effect EffectClass) bool {
+	switch effect {
+	case EffectClassWrite:
+		return m.AllowWrite
+	case EffectClassExec:
+		return m.AllowExec
+	default:
+		return true
+	}
+}
+
+// EffectRecord is one thing a run did outside its own memory. It is derived
+// from actual outcomes, never from the model's account of them (v1 §19.3).
+type EffectRecord struct {
+	Step    int         `json:"step"`
+	CallID  string      `json:"call_id"`
+	Tool    string      `json:"tool"`
+	Summary string      `json:"summary"`
+	Effect  EffectState `json:"effect"`
+}
+
 // ToolSpec is the model-visible declaration of one tool. It is the single
 // source of truth for that tool's description and argument schema.
 type ToolSpec struct {
@@ -206,4 +249,7 @@ type RunResult struct {
 	ToolCalls int       `json:"tool_calls"`
 	Usage     Usage     `json:"usage"`
 	TracePath string    `json:"trace_path,omitempty"`
+	// Effects lists what the run actually changed, so a failed run still
+	// reports the edits it made before stopping.
+	Effects []EffectRecord `json:"effects,omitempty"`
 }

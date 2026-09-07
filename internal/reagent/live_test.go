@@ -25,7 +25,7 @@ func TestLive_ReadsAMarkerFromTheWorkspace(t *testing.T) {
 
 	const marker = "zubrowka-4417"
 	ws := testWorkspace(t, map[string]string{"notes.txt": "project marker: " + marker + "\n"})
-	registry, err := NewRegistry(NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
+	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
