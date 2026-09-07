@@ -6,10 +6,10 @@ import (
 	"os"
 )
 
-// DefaultModel is the design's configured starting model (v1 §9.3). Nothing in
-// this repository has yet confirmed it against the live API; V0-C2's smoke test
-// is what does that.
-const DefaultModel = "gpt-5.4-mini"
+// DefaultModel is the model used when neither --model nor REAGENT_MODEL says
+// otherwise. v1 §9.3 calls this an experiment default rather than a fixed part
+// of the design, so changing it is expected as cheaper or better models appear.
+const DefaultModel = "gpt-5.6-luna"
 
 // MaxRequestBytes is the largest encoded request v0 will send. It is a byte
 // bound, not a token estimate: the provider may still refuse a smaller body for
