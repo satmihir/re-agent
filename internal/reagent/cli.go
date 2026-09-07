@@ -142,14 +142,15 @@ func usage(stderr io.Writer, message string) int {
 // answer. A completed run means the model replied, not that it was right (I17).
 func report(result RunResult, stdout, stderr io.Writer) int {
 	if result.Reply != "" {
-		fmt.Fprintln(stdout, result.Reply)
+		fmt.Fprintln(stdout, display(result.Reply, styledOutput(stdout)))
 	}
 	if result.Reason != "" {
-		fmt.Fprintf(stderr, "%s: %s\n", result.Status, result.Reason)
+		fmt.Fprintf(stderr, "%s: %s\n", result.Status, sanitize(result.Reason))
 	}
 	fmt.Fprintf(stderr, "%s in %d steps, %d tool calls\n", result.Status, result.Steps, result.ToolCalls)
 	for _, effect := range result.Effects {
-		fmt.Fprintf(stderr, "changed: %s %s [%s]\n", effect.Tool, effect.Summary, effect.Effect)
+		fmt.Fprintf(stderr, "changed: %s %s [%s]\n",
+			sanitize(effect.Tool), sanitize(effect.Summary), effect.Effect)
 	}
 	if result.TracePath == "" {
 		fmt.Fprintln(stderr, "trace: not recorded")
