@@ -86,6 +86,7 @@ beats completeness. When in doubt, write less.
   will own. If that list is surprising, say so first.
 - Before reporting done, run and paste real output from:
   `go build ./... && go vet ./... && go test ./...`
+  `make check` runs the same gate plus gofmt.
 - Report what works, what was tested, what was not, and any deviation from the
   design. Never claim a live run happened if it did not.
 - Do not commit, push, add CI, linters, Makefiles, or tooling unless asked.

@@ -244,6 +244,10 @@ Use process exit code 0 for a completed reply or successful context preview, 1 f
 
 **Relaxation:** This three-code mapping and reduced flag surface replace v1 §§18.2 and 18.4. `--scripted` and `--show-context` are v0 additions to the v1 surface.
 
+**Amendment (2026-09-07):** Two flags joined the surface with the second provider (§12 amendment). `--provider` selects `openai` or `anthropic`; when omitted it is inferred from the model name, and a model name that contradicts an explicit provider is a startup error. `--reasoning-effort` is described under §6. `--scripted` is mutually exclusive with `--provider` as well as `--model`. The environment surface inherited from v1 §18.2 gains `ANTHROPIC_API_KEY`, read only for a live run on that provider; the preview and scripted paths require neither key.
+
+A `Makefile` now exists, added on request. `make check` runs gofmt, vet, and the offline suite. `make live` sources a `.env` file, when present, into the environment of one `go test` invocation and runs the opt-in conformance tests for both providers. This does not weaken v1 §18.1: the harness binary still reads credentials from its environment and nothing else, and never opens a `.env` file itself. The sourcing happens in the shell, before the tests start, for the test target alone. `.env` is ignored by git and `.env.example` documents its format.
+
 **Amendment (2026-09-06):** v1 §18.3's requirement to escape terminal control characters is now implemented, and the reply is additionally rendered as Markdown when stdout is a terminal. Sanitizing runs first, so every escape sequence reaching the terminal is the harness's own. A pipe or redirect, or `NO_COLOR`, yields the sanitized text unstyled, keeping stdout usable by another program. The rendered subset is headings, bullet and numbered lists, block quotes, fenced code, inline code, bold, italic, and links. Tables and paragraph reflow are out of scope: both need display-width arithmetic the standard library does not provide. Underscore emphasis is out of scope because `snake_case` is more common here than `__bold__`.
 
 ## 11. Design fork: native versus prompt-defined tools
@@ -318,7 +322,7 @@ Use `go test ./...` with scripted responses, a local HTTP test server, and tempo
 
 The adapter tests must compare preview bytes with captured live-path bytes, exercise 429/5xx then success, a nonretryable failure, and a stalled attempt that hits `HTTPTimeout`, retain native continuation items, and reject incomplete output before any tool executes. Tool tests must exercise their one meaningful failure path as well as success. Add a trace-write failure case proving that v0 warns and continues deliberately.
 
-A small manual live run follows **v1 §20.8** without creating the evaluation suite. Record whether it actually ran; missing credentials do not block the offline implementation. Do not claim model quality from these checks.
+A small manual live run follows **v1 §20.8** without creating the evaluation suite. Record whether it actually ran; missing credentials do not block the offline implementation. Do not claim model quality from these checks. `make live` is that run for both providers (§10 amendment); a provider whose key is absent is skipped, and no key at all is an error rather than a pass.
 
 ## 14. Explicitly deferred work
 
