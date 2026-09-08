@@ -73,7 +73,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, err := PreviewRequest(Config{
-		Model: resolveModel(""), ReasoningEffort: DefaultReasoningEffort,
+		Provider: openaiName, Model: DefaultOpenAIModel, ReasoningEffort: DefaultReasoningEffort,
 		Registry: registry, WorkspacePath: ws.Root(),
 		MaxSteps: 20, MaxToolCalls: 40,
 	}, "Where is the timeout set?")

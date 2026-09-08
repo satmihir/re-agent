@@ -14,6 +14,7 @@ import (
 
 // Config is the fixed configuration of one run.
 type Config struct {
+	Provider        string
 	Model           string
 	ReasoningEffort string
 	Registry        *Registry
@@ -65,6 +66,7 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 	r.history = append(r.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}})
 	r.trace.Write("run.started", 0, map[string]any{
 		"model":          r.model.Name(),
+		"provider":       r.cfg.Provider,
 		"configured":     r.cfg.Model,
 		"max_steps":      r.cfg.MaxSteps,
 		"max_tool_calls": r.cfg.MaxToolCalls,

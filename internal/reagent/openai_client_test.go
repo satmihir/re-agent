@@ -28,6 +28,7 @@ type fakeAPI struct {
 	server   *httptest.Server
 	mu       sync.Mutex
 	requests [][]byte
+	headers  []http.Header
 	replies  []apiReply
 }
 
@@ -39,6 +40,7 @@ func newFakeAPI(t *testing.T, replies ...apiReply) *fakeAPI {
 
 		api.mu.Lock()
 		api.requests = append(api.requests, body)
+		api.headers = append(api.headers, r.Header.Clone())
 		index := len(api.requests) - 1
 		api.mu.Unlock()
 
@@ -58,6 +60,12 @@ func newFakeAPI(t *testing.T, replies ...apiReply) *fakeAPI {
 	return api
 }
 
+func (a *fakeAPI) receivedHeaders() []http.Header {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]http.Header(nil), a.headers...)
+}
+
 func (a *fakeAPI) received() [][]byte {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -68,7 +76,7 @@ func (a *fakeAPI) received() [][]byte {
 func runAgainst(t *testing.T, api *fakeAPI, client *http.Client, tools ...Tool) (Config, string, RunResult) {
 	t.Helper()
 	cfg := testConfig(t, tools...)
-	cfg.Model = "test-model"
+	cfg.Provider, cfg.Model = openaiName, "test-model"
 	tracePath := filepath.Join(t.TempDir(), "events.jsonl")
 	trace := OpenTrace(tracePath, "session", "run", io.Discard)
 	defer trace.Close()

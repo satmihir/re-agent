@@ -25,7 +25,7 @@ type decodedRequest struct {
 
 func encode(t *testing.T, req ModelRequest) ([]byte, decodedRequest) {
 	t.Helper()
-	body, err := EncodeRequest(req)
+	body, err := EncodeOpenAIRequest(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestEncodeRequest_SendsNativeItemsAndNotTheirText(t *testing.T) {
 			{Kind: BlockText, Text: "thinking out loud"},
 			{Kind: BlockToolCall, Call: &ToolCall{CallID: "call_1", Name: "echo"}},
 		},
-		Native: NativeOutput{Provider: "openai.responses", Items: []json.RawMessage{reasoning, call}},
+		Native: NativeOutput{Provider: openaiProvider, Items: []json.RawMessage{reasoning, call}},
 	}
 	outcome := ToolOutcome{OK: true, Code: "ok", Effect: EffectNone}
 
@@ -121,8 +121,11 @@ func TestEncodeRequest_SendsNativeItemsAndNotTheirText(t *testing.T) {
 }
 
 func TestEncodeRequest_RefusesAnAssistantTurnWithoutProviderItems(t *testing.T) {
-	_, err := EncodeRequest(ModelRequest{History: []Entry{
-		{Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{{Kind: BlockText, Text: "hi"}}}},
+	_, err := EncodeOpenAIRequest(ModelRequest{History: []Entry{
+		{Kind: EntryAssistant, Assistant: &ModelResponse{
+			Blocks: []OutputBlock{{Kind: BlockText, Text: "hi"}},
+			Native: NativeOutput{Provider: openaiProvider},
+		}},
 	}})
 	if err == nil || !strings.Contains(err.Error(), "no provider items") {
 		t.Fatalf("got %v", err)
@@ -132,7 +135,7 @@ func TestEncodeRequest_RefusesAnAssistantTurnWithoutProviderItems(t *testing.T) 
 // The size check happens here, before any transport exists (v1 §8.5).
 func TestEncodeRequest_RejectsAnOversizedRequest(t *testing.T) {
 	huge := strings.Repeat("x", MaxRequestBytes)
-	_, err := EncodeRequest(ModelRequest{History: []Entry{
+	_, err := EncodeOpenAIRequest(ModelRequest{History: []Entry{
 		{Kind: EntryUser, User: &UserTurn{Text: huge}},
 	}})
 
@@ -142,20 +145,6 @@ func TestEncodeRequest_RejectsAnOversizedRequest(t *testing.T) {
 	}
 	if !strings.Contains(modelErr.Message, "over the") {
 		t.Fatalf("got %q", modelErr.Message)
-	}
-}
-
-func TestResolveModel_FlagThenEnvironmentThenDefault(t *testing.T) {
-	t.Setenv("REAGENT_MODEL", "from-env")
-	if got := resolveModel("from-flag"); got != "from-flag" {
-		t.Fatalf("got %q", got)
-	}
-	if got := resolveModel(""); got != "from-env" {
-		t.Fatalf("got %q", got)
-	}
-	t.Setenv("REAGENT_MODEL", "")
-	if got := resolveModel(""); got != DefaultModel {
-		t.Fatalf("got %q", got)
 	}
 }
 

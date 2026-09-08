@@ -66,14 +66,14 @@ func (u *responsesUsage) normalized() Usage {
 	}
 }
 
-// normalizeResponse turns one raw 2xx body into a model turn.
+// normalizeOpenAIResponse turns one raw 2xx body into a model turn.
 //
 // It produces two views of the same output: normalized blocks, which the
 // runtime uses to decide what to do, and the provider's own items, retained
 // verbatim because continuation can depend on parts we cannot read (I15).
 // Anything it does not recognize fails the whole response, so an unread item
 // can never be quietly dropped from a turn.
-func normalizeResponse(raw []byte) (ModelResponse, error) {
+func normalizeOpenAIResponse(raw []byte) (ModelResponse, error) {
 	var body responsesBody
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return ModelResponse{}, &ModelError{Status: StatusProtocolError, Message: "response is not valid JSON"}
@@ -103,11 +103,11 @@ func normalizeResponse(raw []byte) (ModelResponse, error) {
 	response := ModelResponse{
 		ResponseID: body.ID,
 		Model:      body.Model,
-		Native:     NativeOutput{Provider: "openai.responses"},
+		Native:     NativeOutput{Provider: openaiProvider},
 		Usage:      usage,
 	}
 	for _, raw := range body.Output {
-		blocks, err := normalizeItem(raw)
+		blocks, err := normalizeOpenAIItem(raw)
 		if err != nil {
 			return ModelResponse{}, err
 		}
@@ -119,9 +119,9 @@ func normalizeResponse(raw []byte) (ModelResponse, error) {
 	return response, nil
 }
 
-// normalizeItem reads the blocks one output item contributes. A reasoning item
+// normalizeOpenAIItem reads the blocks one output item contributes. A reasoning item
 // contributes none: it is retained, never turned into visible prose.
-func normalizeItem(raw json.RawMessage) ([]OutputBlock, error) {
+func normalizeOpenAIItem(raw json.RawMessage) ([]OutputBlock, error) {
 	var item responsesItem
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return nil, &ModelError{Status: StatusProtocolError, Message: "output item is not valid JSON"}

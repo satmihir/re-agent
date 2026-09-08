@@ -43,6 +43,18 @@ export OPENAI_API_KEY=sk-...
 ./reagent run --workspace ./some-repo "Trace how a request reaches the worker."
 ```
 
+Two providers are supported, and a run keeps one from start to finish. A model
+name starting with `claude-` selects Anthropic; anything else selects OpenAI.
+`--provider` makes it explicit and picks that provider's default model.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+./reagent run --workspace ./some-repo --provider anthropic "Trace how a request reaches the worker."
+```
+
+Both providers write the same trace format, so a run on one can be compared
+with a run on the other line for line.
+
 ## What it can do
 
 Tools are granted at launch, by you, and nothing the model sends can widen that
@@ -116,9 +128,11 @@ repeat. Everything else is in service of it.
 | `loop.go` | The loop, response validation, tool dispatch, budgets |
 | `types.go` | The domain vocabulary: entries, blocks, calls, outcomes, modes |
 | `context.go` | `BuildContext`, a pure function with no I/O and no clock |
-| `openai.go` | `EncodeRequest`: the request bytes, shared by preview and live |
-| `openai_client.go` | Transport, the two-attempt retry rule, attempt tracing |
-| `openai_response.go` | Turning a reply into blocks plus retained provider items |
+| `provider.go` | Everywhere the choice of provider matters, in one place |
+| `transport.go` | HTTP, the two-attempt retry rule, attempt tracing; shared by both adapters |
+| `openai.go`, `anthropic.go` | Each provider's request bytes, shared by preview and live |
+| `openai_response.go`, `anthropic_response.go` | Turning a reply into blocks plus retained provider items |
+| `openai_client.go`, `anthropic_client.go` | Each adapter's headers and endpoint around the transport |
 | `tools.go` | The registry, mode filtering, argument decoding |
 | `tool_*.go` | One file per tool, each about a hundred lines |
 | `workspace.go` | Path checks, the single file snapshot, publication |
@@ -131,9 +145,10 @@ that would otherwise look odd:
 - **The model never runs a tool.** The adapter returns a response; the loop
   decides what to execute. That boundary is the reason `Model` is an interface.
 - **Provider items come back verbatim.** An assistant turn carries the
-  provider's own output items, including opaque reasoning, and they are sent
-  back unchanged. The harness never rebuilds continuation state from visible
-  prose, and refuses to send a turn that has none.
+  provider's own output items, including opaque reasoning or thinking, and
+  they are sent back unchanged. The harness never rebuilds continuation state
+  from visible prose, refuses to send a turn that has none, and refuses to
+  send one provider's items to the other.
 - **Context construction is pure.** No file reads, no timestamps, no random
   values. Two requests differ only where the conversation differs, which is
   what makes comparing them worth anything.
@@ -155,29 +170,32 @@ Everything runs offline with no credentials. A test that reaches the public
 internet is a bug. The live adapter is tested against a local fake server;
 process tests use `/bin/sh` rather than any language toolchain.
 
-One test does contact the real API, and only when you ask it to:
+Two tests contact the real APIs, and only when you ask them to:
 
 ```bash
-REAGENT_LIVE_TESTS=1 OPENAI_API_KEY=sk-... go test ./internal/reagent/ -run Live -v
+REAGENT_LIVE_TESTS=1 OPENAI_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-...   go test ./internal/reagent/ -run Live -v
 ```
 
-It spends tokens. It checks that the deployed API accepts the request this
-harness encodes and completes one tool round trip. It says nothing about model
-quality.
+They spend tokens. Each checks that the deployed API accepts the request this
+harness encodes and completes one tool round trip. Set only one key to run only
+that provider's test. They say nothing about model quality.
 
 ## Configuration
 
 | Flag | Meaning |
 |---|---|
 | `--workspace` | Directory the tools may see. Defaults to the current one. |
-| `--model` | Model to request. Falls back to `REAGENT_MODEL`, then a compiled default. |
+| `--provider` | `openai` or `anthropic`. Inferred from the model name when omitted. |
+| `--model` | Model to request. Falls back to `REAGENT_MODEL`, then the provider's default. |
+| `--reasoning-effort` | `auto` picks the provider's default; empty omits the parameter. |
 | `--allow-write`, `--allow-exec` | Grant authority beyond reading. |
 | `--show-context` | Print the first request and exit. No key needed. |
 | `--scripted FILE` | Replay recorded responses instead of calling a provider. |
 | `--trace-file PATH` | Where to write the run's trace. |
 | `--max-steps`, `--max-tool-calls` | Run budgets. Default 20 and 40. |
 
-`OPENAI_API_KEY` is required only for live runs. Exit codes are 0 for a
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is required only for a live run on
+that provider. Exit codes are 0 for a
 completed reply or a successful preview, 1 for a run that did not complete, and
 2 for a bad invocation. A failing command inside a run does not become the
 harness's exit code.

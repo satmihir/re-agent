@@ -22,9 +22,10 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("reagent run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	workspace := fs.String("workspace", ".", "directory the read tools may see")
-	modelName := fs.String("model", "", "model to request; defaults to REAGENT_MODEL, then "+DefaultModel)
-	reasoning := fs.String("reasoning-effort", DefaultReasoningEffort,
-		"reasoning effort to request; empty leaves the model at its own default")
+	providerName := fs.String("provider", "", "openai or anthropic; inferred from the model name when omitted")
+	modelName := fs.String("model", "", "model to request; defaults to REAGENT_MODEL, then the provider's default")
+	reasoning := fs.String("reasoning-effort", "auto",
+		"reasoning effort to request; auto picks the provider's default, empty omits the parameter")
 	script := fs.String("scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	showContext := fs.Bool("show-context", false, "print the request the first step would send, then exit")
 	allowWrite := fs.Bool("allow-write", false, "let the model change workspace files with edit_file")
@@ -47,8 +48,8 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return usage(stderr, "a prompt is required")
 	case *maxSteps < 1 || *maxToolCalls < 1:
 		return usage(stderr, "--max-steps and --max-tool-calls must be positive")
-	case *script != "" && *modelName != "":
-		return usage(stderr, "--scripted replays recorded responses, so it takes no --model")
+	case *script != "" && (*modelName != "" || *providerName != ""):
+		return usage(stderr, "--scripted replays recorded responses, so it takes no --model or --provider")
 	case *script != "" && *showContext:
 		return usage(stderr, "--show-context previews a live request, so it cannot be combined with --scripted")
 	case *allowExec && !*allowWrite:
@@ -81,13 +82,17 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "exec mode: commands run as you, in %s, and can read, write, and use the network\n", ws.Root())
 	}
 
+	provider, model, err := resolveTarget(*providerName, *modelName)
+	if err != nil {
+		return usage(stderr, err.Error())
+	}
 	cfg := Config{
-		Model: resolveModel(*modelName), ReasoningEffort: *reasoning,
+		Provider: provider, Model: model, ReasoningEffort: resolveEffort(*reasoning, provider),
 		Registry: registry, WorkspacePath: ws.Root(),
 		MaxSteps: *maxSteps, MaxToolCalls: *maxToolCalls,
 	}
 	if *script != "" {
-		cfg.Model = "scripted"
+		cfg.Provider, cfg.Model = "scripted", "scripted"
 	}
 
 	// The preview is built before any live dependency exists, which is why it
@@ -104,9 +109,9 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return exitOK
 	}
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := os.Getenv(apiKeyVariable(provider))
 	if *script == "" && apiKey == "" {
-		return usage(stderr, "OPENAI_API_KEY is not set; use --scripted or --show-context to work offline")
+		return usage(stderr, apiKeyVariable(provider)+" is not set; use --scripted or --show-context to work offline")
 	}
 
 	sessionID, runID := NewID(), NewID()
@@ -122,14 +127,14 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	// The adapter holds the trace so every attempt's exact bytes are recorded
 	// without transport detail leaking into the transcript (v1 §5.1).
-	var model Model = NewOpenAIModel(apiKey, "", NewHTTPClient(), trace)
+	live := newLiveModel(provider, apiKey, NewHTTPClient(), trace)
 	if *script != "" {
-		if model, err = LoadScript(*script); err != nil {
+		if live, err = LoadScript(*script); err != nil {
 			return usage(stderr, err.Error())
 		}
 	}
 
-	result := NewRun(cfg, model, trace, sessionID, runID, stderr).Execute(ctx, prompt)
+	result := NewRun(cfg, live, trace, sessionID, runID, stderr).Execute(ctx, prompt)
 	return report(result, stdout, stderr)
 }
 

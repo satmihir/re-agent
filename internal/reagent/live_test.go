@@ -34,12 +34,16 @@ func TestLive_ReadsAMarkerFromTheWorkspace(t *testing.T) {
 	trace := OpenTrace(tracePath, "session", "run", io.Discard)
 	defer trace.Close()
 
+	_, model, err := resolveTarget("", os.Getenv("REAGENT_TEST_MODEL"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := Config{
-		Model: resolveModel(os.Getenv("REAGENT_TEST_MODEL")), Registry: registry,
+		Provider: openaiName, Model: model, Registry: registry,
 		WorkspacePath: ws.Root(), MaxSteps: 4, MaxToolCalls: 6,
 	}
-	model := NewOpenAIModel(apiKey, "", NewHTTPClient(), trace)
-	run := NewRun(cfg, model, trace, "session", "run", io.Discard)
+	live := NewOpenAIModel(apiKey, "", NewHTTPClient(), trace)
+	run := NewRun(cfg, live, trace, "session", "run", io.Discard)
 	result := run.Execute(context.Background(), "What is the project marker in this workspace?")
 
 	if result.Status != StatusCompleted {
@@ -59,6 +63,54 @@ func TestLive_ReadsAMarkerFromTheWorkspace(t *testing.T) {
 	for _, entry := range run.history {
 		if entry.Kind == EntryAssistant && len(entry.Assistant.Native.Items) == 0 {
 			t.Fatal("an accepted turn retained no provider items for continuation")
+		}
+	}
+	t.Logf("live trace: %s", tracePath)
+}
+
+// TestLive_AnthropicReadsAMarkerFromTheWorkspace is the Anthropic conformance
+// check: opt-in, spends tokens, and says nothing about model quality.
+func TestLive_AnthropicReadsAMarkerFromTheWorkspace(t *testing.T) {
+	if os.Getenv("REAGENT_LIVE_TESTS") != "1" {
+		t.Skip("live conformance test not enabled: set REAGENT_LIVE_TESTS=1 and ANTHROPIC_API_KEY")
+	}
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		t.Skip("live conformance test enabled but ANTHROPIC_API_KEY is not set")
+	}
+	t.Log("contacting the real API; this test spends tokens")
+
+	const marker = "zubrowka-4417"
+	ws := testWorkspace(t, map[string]string{"notes.txt": "project marker: " + marker + "\n"})
+	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tracePath := filepath.Join(t.TempDir(), "events.jsonl")
+	trace := OpenTrace(tracePath, "session", "run", io.Discard)
+	defer trace.Close()
+
+	cfg := Config{
+		Provider: anthropicName, Model: DefaultAnthropicModel, Registry: registry,
+		WorkspacePath: ws.Root(), MaxSteps: 4, MaxToolCalls: 6,
+	}
+	live := NewAnthropicModel(apiKey, "", NewHTTPClient(), trace)
+	run := NewRun(cfg, live, trace, "session", "run", io.Discard)
+	result := run.Execute(context.Background(), "What is the project marker in this workspace?")
+
+	if result.Status != StatusCompleted {
+		t.Fatalf("got %s: %s", result.Status, result.Reason)
+	}
+	if !strings.Contains(result.Reply, marker) || result.ToolCalls == 0 {
+		t.Fatalf("reply %q after %d tool calls", result.Reply, result.ToolCalls)
+	}
+	if !result.Usage.Known || result.Usage.InputTokens == 0 {
+		t.Fatalf("no usage was reported: %+v", result.Usage)
+	}
+	for _, entry := range run.history {
+		if entry.Kind == EntryAssistant && entry.Assistant.Native.Provider != anthropicProvider {
+			t.Fatalf("an accepted turn was tagged %q", entry.Assistant.Native.Provider)
 		}
 	}
 	t.Logf("live trace: %s", tracePath)
