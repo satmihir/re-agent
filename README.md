@@ -14,7 +14,7 @@ It is a working repository assistant, not a rival to a mature coding agent. See
 ## Quick start
 
 ```bash
-go build ./cmd/reagent
+make build
 ```
 
 The fastest way to understand the harness is to look at what it would send a
@@ -162,23 +162,25 @@ that would otherwise look odd:
 ## Tests
 
 ```bash
-go test ./...
-go test -race ./...
+make check
 ```
 
-Everything runs offline with no credentials. A test that reaches the public
+That runs gofmt, vet, and the whole suite. Everything runs offline with no
+credentials. A test that reaches the public
 internet is a bug. The live adapter is tested against a local fake server;
 process tests use `/bin/sh` rather than any language toolchain.
 
-Two tests contact the real APIs, and only when you ask them to:
+Two tests contact the real APIs, and only when you ask them to. Copy
+`.env.example` to `.env`, fill in the keys, and run:
 
 ```bash
-REAGENT_LIVE_TESTS=1 OPENAI_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-...   go test ./internal/reagent/ -run Live -v
+make live
 ```
 
 They spend tokens. Each checks that the deployed API accepts the request this
-harness encodes and completes one tool round trip. Set only one key to run only
-that provider's test. They say nothing about model quality.
+harness encodes and completes one tool round trip. A provider whose key is
+missing is skipped; no key at all is an error. They say nothing about model
+quality.
 
 ## Configuration
 
