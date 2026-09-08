@@ -36,11 +36,9 @@ func runAnthropic(t *testing.T, api *fakeAPI, tools ...Tool) (Config, string, Ru
 	cfg := testConfig(t, tools...)
 	cfg.Provider, cfg.Model = anthropicName, "claude-haiku-4-5"
 	tracePath := filepath.Join(t.TempDir(), "events.jsonl")
-	trace := OpenTrace(tracePath, "session", "run", io.Discard)
-	defer trace.Close()
-
+	trace := NewTrace(io.Discard)
 	live := NewAnthropicModel("sk-ant-secret", api.server.URL, NewHTTPClient(), trace)
-	result := NewRun(cfg, live, trace, "session", "run", io.Discard).Execute(context.Background(), "find the marker")
+	_, result := oneTurn(t, context.Background(), cfg, live, trace, tracePath, "find the marker")
 	return cfg, tracePath, result
 }
 

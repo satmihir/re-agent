@@ -17,7 +17,7 @@ func TestMain_ScriptedRunPrintsReplyOnStdout(t *testing.T) {
 	code := Main(context.Background(), []string{"run",
 		"--scripted", "../../testdata/scripts/echo_then_answer.json",
 		"--trace-file", trace,
-		"Where is the timeout set?"}, &stdout, &stderr)
+		"Where is the timeout set?"}, strings.NewReader(""), &stdout, &stderr)
 
 	if code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
@@ -40,7 +40,7 @@ func TestMain_UsageErrors(t *testing.T) {
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := Main(context.Background(), args, &stdout, &stderr); code != exitUsage {
+			if code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code != exitUsage {
 				t.Fatalf("exit %d, want %d", code, exitUsage)
 			}
 		})
@@ -59,7 +59,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := Main(context.Background(), []string{"run",
-		"--workspace", root, "--show-context", "Where is the timeout set?"}, &stdout, &stderr)
+		"--workspace", root, "--show-context", "Where is the timeout set?"}, strings.NewReader(""), &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -91,7 +91,7 @@ func TestMain_ShowContextNeedsNoCredentials(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	if code := Main(context.Background(), []string{"run",
-		"--workspace", t.TempDir(), "--show-context", "a task"}, &stdout, &stderr); code != exitOK {
+		"--workspace", t.TempDir(), "--show-context", "a task"}, strings.NewReader(""), &stdout, &stderr); code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
 	if strings.Contains(stdout.String(), "secret-key-value") {
@@ -106,7 +106,7 @@ func TestMain_ShowContextReportsAnOversizedRequest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main(context.Background(), []string{"run",
 		"--workspace", t.TempDir(), "--show-context",
-		strings.Repeat("x ", MaxRequestBytes/2)}, &stdout, &stderr)
+		strings.Repeat("x ", MaxRequestBytes/2)}, strings.NewReader(""), &stdout, &stderr)
 
 	if code != exitRunFail {
 		t.Fatalf("exit %d, want %d", code, exitRunFail)
@@ -125,7 +125,7 @@ func TestMain_ConflictingAndMissingModes(t *testing.T) {
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := Main(context.Background(), args, &stdout, &stderr); code != exitUsage {
+			if code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code != exitUsage {
 				t.Fatalf("exit %d, want %d", code, exitUsage)
 			}
 		})
@@ -142,7 +142,7 @@ func TestMain_AllowWriteDeclaresTheEditTool(t *testing.T) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
 		full := append([]string{"run", "--workspace", root, "--show-context"}, args...)
-		if code := Main(context.Background(), append(full, "a task"), &stdout, &stderr); code != exitOK {
+		if code := Main(context.Background(), append(full, "a task"), strings.NewReader(""), &stdout, &stderr); code != exitOK {
 			t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 		}
 		var request decodedRequest

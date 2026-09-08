@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,12 +33,10 @@ func readEvents(t *testing.T, path string) []event {
 
 func TestTrace_RecordsOneRunInOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
-	trace := OpenTrace(path, "session", "run", os.Stderr)
-	run := NewRun(testConfig(t), NewScriptedModel(
+	trace := NewTrace(os.Stderr)
+	oneTurn(t, context.Background(), testConfig(t), NewScriptedModel(
 		turn(callBlock("call_1", "echo", `{"text":"hi"}`)),
-		turn(textBlock("done"))), trace, "session", "run", io.Discard)
-	run.Execute(context.Background(), "task")
-	trace.Close()
+		turn(textBlock("done"))), trace, path, "task")
 
 	var kinds []string
 	for i, e := range readEvents(t, path) {
@@ -63,11 +60,8 @@ func TestTrace_WriteFailureWarnsAndRunContinues(t *testing.T) {
 	}
 
 	var warnings bytes.Buffer
-	trace := OpenTrace(filepath.Join(blocked, "events.jsonl"), "s", "r", &warnings)
-	defer trace.Close()
-
-	run := NewRun(testConfig(t), NewScriptedModel(turn(textBlock("done"))), trace, "s", "r", io.Discard)
-	result := run.Execute(context.Background(), "task")
+	_, result := oneTurn(t, context.Background(), testConfig(t), NewScriptedModel(turn(textBlock("done"))),
+		NewTrace(&warnings), filepath.Join(blocked, "events.jsonl"), "task")
 
 	if result.Status != StatusCompleted {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)

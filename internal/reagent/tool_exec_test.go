@@ -319,7 +319,7 @@ func TestExec_IsWithheldWithoutExecMode(t *testing.T) {
 func TestMain_AllowExecRequiresAllowWrite(t *testing.T) {
 	var stdout, stderr io.Writer = &strings.Builder{}, &strings.Builder{}
 	code := Main(context.Background(), []string{"run", "--workspace", t.TempDir(),
-		"--allow-exec", "--show-context", "a task"}, stdout, stderr)
+		"--allow-exec", "--show-context", "a task"}, strings.NewReader(""), stdout, stderr)
 
 	if code != exitUsage {
 		t.Fatalf("exit %d, want %d", code, exitUsage)

@@ -31,8 +31,7 @@ func TestLive_ReadsAMarkerFromTheWorkspace(t *testing.T) {
 	}
 
 	tracePath := filepath.Join(t.TempDir(), "events.jsonl")
-	trace := OpenTrace(tracePath, "session", "run", io.Discard)
-	defer trace.Close()
+	trace := NewTrace(io.Discard)
 
 	_, model, err := resolveTarget("", os.Getenv("REAGENT_TEST_MODEL"))
 	if err != nil {
@@ -43,8 +42,8 @@ func TestLive_ReadsAMarkerFromTheWorkspace(t *testing.T) {
 		WorkspacePath: ws.Root(), MaxSteps: 4, MaxToolCalls: 6,
 	}
 	live := NewOpenAIModel(apiKey, "", NewHTTPClient(), trace)
-	run := NewRun(cfg, live, trace, "session", "run", io.Discard)
-	result := run.Execute(context.Background(), "What is the project marker in this workspace?")
+	run, result := oneTurn(t, context.Background(), cfg, live, trace, tracePath,
+		"What is the project marker in this workspace?")
 
 	if result.Status != StatusCompleted {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
@@ -88,16 +87,15 @@ func TestLive_AnthropicReadsAMarkerFromTheWorkspace(t *testing.T) {
 	}
 
 	tracePath := filepath.Join(t.TempDir(), "events.jsonl")
-	trace := OpenTrace(tracePath, "session", "run", io.Discard)
-	defer trace.Close()
+	trace := NewTrace(io.Discard)
 
 	cfg := Config{
 		Provider: anthropicName, Model: DefaultAnthropicModel, Registry: registry,
 		WorkspacePath: ws.Root(), MaxSteps: 4, MaxToolCalls: 6,
 	}
 	live := NewAnthropicModel(apiKey, "", NewHTTPClient(), trace)
-	run := NewRun(cfg, live, trace, "session", "run", io.Discard)
-	result := run.Execute(context.Background(), "What is the project marker in this workspace?")
+	run, result := oneTurn(t, context.Background(), cfg, live, trace, tracePath,
+		"What is the project marker in this workspace?")
 
 	if result.Status != StatusCompleted {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)

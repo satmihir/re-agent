@@ -25,35 +25,53 @@ type event struct {
 	Data          any    `json:"data"`
 }
 
-// Trace is a best-effort JSONL record of one run.
+// Trace is a best-effort JSONL record of one run at a time.
 //
-// v0 deliberately drops v1's I13: a failed write warns once, disables further
-// writes, and lets the run continue. v1 §16.5 restores fail-closed recording.
+// A session points one recorder at a fresh file for each run, so the loop and
+// the adapter, which both hold it, follow the conversation without being
+// rebuilt. v0 deliberately drops v1's I13: a failed write warns once, disables
+// recording for that run, and lets the run continue (v1 §16.5 restores
+// fail-closed recording).
 type Trace struct {
-	file      *os.File
-	path      string
+	warn      io.Writer
 	sessionID string
 	runID     string
-	warn      io.Writer
+	path      string
+	file      *os.File
 	seq       int
 	off       bool
 }
 
-// OpenTrace creates a new trace file. It always returns a usable Trace: if the
-// file cannot be created, the returned Trace warns once and records nothing.
+// NewTrace makes a recorder with nothing open. Nothing is recorded until Open.
+func NewTrace(warn io.Writer) *Trace {
+	return &Trace{warn: warn}
+}
+
+// OpenTrace makes a recorder and opens its first run: the one-shot form.
 func OpenTrace(path, sessionID, runID string, warn io.Writer) *Trace {
-	t := &Trace{path: path, sessionID: sessionID, runID: runID, warn: warn}
+	t := NewTrace(warn)
+	t.Open(sessionID, runID, path)
+	return t
+}
+
+// Open closes any current file and starts recording a new run into path. A
+// failure to create the file is reported once and recording for this run is
+// skipped; the next Open tries again.
+func (t *Trace) Open(sessionID, runID, path string) {
+	t.Close()
+	t.sessionID, t.runID, t.path = sessionID, runID, path
+	t.seq, t.off = 0, false
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.disable(err)
-		return t
+		return
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		t.disable(err)
-		return t
+		return
 	}
-	t.file = f
-	return t
+	t.file = file
 }
 
 // DefaultTracePath is where a run records itself when no path is given.
@@ -68,7 +86,7 @@ func DefaultTracePath(runID string) (string, error) {
 // Write appends one event. Callers do not check for failure: recording is best
 // effort in v0, and a disabled trace is reported once, on stderr.
 func (t *Trace) Write(kind string, step int, data any) {
-	if t.off {
+	if t.off || t.file == nil {
 		return
 	}
 	t.seq++
@@ -91,7 +109,7 @@ func (t *Trace) Write(kind string, step int, data any) {
 	}
 }
 
-// Path is the trace file, or empty when nothing was recorded.
+// Path is the current run's trace file, or empty when it is not being recorded.
 func (t *Trace) Path() string {
 	if t.off {
 		return ""
@@ -99,17 +117,16 @@ func (t *Trace) Path() string {
 	return t.path
 }
 
+// Close finishes the current run's file, if one is open.
 func (t *Trace) Close() {
 	if t.file != nil {
 		t.file.Close()
+		t.file = nil
 	}
 }
 
 func (t *Trace) disable(cause error) {
 	t.off = true
-	if t.file != nil {
-		t.file.Close()
-		t.file = nil
-	}
+	t.Close()
 	fmt.Fprintf(t.warn, "warning: tracing disabled, this run is not recorded: %v\n", cause)
 }

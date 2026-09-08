@@ -55,6 +55,19 @@ export ANTHROPIC_API_KEY=sk-ant-...
 Both providers write the same trace format, so a run on one can be compared
 with a run on the other line for line.
 
+For a conversation rather than a single task, use `chat`. Each line you type
+is one turn, and the model sees every turn before it, including the files it
+already read.
+
+```bash
+./reagent chat --workspace ./some-repo
+```
+
+`/trace` prints the last turn's trace, `/reset` starts over, `/exit` or Ctrl-D
+leaves. A turn that ends badly, for instance by running out of steps, blocks
+the session until `/reset`, so a conversation is never silently continued from
+a state the harness could not account for.
+
 ## What it can do
 
 Tools are granted at launch, by you, and nothing the model sends can widen that
@@ -193,7 +206,8 @@ quality.
 | `--allow-write`, `--allow-exec` | Grant authority beyond reading. |
 | `--show-context` | Print the first request and exit. No key needed. |
 | `--scripted FILE` | Replay recorded responses instead of calling a provider. |
-| `--trace-file PATH` | Where to write the run's trace. |
+| `--trace-file PATH` | `run`: where to write the trace. |
+| `--trace-dir DIR` | `chat`: where each turn's trace goes. |
 | `--max-steps`, `--max-tool-calls` | Run budgets. Default 20 and 40. |
 
 `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is required only for a live run on

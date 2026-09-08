@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 )
@@ -23,32 +22,26 @@ type Config struct {
 	MaxToolCalls    int
 }
 
-// Run executes one user submission to a terminal outcome. One Run owns one
-// transcript; v0 has no reusable session (v1 §6 restores one).
+// Run executes one user submission to a terminal outcome. It appends to its
+// session's transcript and owns only what is per-run: its id, its counters,
+// and the effects it caused.
 type Run struct {
-	cfg      Config
-	model    Model
-	trace    *Trace
-	progress io.Writer
+	session *Session
+	cfg     Config
+	model   Model
+	trace   *Trace
+	runID   string
 
-	sessionID string
-	runID     string
-
-	history   []Entry
-	seenCalls map[string]bool
-	effects   []EffectRecord
-	steps     int
-	calls     int
-	usage     Usage
+	effects []EffectRecord
+	steps   int
+	calls   int
+	usage   Usage
 }
 
-// NewRun wires one run. IDs are generated locally and identify the trace only.
-func NewRun(cfg Config, model Model, trace *Trace, sessionID, runID string, progress io.Writer) *Run {
+func newRun(session *Session, runID string) *Run {
 	return &Run{
-		cfg: cfg, model: model, trace: trace, progress: progress,
-		sessionID: sessionID, runID: runID,
-		seenCalls: make(map[string]bool),
-		usage:     Usage{Known: true},
+		session: session, cfg: session.cfg, model: session.model, trace: session.trace,
+		runID: runID, usage: Usage{Known: true},
 	}
 }
 
@@ -63,17 +56,21 @@ func NewID() string {
 // validate it, execute the tools it asked for, append the observations, repeat
 // (v1 §7.2). Everything that reaches the model passes through here.
 func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
-	r.history = append(r.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}})
+	s := r.session
+	// The history a run starts from is embedded so its trace can be read on
+	// its own, without the traces of the turns before it (v1 §6.2).
 	r.trace.Write("run.started", 0, map[string]any{
-		"model":          r.model.Name(),
-		"provider":       r.cfg.Provider,
-		"configured":     r.cfg.Model,
-		"max_steps":      r.cfg.MaxSteps,
-		"max_tool_calls": r.cfg.MaxToolCalls,
-		"prompt":         prompt,
-		"instructions":   defaultInstructions,
-		"tools":          r.cfg.Registry.Specs(),
+		"model":           r.model.Name(),
+		"provider":        r.cfg.Provider,
+		"configured":      r.cfg.Model,
+		"max_steps":       r.cfg.MaxSteps,
+		"max_tool_calls":  r.cfg.MaxToolCalls,
+		"prompt":          prompt,
+		"instructions":    defaultInstructions,
+		"tools":           r.cfg.Registry.Specs(),
+		"initial_history": s.history,
 	})
+	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}})
 
 	for {
 		if ctx.Err() != nil {
@@ -81,7 +78,7 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 		}
 
 		r.steps++
-		req := BuildContext(r.cfg, RequestScope{SessionID: r.sessionID, RunID: r.runID, Step: r.steps}, r.history)
+		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.history)
 		r.trace.Write("model.requested", r.steps, req)
 
 		resp, err := r.model.Generate(ctx, req)
@@ -101,7 +98,7 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 		r.usage.Add(resp.Usage)
 		r.trace.Write("model.accepted", r.steps, resp)
 		// The whole response is appended before any of its results (I08).
-		r.history = append(r.history, Entry{Kind: EntryAssistant, Assistant: &resp})
+		s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &resp})
 
 		calls := toolCalls(resp)
 		if len(calls) == 0 {
@@ -111,11 +108,11 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 			return r.finish(StatusCompleted, "", blockText(resp, BlockText))
 		}
 		for _, call := range calls {
-			r.seenCalls[call.CallID] = true
+			s.seenCalls[call.CallID] = true
 		}
 		if text := blockText(resp, BlockText); text != "" {
 			// Text alongside tool calls is progress, not an answer (v1 §7.3.4).
-			fmt.Fprintf(r.progress, "· %s\n", sanitize(text))
+			fmt.Fprintf(s.progress, "· %s\n", sanitize(text))
 		}
 
 		if reason, reserved := r.reserve(len(calls)); !reserved {
@@ -151,8 +148,8 @@ func (r *Run) validateResponse(resp ModelResponse) string {
 			case b.Call.Name == "":
 				return "tool call has an empty name"
 			// A repeated ID is a protocol failure, not a request to reuse a
-			// cached result (I04).
-			case inResponse[b.Call.CallID] || r.seenCalls[b.Call.CallID]:
+			// cached result. The set spans the whole session (I04).
+			case inResponse[b.Call.CallID] || r.session.seenCalls[b.Call.CallID]:
 				return "duplicate call_id " + b.Call.CallID
 			}
 			inResponse[b.Call.CallID] = true
@@ -252,8 +249,8 @@ func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 		})
 	}
 	r.trace.Write("tool.finished", r.steps, result)
-	r.history = append(r.history, Entry{Kind: EntryTool, Tool: &result})
-	fmt.Fprintf(r.progress, "· %s %s\n", sanitize(call.Name), outcome.Code)
+	r.session.history = append(r.session.history, Entry{Kind: EntryTool, Tool: &result})
+	fmt.Fprintf(r.session.progress, "· %s %s\n", sanitize(call.Name), outcome.Code)
 }
 
 // recordNotExecuted gives every unrun call of an accepted batch a terminal

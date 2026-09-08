@@ -60,10 +60,13 @@ func display(text string, styled bool) string {
 
 // styledOutput reports whether this writer is a terminal that wants styling.
 func styledOutput(w io.Writer) bool {
-	if os.Getenv("NO_COLOR") != "" {
-		return false
-	}
-	file, isFile := w.(*os.File)
+	return os.Getenv("NO_COLOR") == "" && isTerminal(w)
+}
+
+// isTerminal reports whether a stream is an interactive terminal rather than a
+// pipe, a file, or a buffer.
+func isTerminal(stream any) bool {
+	file, isFile := stream.(*os.File)
 	if !isFile {
 		return false
 	}

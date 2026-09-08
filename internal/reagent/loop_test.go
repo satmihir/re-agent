@@ -48,16 +48,26 @@ func testConfig(t *testing.T, tools ...Tool) Config {
 	return Config{Model: "test", Registry: registry, MaxSteps: 20, MaxToolCalls: 40}
 }
 
-func runScript(t *testing.T, cfg Config, responses ...ModelResponse) (*Run, RunResult) {
+func runScript(t *testing.T, cfg Config, responses ...ModelResponse) (*Session, RunResult) {
 	t.Helper()
-	trace := OpenTrace(filepath.Join(t.TempDir(), "events.jsonl"), "session", "run", io.Discard)
-	defer trace.Close()
-	run := NewRun(cfg, NewScriptedModel(responses...), trace, "session", "run", io.Discard)
-	return run, run.Execute(context.Background(), "task")
+	return oneTurn(t, context.Background(), cfg, NewScriptedModel(responses...), NewTrace(io.Discard),
+		filepath.Join(t.TempDir(), "events.jsonl"), "task")
+}
+
+// oneTurn runs a single turn of a fresh session and returns the session so a
+// test can inspect the transcript it built.
+func oneTurn(t *testing.T, ctx context.Context, cfg Config, model Model, trace *Trace, tracePath, text string) (*Session, RunResult) {
+	t.Helper()
+	session := NewSession(cfg, model, trace, io.Discard)
+	result, err := session.Turn(ctx, text, "run", tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session, result
 }
 
 // results returns every tool observation appended to the transcript, in order.
-func results(run *Run) []ToolResult {
+func results(run *Session) []ToolResult {
 	var out []ToolResult
 	for _, e := range run.history {
 		if e.Kind == EntryTool {
@@ -277,10 +287,9 @@ func TestLoop_CancelledBeforeFirstStep(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	trace := OpenTrace(filepath.Join(t.TempDir(), "events.jsonl"), "s", "r", io.Discard)
-	defer trace.Close()
 	model := NewScriptedModel(turn(textBlock("unreached")))
-	result := NewRun(testConfig(t), model, trace, "s", "r", io.Discard).Execute(ctx, "task")
+	_, result := oneTurn(t, ctx, testConfig(t), model, NewTrace(io.Discard),
+		filepath.Join(t.TempDir(), "events.jsonl"), "task")
 
 	if result.Status != StatusCancelled || result.Steps != 0 {
 		t.Fatalf("got %s after %d steps", result.Status, result.Steps)
@@ -333,13 +342,11 @@ func TestLoop_CancelDuringBatchLeavesRemainingCallsUnexecuted(t *testing.T) {
 	runs := 0
 	cfg := testConfig(t, cancellingTool{cancel: cancel}, countingTool{runs: &runs})
 
-	trace := OpenTrace(filepath.Join(t.TempDir(), "events.jsonl"), "s", "r", io.Discard)
-	defer trace.Close()
+	trace := NewTrace(io.Discard)
 	model := NewScriptedModel(turn(
 		callBlock("call_1", "canceller", `{}`),
 		callBlock("call_2", "counter", `{}`)))
-	run := NewRun(cfg, model, trace, "s", "r", io.Discard)
-	result := run.Execute(ctx, "task")
+	run, result := oneTurn(t, ctx, cfg, model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "task")
 
 	if result.Status != StatusCancelled {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
@@ -355,11 +362,10 @@ func TestLoop_CancelDuringBatchLeavesRemainingCallsUnexecuted(t *testing.T) {
 // A model failure with no typed status is reported as a provider error rather
 // than being guessed at.
 func TestLoop_UntypedModelErrorIsProviderError(t *testing.T) {
-	trace := OpenTrace(filepath.Join(t.TempDir(), "events.jsonl"), "s", "r", io.Discard)
-	defer trace.Close()
-	run := NewRun(testConfig(t), brokenModel{}, trace, "s", "r", io.Discard)
+	_, result := oneTurn(t, context.Background(), testConfig(t), brokenModel{}, NewTrace(io.Discard),
+		filepath.Join(t.TempDir(), "events.jsonl"), "task")
 
-	if result := run.Execute(context.Background(), "task"); result.Status != StatusProviderError {
+	if result.Status != StatusProviderError {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
 	}
 }

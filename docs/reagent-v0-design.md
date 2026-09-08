@@ -60,7 +60,9 @@ The only run budgets are `max_steps` and `max_tool_calls`, defaulting to 20 and 
 
 **Relaxation:** Remove the eight-call response cap, the run deadline, the logical model-call deadline, and token budgets; the run's call budget limits batches, one fixed HTTP client timeout (§6.2) bounds a single attempt, and v1 §§7.3 and 15 restore the other limits.
 
-Keep distinct internal reasons for completion, refusal, cancellation, budget exhaustion, provider error, incomplete response, and protocol error, as required by I11. Return the reason with the result; a three-code CLI does not require collapsing the internal distinctions. Do not implement v1's session-reset behavior.
+Keep distinct internal reasons for completion, refusal, cancellation, budget exhaustion, provider error, incomplete response, and protocol error, as required by I11. Return the reason with the result; a three-code CLI does not require collapsing the internal distinctions.
+
+**Amendment (2026-09-07):** v0 originally excluded reusable sessions and v1's reset behavior. Both now exist, because a conversation was wanted and the loop needed no change to support one: a later turn is one more user entry appended to the same transcript. A `Session` holds what outlives a run: the fixed configuration, the accepted transcript, and every call id ever accepted, so I04 spans the session. A `Run` owns what is per-run: its id, counters, effects, and trace. v1 §7.5's continuability rule is adopted as written: only `completed` and `refused` runs may be followed by another turn; any other outcome blocks the session until `/reset`, which starts a fresh session with the same launch configuration and never rolls the old transcript back. The rule is also what keeps the Anthropic encoding valid, since every blocking outcome is one that leaves the transcript ending without an assistant reply. One recorder follows the session and is pointed at a fresh file for each run; each run's `run.started` embeds the history it began from, so a later turn's trace can be read without the earlier ones (v1 §6.2).
 
 Malformed arguments remain a tool observation when their call envelope is valid. An incomplete model response or duplicate call ID remains a protocol-level stop. Those are inherited loop behaviors, not reasons to add a general recovery framework.
 
@@ -246,6 +248,8 @@ Use process exit code 0 for a completed reply or successful context preview, 1 f
 
 **Amendment (2026-09-07):** Two flags joined the surface with the second provider (§12 amendment). `--provider` selects `openai` or `anthropic`; when omitted it is inferred from the model name, and a model name that contradicts an explicit provider is a startup error. `--reasoning-effort` is described under §6. `--scripted` is mutually exclusive with `--provider` as well as `--model`. The environment surface inherited from v1 §18.2 gains `ANTHROPIC_API_KEY`, read only for a live run on that provider; the preview and scripted paths require neither key.
 
+`reagent chat` reads one submission per line from stdin and runs each as a turn of one session (v1 §18.2). It supports `/help`, `/trace`, `/reset`, and `/exit`; a blank line does nothing, an unknown command is explained locally without spending tokens, and EOF exits cleanly. It takes no prompt argument and no `--show-context`; `--trace-dir` places each turn's trace under one directory, and `--trace-file` remains `run`'s flag, since a conversation writes one trace per turn. The first Ctrl-C during a turn cancels that turn and leaves the session usable; in an idle prompt it ends the process. A line is the unit of input, so multi-line pastes are several turns, as v1 §18.2 anticipates.
+
 A `Makefile` now exists, added on request. `make check` runs gofmt, vet, and the offline suite. `make live` sources a `.env` file, when present, into the environment of one `go test` invocation and runs the opt-in conformance tests for both providers. This does not weaken v1 §18.1: the harness binary still reads credentials from its environment and nothing else, and never opens a `.env` file itself. The sourcing happens in the shell, before the tests start, for the test target alone. `.env` is ignored by git and `.env.example` documents its format.
 
 **Amendment (2026-09-06):** v1 §18.3's requirement to escape terminal control characters is now implemented, and the reply is additionally rendered as Markdown when stdout is a terminal. Sanitizing runs first, so every escape sequence reaching the terminal is the harness's own. A pipe or redirect, or `NO_COLOR`, yields the sanitized text unstyled, keeping stdout usable by another program. The rendered subset is headings, bullet and numbered lists, block quotes, fenced code, inline code, bold, italic, and links. Tables and paragraph reflow are out of scope: both need display-width arithmetic the standard library does not provide. Underscore emphasis is out of scope because `snake_case` is more common here than `__bold__`.
@@ -329,7 +333,6 @@ A small manual live run follows **v1 §20.8** without creating the evaluation su
 | Exclusion | v1 restoration point |
 |---|---|
 | Offline replay | §17 |
-| `chat` and reusable sessions | §§6, 18.1 |
 | Exhibits | §8.3 |
 | Evaluation fixture and evaluation runner | §21 |
 | Exit codes beyond 0, 1, and 2 | §18.4 |

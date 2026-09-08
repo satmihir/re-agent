@@ -78,11 +78,9 @@ func runAgainst(t *testing.T, api *fakeAPI, client *http.Client, tools ...Tool) 
 	cfg := testConfig(t, tools...)
 	cfg.Provider, cfg.Model = openaiName, "test-model"
 	tracePath := filepath.Join(t.TempDir(), "events.jsonl")
-	trace := OpenTrace(tracePath, "session", "run", io.Discard)
-	defer trace.Close()
-
+	trace := NewTrace(io.Discard)
 	model := NewOpenAIModel("sk-secret-key", api.server.URL, client, trace)
-	result := NewRun(cfg, model, trace, "session", "run", io.Discard).Execute(context.Background(), "find the marker")
+	_, result := oneTurn(t, context.Background(), cfg, model, trace, tracePath, "find the marker")
 	return cfg, tracePath, result
 }
 
@@ -324,8 +322,7 @@ func TestOpenAI_KeyNeverReachesTheTrace(t *testing.T) {
 
 func TestOpenAI_CancellationDuringRetryStopsTheRun(t *testing.T) {
 	api := newFakeAPI(t, apiReply{status: 429, body: `{"error":{"message":"slow down"}}`}, okReply(textReply))
-	trace := OpenTrace(filepath.Join(t.TempDir(), "events.jsonl"), "s", "r", io.Discard)
-	defer trace.Close()
+	trace := NewTrace(io.Discard)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
@@ -333,7 +330,7 @@ func TestOpenAI_CancellationDuringRetryStopsTheRun(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	result := NewRun(testConfig(t), model, trace, "s", "r", io.Discard).Execute(ctx, "task")
+	_, result := oneTurn(t, ctx, testConfig(t), model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "task")
 
 	if result.Status != StatusCancelled {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
@@ -368,12 +365,10 @@ func TestOpenAI_NonObjectOutputItemIsAProtocolFailure(t *testing.T) {
 // no attempt at all (v1 §8.5).
 func TestOpenAI_OversizedRequestIsNeverSent(t *testing.T) {
 	api := newFakeAPI(t, okReply(textReply))
-	trace := OpenTrace(filepath.Join(t.TempDir(), "events.jsonl"), "s", "r", io.Discard)
-	defer trace.Close()
-
+	trace := NewTrace(io.Discard)
 	model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
-	result := NewRun(testConfig(t), model, trace, "s", "r", io.Discard).
-		Execute(context.Background(), strings.Repeat("x ", MaxRequestBytes/2))
+	_, result := oneTurn(t, context.Background(), testConfig(t), model, trace,
+		filepath.Join(t.TempDir(), "events.jsonl"), strings.Repeat("x ", MaxRequestBytes/2))
 
 	if result.Status != StatusLimitExceeded {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
@@ -404,8 +399,7 @@ func TestOpenAI_NonUTF8BodyIsFlaggedInTheTrace(t *testing.T) {
 // Cancellation mid-request is reported as cancellation, not as a provider fault.
 func TestOpenAI_CancellationDuringARequestStopsTheRun(t *testing.T) {
 	api := newFakeAPI(t, apiReply{status: 200, body: textReply, delay: 500 * time.Millisecond})
-	trace := OpenTrace(filepath.Join(t.TempDir(), "events.jsonl"), "s", "r", io.Discard)
-	defer trace.Close()
+	trace := NewTrace(io.Discard)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -413,7 +407,7 @@ func TestOpenAI_CancellationDuringARequestStopsTheRun(t *testing.T) {
 		cancel()
 	}()
 	model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
-	result := NewRun(testConfig(t), model, trace, "s", "r", io.Discard).Execute(ctx, "task")
+	_, result := oneTurn(t, ctx, testConfig(t), model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "task")
 
 	if result.Status != StatusCancelled {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
