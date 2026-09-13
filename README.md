@@ -63,6 +63,12 @@ already read.
 ./reagent chat --workspace ./some-repo
 ```
 
+`/model` lists the models available with the credentials you have set, and
+`/model 2` or `/model claude-sonnet-5` switches. A model change starts a fresh
+session, since a conversation cannot continue on a different model. `/effort`
+does the same for reasoning effort, which the current model's own vocabulary
+decides, and which changes without discarding the conversation.
+
 `/trace` prints the last turn's trace, `/reset` starts over, `/exit` or Ctrl-D
 leaves. A turn that ends badly, for instance by running out of steps, blocks
 the session until `/reset`, so a conversation is never silently continued from

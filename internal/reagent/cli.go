@@ -97,7 +97,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, err.Error())
 	}
 	cfg := Config{
-		Provider: provider, Model: model, ReasoningEffort: resolveEffort(*reasoning, provider),
+		Provider: provider, Model: model, ReasoningEffort: resolveEffort(*reasoning, provider, model),
 		Registry: registry, WorkspacePath: ws.Root(),
 		MaxSteps: *maxSteps, MaxToolCalls: *maxToolCalls,
 	}
@@ -120,8 +120,13 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return exitOK
 	}
 
-	apiKey := os.Getenv(apiKeyVariable(provider))
-	if *script == "" && apiKey == "" {
+	// Both keys are read, not just the selected provider's: chat can switch
+	// providers, and the catalog listing says which are usable.
+	keys := map[string]string{
+		openaiName:    os.Getenv(apiKeyVariable(openaiName)),
+		anthropicName: os.Getenv(apiKeyVariable(anthropicName)),
+	}
+	if *script == "" && keys[provider] == "" {
 		return usage(stderr, apiKeyVariable(provider)+" is not set; use --scripted or --show-context to work offline")
 	}
 
@@ -130,16 +135,22 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// into the transcript (v1 §5.1).
 	trace := NewTrace(stderr)
 	defer trace.Close()
-	live := newLiveModel(provider, apiKey, NewHTTPClient(), trace)
+	client := NewHTTPClient()
+	live := newLiveModel(provider, keys[provider], client, trace)
+	var scripted Model
 	if *script != "" {
-		if live, err = LoadScript(*script); err != nil {
+		if scripted, err = LoadScript(*script); err != nil {
 			return usage(stderr, err.Error())
 		}
+		live = scripted
 	}
 	session := NewSession(cfg, live, trace, stderr)
 
 	if command == "chat" {
-		return chat(ctx, session, *traceDir, stdin, stdout, stderr)
+		return chat(ctx, &conversation{
+			session: session, cfg: cfg, keys: keys, client: client, scripted: scripted,
+			trace: trace, traceDir: *traceDir, progress: stderr,
+		}, stdin, stdout, stderr)
 	}
 
 	// One-shot: the first Ctrl-C cancels the run.
