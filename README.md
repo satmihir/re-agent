@@ -4,9 +4,11 @@ An AI agent harness written from first principles, in Go, to understand how one
 works. It builds a request, reads what the model asked for, runs the tools it
 authorized, feeds the observations back, and repeats.
 
-The point is that you can read it. About 2,800 lines of non-test Go, one
-package, standard library only. Every decision the harness makes is visible in
-the code, and every request it sends is recoverable from disk.
+The point is that you can read it. About 4,200 lines of non-test Go in one
+package, with a single dependency: `golang.org/x/term`, for line editing at the
+chat prompt. Everything the agent itself does is standard library. Every
+decision the harness makes is visible in the code, and every request it sends
+is recoverable from disk.
 
 It is a working repository assistant, not a rival to a mature coding agent. See
 [what it does not do](#what-it-deliberately-does-not-do).
@@ -70,7 +72,9 @@ does the same for reasoning effort, which the current model's own vocabulary
 decides, and which changes without discarding the conversation.
 
 `/trace` prints the last turn's trace, `/reset` starts over, `/exit` or Ctrl-D
-leaves. A turn that ends badly, for instance by running out of steps, blocks
+leaves. The prompt has the usual line editing: the up and down arrows walk the
+turns you have typed this session, and left, right, and backspace work as you
+would expect. Piped input is read plainly, so scripting `chat` is unaffected. A turn that ends badly, for instance by running out of steps, blocks
 the session until `/reset`, so a conversation is never silently continued from
 a state the harness could not account for.
 

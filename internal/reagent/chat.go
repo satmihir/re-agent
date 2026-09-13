@@ -1,8 +1,8 @@
 package reagent
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -121,24 +121,21 @@ func (c *conversation) commandEffort(argument string, stderr io.Writer) {
 // session (v1 §18.2). Slash commands are handled locally and spend no tokens.
 // A line is the unit of input; pasting several lines sends several turns.
 func chat(ctx context.Context, c *conversation, stdin io.Reader, stdout, stderr io.Writer) int {
-	interactive := isTerminal(stdin)
-	scanner := bufio.NewScanner(stdin)
-	scanner.Buffer(make([]byte, 0, 64<<10), MaxRequestBytes)
+	input := newLineReader(stdin, stderr)
 
 	for {
-		if interactive {
-			fmt.Fprint(stderr, "> ")
-		}
-		if !scanner.Scan() {
-			// EOF, or a line too long to be one turn.
-			if err := scanner.Err(); err != nil {
-				fmt.Fprintf(stderr, "error: %v\n", err)
-				return exitUsage
+		typed, err := input.ReadLine()
+		if err != nil {
+			// End of input, Ctrl-D, and Ctrl-C at the prompt all arrive here
+			// as io.EOF and end the conversation cleanly.
+			if errors.Is(err, io.EOF) {
+				return exitOK
 			}
-			return exitOK
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return exitUsage
 		}
 
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(typed)
 		command, argument, _ := strings.Cut(line, " ")
 		argument = strings.TrimSpace(argument)
 

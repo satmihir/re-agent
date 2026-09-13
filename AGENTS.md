@@ -31,7 +31,8 @@ beats completeness. When in doubt, write less.
   warrants, stop and say so before continuing.
 - One package `internal/reagent` plus `cmd/reagent`. No new package without a
   second real consumer, named in the PR or report.
-- Standard library only. The design names any exception.
+- Standard library, with one exception: `golang.org/x/term`, for line editing
+  at the chat prompt. Nothing else without asking first.
 - Interfaces only where the design justifies them: model I/O, tool execution,
   trace recording. No interface with a single implementation elsewhere.
 - No generics, reflection, functional options, middleware, event buses, or
