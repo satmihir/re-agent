@@ -38,6 +38,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	showContext := fs.Bool("show-context", false, "run only: print the request the first step would send, then exit")
 	allowWrite := fs.Bool("allow-write", false, "let the model change workspace files with edit_file")
 	allowExec := fs.Bool("allow-exec", false, "let the model run commands with exec; requires --allow-write")
+	promptFile := fs.String("prompt-file", "", "run only: read the prompt from this file, or - for stdin")
 	traceFile := fs.String("trace-file", "", "run only: write the trace here instead of the default cache location")
 	traceDir := fs.String("trace-dir", "", "chat only: write each turn's trace under this directory")
 	maxSteps := fs.Int("max-steps", 20, "maximum model requests in one run")
@@ -48,10 +49,12 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	switch {
-	case command == "run" && prompt == "":
-		return usage(stderr, "a prompt is required")
-	case command == "chat" && prompt != "":
-		return usage(stderr, "chat reads its turns from stdin and takes no prompt argument")
+	case command == "run" && prompt == "" && *promptFile == "":
+		return usage(stderr, "a prompt is required, as an argument or with --prompt-file")
+	case command == "run" && prompt != "" && *promptFile != "":
+		return usage(stderr, "give the prompt as an argument or with --prompt-file, not both")
+	case command == "chat" && (prompt != "" || *promptFile != ""):
+		return usage(stderr, "chat reads its turns from stdin and takes no prompt")
 	case command == "chat" && (*showContext || *traceFile != ""):
 		return usage(stderr, "--show-context and --trace-file apply to run; chat writes one trace per turn")
 	case command == "run" && *traceDir != "":
@@ -66,6 +69,14 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		// Commands can write, so enabling them without acknowledging writes
 		// would understate the authority being granted (v1 §10.3).
 		return usage(stderr, "--allow-exec also permits writing, so it requires --allow-write")
+	}
+
+	if *promptFile != "" {
+		text, err := readPrompt(*promptFile, stdin)
+		if err != nil {
+			return usage(stderr, err.Error())
+		}
+		prompt = text
 	}
 
 	ws, err := OpenWorkspace(*workspace)
@@ -200,4 +211,26 @@ func printResult(result RunResult, stdout, stderr io.Writer) {
 	} else {
 		fmt.Fprintf(stderr, "trace: %s\n", result.TracePath)
 	}
+}
+
+// readPrompt loads a run's prompt from a file, or from stdin when the path is
+// "-". Only the conventional terminal newline is removed; everything else is
+// preserved exactly, since an issue report's own blank lines and indentation
+// are part of what the model is being asked about (v1 §18.2).
+func readPrompt(path string, stdin io.Reader) (string, error) {
+	var raw []byte
+	var err error
+	if path == "-" {
+		raw, err = io.ReadAll(stdin)
+	} else {
+		raw, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return "", err
+	}
+	prompt := strings.TrimSuffix(string(raw), "\n")
+	if strings.TrimSpace(prompt) == "" {
+		return "", fmt.Errorf("%s contains no prompt", path)
+	}
+	return prompt, nil
 }

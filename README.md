@@ -216,6 +216,7 @@ quality.
 | `--allow-write`, `--allow-exec` | Grant authority beyond reading. |
 | `--show-context` | Print the first request and exit. No key needed. |
 | `--scripted FILE` | Replay recorded responses instead of calling a provider. |
+| `--prompt-file PATH` | `run`: read the prompt from a file, or `-` for stdin. |
 | `--trace-file PATH` | `run`: where to write the trace. |
 | `--trace-dir DIR` | `chat`: where each turn's trace goes. |
 | `--max-steps`, `--max-tool-calls` | Run budgets. Default 20 and 40. |
