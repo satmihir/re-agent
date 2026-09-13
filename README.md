@@ -239,3 +239,8 @@ Two documents, and the shorter one wins:
 
 Comments in the code cite these by section, so `// v0 §6.2` next to the retry
 rule points at the paragraph that decided it.
+
+## License
+
+re:agent is open-source software released under the [MIT License](LICENSE).
+See the [LICENSE file](LICENSE) for the complete license text and copyright notice.
