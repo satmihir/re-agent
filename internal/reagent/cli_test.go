@@ -153,13 +153,14 @@ func TestMain_AllowWriteDeclaresTheEditTool(t *testing.T) {
 		for _, tool := range request.Tools {
 			names = append(names, tool.Name)
 		}
-		return strings.Join(names, ",") + " | " + request.Instructions[strings.Index(request.Instructions, "Mode: "):]
+		mode := request.Instructions[strings.Index(request.Instructions, "Mode: "):]
+		return strings.Join(names, ",") + " | " + strings.SplitN(mode, "\n", 2)[0]
 	}
 
-	if got := declared(); got != "list_files,read_file,search_text | Mode: read only\n" {
+	if got := declared(); got != "list_files,read_file,search_text | Mode: read only" {
 		t.Fatalf("read-only run declared %q", got)
 	}
-	if got := declared("--allow-write"); got != "edit_file,list_files,read_file,search_text | Mode: read and write\n" {
+	if got := declared("--allow-write"); got != "edit_file,list_files,read_file,search_text | Mode: read and write" {
 		t.Fatalf("write run declared %q", got)
 	}
 }

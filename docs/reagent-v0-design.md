@@ -122,6 +122,10 @@ Declare native function tools with **`strict: false` explicitly**. This permits 
 
 Use the default instruction source from v1 §8.2, selecting only instructions relevant to enabled v0 tools. Change the edit-tool name where necessary. Context construction adopts v1 §§8.1 and 8.4; exhibits are absent. The builder receives current state and returns data without performing I/O.
 
+**Amendment (2026-09-13):** v1 §8.2 puts only the operating mode and the workspace path in the runtime section. It now also carries the provider, the requested model, the reasoning effort, the platform, and the step and tool-call budgets, because that section is the only way the model learns anything about its own environment; without those lines it answered questions about itself by saying it did not know. The model named is the one requested, which a provider may serve as a dated snapshot; the trace records the returned identifier separately.
+
+The section's admission rule follows from v1 §8.1 rather than from taste: every line must be fixed for the session. A step counter, a remaining budget, or a clock reading would change the prompt prefix on every request, and both providers match a cached prefix byte for byte, so such a line would turn every request into a cache miss. Anything genuinely changing belongs in a tool result, not here. `--show-context` prints the section, and a test pins its whole contents.
+
 Keep transport encoding separate from context selection. Expose a pure adapter function such as `EncodeRequest(ModelRequest) ([]byte, error)`. Both live `Generate` and the CLI preview call that function. This is an ordinary function, not a new capability interface.
 
 Adopt the Responses request and continuation contracts from v1 §§9.1–9.5 with three changes: `strict: false`, the reduced v0 tool definitions, and no configured output-token limit. Omit run-timeout and model-timeout flags.
