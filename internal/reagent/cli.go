@@ -202,6 +202,10 @@ func printResult(result RunResult, stdout, stderr io.Writer) {
 		fmt.Fprintf(stderr, "%s: %s\n", result.Status, sanitize(result.Reason))
 	}
 	fmt.Fprintf(stderr, "%s in %d steps, %d tool calls\n", result.Status, result.Steps, result.ToolCalls)
+	if usage := result.Usage; usage.Known {
+		fmt.Fprintf(stderr, "tokens: %d in (%d cached), %d out\n",
+			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens)
+	}
 	for _, effect := range result.Effects {
 		fmt.Fprintf(stderr, "changed: %s %s [%s]\n",
 			sanitize(effect.Tool), sanitize(effect.Summary), effect.Effect)

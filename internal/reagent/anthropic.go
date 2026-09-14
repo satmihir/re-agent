@@ -43,11 +43,16 @@ type messagesMessage struct {
 }
 
 type messagesToolResult struct {
-	Type      string `json:"type"`
-	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
-	IsError   bool   `json:"is_error,omitempty"`
+	Type         string                `json:"type"`
+	ToolUseID    string                `json:"tool_use_id"`
+	Content      string                `json:"content"`
+	IsError      bool                  `json:"is_error,omitempty"`
+	CacheControl *messagesCacheControl `json:"cache_control,omitempty"`
 }
+
+// ephemeralCache is the breakpoint marker. It is read-only once built, so one
+// value is shared by every block that carries it.
+var ephemeralCache = &messagesCacheControl{Type: "ephemeral"}
 
 type messagesTool struct {
 	Name        string          `json:"name"`
@@ -78,12 +83,16 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 		tools[i] = messagesTool{Name: spec.Name, Description: spec.Description, InputSchema: spec.InputSchema}
 	}
 
-	// The breakpoint on the system block caches everything rendered before it,
-	// which is the tools and the instructions: the stable prefix of every
-	// request. Below the model's minimum prefix length it silently does not
-	// cache, which is harmless.
+	// Two breakpoints, each marking the end of a prefix worth caching.
+	//
+	// The first covers the tools and the instructions, which are identical
+	// across every run of a session. The second, placed below, covers the
+	// conversation so far, which is where the tokens actually are: by the
+	// second step the history dwarfs the fixed prefix, and it is the same
+	// bytes on every later request. Anthropic caching is explicit, so a prefix
+	// without a breakpoint is simply resent at full price.
 	system := []messagesTextBlock{{
-		Type: "text", Text: req.Instructions, CacheControl: &messagesCacheControl{Type: "ephemeral"},
+		Type: "text", Text: req.Instructions, CacheControl: ephemeralCache,
 	}}
 
 	// An unconfigured effort omits the parameter rather than sending a value
@@ -92,6 +101,8 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 	if req.ReasoningEffort != "" {
 		outputConfig = &messagesOutputConfig{Effort: req.ReasoningEffort}
 	}
+
+	markCachePoint(messages)
 
 	body, err := json.Marshal(messagesRequest{
 		Model:        req.Model,
@@ -166,4 +177,27 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 	}
 	flushResults()
 	return messages, nil
+}
+
+// markCachePoint puts a breakpoint on the last block of the last message, so
+// everything sent this time is a cached prefix next time.
+//
+// The final message is always one this encoder built, never a provider block:
+// a request is only sent when the transcript ends with a user turn or with the
+// results answering the previous turn's calls. An assistant turn is never last,
+// because its results are appended before the next request is built.
+func markCachePoint(messages []messagesMessage) {
+	if len(messages) == 0 {
+		return
+	}
+	switch content := messages[len(messages)-1].Content.(type) {
+	case []messagesTextBlock:
+		if len(content) > 0 {
+			content[len(content)-1].CacheControl = ephemeralCache
+		}
+	case []messagesToolResult:
+		if len(content) > 0 {
+			content[len(content)-1].CacheControl = ephemeralCache
+		}
+	}
 }
