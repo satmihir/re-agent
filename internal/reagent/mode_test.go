@@ -106,11 +106,12 @@ func TestLoop_ReportsEffectsEvenWhenTheRunFails(t *testing.T) {
 	}
 }
 
-func TestInstructions_NameTheWorkspaceAndMode(t *testing.T) {
+func TestInstructions_NameTheMode(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
 	for name, mode := range map[string]Mode{
-		"read only":      {},
-		"read and write": {AllowWrite: true},
+		"read only":                {},
+		"read and write":           {AllowWrite: true},
+		"read, write, and execute": {AllowWrite: true, AllowExec: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			registry, err := NewRegistry(mode, NewReadFileTool(ws))
@@ -118,7 +119,7 @@ func TestInstructions_NameTheWorkspaceAndMode(t *testing.T) {
 				t.Fatal(err)
 			}
 			text := instructions(Config{Registry: registry, WorkspacePath: "/tmp/example"})
-			if !strings.Contains(text, "Workspace: /tmp/example") || !strings.Contains(text, "Mode: "+name) {
+			if !strings.Contains(text, "Mode: "+name+"\n") {
 				t.Fatalf("got runtime section:\n%s", text[strings.Index(text, "# Runtime"):])
 			}
 		})

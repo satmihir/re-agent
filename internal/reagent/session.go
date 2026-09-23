@@ -68,6 +68,25 @@ func (s *Session) Reset() {
 // LastTrace is the path of the most recent run's trace, or empty.
 func (s *Session) LastTrace() string { return s.lastTrace }
 
+// SetEffort changes the reasoning effort used by later turns.
+//
+// This is safe mid-session, unlike a model change: effort is a request
+// parameter rather than part of the transcript, so nothing already accepted
+// becomes invalid. It does change the request prefix, so the next request
+// starts a new prompt cache.
+func (s *Session) SetEffort(effort string) { s.cfg.ReasoningEffort = effort }
+
+// Turns counts the submissions accepted so far.
+func (s *Session) Turns() int {
+	turns := 0
+	for _, entry := range s.history {
+		if entry.Kind == EntryUser {
+			turns++
+		}
+	}
+	return turns
+}
+
 func (s *Session) describeLastTrace() string {
 	if s.lastTrace == "" {
 		return "the run's output above"

@@ -141,3 +141,44 @@ func TestEncodeAnthropic_RejectsAnOversizedRequest(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// Anthropic caching is explicit: a prefix without a breakpoint is resent at
+// full price. The conversation is where the tokens are, so it gets one.
+func TestEncodeAnthropic_CacheBreakpoints(t *testing.T) {
+	call := json.RawMessage(`{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}`)
+	history := []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: "the task"}},
+		{Kind: EntryAssistant, Assistant: &ModelResponse{
+			Native: NativeOutput{Provider: anthropicProvider, Items: []json.RawMessage{call}},
+		}},
+		{Kind: EntryTool, Tool: &ToolResult{CallID: "toolu_1", Name: "echo", Outcome: ToolOutcome{OK: true}}},
+	}
+
+	// Mid-run, the last message is the results answering the previous turn.
+	body, got := encodeAnthropic(t, ModelRequest{Instructions: "be useful", History: history})
+	if got.System[0].CacheControl == nil {
+		t.Fatal("the fixed prefix has no breakpoint")
+	}
+	var result messagesToolResult
+	if err := json.Unmarshal(got.Messages[2].Content[0], &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.CacheControl == nil {
+		t.Fatalf("the conversation has no breakpoint: %s", body)
+	}
+
+	// At the start of a turn, the last message is the user's text.
+	_, first := encodeAnthropic(t, ModelRequest{History: history[:1]})
+	var text messagesTextBlock
+	if err := json.Unmarshal(first.Messages[0].Content[0], &text); err != nil {
+		t.Fatal(err)
+	}
+	if text.CacheControl == nil {
+		t.Fatal("a first request has no conversation breakpoint")
+	}
+
+	// Four is the provider's limit; two leaves room and is all this needs.
+	if breakpoints := strings.Count(string(body), `"cache_control"`); breakpoints != 2 {
+		t.Fatalf("got %d breakpoints, want 2", breakpoints)
+	}
+}

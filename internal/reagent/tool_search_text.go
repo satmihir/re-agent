@@ -116,9 +116,12 @@ func (t searchTextTool) walk(root string, s *scan) {
 			s.skip()
 			return nil
 		case entry.IsDir():
-			if abs != root && (entry.Name() == ".git" || excludedDirs[entry.Name()]) {
+			if abs != root && (withheld(entry.Name()) || excludedDirs[entry.Name()]) {
 				return fs.SkipDir
 			}
+			return nil
+		case withheld(entry.Name()):
+			// Passed over uncounted, the same way a .git directory is.
 			return nil
 		case !entry.Type().IsRegular():
 			// A symlink could point at matching text, and v0 does not follow it.

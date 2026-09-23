@@ -153,13 +153,81 @@ func TestMain_AllowWriteDeclaresTheEditTool(t *testing.T) {
 		for _, tool := range request.Tools {
 			names = append(names, tool.Name)
 		}
-		return strings.Join(names, ",") + " | " + request.Instructions[strings.Index(request.Instructions, "Mode: "):]
+		mode := request.Instructions[strings.Index(request.Instructions, "Mode: "):]
+		return strings.Join(names, ",") + " | " + strings.SplitN(mode, "\n", 2)[0]
 	}
 
-	if got := declared(); got != "list_files,read_file,search_text | Mode: read only\n" {
+	if got := declared(); got != "list_files,read_file,search_text | Mode: read only" {
 		t.Fatalf("read-only run declared %q", got)
 	}
-	if got := declared("--allow-write"); got != "edit_file,list_files,read_file,search_text | Mode: read and write\n" {
+	if got := declared("--allow-write"); got != "edit_file,list_files,read_file,search_text | Mode: read and write" {
 		t.Fatalf("write run declared %q", got)
+	}
+}
+
+// An issue report is long and multi-line, so a run takes its prompt from a
+// file with everything but the trailing newline preserved.
+func TestMain_PromptFile(t *testing.T) {
+	issue := "Title: crash on empty input\n\nSteps:\n  1. call parse(\"\")\n  2. observe the panic\n"
+	path := filepath.Join(t.TempDir(), "issue.txt")
+	if err := os.WriteFile(path, []byte(issue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run",
+		"--workspace", t.TempDir(), "--show-context", "--prompt-file", path},
+		strings.NewReader(""), &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+
+	var request decodedRequest
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &request); err != nil {
+		t.Fatal(err)
+	}
+	var message responsesMessage
+	if err := json.Unmarshal(request.Input[0], &message); err != nil {
+		t.Fatal(err)
+	}
+	// Only the final newline is dropped; the blank line and indentation stay.
+	if want := strings.TrimSuffix(issue, "\n"); message.Content[0].Text != want {
+		t.Fatalf("got %q, want %q", message.Content[0].Text, want)
+	}
+}
+
+func TestMain_PromptFileFromStdin(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run",
+		"--workspace", t.TempDir(), "--show-context", "--prompt-file", "-"},
+		strings.NewReader("piped issue text\n"), &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "piped issue text") {
+		t.Fatalf("stdout: %s", stdout.String())
+	}
+}
+
+func TestMain_PromptSourceErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.txt")
+	if err := os.WriteFile(path, []byte("  \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cases := map[string][]string{
+		"both sources":       {"run", "--workspace", dir, "--prompt-file", path, "a prompt"},
+		"neither":            {"run", "--workspace", dir},
+		"missing file":       {"run", "--workspace", dir, "--prompt-file", "/nonexistent/issue.txt"},
+		"blank file":         {"run", "--workspace", dir, "--prompt-file", path},
+		"chat takes neither": {"chat", "--workspace", dir, "--prompt-file", path},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code != exitUsage {
+				t.Fatalf("exit %d, want %d: %s", code, exitUsage, stderr.String())
+			}
+		})
 	}
 }

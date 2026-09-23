@@ -4,9 +4,11 @@ An AI agent harness written from first principles, in Go, to understand how one
 works. It builds a request, reads what the model asked for, runs the tools it
 authorized, feeds the observations back, and repeats.
 
-The point is that you can read it. About 2,800 lines of non-test Go, one
-package, standard library only. Every decision the harness makes is visible in
-the code, and every request it sends is recoverable from disk.
+The point is that you can read it. About 4,200 lines of non-test Go in one
+package, with a single dependency: `golang.org/x/term`, for line editing at the
+chat prompt. Everything the agent itself does is standard library. Every
+decision the harness makes is visible in the code, and every request it sends
+is recoverable from disk.
 
 It is a working repository assistant, not a rival to a mature coding agent. See
 [what it does not do](#what-it-deliberately-does-not-do).
@@ -63,8 +65,16 @@ already read.
 ./reagent chat --workspace ./some-repo
 ```
 
+`/model` lists the models available with the credentials you have set, and
+`/model 2` or `/model claude-sonnet-5` switches. A model change starts a fresh
+session, since a conversation cannot continue on a different model. `/effort`
+does the same for reasoning effort, which the current model's own vocabulary
+decides, and which changes without discarding the conversation.
+
 `/trace` prints the last turn's trace, `/reset` starts over, `/exit` or Ctrl-D
-leaves. A turn that ends badly, for instance by running out of steps, blocks
+leaves. The prompt has the usual line editing: the up and down arrows walk the
+turns you have typed this session, and left, right, and backspace work as you
+would expect. Piped input is read plainly, so scripting `chat` is unaffected. A turn that ends badly, for instance by running out of steps, blocks
 the session until `/reset`, so a conversation is never silently continued from
 a state the harness could not account for.
 
@@ -127,7 +137,9 @@ jq -r 'select(.type=="api.attempt.started") | .data.request_body' /tmp/run.jsonl
 
 The API key never appears in a trace. Everything else does, including file
 contents and command output, so treat a trace as seriously as the workspace it
-came from.
+came from. The file tools refuse `.git`, `.env`, and `.env.*`, so a key kept in
+the workspace's dotenv file is not sent to the provider. `exec` is not bound by
+that: a command can read any file you can.
 
 ## Reading the code
 
@@ -206,6 +218,7 @@ quality.
 | `--allow-write`, `--allow-exec` | Grant authority beyond reading. |
 | `--show-context` | Print the first request and exit. No key needed. |
 | `--scripted FILE` | Replay recorded responses instead of calling a provider. |
+| `--prompt-file PATH` | `run`: read the prompt from a file, or `-` for stdin. |
 | `--trace-file PATH` | `run`: where to write the trace. |
 | `--trace-dir DIR` | `chat`: where each turn's trace goes. |
 | `--max-steps`, `--max-tool-calls` | Run budgets. Default 20 and 40. |
@@ -239,3 +252,8 @@ Two documents, and the shorter one wins:
 
 Comments in the code cite these by section, so `// v0 §6.2` next to the retry
 rule points at the paragraph that decided it.
+
+## License
+
+re:agent is open-source software released under the [MIT License](LICENSE).
+See the [LICENSE file](LICENSE) for the complete license text and copyright notice.

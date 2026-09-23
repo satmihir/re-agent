@@ -16,10 +16,14 @@ const DefaultOpenAIModel = "gpt-5.6-luna"
 // in place (v1 §9.2).
 const DefaultReasoningEffort = "low"
 
-// MaxRequestBytes is the largest encoded request v0 will send. It is a byte
-// bound, not a token estimate: the provider may still refuse a smaller body for
-// its own context limit (v1 §8.5).
-const MaxRequestBytes = 256 << 10
+// MaxRequestBytes is the largest encoded request v0 will send.
+//
+// It is a byte bound, not a token estimate: the provider may still refuse a
+// smaller body for its own context limit (v1 §8.5). It exists to fail locally
+// before sending something absurd, not to control cost; the step and tool-call
+// budgets do that. At roughly four bytes per token this is around a quarter of
+// the million-token window both current providers offer.
+const MaxRequestBytes = 1 << 20
 
 // responsesRequest is the Responses body v0 sends (v1 §9.2). Every field is
 // fixed except the model, instructions, input, and tools.

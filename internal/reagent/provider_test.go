@@ -49,17 +49,23 @@ func TestResolveTarget_EnvironmentModelSelectsProvider(t *testing.T) {
 
 // The per-provider default exists because the default Anthropic model rejects
 // the effort parameter. An explicit value, even empty, always passes through.
-func TestResolveEffort_AutoIsPerProvider(t *testing.T) {
-	cases := []struct{ flag, provider, want string }{
-		{"auto", openaiName, DefaultReasoningEffort},
-		{"auto", anthropicName, ""},
-		{"high", anthropicName, "high"},
-		{"low", openaiName, "low"},
-		{"", openaiName, ""},
+func TestResolveEffort_AutoIsPerModelThenPerProvider(t *testing.T) {
+	cases := []struct{ flag, provider, model, want string }{
+		// A catalog model knows its own; effort support varies inside a
+		// provider, not only between providers.
+		{"auto", anthropicName, "claude-haiku-4-5", ""},
+		{"auto", anthropicName, "claude-sonnet-5", "low"},
+		{"auto", openaiName, "gpt-5.6-luna", "low"},
+		// Anything outside the catalog falls back to the provider's default.
+		{"auto", anthropicName, "claude-something-new", ""},
+		{"auto", openaiName, "gpt-experimental", DefaultReasoningEffort},
+		// An explicit value always wins, including an empty one.
+		{"high", anthropicName, "claude-haiku-4-5", "high"},
+		{"", openaiName, "gpt-5.6-luna", ""},
 	}
 	for _, c := range cases {
-		if got := resolveEffort(c.flag, c.provider); got != c.want {
-			t.Fatalf("resolveEffort(%q, %s) = %q, want %q", c.flag, c.provider, got, c.want)
+		if got := resolveEffort(c.flag, c.provider, c.model); got != c.want {
+			t.Fatalf("resolveEffort(%q, %s, %s) = %q, want %q", c.flag, c.provider, c.model, got, c.want)
 		}
 	}
 }

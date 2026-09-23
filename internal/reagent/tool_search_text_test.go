@@ -54,6 +54,27 @@ func TestSearchText_ZeroMatchesIsComplete(t *testing.T) {
 	}
 }
 
+// A withheld file is never searched, whether walked past or named, unlike an
+// excluded directory, which the model may still select.
+func TestSearchText_NeverReadsWithheldFiles(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{
+		"a.txt":          "sk-secret\n",
+		".env":           "sk-secret\n",
+		"sub/.env.local": "sk-secret\n",
+	})
+	tool := NewSearchTextTool(ws)
+
+	var walked searchTextResult
+	data(t, runTool(t, tool, `{"path":".","query":"sk-secret"}`), &walked)
+	if matchLocations(walked.Matches) != "a.txt:1" || walked.FilesScanned != 1 {
+		t.Fatalf("walk reached a withheld file: %+v", walked)
+	}
+
+	if outcome := runTool(t, tool, `{"path":".env","query":"sk-secret"}`); outcome.Code != "invalid_path" {
+		t.Fatalf("named .env: got %s, want invalid_path", outcome.Code)
+	}
+}
+
 // An excluded directory is skipped while walking, but searched when the model
 // names it as the root (v1 §11.2).
 func TestSearchText_ExcludedDirectoryIsReachableAsARoot(t *testing.T) {

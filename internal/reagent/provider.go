@@ -55,14 +55,21 @@ func defaultModel(provider string) string {
 	return DefaultOpenAIModel
 }
 
-// resolveEffort applies the per-provider default when the flag was left at
-// "auto". The defaults differ because the default Anthropic model rejects the
-// effort parameter outright, while the default OpenAI model reasons at medium
-// unless told otherwise. An explicit value is passed through unchanged, even
-// an empty one, which omits the parameter.
-func resolveEffort(flag, provider string) string {
+// resolveEffort applies a default when the flag was left at "auto". A model in
+// the catalog knows its own, which matters because effort support varies
+// within a provider as well as between them: Haiku 4.5 rejects the parameter
+// while Sonnet 5 accepts five values. Anything outside the catalog falls back
+// to the provider's default.
+//
+// An explicit value is passed through unchanged, even an empty one, which
+// omits the parameter. The flag does not second-guess a model it does not
+// know; an effort the provider rejects fails clearly at the first request.
+func resolveEffort(flag, provider, model string) string {
 	if flag != "auto" {
 		return flag
+	}
+	if info, known := findModel(model); known {
+		return info.Effort
 	}
 	if provider == anthropicName {
 		return ""
