@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -27,6 +29,148 @@ func TestMain_ScriptedRunPrintsReplyOnStdout(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "trace: "+trace) {
 		t.Fatalf("stderr: %q", stderr.String())
+	}
+}
+
+func TestMain_FlagAfterPromptIsRefused(t *testing.T) {
+	for flag, want := range map[string]string{
+		"--allow-write":      "--allow-write",
+		"--allow-write=true": "--allow-write",
+		"-model=x":           "--model",
+		"--help":             "--help",
+	} {
+		t.Run(flag, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Main(context.Background(), []string{"run", "--show-context", "a task", flag}, strings.NewReader(""), &stdout, &stderr)
+			if code != exitUsage {
+				t.Fatalf("exit %d, want %d", code, exitUsage)
+			}
+			if !strings.Contains(stderr.String(), want) {
+				t.Fatalf("stderr %q does not name %q", stderr.String(), want)
+			}
+		})
+	}
+}
+
+func TestMain_DoubleDashKeepsFlagLikeTextInThePrompt(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run", "--show-context", "--", "--allow-write"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "--allow-write") {
+		t.Fatalf("preview does not contain prompt: %s", stdout.String())
+	}
+}
+
+func TestMain_DoubleDashAfterPromptIsPromptText(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run", "--show-context", "explain", "--", "--allow-write"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "explain -- --allow-write") {
+		t.Fatalf("preview does not contain the prompt: %s", stdout.String())
+	}
+}
+
+func TestMain_UnknownFlagStaysOffStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run", "--bogus", "a task"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestMain_ChatPromptDoesNotReportAMisplacedFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"chat", "a prompt", "--allow-write"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr.String(), "chat reads its turns from stdin and takes no prompt") {
+		t.Fatalf("stderr: %q", stderr.String())
+	}
+}
+
+func TestMain_HelpGoesToStdoutAndExitsZero(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}, {"help", "run"}, {"help", "chat"}, {"run", "-h"}, {"chat", "--help"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr)
+			if code != exitOK || stdout.Len() == 0 || stderr.Len() != 0 {
+				t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestHelp_ListsEachCommandsOwnFlags(t *testing.T) {
+	for _, command := range []string{"run", "chat"} {
+		t.Run(command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Main(context.Background(), []string{"help", command}, strings.NewReader(""), &stdout, &stderr); code != exitOK {
+				t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+			}
+			if command == "run" && (!strings.Contains(stdout.String(), "--prompt-file") || strings.Contains(stdout.String(), "--trace-dir")) {
+				t.Fatalf("run help: %s", stdout.String())
+			}
+			if command == "chat" && (!strings.Contains(stdout.String(), "--trace-dir") || strings.Contains(stdout.String(), "--prompt-file")) {
+				t.Fatalf("chat help: %s", stdout.String())
+			}
+		})
+	}
+}
+
+func TestHelp_EveryFlagIsInAGroup(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	defineFlags(fs)
+	listed := map[string]bool{}
+	for _, groups := range [][]flagGroup{runFlagGroups, chatFlagGroups} {
+		for _, group := range groups {
+			for _, name := range group.flags {
+				listed[name] = true
+			}
+		}
+	}
+	fs.VisitAll(func(f *flag.Flag) {
+		if !listed[f.Name] {
+			t.Errorf("%s is missing from command help", f.Name)
+		}
+	})
+}
+
+func TestMain_Version(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Main(context.Background(), []string{"version"}, strings.NewReader(""), &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.HasPrefix(stdout.String(), "reagent ") || !strings.Contains(stdout.String(), runtime.Version()) {
+		t.Fatalf("version: %q", stdout.String())
+	}
+}
+
+func TestMain_BareCommandIsAUsageError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Main(context.Background(), nil, strings.NewReader(""), &stdout, &stderr); code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 || stderr.Len() == 0 {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestMain_UnknownCommandExplainsTheError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"frobnicate"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "error: unknown command frobnicate") {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
 	}
 }
 
