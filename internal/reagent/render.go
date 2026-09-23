@@ -14,6 +14,9 @@ const (
 	ansiDim    = "\x1b[2m"
 	ansiItalic = "\x1b[3m"
 	ansiCode   = "\x1b[36m"
+	ansiRed    = "\x1b[31m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
 )
 
 // isTerminalControl reports characters that must never reach a terminal as
@@ -178,4 +181,25 @@ func renderSpans(text string) string {
 func styleEmphasis(text string) string {
 	text = boldPattern.ReplaceAllString(text, ansiBold+"${1}"+ansiReset)
 	return italicPattern.ReplaceAllString(text, ansiItalic+"${1}"+ansiReset)
+}
+
+func styleMark(m mark, marker string) string {
+	color := ansiGreen
+	if m == markFailed {
+		color = ansiRed
+	}
+	if m == markUncertain {
+		color = ansiYellow
+	}
+	if m == markSkipped {
+		color = ansiDim
+	}
+	return "  " + color + marker + ansiReset
+}
+
+func truncateWidth(text string, width int) string {
+	if width <= 0 || len([]rune(text)) <= width {
+		return text
+	}
+	return string([]rune(text)[:width-1]) + "…"
 }

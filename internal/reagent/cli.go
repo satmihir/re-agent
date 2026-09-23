@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 )
 
 // Process exit codes (v0 §10). A failing run is 1; a bad invocation is 2.
@@ -186,11 +187,14 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	session := NewSession(cfg, live, trace, stderr)
 
 	if command == "chat" {
+		session.display.header(cfg, ws.Root(), true)
 		return chat(ctx, &conversation{
 			session: session, cfg: cfg, keys: keys, client: client, scripted: scripted,
 			trace: trace, traceDir: options.traceDir, progress: stderr,
 		}, stdin, stdout, stderr)
 	}
+
+	session.display.header(cfg, ws.Root(), false)
 
 	// One-shot: the first Ctrl-C cancels the run.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
@@ -202,12 +206,14 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			return startupError(stderr, err.Error())
 		}
 	}
+	session.display.beginTurn()
+	started := time.Now()
 	result, err := session.Turn(runCtx, prompt, runID, tracePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return exitRunFail
 	}
-	printResult(result, stdout, stderr)
+	printResult(session.display, result, time.Since(started), stdout, true)
 	if result.Status == StatusCompleted {
 		return exitOK
 	}
@@ -411,30 +417,9 @@ func startupError(stderr io.Writer, message string) int {
 	return exitUsage
 }
 
-// printResult prints the reply, then a summary that never dresses a failure up
-// as an answer. A completed run means the model replied, not that it was right
-// (I17).
-func printResult(result RunResult, stdout, stderr io.Writer) {
-	if result.Reply != "" {
-		fmt.Fprintln(stdout, display(result.Reply, styledOutput(stdout)))
-	}
-	if result.Reason != "" {
-		fmt.Fprintf(stderr, "%s: %s\n", result.Status, sanitize(result.Reason))
-	}
-	fmt.Fprintf(stderr, "%s in %d steps, %d tool calls\n", result.Status, result.Steps, result.ToolCalls)
-	if usage := result.Usage; usage.Known {
-		fmt.Fprintf(stderr, "tokens: %d in (%d cached), %d out\n",
-			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens)
-	}
-	for _, effect := range result.Effects {
-		fmt.Fprintf(stderr, "changed: %s %s [%s]\n",
-			sanitize(effect.Tool), sanitize(effect.Summary), effect.Effect)
-	}
-	if result.TracePath == "" {
-		fmt.Fprintln(stderr, "trace: not recorded")
-	} else {
-		fmt.Fprintf(stderr, "trace: %s\n", result.TracePath)
-	}
+func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, showTrace bool) {
+	d.reply(stdout, result.Reply)
+	d.summary(result, elapsed, showTrace)
 }
 
 // readPrompt loads a run's prompt from a file, or from stdin when the path is

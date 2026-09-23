@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 )
 
 const chatHelp = `Each line you type is one turn; the model sees every turn before it.
@@ -178,12 +179,14 @@ func runTurn(ctx context.Context, session *Session, traceDir, text string, stdou
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return
 	}
+	session.display.beginTurn()
+	started := time.Now()
 	result, err := session.Turn(turnCtx, text, runID, path)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return
 	}
-	printResult(result, stdout, stderr)
+	printResult(session.display, result, time.Since(started), stdout, result.Status != StatusCompleted)
 }
 
 // tracePathFor places a run's trace under dir, or under the default cache
