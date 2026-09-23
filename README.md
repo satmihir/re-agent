@@ -19,6 +19,8 @@ It is a working repository assistant, not a rival to a mature coding agent. See
 make build
 ```
 
+`./reagent help` lists commands, and `./reagent help run` lists `run` flags.
+
 The fastest way to understand the harness is to look at what it would send a
 model. This needs no API key and contacts nothing.
 
