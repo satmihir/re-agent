@@ -63,6 +63,39 @@ func TestMain_DoubleDashKeepsFlagLikeTextInThePrompt(t *testing.T) {
 	}
 }
 
+func TestMain_DoubleDashAfterPromptIsPromptText(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run", "--show-context", "explain", "--", "--allow-write"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "explain -- --allow-write") {
+		t.Fatalf("preview does not contain the prompt: %s", stdout.String())
+	}
+}
+
+func TestMain_UnknownFlagStaysOffStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"run", "--bogus", "a task"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestMain_ChatPromptDoesNotReportAMisplacedFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"chat", "a prompt", "--allow-write"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr.String(), "chat reads its turns from stdin and takes no prompt") {
+		t.Fatalf("stderr: %q", stderr.String())
+	}
+}
+
 func TestMain_HelpGoesToStdoutAndExitsZero(t *testing.T) {
 	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}, {"help", "run"}, {"help", "chat"}, {"run", "-h"}, {"chat", "--help"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -126,6 +159,17 @@ func TestMain_BareCommandIsAUsageError(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, exitUsage)
 	}
 	if stdout.Len() != 0 || stderr.Len() == 0 {
+		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestMain_UnknownCommandExplainsTheError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"frobnicate"}, strings.NewReader(""), &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "error: unknown command frobnicate") {
 		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
 	}
 }

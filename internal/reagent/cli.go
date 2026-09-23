@@ -39,7 +39,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			writeCommandHelp(stdout, args[1], fs)
 			return exitOK
 		}
-		return usage(stderr, "help takes an optional command: run or chat")
+		return usage(stderr, "help", "help takes an optional command: run or chat")
 	}
 	if args[0] == "--help" || args[0] == "-h" {
 		writeTopLevelHelp(stdout)
@@ -50,6 +50,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return exitOK
 	}
 	if args[0] != "run" && args[0] != "chat" {
+		fmt.Fprintf(stderr, "error: unknown command %s\n", args[0])
 		writeTopLevelHelp(stderr)
 		return exitUsage
 	}
@@ -58,37 +59,44 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	fs := flag.NewFlagSet("reagent "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	options := defineFlags(fs)
-	fs.Usage = func() { writeCommandHelp(stdout, command, fs) }
+	fs.Usage = func() {}
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			writeCommandHelp(stdout, command, fs)
 			return exitOK
 		}
-		return usage(stderr, err.Error())
+		return usage(stderr, command, err.Error())
 	}
-	if name := misplacedFlag(fs, positionalArgs(fs, args[1:])); name != "" {
-		return usage(stderr, fmt.Sprintf("--%s comes after the prompt, where it would be read as prompt text; put flags before the prompt", name))
+	consumed := len(args[1:]) - len(fs.Args())
+	terminated := consumed > 0 && args[consumed] == "--"
+	if command == "run" && !terminated {
+		if name := misplacedFlag(fs, fs.Args()); name != "" {
+			return usage(stderr, command, fmt.Sprintf("--%s comes after the prompt, where it would be read as prompt text; put flags before the prompt", name))
+		}
 	}
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	switch {
 	case command == "run" && prompt == "" && options.promptFile == "":
-		return usage(stderr, "a prompt is required, as an argument or with --prompt-file")
+		return usage(stderr, command, "a prompt is required, as an argument or with --prompt-file")
 	case command == "run" && prompt != "" && options.promptFile != "":
-		return usage(stderr, "give the prompt as an argument or with --prompt-file, not both")
+		return usage(stderr, command, "give the prompt as an argument or with --prompt-file, not both")
 	case command == "chat" && (prompt != "" || options.promptFile != ""):
-		return usage(stderr, "chat reads its turns from stdin and takes no prompt")
+		return usage(stderr, command, "chat reads its turns from stdin and takes no prompt")
 	case command == "chat" && (options.showContext || options.traceFile != ""):
-		return usage(stderr, "--show-context and --trace-file apply to run; chat writes one trace per turn")
+		return usage(stderr, command, "--show-context and --trace-file apply to run; chat writes one trace per turn")
 	case command == "run" && options.traceDir != "":
-		return usage(stderr, "--trace-dir applies to chat; run takes --trace-file")
+		return usage(stderr, command, "--trace-dir applies to chat; run takes --trace-file")
 	case options.maxSteps < 1 || options.maxToolCalls < 1:
-		return usage(stderr, "--max-steps and --max-tool-calls must be positive")
+		return usage(stderr, command, "--max-steps and --max-tool-calls must be positive")
 	case options.script != "" && (options.model != "" || options.provider != ""):
-		return usage(stderr, "--scripted replays recorded responses, so it takes no --model or --provider")
+		return usage(stderr, command, "--scripted replays recorded responses, so it takes no --model or --provider")
 	case options.script != "" && options.showContext:
-		return usage(stderr, "--show-context previews a live request, so it cannot be combined with --scripted")
+		return usage(stderr, command, "--show-context previews a live request, so it cannot be combined with --scripted")
 	case options.allowExec && !options.allowWrite:
-		return usage(stderr, "--allow-exec also permits writing, so it requires --allow-write")
+		// Commands can write, so enabling them without acknowledging writes
+		// would understate the authority being granted (v1 §10.3).
+		return usage(stderr, command, "--allow-exec also permits writing, so it requires --allow-write")
 	}
 
 	if options.promptFile != "" {
@@ -103,17 +111,21 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if err != nil {
 		return startupError(stderr, err.Error())
 	}
+	// Every tool this build has is offered to the registry; the mode decides
+	// which of them the model is told about (v1 §10.3).
 	tools := []Tool{
 		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws),
 		NewEditFileTool(ws), NewExecTool(ws),
 	}
 	if options.script != "" {
+		// The fake tool rides along with a script so orchestration can be
+		// exercised without touching the workspace (v0 §10).
 		tools = append(tools, NewEchoTool())
 	}
 	mode := Mode{AllowWrite: options.allowWrite, AllowExec: options.allowExec}
 	registry, err := NewRegistry(mode, tools...)
 	if err != nil {
-		return usage(stderr, err.Error())
+		return usage(stderr, command, err.Error())
 	}
 	if mode.AllowExec && !options.showContext {
 		fmt.Fprintf(stderr, "exec mode: commands run as you, in %s, and can read, write, and use the network\n", ws.Root())
@@ -121,7 +133,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 	provider, model, err := resolveTarget(options.provider, options.model)
 	if err != nil {
-		return usage(stderr, err.Error())
+		return usage(stderr, command, err.Error())
 	}
 	cfg := Config{
 		Provider: provider, Model: model, ReasoningEffort: resolveEffort(options.reasoning, provider, model),
@@ -132,6 +144,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		cfg.Provider, cfg.Model = "scripted", "scripted"
 	}
 
+	// The preview is built before any live dependency exists, which is why it
+	// needs no credentials and creates no trace (v0 §6.1).
 	if options.showContext {
 		body, err := PreviewRequest(cfg, prompt)
 		if err != nil {
@@ -145,6 +159,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return exitOK
 	}
 
+	// Both keys are read, not just the selected provider's: chat can switch
+	// providers, and the catalog listing says which are usable.
 	keys := map[string]string{
 		openaiName:    os.Getenv(apiKeyVariable(openaiName)),
 		anthropicName: os.Getenv(apiKeyVariable(anthropicName)),
@@ -153,6 +169,9 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return startupError(stderr, apiKeyVariable(provider)+" is not set; use --scripted or --show-context to work offline")
 	}
 
+	// One recorder follows the session; the adapter holds it so every
+	// attempt's exact bytes are recorded without transport detail leaking
+	// into the transcript (v1 §5.1).
 	trace := NewTrace(stderr)
 	defer trace.Close()
 	client := NewHTTPClient()
@@ -173,6 +192,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		}, stdin, stdout, stderr)
 	}
 
+	// One-shot: the first Ctrl-C cancels the run.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	runID := NewID()
@@ -327,6 +347,10 @@ func writeFlagHelp(w io.Writer, label, description string, width int) {
 	}
 }
 
+// misplacedFlag returns the first argument after the prompt that names one of
+// this command's flags. Go's flag package stops at the first positional
+// argument, so such a flag would otherwise become prompt text and the
+// authority it asks for would silently not be granted.
 func misplacedFlag(fs *flag.FlagSet, positional []string) string {
 	for _, arg := range positional {
 		if arg == "--" {
@@ -342,25 +366,6 @@ func misplacedFlag(fs *flag.FlagSet, positional []string) string {
 		}
 	}
 	return ""
-}
-
-func positionalArgs(fs *flag.FlagSet, args []string) []string {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" || !strings.HasPrefix(arg, "-") || arg == "-" {
-			return args[i:]
-		}
-		name, hasValue := strings.TrimLeft(arg, "-"), strings.Contains(arg, "=")
-		name, _, _ = strings.Cut(name, "=")
-		f := fs.Lookup(name)
-		if f == nil || hasValue {
-			continue
-		}
-		if _, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok {
-			i++
-		}
-	}
-	return nil
 }
 
 func writeVersion(w io.Writer) {
@@ -396,8 +401,8 @@ func writeVersion(w io.Writer) {
 	fmt.Fprintln(w, strings.Join(parts, " "))
 }
 
-func usage(stderr io.Writer, message string) int {
-	fmt.Fprintf(stderr, "error: %s\nreagent help COMMAND lists the flags\n", message)
+func usage(stderr io.Writer, command, message string) int {
+	fmt.Fprintf(stderr, "error: %s\nreagent help %s lists the flags\n", message, command)
 	return exitUsage
 }
 
