@@ -43,12 +43,15 @@ func TestListFiles_SortedAndPaginated(t *testing.T) {
 	}
 }
 
-func TestListFiles_ExcludesGitAndCountsIt(t *testing.T) {
-	ws := testWorkspace(t, map[string]string{"a.txt": "x", ".git/config": "x"})
+func TestListFiles_ExcludesWithheldEntriesAndCountsThem(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{
+		"a.txt": "x", ".git/config": "x", ".env": "x", ".env.local": "x", ".envrc": "x",
+	})
 	var got listFilesResult
 	data(t, runTool(t, NewListFilesTool(ws), `{"path":"."}`), &got)
 
-	if listedNames(got.Entries) != "a.txt" || got.SkippedEntries != 1 {
+	// .envrc is not a dotenv file, so only the exact name and its variants go.
+	if listedNames(got.Entries) != ".envrc,a.txt" || got.SkippedEntries != 3 {
 		t.Fatalf("got %+v", got)
 	}
 }

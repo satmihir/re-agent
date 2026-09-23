@@ -40,7 +40,7 @@ func (listFilesTool) Spec() ToolSpec {
 		Name: "list_files",
 		Description: "List one workspace directory in name order. Does not recurse. " +
 			"offset defaults to 0 and limit to as many entries as fit in one result; " +
-			"use next_offset to continue. Paths are workspace-relative and .git is excluded.",
+			"use next_offset to continue. Paths are workspace-relative; .git and .env files are excluded.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -86,7 +86,7 @@ func (t listFilesTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 
 	entries, skipped := make([]listEntry, 0, len(dir)), 0
 	for _, d := range dir {
-		if d.Name() == ".git" || !utf8.ValidString(d.Name()) {
+		if withheld(d.Name()) || !utf8.ValidString(d.Name()) {
 			skipped++
 			continue
 		}

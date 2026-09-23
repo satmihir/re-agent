@@ -137,7 +137,9 @@ jq -r 'select(.type=="api.attempt.started") | .data.request_body' /tmp/run.jsonl
 
 The API key never appears in a trace. Everything else does, including file
 contents and command output, so treat a trace as seriously as the workspace it
-came from.
+came from. The file tools refuse `.git`, `.env`, and `.env.*`, so a key kept in
+the workspace's dotenv file is not sent to the provider. `exec` is not bound by
+that: a command can read any file you can.
 
 ## Reading the code
 

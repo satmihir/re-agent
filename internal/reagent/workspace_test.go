@@ -60,6 +60,8 @@ func TestWorkspace_RejectsPathsOutsideTheContract(t *testing.T) {
 		"nested parent": "sub/../../secrets",
 		"git":           ".git/config",
 		"git deep":      "sub/.git/config",
+		"env":           ".env",
+		"env variant":   "sub/.env.local",
 		"nul":           "a\x00b",
 	}
 	for name, path := range cases {

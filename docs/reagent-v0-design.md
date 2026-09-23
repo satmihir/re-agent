@@ -86,6 +86,8 @@ Read candidate files through a limit-plus-one reader to detect overflow. Adopt t
 
 Path checking rejects absolute paths, `..` components, and `.git` components before joining a path to the configured workspace. Walking does not follow directory symlinks. Use ordinary Go filesystem calls. Assume ordinary local text files.
 
+**Amendment (2026-09-23):** `.env` and `.env.*` components are rejected the same way as `.git`, and listing and walking omit them. Anything a tool reads reaches the provider and the trace, and those files conventionally hold the very keys the harness keeps out of both. This is a name rule, not a secrets policy; `exec` is not bound by it.
+
 **Relaxation:** Lexical path checks replace rooted access and file-type/symlink defenses; no `os.Root`, FIFO handling, or further symlink policy is built, and v1 §11.1 restores them.
 
 These checks do not establish workspace containment against filesystem aliases. Do not describe them as a sandbox. No further policy mechanism belongs in this slice.

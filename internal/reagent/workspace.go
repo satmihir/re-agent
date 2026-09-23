@@ -53,14 +53,21 @@ func (w *Workspace) resolve(rel string) (string, *ToolOutcome) {
 		return "", failPtr("invalid_path", "path must be relative to the workspace")
 	}
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
-		switch part {
-		case "..":
+		switch {
+		case part == "..":
 			return "", failPtr("invalid_path", "path must not contain a .. component")
-		case ".git":
-			return "", failPtr("invalid_path", ".git is not readable")
+		case withheld(part):
+			return "", failPtr("invalid_path", part+" is not readable")
 		}
 	}
 	return filepath.Join(w.root, rel), nil
+}
+
+// withheld names the entries no file tool may see. .git is repository
+// internals; .env files conventionally hold credentials, and anything a tool
+// reads is sent to the provider and written to the trace (v0 §4).
+func withheld(name string) bool {
+	return name == ".git" || name == ".env" || strings.HasPrefix(name, ".env.")
 }
 
 // relative renders an absolute path the way the model should refer to it.
