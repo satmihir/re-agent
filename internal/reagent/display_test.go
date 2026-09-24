@@ -3,6 +3,7 @@ package reagent
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -69,5 +70,66 @@ func TestShortPath(t *testing.T) {
 func TestFormatElapsed(t *testing.T) {
 	if got := formatElapsed(65 * time.Second); got != "1m05s" {
 		t.Fatal(got)
+	}
+}
+
+func TestStatusText(t *testing.T) {
+	stripStyle := func(s string) string {
+		s = strings.ReplaceAll(s, ansiDim, "")
+		return strings.ReplaceAll(s, ansiReset, "")
+	}
+	cases := []struct {
+		name    string
+		frame   int
+		elapsed time.Duration
+		columns int
+		want    string
+	}{
+		{"first frame without elapsed", 0, 999 * time.Millisecond, 0, "⠋ waiting"},
+		{"cycles frames and adds elapsed", 11, time.Second, 0, "⠙ waiting · 1.0s"},
+		{"caps terminal width", 0, time.Second, 12, "⠋ waiting …"},
+		{"one column leaves room for cursor", 0, time.Second, 1, ""},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := stripStyle(statusText(test.frame, "waiting", test.elapsed, test.columns))
+			if got != test.want {
+				t.Errorf("statusText() = %q, want %q", got, test.want)
+			}
+			if test.columns > 1 && displayWidth(got) > test.columns-1 {
+				t.Errorf("status width = %d, want at most %d", displayWidth(got), test.columns-1)
+			}
+		})
+	}
+}
+
+func TestDisplay_StatusLineStopsCleanly(t *testing.T) {
+	// The ticker is stopped and joined before this buffer is read, so it does
+	// not need its own synchronization.
+	var b bytes.Buffer
+	d := NewDisplay(&b)
+	d.live = true // A buffer is not a terminal; enable the live path explicitly.
+	d.tick = time.Millisecond
+	d.modelStarted("test-model", 1, 2)
+	time.Sleep(20 * time.Millisecond)
+	d.stopStatus()
+
+	if got := b.String(); !strings.HasSuffix(got, "\r\x1b[2K") {
+		t.Fatalf("status output does not end by erasing the line: %q", got)
+	}
+	length := b.Len()
+	time.Sleep(20 * time.Millisecond)
+	if got := b.Len(); got != length {
+		t.Fatalf("status wrote after stop: length %d, want %d", got, length)
+	}
+}
+
+func TestDisplay_PlainNeverDrawsStatus(t *testing.T) {
+	var b bytes.Buffer
+	d := NewDisplay(&b)
+	d.modelStarted("test-model", 1, 2)
+	d.modelFinished()
+	if got := b.String(); got != "" {
+		t.Fatalf("plain display drew status: %q", got)
 	}
 }

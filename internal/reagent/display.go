@@ -11,12 +11,22 @@ import (
 	"golang.org/x/term"
 )
 
+// statusLine owns one live status ticker and its cancellation state.
+type statusLine struct {
+	label   string
+	started time.Time
+	stop    chan struct{}
+	wg      sync.WaitGroup
+}
+
 // Display writes harness presentation output for a session.
 type Display struct {
 	mu      sync.Mutex
 	w       io.Writer
 	styled  bool
 	live    bool
+	tick    time.Duration
+	status  *statusLine
 	printed bool
 	recap   []string
 }
@@ -24,7 +34,96 @@ type Display struct {
 // NewDisplay creates a display for w.
 func NewDisplay(w io.Writer) *Display {
 	styled := styledOutput(w)
-	return &Display{w: w, styled: styled, live: styled && isTerminal(w)}
+	return &Display{w: w, styled: styled, live: styled && isTerminal(w), tick: 100 * time.Millisecond}
+}
+
+// modelStarted shows progress while a model request is in flight.
+func (d *Display) modelStarted(model string, step, maxSteps int) {
+	d.startStatus(fmt.Sprintf("waiting for %s · step %d of %d", sanitize(model), step, maxSteps))
+}
+
+// modelFinished removes the model-request status line.
+func (d *Display) modelFinished() { d.stopStatus() }
+
+// toolStarted shows progress for commands, the only tool likely to run long enough.
+func (d *Display) toolStarted(call ToolCall) {
+	if call.Name == "exec" {
+		d.startStatus("running " + callTarget(call))
+	}
+}
+
+// startStatus replaces any existing status and starts its ticker on live displays.
+func (d *Display) startStatus(label string) {
+	if !d.live {
+		return
+	}
+	d.stopStatus()
+	s := &statusLine{label: label, started: time.Now(), stop: make(chan struct{})}
+	s.wg.Add(1)
+	d.mu.Lock()
+	d.status = s
+	d.mu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		t := time.NewTicker(d.tick)
+		defer t.Stop()
+		frame := 0
+		for {
+			select {
+			case now := <-t.C:
+				d.mu.Lock()
+				if d.status == s {
+					fmt.Fprint(d.w, "\r\x1b[2K"+statusText(frame, s.label, now.Sub(s.started), d.columns()))
+				}
+				d.mu.Unlock()
+				frame++
+			case <-s.stop:
+				return
+			}
+		}
+	}()
+}
+
+// stopStatus waits for the ticker without holding mu, because its final tick
+// needs that mutex before it can observe the stop signal. It then erases the
+// line after the ticker is guaranteed not to draw again.
+func (d *Display) stopStatus() {
+	d.mu.Lock()
+	s := d.status
+	d.status = nil
+	d.mu.Unlock()
+	if s == nil {
+		return
+	}
+	close(s.stop)
+	s.wg.Wait()
+	d.mu.Lock()
+	fmt.Fprint(d.w, "\r\x1b[2K")
+	d.mu.Unlock()
+}
+
+// statusText formats one dim spinner frame without letting it wrap the terminal.
+func statusText(frame int, label string, elapsed time.Duration, columns int) string {
+	frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+	text := string(frames[frame%len(frames)]) + " " + label
+	if elapsed >= time.Second {
+		text += " · " + formatElapsed(elapsed)
+	}
+	if columns == 1 {
+		// Reserve the only cell for the cursor; a visible status would wrap.
+		text = ""
+	} else if columns > 1 {
+		text = truncateWidth(text, columns-1)
+	}
+	return ansiDim + text + ansiReset
+}
+
+// eraseStatusLocked clears a live status before ordinary terminal output. The
+// ticker redraws it on its next tick while the operation remains in progress.
+func (d *Display) eraseStatusLocked() {
+	if d.status != nil {
+		fmt.Fprint(d.w, "\r\x1b[2K")
+	}
 }
 
 func (d *Display) beginTurn() {
@@ -41,6 +140,7 @@ func (d *Display) note(text string) {
 	d.write(text + "\n")
 }
 func (d *Display) toolFinished(call ToolCall, outcome ToolOutcome) {
+	d.stopStatus()
 	a := describeActivity(call, outcome)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -55,6 +155,7 @@ func (d *Display) reply(stdout io.Writer, text string) {
 		return
 	}
 	d.mu.Lock()
+	d.eraseStatusLocked()
 	if d.styled && d.printed {
 		fmt.Fprintln(d.w)
 	}
@@ -64,6 +165,7 @@ func (d *Display) reply(stdout io.Writer, text string) {
 func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.eraseStatusLocked()
 	if d.styled {
 		fmt.Fprintln(d.w)
 	}
@@ -110,6 +212,7 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace boo
 func (d *Display) blocked(tracePath string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.eraseStatusLocked()
 	text := "  session blocked: /reset to continue"
 	if d.styled {
 		text = ansiDim + text + ansiReset
@@ -132,6 +235,7 @@ func (d *Display) traceLocked(tracePath string) {
 func (d *Display) spacer() {
 	if d.styled {
 		d.mu.Lock()
+		d.eraseStatusLocked()
 		fmt.Fprintln(d.w)
 		d.mu.Unlock()
 	}
@@ -140,6 +244,7 @@ func (d *Display) spacer() {
 func (d *Display) write(text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.eraseStatusLocked()
 	fmt.Fprint(d.w, text)
 	d.printed = true
 }
