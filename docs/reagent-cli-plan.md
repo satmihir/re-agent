@@ -1,6 +1,6 @@
 # re:agent CLI — Make It Pleasant to Use
 
-**Status:** In progress. C1–C5 merged: C1 in #2, C2 in #3, C3 in #4, C4 in #5, C5 in #6. C6 not started.
+**Status:** Complete. C1 merged in #2, C2 in #3, C3 in #4, C4 in #5, C5 in #6, C6 in #7.
 **Governs:** the presentation and input layer: `cli.go`, `chat.go`, `render.go`, `lineinput.go`, `session.go`'s display field, four display call sites in `loop.go`, and two new files, `display.go` and `activity.go`.
 **Authority:** subordinate to `docs/reagent-v0-design.md`. Wherever this plan departs from v0, the milestone names the amendment to add to v0 in the same change, so v0 remains the document that says what is built.
 **Implementer:** meant to be re:agent itself, one milestone per session, with a human reviewing and committing between milestones. §7 is written for that implementer; read it before starting any milestone.
