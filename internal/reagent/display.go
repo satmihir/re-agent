@@ -84,7 +84,10 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace boo
 		if path == "" {
 			path = "not recorded"
 		}
-		fmt.Fprintf(d.w, "trace: %s\n", shortPath(path))
+		if d.styled {
+			path = shortPath(path)
+		}
+		fmt.Fprintf(d.w, "trace: %s\n", path)
 	}
 }
 func (d *Display) write(text string) {

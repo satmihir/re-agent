@@ -417,6 +417,9 @@ func startupError(stderr io.Writer, message string) int {
 	return exitUsage
 }
 
+// printResult prints the reply, then a summary that never dresses a failure up
+// as an answer. A completed run means the model replied, not that it was right
+// (I17).
 func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, showTrace bool) {
 	d.reply(stdout, result.Reply)
 	d.summary(result, elapsed, showTrace)
