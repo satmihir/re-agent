@@ -369,9 +369,9 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 		case command == "/edit":
 			c.commandEdit(ctx, stdout, stderr)
 		case strings.HasPrefix(line, "/"):
-			message := fmt.Sprintf("unknown command %s", sanitize(command))
+			message := fmt.Sprintf("unknown command %s;", sanitize(command))
 			if suggestion := commandSuggestion(command); suggestion != "" {
-				message += "; did you mean " + suggestion + "?"
+				message += " did you mean " + suggestion + "?"
 			}
 			fmt.Fprintf(stderr, "%s /help lists commands.\n", message)
 		default:

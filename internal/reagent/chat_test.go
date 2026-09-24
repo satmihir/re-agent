@@ -339,13 +339,14 @@ func TestChat_StatusFormatsModel(t *testing.T) {
 
 func TestChat_UnknownCommandSuggests(t *testing.T) {
 	_, stderr := chatSession(t, NewScriptedModel(), "/mdoel\n/edi\n/zz\n/exit\n")
-	for _, want := range []string{"did you mean /model?", "did you mean /edit?"} {
+	for _, want := range []string{
+		"unknown command /mdoel; did you mean /model? /help lists commands.\n",
+		"unknown command /edi; did you mean /edit? /help lists commands.\n",
+		"unknown command /zz; /help lists commands.\n",
+	} {
 		if !strings.Contains(stderr, want) {
-			t.Fatalf("missing suggestion %q: %s", want, stderr)
+			t.Fatalf("missing %q: %s", want, stderr)
 		}
-	}
-	if strings.Contains(stderr, "unknown command /zz; did you mean") {
-		t.Fatalf("unexpected suggestion: %s", stderr)
 	}
 }
 
