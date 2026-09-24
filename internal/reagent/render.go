@@ -194,7 +194,7 @@ func styleMark(m mark, marker string) string {
 	if m == markSkipped {
 		color = ansiDim
 	}
-	return "  " + color + marker + ansiReset
+	return color + marker + ansiReset
 }
 
 func truncateWidth(text string, width int) string {

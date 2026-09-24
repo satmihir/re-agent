@@ -66,7 +66,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 		if json.Unmarshal([]byte(call.Arguments), &args) != nil || json.Unmarshal(outcome.Data, &result) != nil {
 			return a
 		}
-		a.target = fmt.Sprintf("%q in %s", sanitize(args.Query), sanitize(args.Path))
+		a.target = "\"" + sanitize(args.Query) + "\" in " + sanitize(args.Path)
 		if len(result.Matches) == 0 {
 			a.result = "no matches"
 		} else {
@@ -134,7 +134,7 @@ func (a activity) render(styled bool, columns int) string {
 		line = truncateWidth(line, columns)
 	}
 	if styled {
-		line = styleMark(a.mark, marker) + line[len("  "+marker):]
+		line = "  " + styleMark(a.mark, marker) + line[len("  "+marker):]
 	}
 	var out strings.Builder
 	out.WriteString(line + "\n")
@@ -145,6 +145,40 @@ func (a activity) render(styled bool, columns int) string {
 }
 
 func callTarget(call ToolCall) string {
+	switch call.Name {
+	case "read_file":
+		var args readFileArgs
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return sanitize(args.Path)
+		}
+	case "list_files":
+		var args listFilesArgs
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return sanitize(args.Path)
+		}
+	case "search_text":
+		var args searchTextArgs
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return "\"" + sanitize(args.Query) + "\" in " + sanitize(args.Path)
+		}
+	case "edit_file":
+		var args editFileArgs
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return sanitize(args.Path)
+		}
+	case "exec":
+		var args execArgs
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return commandText(args)
+		}
+	case "echo":
+		var args struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return "\"" + sanitize(args.Text) + "\""
+		}
+	}
 	return truncateWidth(sanitize(argumentSummary(call.Arguments)), 160)
 }
 func recapLine(call ToolCall, outcome ToolOutcome) string {

@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// Display writes harness presentation output for a session.
 type Display struct {
 	mu      sync.Mutex
 	w       io.Writer
@@ -18,6 +19,7 @@ type Display struct {
 	recap   []string
 }
 
+// NewDisplay creates a display for w.
 func NewDisplay(w io.Writer) *Display {
 	return &Display{w: w, styled: styledOutput(w), live: styledOutput(w) && isTerminal(w)}
 }
@@ -108,7 +110,7 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 func shortPath(path string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
+	if home, err := os.UserHomeDir(); err == nil && (path == home || strings.HasPrefix(path, home+string(os.PathSeparator))) {
 		return "~" + strings.TrimPrefix(path, home)
 	}
 	return path
