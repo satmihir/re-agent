@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/term"
 )
 
 // statusLine owns one live status ticker and its cancellation state.
@@ -160,7 +158,10 @@ func (d *Display) reply(stdout io.Writer, text string) {
 		fmt.Fprintln(d.w)
 	}
 	d.mu.Unlock()
-	fmt.Fprintln(stdout, display(text, styledOutput(stdout)))
+	// Measured on stdout rather than d.w: the reply is written there, and the
+	// two differ when only stderr is redirected.
+	columns := min(terminalColumns(stdout), maxReplyColumns)
+	fmt.Fprintln(stdout, display(text, styledOutput(stdout), columns))
 }
 func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace bool) {
 	d.mu.Lock()
@@ -254,15 +255,7 @@ func (d *Display) columns() int {
 	if !d.styled {
 		return 0
 	}
-	file, ok := d.w.(*os.File)
-	if !ok {
-		return 0
-	}
-	columns, _, err := term.GetSize(int(file.Fd()))
-	if err != nil || columns <= 0 {
-		return 0
-	}
-	return columns
+	return terminalColumns(d.w)
 }
 
 func formatCount(n int64) string {
