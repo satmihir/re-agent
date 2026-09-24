@@ -57,6 +57,7 @@ func NewID() string {
 // (v1 §7.2). Everything that reaches the model passes through here.
 func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 	s := r.session
+	defer s.display.stopStatus()
 	// The history a run starts from is embedded so its trace can be read on
 	// its own, without the traces of the turns before it (v1 §6.2).
 	r.trace.Write("run.started", 0, map[string]any{
@@ -81,7 +82,9 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.history)
 		r.trace.Write("model.requested", r.steps, req)
 
+		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)
 		resp, err := r.model.Generate(ctx, req)
+		s.display.modelFinished()
 		if err != nil {
 			// A failed request can still have cost tokens, so account what the
 			// provider reported before stopping.
@@ -214,6 +217,7 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 		r.trace.Write("tool.started", r.steps, map[string]any{
 			"call_id": call.CallID, "name": call.Name, "arguments": call.Arguments,
 		})
+		r.session.display.toolStarted(*call)
 		outcome, err := tool.Execute(ctx, json.RawMessage(call.Arguments))
 		if err != nil {
 			r.recordResult(call, failOutcome("internal_error", err.Error()))
