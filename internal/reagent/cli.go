@@ -186,10 +186,16 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		session.display.header(cfg, ws.Root(), true)
 		conversation := &conversation{
 			session: session, cfg: cfg, keys: keys, client: client, scripted: scripted,
-			trace: trace, traceDir: options.traceDir, progress: stderr,
+			trace: trace, traceDir: options.traceDir, progress: stderr, workspace: ws.Root(),
+			usage: Usage{Known: true},
+		}
+		if terminal, ok := stdin.(*os.File); ok && isTerminal(terminal) {
+			conversation.stdin = terminal
+			conversation.stdout, _ = stdout.(*os.File)
+			conversation.stderr, _ = stderr.(*os.File)
 		}
 		complete := func(line string, pos int, key rune) (string, int, bool) {
-			return completeLine(line, pos, key, completionCommands, conversation.completionArguments)
+			return completeLine(line, pos, key, completionCommands(), conversation.completionArguments)
 		}
 		return chat(ctx, conversation, newLineReader(stdin, stderr, complete), stdout, stderr)
 	}

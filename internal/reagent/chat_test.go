@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -13,7 +14,7 @@ func chatSession(t *testing.T, model Model, input string) (stdout, stderr string
 	t.Helper()
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, errs.String())
 	}
@@ -288,11 +289,128 @@ func TestChat_ModelAndEffortDoNotApplyToAScriptedRun(t *testing.T) {
 	for _, want := range []string{
 		"no model to choose",
 		"reasoning effort has no effect",
-		"/model   list models",
-		"/effort  list reasoning efforts",
+		"/model    [number or name]   list models",
+		"/effort   [number or name]   list reasoning efforts",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("stderr lacks %q:\n%s", want, stderr)
 		}
+	}
+}
+
+func TestChat_StatusReportsSessionState(t *testing.T) {
+	model := NewScriptedModel(ModelResponse{
+		Blocks: []OutputBlock{textBlock("done")},
+		Usage:  Usage{Known: true, InputTokens: 1200, CachedInputTokens: 800, OutputTokens: 30},
+	})
+	_, stderr := chatSession(t, model, "question\n/status\n/reset\n/status\n/exit\n")
+	for _, want := range []string{
+		"model      ", "mode       read only", "1 turn", "1.2k in (800 cached) · 30 out", "last trace ",
+		"session    0 turns · 0 in (0 cached) · 0 out",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("status lacks %q:\n%s", want, stderr)
+		}
+	}
+
+	_, blocked := chatSession(t, NewScriptedModel(
+		turn(callBlock("call_1", "echo", `{"text":"hi"}`), callBlock("call_1", "echo", `{"text":"hi"}`))),
+		"question\n/status\n/exit\n")
+	if !strings.Contains(blocked, "blocked by protocol_error; /reset to continue") {
+		t.Fatalf("blocked status: %s", blocked)
+	}
+}
+
+func TestChat_UnknownCommandSuggests(t *testing.T) {
+	_, stderr := chatSession(t, NewScriptedModel(), "/mdoel\n/zz\n/exit\n")
+	if !strings.Contains(stderr, "did you mean /model?") {
+		t.Fatalf("missing suggestion: %s", stderr)
+	}
+	if strings.Contains(stderr, "unknown command /zz; did you mean") {
+		t.Fatalf("unexpected suggestion: %s", stderr)
+	}
+}
+
+func TestChat_BlockedPrompt(t *testing.T) {
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{
+		{line: "question"},
+		{line: "/exit"},
+	}}
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), NewScriptedModel(
+		turn(callBlock("call_1", "echo", `{"text":"hi"}`), callBlock("call_1", "echo", `{"text":"hi"}`))), NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if len(input.prompts) < 2 || input.prompts[0] != "> " || input.prompts[1] != "(blocked) > " {
+		t.Fatalf("prompts: %#v", input.prompts)
+	}
+}
+
+func TestChat_HelpListsEveryCommand(t *testing.T) {
+	_, stderr := chatSession(t, NewScriptedModel(), "/help\n/exit\n")
+	for _, command := range chatCommands {
+		if !strings.Contains(stderr, command.name) {
+			t.Fatalf("help lacks %s:\n%s", command.name, stderr)
+		}
+	}
+}
+
+func TestChat_EditNeedsTerminal(t *testing.T) {
+	model := NewScriptedModel(turn(textBlock("unused")))
+	_, stderr := chatSession(t, model, "/edit\n/exit\n")
+	if !strings.Contains(stderr, "/edit needs a terminal") {
+		t.Fatalf("stderr: %s", stderr)
+	}
+	if model.next != 0 {
+		t.Fatalf("the model was called %d times", model.next)
+	}
+}
+
+func TestComposeInEditor(t *testing.T) {
+	stdin, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+
+	write := t.TempDir() + "/write"
+	if err := os.WriteFile(write, []byte("#!/bin/sh\nprintf 'known text\\n' > \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	text, err := composeInEditor([]string{write}, stdin, stdout, stderr)
+	if err != nil || text != "known text\n" {
+		t.Fatalf("text %q, err %v", text, err)
+	}
+
+	empty := t.TempDir() + "/empty"
+	if err := os.WriteFile(empty, []byte("#!/bin/sh\n: > \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	text, err = composeInEditor([]string{empty}, stdin, stdout, stderr)
+	if err != nil || text != "" {
+		t.Fatalf("text %q, err %v", text, err)
+	}
+
+	fail := t.TempDir() + "/fail"
+	if err := os.WriteFile(fail, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := composeInEditor([]string{fail}, stdin, stdout, stderr); err == nil {
+		t.Fatal("failing editor succeeded")
 	}
 }
