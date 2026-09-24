@@ -100,9 +100,25 @@ func newLiveModel(provider, apiKey string, client *http.Client, trace *Trace) Mo
 // plausible-looking assembly path (v0 §6.1).
 func PreviewRequest(cfg Config, prompt string) ([]byte, error) {
 	history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: prompt}}}
-	req := BuildContext(cfg, RequestScope{Step: 1}, history)
-	if cfg.Provider == anthropicName {
+	return encodeRequest(cfg.Provider, BuildContext(cfg, RequestScope{Step: 1}, history))
+}
+
+// encodeRequest is the provider's own encoder, size check included.
+func encodeRequest(provider string, req ModelRequest) ([]byte, error) {
+	if provider == anthropicName {
 		return EncodeAnthropicRequest(req)
 	}
 	return EncodeOpenAIRequest(req)
+}
+
+// nativeItemLabel names a provider output item's type for /context. Unknown
+// types count as text rather than disappearing from the breakdown.
+func nativeItemLabel(itemType string) string {
+	switch itemType {
+	case "reasoning", "thinking", "redacted_thinking":
+		return "model reasoning"
+	case "function_call", "tool_use":
+		return "model tool calls"
+	}
+	return "model text"
 }
