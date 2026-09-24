@@ -290,20 +290,26 @@ func shortPath(path string) string {
 	return path
 }
 
+// modelPresentation normalizes the model metadata used in terminal presentation.
+func modelPresentation(cfg Config) (model, provider, effort string) {
+	if cfg.Provider == "scripted" {
+		return "scripted", "", ""
+	}
+	effort = cfg.ReasoningEffort
+	if effort == "" {
+		effort = "default effort"
+	} else {
+		effort = "effort " + effort
+	}
+	return cfg.Model, cfg.Provider, effort
+}
+
 func (d *Display) header(cfg Config, workspace string, chat bool) {
 	mode := cfg.Registry.Mode().String()
-	model := cfg.Model
+	model, provider, effort := modelPresentation(cfg)
 	details := ""
-	if cfg.Provider == "scripted" {
-		model = "scripted"
-	} else {
-		effort := cfg.ReasoningEffort
-		if effort == "" {
-			effort = "default effort"
-		} else {
-			effort = "effort " + effort
-		}
-		details = " (" + cfg.Provider + ", " + effort + ")"
+	if provider != "" {
+		details = " (" + provider + ", " + effort + ")"
 	}
 	workspace = shortPath(workspace)
 	if chat {

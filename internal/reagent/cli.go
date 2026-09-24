@@ -195,7 +195,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			conversation.stderr, _ = stderr.(*os.File)
 		}
 		complete := func(line string, pos int, key rune) (string, int, bool) {
-			return completeLine(line, pos, key, completionCommands(), conversation.completionArguments)
+			return completeLine(line, pos, key, completionCommands(), conversation.completionArguments, commandTakesArgument)
 		}
 		return chat(ctx, conversation, newLineReader(stdin, stderr, complete), stdout, stderr)
 	}

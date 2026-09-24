@@ -246,7 +246,7 @@ func (r *scannerReader) ReadLine() (string, error) {
 }
 
 // completeLine returns the longest useful completion at the end of a line.
-func completeLine(line string, pos int, key rune, commands []string, argumentsFor func(string) []string) (string, int, bool) {
+func completeLine(line string, pos int, key rune, commands []string, argumentsFor func(string) []string, takesArgument func(string) bool) (string, int, bool) {
 	if key != '\t' || pos != len(line) {
 		return line, pos, false
 	}
@@ -278,14 +278,14 @@ func completeLine(line string, pos int, key rune, commands []string, argumentsFo
 		}
 	}
 	if common == prefix {
-		if len(matches) == 1 && argument == "" && (common == "/model" || common == "/effort") {
+		if len(matches) == 1 && argument == "" && takesArgument(common) {
 			out := line[:start] + common + " "
 			return out, len(out), true
 		}
 		return line, pos, false
 	}
 	out := line[:start] + common
-	if len(matches) == 1 && argument == "" && (common == "/model" || common == "/effort") {
+	if len(matches) == 1 && argument == "" && takesArgument(common) {
 		out += " "
 	}
 	return out, len(out), true

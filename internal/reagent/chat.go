@@ -13,6 +13,7 @@ import (
 	"time"
 )
 
+// chatCommand is one locally handled chat command.
 type chatCommand struct{ name, argument, help string }
 
 var chatCommands = []chatCommand{
@@ -26,6 +27,7 @@ var chatCommands = []chatCommand{
 	{"/exit", "", "leave (Ctrl-D does the same)"},
 }
 
+// chatHelp renders the command table and terminal key bindings.
 func chatHelp() string {
 	var b strings.Builder
 	b.WriteString("commands\n")
@@ -149,12 +151,18 @@ func (c *conversation) commandEffort(argument string, stderr io.Writer) {
 	fmt.Fprintf(stderr, "reasoning effort is now %s; the next request starts a new prompt cache\n", effort)
 }
 
+// commandStatus reports only state already held by the conversation.
 func (c *conversation) commandStatus(stderr io.Writer) {
 	workspace := c.workspace
 	if styledOutput(stderr) {
 		workspace = shortPath(workspace)
 	}
-	fmt.Fprintf(stderr, "model      %s (%s), effort %s\n", sanitize(c.cfg.Model), sanitize(c.cfg.Provider), sanitize(c.cfg.ReasoningEffort))
+	model, provider, effort := modelPresentation(c.cfg)
+	if provider == "" {
+		fmt.Fprintf(stderr, "model      %s\n", sanitize(model))
+	} else {
+		fmt.Fprintf(stderr, "model      %s (%s), %s\n", sanitize(model), sanitize(provider), sanitize(effort))
+	}
 	fmt.Fprintf(stderr, "workspace  %s\n", sanitize(workspace))
 	fmt.Fprintf(stderr, "mode       %s\n", sanitize(c.cfg.Registry.Mode().String()))
 	fmt.Fprintf(stderr, "budget     %d steps, %d tool calls per turn\n", c.cfg.MaxSteps, c.cfg.MaxToolCalls)
@@ -174,19 +182,35 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 	}
 }
 
+// commandSuggestion returns the sole prefix or close spelling correction.
 func commandSuggestion(command string) string {
-	match := ""
-	for _, candidate := range chatCommands {
-		if strings.HasPrefix(candidate.name, command) || levenshtein(command, candidate.name) <= 2 {
-			if match != "" {
-				return ""
-			}
-			match = candidate.name
-		}
+	if match, ambiguous := soleCommandMatch(func(candidate chatCommand) bool {
+		return strings.HasPrefix(candidate.name, command)
+	}); match != "" || ambiguous {
+		return match
 	}
+	match, _ := soleCommandMatch(func(candidate chatCommand) bool {
+		return levenshtein(command, candidate.name) <= 2
+	})
 	return match
 }
 
+// soleCommandMatch distinguishes no match from an ambiguous match.
+func soleCommandMatch(matches func(chatCommand) bool) (string, bool) {
+	match := ""
+	for _, candidate := range chatCommands {
+		if !matches(candidate) {
+			continue
+		}
+		if match != "" {
+			return "", true
+		}
+		match = candidate.name
+	}
+	return match, false
+}
+
+// levenshtein reports the number of single-rune edits between two strings.
 func levenshtein(a, b string) int {
 	left, right := []rune(a), []rune(b)
 	previous := make([]int, len(right)+1)
@@ -208,6 +232,7 @@ func levenshtein(a, b string) int {
 	return previous[len(right)]
 }
 
+// commandEdit composes and sends one turn only from an interactive terminal.
 func (c *conversation) commandEdit(ctx context.Context, stdout, stderr io.Writer) {
 	if c.stdin == nil || c.stdout == nil || c.stderr == nil {
 		fmt.Fprintln(stderr, "/edit needs a terminal")
@@ -226,6 +251,7 @@ func (c *conversation) commandEdit(ctx context.Context, stdout, stderr io.Writer
 	c.runTurn(ctx, text, stdout, stderr)
 }
 
+// editorCommand chooses the configured editor, falling back to vi.
 func editorCommand() []string {
 	for _, value := range []string{os.Getenv("VISUAL"), os.Getenv("EDITOR"), "vi"} {
 		if editor := strings.Fields(value); len(editor) > 0 {
@@ -235,6 +261,8 @@ func editorCommand() []string {
 	return []string{"vi"}
 }
 
+// composeInEditor gives the editor the real terminal while no prompt is being
+// read, so the terminal is in cooked mode and the editor behaves normally.
 func composeInEditor(editor []string, stdin, stdout, stderr *os.File) (string, error) {
 	file, err := os.CreateTemp("", "reagent-*.md")
 	if err != nil {
@@ -260,6 +288,7 @@ func composeInEditor(editor []string, stdin, stdout, stderr *os.File) (string, e
 	return string(text), nil
 }
 
+// previewEditorMessage leaves a bounded record of the composed message.
 func previewEditorMessage(stderr io.Writer, text string) {
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	for _, line := range lines[:min(len(lines), 5)] {
@@ -344,7 +373,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			if suggestion := commandSuggestion(command); suggestion != "" {
 				message += "; did you mean " + suggestion + "?"
 			}
-			fmt.Fprintf(stderr, "%s; /help lists them\n", message)
+			fmt.Fprintf(stderr, "%s /help lists commands.\n", message)
 		default:
 			c.runTurn(ctx, line, stdout, stderr)
 		}
@@ -367,12 +396,23 @@ func (c *conversation) completionArguments(command string) []string {
 	return nil
 }
 
+// completionCommands returns the command names from the shared command table.
 func completionCommands() []string {
 	commands := make([]string, 0, len(chatCommands))
 	for _, command := range chatCommands {
 		commands = append(commands, command.name)
 	}
 	return commands
+}
+
+// commandTakesArgument reports whether completion should enter argument mode.
+func commandTakesArgument(name string) bool {
+	for _, command := range chatCommands {
+		if command.name == name {
+			return command.argument != ""
+		}
+	}
+	return false
 }
 
 // runTurn runs one turn under its own interrupt handler, so the first Ctrl-C

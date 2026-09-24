@@ -321,10 +321,28 @@ func TestChat_StatusReportsSessionState(t *testing.T) {
 	}
 }
 
+func TestChat_StatusFormatsModel(t *testing.T) {
+	c := newConversation(t, "claude-haiku-4-5", "", 0)
+	var stderr bytes.Buffer
+	c.commandStatus(&stderr)
+	if !strings.Contains(stderr.String(), "model      claude-haiku-4-5 (anthropic), default effort") {
+		t.Fatalf("status: %s", stderr.String())
+	}
+
+	c.cfg.Provider = "scripted"
+	stderr.Reset()
+	c.commandStatus(&stderr)
+	if !strings.Contains(stderr.String(), "model      scripted\n") || strings.Contains(stderr.String(), "effort") {
+		t.Fatalf("scripted status: %s", stderr.String())
+	}
+}
+
 func TestChat_UnknownCommandSuggests(t *testing.T) {
-	_, stderr := chatSession(t, NewScriptedModel(), "/mdoel\n/zz\n/exit\n")
-	if !strings.Contains(stderr, "did you mean /model?") {
-		t.Fatalf("missing suggestion: %s", stderr)
+	_, stderr := chatSession(t, NewScriptedModel(), "/mdoel\n/edi\n/zz\n/exit\n")
+	for _, want := range []string{"did you mean /model?", "did you mean /edit?"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("missing suggestion %q: %s", want, stderr)
+		}
 	}
 	if strings.Contains(stderr, "unknown command /zz; did you mean") {
 		t.Fatalf("unexpected suggestion: %s", stderr)
