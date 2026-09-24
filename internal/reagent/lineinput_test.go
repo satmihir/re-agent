@@ -19,6 +19,26 @@ func terminalInput(input io.Reader) *terminalReader {
 	return reader
 }
 
+func TestTerminalReader_ArrowKeysRecallHistory(t *testing.T) {
+	reader := terminalInput(strings.NewReader("first\rsecond\r\x1b[A\r"))
+	for i, want := range []string{"first", "second", "second"} {
+		line, err := reader.ReadLine()
+		if err != nil || line != want {
+			t.Fatalf("read %d: got %q, %v; want %q", i+1, line, err, want)
+		}
+	}
+}
+
+func TestKeyReader_NewlineSubmitsLikeCarriageReturn(t *testing.T) {
+	reader := terminalInput(strings.NewReader("typed while busy\n\x1b[A\r"))
+	for i := 0; i < 2; i++ {
+		line, err := reader.ReadLine()
+		if err != nil || line != "typed while busy" {
+			t.Fatalf("read %d: got %q, %v", i+1, line, err)
+		}
+	}
+}
+
 func TestKeyReader_PasteIsOneSubmission(t *testing.T) {
 	reader := terminalInput(strings.NewReader("\x1b[200~line one\rline two\r\x1b[201~\r"))
 	line, err := reader.ReadLine()
@@ -49,6 +69,20 @@ func TestKeyReader_MarkersSplitAcrossReads(t *testing.T) {
 	line, err := reader.ReadLine()
 	if err != nil || line != "a\nb" {
 		t.Fatalf("got %q, %v", line, err)
+	}
+}
+
+func TestTerminalReader_HistoryUsesPhysicalSubmissions(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[200~a\rb\x1b[201~\rc \\\rd\r"))
+	for _, want := range []string{"a\nb", "c \nd"} {
+		line, err := reader.ReadLine()
+		if err != nil || line != want {
+			t.Fatalf("got %q, %v; want %q", line, err, want)
+		}
+	}
+	want := []string{"a↵b", `c \`, "d"}
+	if strings.Join(reader.history.entries, "|") != strings.Join(want, "|") {
+		t.Fatalf("history: %#v, want %#v", reader.history.entries, want)
 	}
 }
 
@@ -83,7 +117,7 @@ func TestPromptHistory_SkipsBlankAndRepeated(t *testing.T) {
 	for _, line := range []string{"", " \t", "one", "one", "two"} {
 		history.Add(line)
 	}
-	if history.Len() != 2 || history.At(0) != "one" || history.At(1) != "two" {
+	if history.Len() != 2 || history.At(0) != "two" || history.At(1) != "one" {
 		t.Fatalf("history: %#v", history.entries)
 	}
 }

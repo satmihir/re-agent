@@ -12,11 +12,14 @@ import (
 
 var errInterrupted = errors.New("interrupted")
 
+// lineReader supplies one complete submission at a time. Terminal input gets
+// editing; piped input remains one line per turn.
 type lineReader interface {
 	ReadLine() (string, error)
 	SetPrompt(string)
 }
 
+// newLineReader picks terminal editing only for an interactive file.
 func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int, rune) (string, int, bool)) lineReader {
 	if f, ok := stdin.(*os.File); ok && isTerminal(stdin) {
 		keys := &keyReader{inner: f}
@@ -31,13 +34,17 @@ func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int,
 	return &scannerReader{scanner: s}
 }
 
+// terminalIO joins terminal input with stderr, where x/term writes its prompt
+// and echo alongside the other harness diagnostics.
 type terminalIO struct {
 	io.Reader
 	io.Writer
 }
 
 // keyReader makes bracketed pastes one editable submission and translates
-// newlines within them to the visible return-arrow character.
+// embedded newlines to the visible return-arrow character. Outside a paste,
+// newline also means Enter: type-ahead was typed while cooked mode was active
+// and therefore arrives as newline rather than raw-mode carriage return.
 type keyReader struct {
 	inner      io.Reader
 	pending    []byte
@@ -74,6 +81,9 @@ func (r *keyReader) Read(b []byte) (int, error) {
 	return n, nil
 }
 
+// markerPrefix reports whether b could become marker when the next read adds
+// bytes. keyReader must retain such fragments because a paste marker may span
+// reads.
 func markerPrefix(b, marker []byte) bool {
 	return len(b) <= len(marker) && string(b) == string(marker[:len(b)])
 }
@@ -120,6 +130,8 @@ func (r *keyReader) consume(final bool) {
 	}
 }
 
+// promptHistory keeps the prompt's in-memory history. x/term adds completed
+// physical lines; this implementation only decides which lines it retains.
 type promptHistory struct {
 	entries []string
 	max     int
@@ -142,9 +154,12 @@ func (h *promptHistory) At(i int) string {
 	if i < 0 || i >= len(h.entries) {
 		return ""
 	}
-	return h.entries[i]
+	return h.entries[len(h.entries)-1-i]
 }
 
+// terminalReader owns the terminal-specific state for one prompt. keys tracks
+// transformed input and prompt remembers the prompt to restore after a
+// continuation read.
 type terminalReader struct {
 	fd       int
 	terminal *term.Terminal
@@ -154,11 +169,16 @@ type terminalReader struct {
 	history  promptHistory
 }
 
+// SetPrompt changes the prompt restored after a continuation read.
 func (r *terminalReader) SetPrompt(p string) {
 	r.prompt = p
 	r.terminal.SetPrompt(p)
 }
 
+// ReadLine enters raw mode only while it reads a submission. During a turn the
+// terminal stays cooked, so Ctrl-C continues to raise SIGINT and cancel that
+// turn, and type-ahead still arrives as newline. At an idle prompt keyReader
+// translates Ctrl-C into errInterrupted instead of ending the conversation.
 func (r *terminalReader) ReadLine() (line string, err error) {
 	restore := func() {}
 	if r.enterRaw != nil {
@@ -192,10 +212,11 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 		}
 		line += "\n" + next
 	}
-	r.history.Add(line)
 	return line, nil
 }
 
+// readPhysicalLine normalizes a single x/term submission. x/term owns history,
+// so this deliberately does not add the normalized multi-line result again.
 func (r *terminalReader) readPhysicalLine() (string, error) {
 	line, err := r.terminal.ReadLine()
 	if err == term.ErrPasteIndicator {
