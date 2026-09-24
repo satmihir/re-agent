@@ -20,6 +20,7 @@ var chatCommands = []chatCommand{
 	{"/model", "[number or name]", "list models, or switch (starts a fresh session)"},
 	{"/effort", "[number or name]", "list reasoning efforts, or set one"},
 	{"/status", "", "model, mode, workspace, turns, and tokens so far"},
+	{"/context", "", "what the next request is made of, by size"},
 	{"/trace", "", "path of the last turn's trace"},
 	{"/reset", "", "discard the conversation and start a fresh session"},
 	{"/edit", "", "write the next message in $VISUAL or $EDITOR"},
@@ -180,6 +181,21 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 	if c.session.blocked != "" {
 		fmt.Fprintf(stderr, "state      blocked by %s; /reset to continue\n", sanitize(c.session.blocked))
 	}
+}
+
+// commandContext measures the request the next turn would send. The session's
+// own configuration is used because /effort changes it after launch.
+func (c *conversation) commandContext(stderr io.Writer) {
+	if c.scripted != nil {
+		fmt.Fprintln(stderr, "a scripted run replays recorded responses, so it sends no requests to measure")
+		return
+	}
+	breakdown, err := measureContext(c.session.cfg, c.session.history)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
+		return
+	}
+	fmt.Fprintln(stderr, breakdown.render())
 }
 
 // commandSuggestion returns the sole prefix or close spelling correction.
@@ -356,6 +372,8 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			c.commandEffort(argument, stderr)
 		case command == "/status":
 			c.commandStatus(stderr)
+		case command == "/context":
+			c.commandContext(stderr)
 		case command == "/trace":
 			if path := c.session.LastTrace(); path != "" {
 				fmt.Fprintln(stderr, sanitize(path))
