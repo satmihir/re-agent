@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func TestDisplayWidth(t *testing.T) {
+	for _, test := range []struct {
+		text string
+		want int
+	}{{"abc", 3}, {"界", 2}, {"🙂", 2}, {"e\u0301", 1}} {
+		if got := displayWidth(test.text); got != test.want {
+			t.Fatalf("displayWidth(%q) = %d, want %d", test.text, got, test.want)
+		}
+	}
+}
+
+func TestTruncateWidth(t *testing.T) {
+	if got := truncateWidth("界abc", 4); got != "界a…" {
+		t.Fatalf("got %q", got)
+	}
+	if got := truncateWidth("e\u0301abc", 3); got != "e\u0301a…" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestSanitize_KeepsTextAndEscapesControls(t *testing.T) {
 	cases := map[string]struct{ in, want string }{
 		"plain":      {"hello world", "hello world"},

@@ -11,11 +11,11 @@ import (
 // one model, and one mode from its first run to its last; /reset makes a new
 // one rather than changing any of them (v1 §6.1).
 type Session struct {
-	ID       string
-	cfg      Config
-	model    Model
-	trace    *Trace
-	progress io.Writer
+	ID      string
+	cfg     Config
+	model   Model
+	trace   *Trace
+	display *Display
 
 	history   []Entry
 	seenCalls map[string]bool
@@ -30,7 +30,7 @@ type Session struct {
 // NewSession starts a session with an empty transcript.
 func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Session {
 	return &Session{
-		ID: NewID(), cfg: cfg, model: model, trace: trace, progress: progress,
+		ID: NewID(), cfg: cfg, model: model, trace: trace, display: NewDisplay(progress),
 		seenCalls: make(map[string]bool),
 	}
 }

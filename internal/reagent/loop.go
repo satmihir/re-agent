@@ -112,7 +112,7 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 		}
 		if text := blockText(resp, BlockText); text != "" {
 			// Text alongside tool calls is progress, not an answer (v1 §7.3.4).
-			fmt.Fprintf(s.progress, "· %s\n", sanitize(text))
+			s.display.note(text)
 		}
 
 		if reason, reserved := r.reserve(len(calls)); !reserved {
@@ -250,7 +250,7 @@ func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 	}
 	r.trace.Write("tool.finished", r.steps, result)
 	r.session.history = append(r.session.history, Entry{Kind: EntryTool, Tool: &result})
-	fmt.Fprintf(r.session.progress, "· %s %s\n", sanitize(call.Name), outcome.Code)
+	r.session.display.toolFinished(*call, outcome)
 }
 
 // recordNotExecuted gives every unrun call of an accepted batch a terminal

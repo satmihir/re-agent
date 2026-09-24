@@ -1,0 +1,234 @@
+package reagent
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/term"
+)
+
+// Display writes harness presentation output for a session.
+type Display struct {
+	mu      sync.Mutex
+	w       io.Writer
+	styled  bool
+	live    bool
+	printed bool
+	recap   []string
+}
+
+// NewDisplay creates a display for w.
+func NewDisplay(w io.Writer) *Display {
+	styled := styledOutput(w)
+	return &Display{w: w, styled: styled, live: styled && isTerminal(w)}
+}
+
+func (d *Display) beginTurn() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.printed = false
+	d.recap = nil
+}
+func (d *Display) note(text string) {
+	text = "  · " + strings.ReplaceAll(sanitize(text), "\n", "\n    ")
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	d.write(text + "\n")
+}
+func (d *Display) toolFinished(call ToolCall, outcome ToolOutcome) {
+	a := describeActivity(call, outcome)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fmt.Fprint(d.w, a.render(d.styled, d.columns()))
+	d.printed = true
+	if recap := recapLine(call, outcome); recap != "" {
+		d.recap = append(d.recap, recap)
+	}
+}
+func (d *Display) reply(stdout io.Writer, text string) {
+	if text == "" {
+		return
+	}
+	d.mu.Lock()
+	if d.styled && d.printed {
+		fmt.Fprintln(d.w)
+	}
+	d.mu.Unlock()
+	fmt.Fprintln(stdout, display(text, styledOutput(stdout)))
+}
+func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.styled {
+		fmt.Fprintln(d.w)
+	}
+	marker := markFailed
+	if result.Status == StatusCompleted {
+		marker = markOK
+	} else if result.Status == StatusCancelled {
+		marker = markSkipped
+	} else if result.Status == StatusEffectUnknown {
+		marker = markUncertain
+	}
+	tokens := "tokens unknown"
+	if result.Usage.Known {
+		tokens = fmt.Sprintf("%s in (%s cached) · %s out", formatCount(result.Usage.InputTokens), formatCount(result.Usage.CachedInputTokens), formatCount(result.Usage.OutputTokens))
+	}
+	markText := map[mark]string{markOK: "✓", markFailed: "✗", markUncertain: "!", markSkipped: "–"}[marker]
+	if d.styled {
+		markText = styleMark(marker, markText)
+	}
+	summary := fmt.Sprintf("%s %s · %s · %s · %s · %s", markText, result.Status, plural(result.Steps, "step", "steps"), plural(result.ToolCalls, "tool call", "tool calls"), tokens, formatElapsed(elapsed))
+	if d.styled {
+		summary = markText + ansiDim + summary[len(markText):] + ansiReset
+	}
+	fmt.Fprintln(d.w, summary)
+	if result.Reason != "" {
+		reason := result.Reason
+		if reason == "no_followup_step" {
+			reason = "the step budget ran out"
+		}
+		fmt.Fprintf(d.w, "  %s\n", sanitize(reason))
+	}
+	for _, line := range d.recap {
+		if strings.HasPrefix(line, "ran ") {
+			line = "ran     " + strings.TrimPrefix(line, "ran ")
+		}
+		fmt.Fprintf(d.w, "  %s\n", line)
+	}
+	if showTrace {
+		d.traceLocked(result.TracePath)
+	}
+}
+
+// blocked makes a non-continuable turn actionable before showing its trace.
+func (d *Display) blocked(tracePath string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	text := "  session blocked: /reset to continue"
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	fmt.Fprintln(d.w, text)
+	d.traceLocked(tracePath)
+}
+
+// traceLocked keeps trace rendering in the caller's display critical section.
+func (d *Display) traceLocked(tracePath string) {
+	if tracePath == "" {
+		tracePath = "not recorded"
+	} else if d.styled {
+		tracePath = shortPath(tracePath)
+	}
+	fmt.Fprintf(d.w, "trace: %s\n", sanitize(tracePath))
+}
+
+// spacer separates interactive styled turns without changing plain output.
+func (d *Display) spacer() {
+	if d.styled {
+		d.mu.Lock()
+		fmt.Fprintln(d.w)
+		d.mu.Unlock()
+	}
+}
+
+func (d *Display) write(text string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fmt.Fprint(d.w, text)
+	d.printed = true
+}
+
+// columns asks the terminal only when width-sensitive styled output is active.
+func (d *Display) columns() int {
+	if !d.styled {
+		return 0
+	}
+	file, ok := d.w.(*os.File)
+	if !ok {
+		return 0
+	}
+	columns, _, err := term.GetSize(int(file.Fd()))
+	if err != nil || columns <= 0 {
+		return 0
+	}
+	return columns
+}
+
+func formatCount(n int64) string {
+	if n < 1000 {
+		return fmt.Sprint(n)
+	}
+	if n < 1_000_000 {
+		if n >= 999_950 {
+			return "1.0M"
+		}
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+}
+func formatElapsed(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+func shortPath(path string) string {
+	if home, err := os.UserHomeDir(); err == nil && (path == home || strings.HasPrefix(path, home+string(os.PathSeparator))) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
+}
+
+func (d *Display) header(cfg Config, workspace string, chat bool) {
+	mode := cfg.Registry.Mode().String()
+	model := cfg.Model
+	details := ""
+	if cfg.Provider == "scripted" {
+		model = "scripted"
+	} else {
+		effort := cfg.ReasoningEffort
+		if effort == "" {
+			effort = "default effort"
+		} else {
+			effort = "effort " + effort
+		}
+		details = " (" + cfg.Provider + ", " + effort + ")"
+	}
+	workspace = shortPath(workspace)
+	if chat {
+		d.headerTitle("re:agent chat · ", model, details)
+		d.headerLine(fmt.Sprintf("workspace %s · %s · %d steps, %d tool calls per turn", workspace, mode, cfg.MaxSteps, cfg.MaxToolCalls))
+		if cfg.Registry.Mode().AllowExec {
+			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+		}
+		d.headerLine("/help for commands · Ctrl-D to exit")
+		return
+	}
+	d.headerTitle("re:agent · ", model, details+" · "+mode+" · "+workspace)
+	if cfg.Registry.Mode().AllowExec {
+		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+	}
+}
+
+// headerTitle emphasizes the selected model without brightening the metadata.
+func (d *Display) headerTitle(prefix, model, suffix string) {
+	if !d.styled {
+		d.write(prefix + model + suffix + "\n")
+		return
+	}
+	d.write(ansiDim + prefix + ansiReset + ansiBold + model + ansiReset + ansiDim + suffix + ansiReset + "\n")
+}
+
+// headerLine keeps banner metadata visually secondary to activity and replies.
+func (d *Display) headerLine(text string) {
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	d.write(text + "\n")
+}

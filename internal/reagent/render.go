@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -14,6 +15,9 @@ const (
 	ansiDim    = "\x1b[2m"
 	ansiItalic = "\x1b[3m"
 	ansiCode   = "\x1b[36m"
+	ansiRed    = "\x1b[31m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
 )
 
 // isTerminalControl reports characters that must never reach a terminal as
@@ -178,4 +182,61 @@ func renderSpans(text string) string {
 func styleEmphasis(text string) string {
 	text = boldPattern.ReplaceAllString(text, ansiBold+"${1}"+ansiReset)
 	return italicPattern.ReplaceAllString(text, ansiItalic+"${1}"+ansiReset)
+}
+
+func styleMark(m mark, marker string) string {
+	color := ansiGreen
+	if m == markFailed {
+		color = ansiRed
+	}
+	if m == markUncertain {
+		color = ansiYellow
+	}
+	if m == markSkipped {
+		color = ansiDim
+	}
+	return color + marker + ansiReset
+}
+
+// displayWidth reports terminal cells occupied by text. Combining marks consume
+// no cells; the common East Asian wide ranges consume two.
+func displayWidth(text string) int {
+	width := 0
+	for _, r := range text {
+		if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r) {
+			continue
+		}
+		if r >= 0x1100 && (r <= 0x115f || r == 0x2329 || r == 0x232a ||
+			(r >= 0x2e80 && r <= 0xa4cf) || (r >= 0xac00 && r <= 0xd7a3) ||
+			(r >= 0xf900 && r <= 0xfaff) || (r >= 0xfe10 && r <= 0xfe19) ||
+			(r >= 0xfe30 && r <= 0xfe6f) || (r >= 0xff00 && r <= 0xff60) ||
+			(r >= 0xffe0 && r <= 0xffe6) || (r >= 0x1f300 && r <= 0x1f64f) ||
+			(r >= 0x1f900 && r <= 0x1f9ff) || (r >= 0x20000 && r <= 0x3fffd)) {
+			width += 2
+		} else {
+			width++
+		}
+	}
+	return width
+}
+
+// truncateWidth shortens text to terminal cells without splitting a rune.
+func truncateWidth(text string, width int) string {
+	if width <= 0 || displayWidth(text) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+	used := 0
+	var out strings.Builder
+	for _, r := range text {
+		runeWidth := displayWidth(string(r))
+		if used+runeWidth > width-1 {
+			break
+		}
+		out.WriteRune(r)
+		used += runeWidth
+	}
+	return out.String() + "…"
 }
