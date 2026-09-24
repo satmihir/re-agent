@@ -48,6 +48,7 @@ func TestActivity_DescribesEachTool(t *testing.T) {
 		{"read", ToolCall{Name: "read_file", Arguments: `{"path":"a"}`}, `{"total_lines":2,"lines":[{"number":1},{"number":2}],"eof":true}`, "  ✓ read_file a → 2 lines\n"},
 		{"read range", ToolCall{Name: "read_file", Arguments: `{"path":"a"}`}, `{"total_lines":9,"lines":[{"number":3},{"number":4}]}`, "  ✓ read_file a → lines 3-4 of 9\n"},
 		{"list", ToolCall{Name: "list_files", Arguments: `{"path":"."}`}, `{"entries":[{}]}`, "  ✓ list_files . → 1 entry\n"},
+		{"list more", ToolCall{Name: "list_files", Arguments: `{"path":"."}`}, `{"entries":[{},{}],"next_offset":2}`, "  ✓ list_files . → 2 entries, more\n"},
 		{"search", ToolCall{Name: "search_text", Arguments: `{"query":"q","path":"."}`}, `{"matches":[{"path":"a"},{"path":"b"}],"complete":true}`, "  ✓ search_text \"q\" in . → 2 matches in 2 files\n"},
 		{"search incomplete", ToolCall{Name: "search_text", Arguments: `{"query":"q","path":"."}`}, `{"matches":[],"complete":false}`, "  ✓ search_text \"q\" in . → no matches, incomplete\n"},
 		{"edit", ToolCall{Name: "edit_file", Arguments: `{"path":"a","old_text":"x","new_text":"y"}`}, `{"changed":true}`, "  ✓ edit_file a → +1 -1\n      - x\n      + y\n"},
@@ -58,6 +59,26 @@ func TestActivity_DescribesEachTool(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got := describeActivity(test.call, ToolOutcome{OK: true, Data: []byte(test.data)}).render(false, 0)
 			if got != test.want {
+				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestActivity_ExecFailureAndTimeout(t *testing.T) {
+	call := ToolCall{Name: "exec", Arguments: `{"argv":["sh","-c","exit 3"],"cwd":"."}`}
+	tests := []struct {
+		name    string
+		outcome ToolOutcome
+		want    string
+	}{
+		{"failed exit", ToolOutcome{Code: "command_failed", Data: []byte(`{"exit_code":3,"duration_ms":20}`)}, "  ✗ exec sh -c 'exit 3' → exit 3 in 0.0s\n"},
+		{"timeout", ToolOutcome{Code: "timeout", Data: []byte(`{"duration_ms":2000}`)}, "  ! exec sh -c 'exit 3' → timed out after 2.0s; effects unknown\n"},
+		{"not executed", ToolOutcome{Code: "not_executed", Message: "step budget reached"}, "  – exec sh -c 'exit 3' → not run: step budget reached\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := describeActivity(call, test.outcome).render(false, 0); got != test.want {
 				t.Fatalf("got %q, want %q", got, test.want)
 			}
 		})
@@ -80,7 +101,7 @@ func TestActivity_EditPreviewDropsSharedLinesAndCaps(t *testing.T) {
 		t.Fatalf("preview: %q", got)
 	}
 	many := make([]string, 7)
-	if got := previewLines(many, nil); len(got) != 7 || got[6] != "… 1 more lines" {
+	if got := previewLines(many, nil); len(got) != 7 || got[6] != "… 1 more line" {
 		t.Fatalf("capped preview: %q", got)
 	}
 }

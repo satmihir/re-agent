@@ -83,7 +83,7 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace boo
 	if d.styled {
 		markText = styleMark(marker, markText)
 	}
-	summary := fmt.Sprintf("%s %s · %s · %s · %s · %s", markText, result.Status, plural(result.Steps, "step"), plural(result.ToolCalls, "tool call"), tokens, formatElapsed(elapsed))
+	summary := fmt.Sprintf("%s %s · %s · %s · %s · %s", markText, result.Status, plural(result.Steps, "step", "steps"), plural(result.ToolCalls, "tool call", "tool calls"), tokens, formatElapsed(elapsed))
 	if d.styled {
 		summary = markText + ansiDim + summary[len(markText):] + ansiReset
 	}
@@ -105,6 +105,8 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace boo
 		d.traceLocked(result.TracePath)
 	}
 }
+
+// blocked makes a non-continuable turn actionable before showing its trace.
 func (d *Display) blocked(tracePath string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -116,12 +118,7 @@ func (d *Display) blocked(tracePath string) {
 	d.traceLocked(tracePath)
 }
 
-func (d *Display) trace(tracePath string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.traceLocked(tracePath)
-}
-
+// traceLocked keeps trace rendering in the caller's display critical section.
 func (d *Display) traceLocked(tracePath string) {
 	if tracePath == "" {
 		tracePath = "not recorded"
@@ -131,6 +128,7 @@ func (d *Display) traceLocked(tracePath string) {
 	fmt.Fprintf(d.w, "trace: %s\n", sanitize(tracePath))
 }
 
+// spacer separates interactive styled turns without changing plain output.
 func (d *Display) spacer() {
 	if d.styled {
 		d.mu.Lock()
@@ -145,6 +143,8 @@ func (d *Display) write(text string) {
 	fmt.Fprint(d.w, text)
 	d.printed = true
 }
+
+// columns asks the terminal only when width-sensitive styled output is active.
 func (d *Display) columns() int {
 	if !d.styled {
 		return 0
@@ -202,7 +202,7 @@ func (d *Display) header(cfg Config, workspace string, chat bool) {
 	}
 	workspace = shortPath(workspace)
 	if chat {
-		d.headerLine(fmt.Sprintf("re:agent chat · %s%s", model, details))
+		d.headerTitle("re:agent chat · ", model, details)
 		d.headerLine(fmt.Sprintf("workspace %s · %s · %d steps, %d tool calls per turn", workspace, mode, cfg.MaxSteps, cfg.MaxToolCalls))
 		if cfg.Registry.Mode().AllowExec {
 			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
@@ -210,12 +210,22 @@ func (d *Display) header(cfg Config, workspace string, chat bool) {
 		d.headerLine("/help for commands · Ctrl-D to exit")
 		return
 	}
-	d.headerLine(fmt.Sprintf("re:agent · %s%s · %s · %s", model, details, mode, workspace))
+	d.headerTitle("re:agent · ", model, details+" · "+mode+" · "+workspace)
 	if cfg.Registry.Mode().AllowExec {
 		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
 	}
 }
 
+// headerTitle emphasizes the selected model without brightening the metadata.
+func (d *Display) headerTitle(prefix, model, suffix string) {
+	if !d.styled {
+		d.write(prefix + model + suffix + "\n")
+		return
+	}
+	d.write(ansiDim + prefix + ansiReset + ansiBold + model + ansiReset + ansiDim + suffix + ansiReset + "\n")
+}
+
+// headerLine keeps banner metadata visually secondary to activity and replies.
 func (d *Display) headerLine(text string) {
 	if d.styled {
 		text = ansiDim + text + ansiReset

@@ -33,6 +33,16 @@ func TestDisplay_SummaryLine(t *testing.T) {
 	}
 }
 
+func TestDisplay_AlignsRecapVerbs(t *testing.T) {
+	var b bytes.Buffer
+	d := NewDisplay(&b)
+	d.recap = []string{"changed config.txt", "ran go test ./..."}
+	d.summary(RunResult{Status: StatusCompleted}, time.Second, false)
+	if got := b.String(); !bytes.Contains([]byte(got), []byte("  changed config.txt\n  ran     go test ./...\n")) {
+		t.Fatalf("recap is not aligned: %q", got)
+	}
+}
+
 func TestFormatCount(t *testing.T) {
 	for _, test := range []struct {
 		in   int64

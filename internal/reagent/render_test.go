@@ -11,7 +11,7 @@ func TestDisplayWidth(t *testing.T) {
 	for _, test := range []struct {
 		text string
 		want int
-	}{{"abc", 3}, {"界", 2}, {"e\u0301", 1}} {
+	}{{"abc", 3}, {"界", 2}, {"🙂", 2}, {"e\u0301", 1}} {
 		if got := displayWidth(test.text); got != test.want {
 			t.Fatalf("displayWidth(%q) = %d, want %d", test.text, got, test.want)
 		}

@@ -49,7 +49,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 			return a
 		}
 		if result.Lines[0].Number == 1 && result.EOF {
-			a.result = plural(len(result.Lines), "line")
+			a.result = plural(len(result.Lines), "line", "lines")
 			return a
 		}
 		a.result = fmt.Sprintf("lines %d-%d of %d", result.Lines[0].Number, result.Lines[len(result.Lines)-1].Number, result.TotalLines)
@@ -59,7 +59,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 		if json.Unmarshal([]byte(call.Arguments), &args) != nil || json.Unmarshal(outcome.Data, &result) != nil {
 			return a
 		}
-		a.target, a.result = sanitize(args.Path), plural(len(result.Entries), "entry")
+		a.target, a.result = sanitize(args.Path), plural(len(result.Entries), "entry", "entries")
 		if result.NextOffset != nil {
 			a.result += ", more"
 		}
@@ -77,7 +77,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 			for _, m := range result.Matches {
 				files[m.Path] = true
 			}
-			a.result = fmt.Sprintf("%s in %s", plural(len(result.Matches), "match"), plural(len(files), "file"))
+			a.result = fmt.Sprintf("%s in %s", plural(len(result.Matches), "match", "matches"), plural(len(files), "file", "files"))
 		}
 		if !result.Complete {
 			a.result += ", incomplete"
@@ -230,14 +230,11 @@ func recapLine(call ToolCall, outcome ToolOutcome) string {
 	}
 	return ""
 }
-func plural(n int, noun string) string {
+func plural(n int, singular, pluralForm string) string {
 	if n == 1 {
-		return "1 " + noun
+		return "1 " + singular
 	}
-	if noun == "match" {
-		return fmt.Sprintf("%d matches", n)
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
+	return fmt.Sprintf("%d %s", n, pluralForm)
 }
 func changedLines(old, new string) ([]string, []string) {
 	a, b := strings.Split(old, "\n"), strings.Split(new, "\n")
@@ -253,14 +250,14 @@ func previewLines(old, new []string) []string {
 	var out []string
 	for i, s := range old {
 		if i == 6 {
-			out = append(out, fmt.Sprintf("… %d more lines", len(old)-i))
+			out = append(out, "… "+plural(len(old)-i, "more line", "more lines"))
 			break
 		}
 		out = append(out, "- "+sanitize(strings.ReplaceAll(s, "\t", "    ")))
 	}
 	for i, s := range new {
 		if i == 6 {
-			out = append(out, fmt.Sprintf("… %d more lines", len(new)-i))
+			out = append(out, "… "+plural(len(new)-i, "more line", "more lines"))
 			break
 		}
 		out = append(out, "+ "+sanitize(strings.ReplaceAll(s, "\t", "    ")))
