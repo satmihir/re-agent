@@ -76,9 +76,14 @@ decides, and which changes without discarding the conversation.
 `/trace` prints the last turn's trace, `/reset` starts over, `/exit` or Ctrl-D
 leaves. The prompt has the usual line editing: the up and down arrows walk the
 turns you have typed this session, and left, right, and backspace work as you
-would expect. Piped input is read plainly, so scripting `chat` is unaffected. A turn that ends badly, for instance by running out of steps, blocks
-the session until `/reset`, so a conversation is never silently continued from
-a state the harness could not account for.
+would expect. Ctrl-C clears a partially typed prompt; press it again within two
+seconds to leave. Paste terminal text of any length and press Enter to send it
+as one message, or end a line with a single `\` to continue on the next line.
+Tab completes slash commands, model names after `/model`, and effort names
+after `/effort`. Piped input is still read one line at a time, so scripting
+`chat` is unaffected. A turn that ends badly, for instance by running out of
+steps, blocks the session until `/reset`, so a conversation is never silently
+continued from a state the harness could not account for.
 
 ## What it can do
 

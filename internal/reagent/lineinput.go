@@ -3,10 +3,11 @@ package reagent
 import (
 	"bufio"
 	"errors"
-	"golang.org/x/term"
 	"io"
 	"os"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 var errInterrupted = errors.New("interrupted")
@@ -16,10 +17,14 @@ type lineReader interface {
 	SetPrompt(string)
 }
 
-func newLineReader(stdin io.Reader, stderr io.Writer) lineReader {
+func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int, rune) (string, int, bool)) lineReader {
 	if f, ok := stdin.(*os.File); ok && isTerminal(stdin) {
-		tr := &terminalReader{fd: int(f.Fd()), terminal: term.NewTerminal(terminalIO{Reader: &keyReader{inner: f}, Writer: stderr}, "> ")}
-		return tr
+		keys := &keyReader{inner: f}
+		terminal := term.NewTerminal(terminalIO{Reader: keys, Writer: stderr}, "> ")
+		terminal.AutoCompleteCallback = complete
+		reader := &terminalReader{fd: int(f.Fd()), terminal: terminal, keys: keys, prompt: "> "}
+		terminal.History = &reader.history
+		return reader
 	}
 	s := bufio.NewScanner(stdin)
 	s.Buffer(make([]byte, 0, 64<<10), MaxRequestBytes)
@@ -31,29 +36,16 @@ type terminalIO struct {
 	io.Writer
 }
 
-// enterKeyReader is retained for compatibility with callers that only need the
-// cooked-mode newline translation.
-type enterKeyReader struct{ inner io.Reader }
-
-func (r enterKeyReader) Read(b []byte) (int, error) {
-	n, err := r.inner.Read(b)
-	for i := 0; i < n; i++ {
-		if b[i] == '\n' {
-			b[i] = '\r'
-		}
-	}
-	return n, err
-}
-
 // keyReader makes bracketed pastes one editable submission and translates
 // newlines within them to the visible return-arrow character.
 type keyReader struct {
 	inner      io.Reader
 	pending    []byte
+	hold       []byte
 	paste      bool
 	lastCR     bool
 	interrupts int
-	hold       []byte
+	err        error
 }
 
 var pasteStart = []byte("\x1b[200~")
@@ -61,57 +53,61 @@ var pasteEnd = []byte("\x1b[201~")
 
 func (r *keyReader) Read(b []byte) (int, error) {
 	for len(r.pending) == 0 {
-		buf := make([]byte, 256)
-		n, e := r.inner.Read(buf)
-		r.hold = append(r.hold, buf[:n]...)
-		if n == 0 && e != nil {
-			r.pending = append(r.pending, r.hold...)
-			r.hold = nil
-			if len(r.pending) > 0 {
-				break
-			}
-			return 0, e
+		if r.err != nil {
+			return 0, r.err
 		}
-		r.consume()
-		if e != nil && len(r.pending) == 0 {
-			return 0, e
+		buf := make([]byte, 256)
+		n, err := r.inner.Read(buf)
+		r.hold = append(r.hold, buf[:n]...)
+		if err != nil {
+			r.err = err
+			r.consume(true)
+		} else {
+			r.consume(false)
+		}
+		if n == 0 && err == nil && len(r.pending) == 0 {
+			continue
 		}
 	}
 	n := copy(b, r.pending)
 	r.pending = r.pending[n:]
 	return n, nil
 }
-func prefix(a, b []byte) bool { return len(a) <= len(b) && string(a) == string(b[:len(a)]) }
-func (r *keyReader) consume() {
+
+func markerPrefix(b, marker []byte) bool {
+	return len(b) <= len(marker) && string(b) == string(marker[:len(b)])
+}
+
+func (r *keyReader) consume(final bool) {
 	for len(r.hold) > 0 {
-		if !r.paste && prefix(r.hold, pasteStart) {
-			if len(r.hold) < len(pasteStart) {
-				return
-			}
-			r.hold = r.hold[len(pasteStart):]
-			r.paste = true
+		marker := pasteStart
+		if r.paste {
+			marker = pasteEnd
+		}
+		if len(r.hold) < len(marker) && markerPrefix(r.hold, marker) && !final {
+			return
+		}
+		if len(r.hold) >= len(marker) && string(r.hold[:len(marker)]) == string(marker) {
+			r.pending = append(r.pending, marker...)
+			r.hold = r.hold[len(marker):]
+			r.paste = !r.paste
+			r.lastCR = false
 			continue
 		}
-		if r.paste && prefix(r.hold, pasteEnd) {
-			if len(r.hold) < len(pasteEnd) {
-				return
-			}
-			r.hold = r.hold[len(pasteEnd):]
-			r.paste = false
-			continue
-		}
+
 		c := r.hold[0]
 		r.hold = r.hold[1:]
 		if c == 3 && !r.paste {
 			r.pending = append(r.pending, 5, 21, 13)
 			r.interrupts++
+			r.lastCR = false
 			continue
 		}
-		if r.paste && (c == '\n' || c == '\r') {
-			if c == '\n' && r.lastCR {
-				r.lastCR = false
-				continue
-			}
+		if c == '\n' && r.lastCR {
+			r.lastCR = false
+			continue
+		}
+		if r.paste && (c == '\r' || c == '\n') {
 			r.pending = append(r.pending, []byte("↵")...)
 			r.lastCR = c == '\r'
 			continue
@@ -120,7 +116,7 @@ func (r *keyReader) consume() {
 			c = '\r'
 		}
 		r.pending = append(r.pending, c)
-		r.lastCR = false
+		r.lastCR = c == '\r'
 	}
 }
 
@@ -152,22 +148,26 @@ func (h *promptHistory) At(i int) string {
 type terminalReader struct {
 	fd       int
 	terminal *term.Terminal
+	keys     *keyReader
 	enterRaw func() (func(), error)
 	prompt   string
 	history  promptHistory
 }
 
-func (r *terminalReader) SetPrompt(p string) { r.prompt = p; r.terminal.SetPrompt(p) }
-func (r *terminalReader) ReadLine() (string, error) {
+func (r *terminalReader) SetPrompt(p string) {
+	r.prompt = p
+	r.terminal.SetPrompt(p)
+}
+
+func (r *terminalReader) ReadLine() (line string, err error) {
 	restore := func() {}
-	var err error
 	if r.enterRaw != nil {
 		restore, err = r.enterRaw()
 	} else {
-		var st *term.State
-		st, err = term.MakeRaw(r.fd)
+		var state *term.State
+		state, err = term.MakeRaw(r.fd)
 		if err == nil {
-			restore = func() { term.Restore(r.fd, st) }
+			restore = func() { _ = term.Restore(r.fd, state) }
 		}
 	}
 	if err != nil {
@@ -176,31 +176,39 @@ func (r *terminalReader) ReadLine() (string, error) {
 	defer restore()
 	r.terminal.SetBracketedPasteMode(true)
 	defer r.terminal.SetBracketedPasteMode(false)
-	line, e := r.terminal.ReadLine()
-	if e == term.ErrPasteIndicator {
-		e = nil
+	defer r.terminal.SetPrompt(r.prompt)
+
+	line, err = r.readPhysicalLine()
+	if err != nil {
+		return "", err
 	}
-	if e != nil {
-		if e == io.EOF {
-			return "", io.EOF
-		}
-		return "", e
-	}
-	if line == "" { /* keyReader's interrupt is handled by x/term as an empty line */
-	}
-	line = strings.ReplaceAll(line, "↵", "\n")
 	for strings.HasSuffix(line, "\\") && !strings.HasSuffix(line, "\\\\") {
 		line = strings.TrimSuffix(line, "\\")
-		r.SetPrompt("… ")
-		next, e := r.terminal.ReadLine()
-		if e != nil {
-			return "", e
+		r.terminal.SetPrompt("… ")
+		var next string
+		next, err = r.readPhysicalLine()
+		if err != nil {
+			return "", err
 		}
-		line += "\n" + strings.ReplaceAll(next, "↵", "\n")
+		line += "\n" + next
 	}
-	r.SetPrompt("> ")
 	r.history.Add(line)
 	return line, nil
+}
+
+func (r *terminalReader) readPhysicalLine() (string, error) {
+	line, err := r.terminal.ReadLine()
+	if err == term.ErrPasteIndicator {
+		err = nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if line == "" && r.keys.interrupts > 0 {
+		r.keys.interrupts--
+		return "", errInterrupted
+	}
+	return strings.ReplaceAll(line, "↵", "\n"), nil
 }
 
 type scannerReader struct{ scanner *bufio.Scanner }
@@ -208,8 +216,8 @@ type scannerReader struct{ scanner *bufio.Scanner }
 func (r *scannerReader) SetPrompt(string) {}
 func (r *scannerReader) ReadLine() (string, error) {
 	if !r.scanner.Scan() {
-		if e := r.scanner.Err(); e != nil {
-			return "", e
+		if err := r.scanner.Err(); err != nil {
+			return "", err
 		}
 		return "", io.EOF
 	}
@@ -222,36 +230,41 @@ func completeLine(line string, pos int, key rune, commands []string, argumentsFo
 		return line, pos, false
 	}
 	start := strings.LastIndex(line, " ") + 1
-	token := line[start:]
+	prefix := line[start:]
 	pool := commands
-	prefix := token
-	if strings.HasPrefix(line, "/model ") {
-		prefix = token
-		pool = argumentsFor("/model")
-	} else if strings.HasPrefix(line, "/effort ") {
-		prefix = token
-		pool = argumentsFor("/effort")
+	argument := ""
+	switch {
+	case strings.HasPrefix(line, "/model "):
+		argument = "/model"
+		pool = argumentsFor(argument)
+	case strings.HasPrefix(line, "/effort "):
+		argument = "/effort"
+		pool = argumentsFor(argument)
 	}
-	matches := []string{}
-	for _, v := range pool {
-		if strings.HasPrefix(v, prefix) {
-			matches = append(matches, v)
+	var matches []string
+	for _, candidate := range pool {
+		if strings.HasPrefix(candidate, prefix) {
+			matches = append(matches, candidate)
 		}
 	}
 	if len(matches) == 0 {
 		return line, pos, false
 	}
 	common := matches[0]
-	for _, v := range matches[1:] {
-		for !strings.HasPrefix(v, common) {
+	for _, candidate := range matches[1:] {
+		for !strings.HasPrefix(candidate, common) {
 			common = common[:len(common)-1]
 		}
 	}
 	if common == prefix {
+		if len(matches) == 1 && argument == "" && (common == "/model" || common == "/effort") {
+			out := line[:start] + common + " "
+			return out, len(out), true
+		}
 		return line, pos, false
 	}
 	out := line[:start] + common
-	if len(matches) == 1 && (token == common) && (strings.HasPrefix(line, "/model") || strings.HasPrefix(line, "/effort")) {
+	if len(matches) == 1 && argument == "" && (common == "/model" || common == "/effort") {
 		out += " "
 	}
 	return out, len(out), true

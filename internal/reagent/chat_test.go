@@ -14,10 +14,60 @@ func chatSession(t *testing.T, model Model, input string) (stdout, stderr string
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
 	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
-	if code := chat(context.Background(), c, strings.NewReader(input), &out, &errs); code != exitOK {
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, errs.String())
 	}
 	return out.String(), errs.String()
+}
+
+type fakeLineReader struct {
+	reads []struct {
+		line string
+		err  error
+	}
+	prompts []string
+}
+
+func (r *fakeLineReader) ReadLine() (string, error) {
+	if len(r.reads) == 0 {
+		return "", io.EOF
+	}
+	read := r.reads[0]
+	r.reads = r.reads[1:]
+	return read.line, read.err
+}
+func (r *fakeLineReader) SetPrompt(prompt string) { r.prompts = append(r.prompts, prompt) }
+
+func TestChat_SecondInterruptExits(t *testing.T) {
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{err: errInterrupted}, {err: errInterrupted}}}
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if got := strings.Count(errs.String(), "Ctrl-C again"); got != 1 {
+		t.Fatalf("warning count %d: %q", got, errs.String())
+	}
+}
+
+func TestChat_SingleInterruptKeepsTheConversation(t *testing.T) {
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{err: errInterrupted}, {line: "/exit"}}}
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(errs.String(), "Ctrl-C again") {
+		t.Fatalf("stderr: %q", errs.String())
+	}
 }
 
 func TestChat_EachLineIsATurnOfOneConversation(t *testing.T) {
