@@ -120,21 +120,32 @@ func (c *conversation) commandEffort(argument string, stderr io.Writer) {
 
 // chat runs a conversation: one submission per line, each its own run of one
 // session (v1 §18.2). Slash commands are handled locally and spend no tokens.
-// A line is the unit of input; pasting several lines sends several turns.
-func chat(ctx context.Context, c *conversation, stdin io.Reader, stdout, stderr io.Writer) int {
-	input := newLineReader(stdin, stderr)
-
+// A terminal submission may contain a bracketed paste or continued lines.
+func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
+	var interrupted time.Time
 	for {
+		input.SetPrompt("> ")
 		typed, err := input.ReadLine()
+		if errors.Is(err, errInterrupted) {
+			if !interrupted.IsZero() && time.Since(interrupted) < 2*time.Second {
+				return exitOK
+			}
+			interrupted = time.Now()
+			warning := "  (Ctrl-C again to exit, or Ctrl-D)"
+			if styledOutput(stderr) {
+				warning = ansiDim + warning + ansiReset
+			}
+			fmt.Fprintln(stderr, warning)
+			continue
+		}
 		if err != nil {
-			// End of input, Ctrl-D, and Ctrl-C at the prompt all arrive here
-			// as io.EOF and end the conversation cleanly.
 			if errors.Is(err, io.EOF) {
 				return exitOK
 			}
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return exitUsage
 		}
+		interrupted = time.Time{}
 
 		line := strings.TrimSpace(typed)
 		command, argument, _ := strings.Cut(line, " ")
@@ -166,6 +177,24 @@ func chat(ctx context.Context, c *conversation, stdin io.Reader, stdout, stderr 
 		}
 	}
 }
+
+func (c *conversation) completionArguments(command string) []string {
+	switch command {
+	case "/model":
+		models := make([]string, 0, len(modelCatalog))
+		for _, model := range modelCatalog {
+			models = append(models, model.ID)
+		}
+		return models
+	case "/effort":
+		if model, ok := findModel(c.cfg.Model); ok {
+			return model.Efforts
+		}
+	}
+	return nil
+}
+
+var completionCommands = []string{"/model", "/effort", "/trace", "/reset", "/help", "/exit"}
 
 // runTurn runs one turn under its own interrupt handler, so the first Ctrl-C
 // cancels this turn and leaves the session usable (v1 §15.3).

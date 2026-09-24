@@ -184,10 +184,14 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 	if command == "chat" {
 		session.display.header(cfg, ws.Root(), true)
-		return chat(ctx, &conversation{
+		conversation := &conversation{
 			session: session, cfg: cfg, keys: keys, client: client, scripted: scripted,
 			trace: trace, traceDir: options.traceDir, progress: stderr,
-		}, stdin, stdout, stderr)
+		}
+		complete := func(line string, pos int, key rune) (string, int, bool) {
+			return completeLine(line, pos, key, completionCommands, conversation.completionArguments)
+		}
+		return chat(ctx, conversation, newLineReader(stdin, stderr, complete), stdout, stderr)
 	}
 
 	session.display.header(cfg, ws.Root(), false)
