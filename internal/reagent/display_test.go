@@ -104,6 +104,8 @@ func TestStatusText(t *testing.T) {
 }
 
 func TestDisplay_StatusLineStopsCleanly(t *testing.T) {
+	// The ticker is stopped and joined before this buffer is read, so it does
+	// not need its own synchronization.
 	var b bytes.Buffer
 	d := NewDisplay(&b)
 	d.live = true // A buffer is not a terminal; enable the live path explicitly.

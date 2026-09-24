@@ -11,7 +11,7 @@ import (
 	"golang.org/x/term"
 )
 
-// Display writes harness presentation output for a session.
+// statusLine owns one live status ticker and its cancellation state.
 type statusLine struct {
 	label   string
 	started time.Time
@@ -19,6 +19,7 @@ type statusLine struct {
 	wg      sync.WaitGroup
 }
 
+// Display writes harness presentation output for a session.
 type Display struct {
 	mu      sync.Mutex
 	w       io.Writer
@@ -36,18 +37,22 @@ func NewDisplay(w io.Writer) *Display {
 	return &Display{w: w, styled: styled, live: styled && isTerminal(w), tick: 100 * time.Millisecond}
 }
 
+// modelStarted shows progress while a model request is in flight.
 func (d *Display) modelStarted(model string, step, maxSteps int) {
 	d.startStatus(fmt.Sprintf("waiting for %s · step %d of %d", sanitize(model), step, maxSteps))
 }
 
+// modelFinished removes the model-request status line.
 func (d *Display) modelFinished() { d.stopStatus() }
 
+// toolStarted shows progress for commands, the only tool likely to run long enough.
 func (d *Display) toolStarted(call ToolCall) {
 	if call.Name == "exec" {
 		d.startStatus("running " + callTarget(call))
 	}
 }
 
+// startStatus replaces any existing status and starts its ticker on live displays.
 func (d *Display) startStatus(label string) {
 	if !d.live {
 		return
@@ -79,6 +84,9 @@ func (d *Display) startStatus(label string) {
 	}()
 }
 
+// stopStatus waits for the ticker without holding mu, because its final tick
+// needs that mutex before it can observe the stop signal. It then erases the
+// line after the ticker is guaranteed not to draw again.
 func (d *Display) stopStatus() {
 	d.mu.Lock()
 	s := d.status
@@ -94,6 +102,7 @@ func (d *Display) stopStatus() {
 	d.mu.Unlock()
 }
 
+// statusText formats one dim spinner frame without letting it wrap the terminal.
 func statusText(frame int, label string, elapsed time.Duration, columns int) string {
 	frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 	text := string(frames[frame%len(frames)]) + " " + label
