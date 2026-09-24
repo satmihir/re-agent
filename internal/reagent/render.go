@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -197,9 +198,44 @@ func styleMark(m mark, marker string) string {
 	return color + marker + ansiReset
 }
 
+// displayWidth reports terminal cells occupied by text. Combining marks consume
+// no cells; the common East Asian wide ranges consume two.
+func displayWidth(text string) int {
+	width := 0
+	for _, r := range text {
+		if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r) {
+			continue
+		}
+		if r >= 0x1100 && (r <= 0x115f || r == 0x2329 || r == 0x232a ||
+			(r >= 0x2e80 && r <= 0xa4cf) || (r >= 0xac00 && r <= 0xd7a3) ||
+			(r >= 0xf900 && r <= 0xfaff) || (r >= 0xfe10 && r <= 0xfe19) ||
+			(r >= 0xfe30 && r <= 0xfe6f) || (r >= 0xff00 && r <= 0xff60) ||
+			(r >= 0xffe0 && r <= 0xffe6) || (r >= 0x20000 && r <= 0x3fffd)) {
+			width += 2
+		} else {
+			width++
+		}
+	}
+	return width
+}
+
+// truncateWidth shortens text to terminal cells without splitting a rune.
 func truncateWidth(text string, width int) string {
-	if width <= 0 || len([]rune(text)) <= width {
+	if width <= 0 || displayWidth(text) <= width {
 		return text
 	}
-	return string([]rune(text)[:width-1]) + "…"
+	if width == 1 {
+		return "…"
+	}
+	used := 0
+	var out strings.Builder
+	for _, r := range text {
+		runeWidth := displayWidth(string(r))
+		if used+runeWidth > width-1 {
+			break
+		}
+		out.WriteRune(r)
+		used += runeWidth
+	}
+	return out.String() + "…"
 }

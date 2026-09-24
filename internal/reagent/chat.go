@@ -186,7 +186,14 @@ func runTurn(ctx context.Context, session *Session, traceDir, text string, stdou
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return
 	}
-	printResult(session.display, result, time.Since(started), stdout, result.Status != StatusCompleted)
+	showTrace := result.Status != StatusCompleted
+	if session.blocked != "" {
+		printResult(session.display, result, time.Since(started), stdout, false)
+		session.display.blocked(result.TracePath)
+	} else {
+		printResult(session.display, result, time.Since(started), stdout, showTrace)
+	}
+	session.display.spacer()
 }
 
 // tracePathFor places a run's trace under dir, or under the default cache

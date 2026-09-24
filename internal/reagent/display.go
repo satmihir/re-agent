@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // Display writes harness presentation output for a session.
@@ -21,15 +23,29 @@ type Display struct {
 
 // NewDisplay creates a display for w.
 func NewDisplay(w io.Writer) *Display {
-	return &Display{w: w, styled: styledOutput(w), live: styledOutput(w) && isTerminal(w)}
+	styled := styledOutput(w)
+	return &Display{w: w, styled: styled, live: styled && isTerminal(w)}
 }
-func (d *Display) beginTurn() { d.mu.Lock(); defer d.mu.Unlock(); d.printed = false; d.recap = nil }
+
+func (d *Display) beginTurn() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.printed = false
+	d.recap = nil
+}
 func (d *Display) note(text string) {
-	d.write("  · " + strings.ReplaceAll(sanitize(text), "\n", "\n    ") + "\n")
+	text = "  · " + strings.ReplaceAll(sanitize(text), "\n", "\n    ")
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	d.write(text + "\n")
 }
 func (d *Display) toolFinished(call ToolCall, outcome ToolOutcome) {
 	a := describeActivity(call, outcome)
-	d.write(a.render(d.styled, d.columns()))
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fmt.Fprint(d.w, a.render(d.styled, d.columns()))
+	d.printed = true
 	if recap := recapLine(call, outcome); recap != "" {
 		d.recap = append(d.recap, recap)
 	}
@@ -39,11 +55,10 @@ func (d *Display) reply(stdout io.Writer, text string) {
 		return
 	}
 	d.mu.Lock()
-	spacer := d.styled && d.printed
-	d.mu.Unlock()
-	if spacer {
+	if d.styled && d.printed {
 		fmt.Fprintln(d.w)
 	}
+	d.mu.Unlock()
 	fmt.Fprintln(stdout, display(text, styledOutput(stdout)))
 }
 func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace bool) {
@@ -68,7 +83,11 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace boo
 	if d.styled {
 		markText = styleMark(marker, markText)
 	}
-	fmt.Fprintf(d.w, "%s %s · %s · %s · %s · %s\n", markText, result.Status, plural(result.Steps, "step"), plural(result.ToolCalls, "tool call"), tokens, formatElapsed(elapsed))
+	summary := fmt.Sprintf("%s %s · %s · %s · %s · %s", markText, result.Status, plural(result.Steps, "step"), plural(result.ToolCalls, "tool call"), tokens, formatElapsed(elapsed))
+	if d.styled {
+		summary = markText + ansiDim + summary[len(markText):] + ansiReset
+	}
+	fmt.Fprintln(d.w, summary)
 	if result.Reason != "" {
 		reason := result.Reason
 		if reason == "no_followup_step" {
@@ -77,34 +96,81 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace boo
 		fmt.Fprintf(d.w, "  %s\n", sanitize(reason))
 	}
 	for _, line := range d.recap {
+		if strings.HasPrefix(line, "ran ") {
+			line = "ran     " + strings.TrimPrefix(line, "ran ")
+		}
 		fmt.Fprintf(d.w, "  %s\n", line)
 	}
 	if showTrace {
-		path := result.TracePath
-		if path == "" {
-			path = "not recorded"
-		}
-		if d.styled {
-			path = shortPath(path)
-		}
-		fmt.Fprintf(d.w, "trace: %s\n", path)
+		d.traceLocked(result.TracePath)
 	}
 }
+func (d *Display) blocked(tracePath string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	text := "  session blocked: /reset to continue"
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	fmt.Fprintln(d.w, text)
+	d.traceLocked(tracePath)
+}
+
+func (d *Display) trace(tracePath string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.traceLocked(tracePath)
+}
+
+func (d *Display) traceLocked(tracePath string) {
+	if tracePath == "" {
+		tracePath = "not recorded"
+	} else if d.styled {
+		tracePath = shortPath(tracePath)
+	}
+	fmt.Fprintf(d.w, "trace: %s\n", sanitize(tracePath))
+}
+
+func (d *Display) spacer() {
+	if d.styled {
+		d.mu.Lock()
+		fmt.Fprintln(d.w)
+		d.mu.Unlock()
+	}
+}
+
 func (d *Display) write(text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	fmt.Fprint(d.w, text)
 	d.printed = true
 }
-func (d *Display) columns() int { return 0 }
+func (d *Display) columns() int {
+	if !d.styled {
+		return 0
+	}
+	file, ok := d.w.(*os.File)
+	if !ok {
+		return 0
+	}
+	columns, _, err := term.GetSize(int(file.Fd()))
+	if err != nil || columns <= 0 {
+		return 0
+	}
+	return columns
+}
+
 func formatCount(n int64) string {
 	if n < 1000 {
 		return fmt.Sprint(n)
 	}
-	if n < 1000000 {
+	if n < 1_000_000 {
+		if n >= 999_950 {
+			return "1.0M"
+		}
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
-	return fmt.Sprintf("%.1fM", float64(n)/1000000)
+	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
 }
 func formatElapsed(d time.Duration) string {
 	if d < time.Minute {
@@ -121,9 +187,38 @@ func shortPath(path string) string {
 
 func (d *Display) header(cfg Config, workspace string, chat bool) {
 	mode := cfg.Registry.Mode().String()
+	model := cfg.Model
+	details := ""
+	if cfg.Provider == "scripted" {
+		model = "scripted"
+	} else {
+		effort := cfg.ReasoningEffort
+		if effort == "" {
+			effort = "default effort"
+		} else {
+			effort = "effort " + effort
+		}
+		details = " (" + cfg.Provider + ", " + effort + ")"
+	}
+	workspace = shortPath(workspace)
 	if chat {
-		fmt.Fprintf(d.w, "re:agent chat · %s (%s, effort %s)\nworkspace %s · %s · %d steps, %d tool calls per turn\n/help for commands · Ctrl-D to exit\n", cfg.Model, cfg.Provider, cfg.ReasoningEffort, shortPath(workspace), mode, cfg.MaxSteps, cfg.MaxToolCalls)
+		d.headerLine(fmt.Sprintf("re:agent chat · %s%s", model, details))
+		d.headerLine(fmt.Sprintf("workspace %s · %s · %d steps, %d tool calls per turn", workspace, mode, cfg.MaxSteps, cfg.MaxToolCalls))
+		if cfg.Registry.Mode().AllowExec {
+			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+		}
+		d.headerLine("/help for commands · Ctrl-D to exit")
 		return
 	}
-	fmt.Fprintf(d.w, "re:agent · %s (%s, effort %s) · %s · %s\n", cfg.Model, cfg.Provider, cfg.ReasoningEffort, mode, shortPath(workspace))
+	d.headerLine(fmt.Sprintf("re:agent · %s%s · %s · %s", model, details, mode, workspace))
+	if cfg.Registry.Mode().AllowExec {
+		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+	}
+}
+
+func (d *Display) headerLine(text string) {
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	d.write(text + "\n")
 }

@@ -31,7 +31,10 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 		return a
 	}
 	if !outcome.OK {
-		a.mark, a.result = markFailed, sanitize(outcome.Code+": "+outcome.Message)
+		a.mark, a.result = markFailed, truncateWidth(sanitize(outcome.Code+": "+outcome.Message), 120)
+		if call.Name != "exec" {
+			return a
+		}
 	}
 	switch call.Name {
 	case "read_file":
@@ -114,9 +117,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 			}
 		}
 	case "echo":
-		var args struct {
-			Text string `json:"text"`
-		}
+		var args echoArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
 			a.target = fmt.Sprintf("%q", sanitize(args.Text))
 		}
@@ -126,22 +127,63 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 
 func (a activity) render(styled bool, columns int) string {
 	marker := map[mark]string{markOK: "✓", markFailed: "✗", markUncertain: "!", markSkipped: "–"}[a.mark]
-	line := "  " + marker + " " + a.tool + " " + a.target
-	if a.result != "" {
-		line += " → " + a.result
+	prefix := "  " + marker + " " + a.tool + " "
+	target, result := a.target, a.result
+	limit := columns
+	if limit == 0 {
+		target = truncateWidth(target, 160)
+	} else {
+		// Keep the marker and tool intact. Spend available cells on the target,
+		// then shorten the result only when necessary.
+		available := limit - displayWidth(prefix)
+		if result != "" {
+			available -= displayWidth(" → ")
+		}
+		if available < 1 {
+			target, result = "", ""
+		} else if displayWidth(target)+displayWidth(result) > available {
+			targetBudget := available - min(displayWidth(result), available/3)
+			if targetBudget < 1 {
+				targetBudget = 1
+			}
+			target = truncateWidth(target, targetBudget)
+			resultBudget := available - displayWidth(target)
+			if resultBudget < 1 {
+				result = ""
+			} else {
+				result = truncateWidth(result, resultBudget)
+			}
+		}
 	}
-	if columns > 0 {
-		line = truncateWidth(line, columns)
+	line := prefix + target
+	if result != "" {
+		line += " → " + result
 	}
 	if styled {
-		line = "  " + styleMark(a.mark, marker) + line[len("  "+marker):]
+		line = "  " + styleMark(a.mark, marker) + " " + a.tool + " " + target
+		if result != "" {
+			line += ansiDim + " → " + result + ansiReset
+		}
 	}
 	var out strings.Builder
 	out.WriteString(line + "\n")
-	for _, p := range a.preview {
-		out.WriteString("      " + p + "\n")
+	for _, preview := range a.preview {
+		preview = truncateWidth(preview, previewWidth(columns))
+		if styled && strings.HasPrefix(preview, "- ") {
+			preview = ansiRed + preview + ansiReset
+		} else if styled && strings.HasPrefix(preview, "+ ") {
+			preview = ansiGreen + preview + ansiReset
+		}
+		out.WriteString("      " + preview + "\n")
 	}
 	return out.String()
+}
+
+func previewWidth(columns int) int {
+	if columns == 0 {
+		return 160
+	}
+	return max(columns-6, 1)
 }
 
 func callTarget(call ToolCall) string {
@@ -172,9 +214,7 @@ func callTarget(call ToolCall) string {
 			return commandText(args)
 		}
 	case "echo":
-		var args struct {
-			Text string `json:"text"`
-		}
+		var args echoArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
 			return "\"" + sanitize(args.Text) + "\""
 		}
@@ -193,6 +233,9 @@ func recapLine(call ToolCall, outcome ToolOutcome) string {
 func plural(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun
+	}
+	if noun == "match" {
+		return fmt.Sprintf("%d matches", n)
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }

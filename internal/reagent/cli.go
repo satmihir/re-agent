@@ -128,10 +128,6 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if err != nil {
 		return usage(stderr, command, err.Error())
 	}
-	if mode.AllowExec && !options.showContext {
-		fmt.Fprintf(stderr, "exec mode: commands run as you, in %s, and can read, write, and use the network\n", ws.Root())
-	}
-
 	provider, model, err := resolveTarget(options.provider, options.model)
 	if err != nil {
 		return usage(stderr, command, err.Error())
