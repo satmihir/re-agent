@@ -73,8 +73,13 @@ session, since a conversation cannot continue on a different model. `/effort`
 does the same for reasoning effort, which the current model's own vocabulary
 decides, and which changes without discarding the conversation.
 
-`/trace` prints the last turn's trace, `/reset` starts over, `/exit` or Ctrl-D
-leaves. The prompt has the usual line editing: the up and down arrows walk the
+`/status` reports the current model, authority, workspace, session totals, and
+last trace. `/trace` prints the last turn's trace, `/reset` starts over, and
+`/exit` or Ctrl-D leaves. `/edit` opens an empty message in `$VISUAL`, then
+`$EDITOR`, then `vi`; saving a non-empty message sends it as one turn, and it
+needs an interactive terminal. `/help` lists every command and key binding.
+
+The prompt has the usual line editing: the up and down arrows walk the
 turns you have typed this session, and left, right, and backspace work as you
 would expect. Ctrl-C clears a partially typed prompt; press it again within two
 seconds to leave. Paste terminal text of any length and press Enter to send it

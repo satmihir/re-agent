@@ -123,7 +123,8 @@ func TestPromptHistory_SkipsBlankAndRepeated(t *testing.T) {
 }
 
 func TestCompleteLine(t *testing.T) {
-	commands := []string{"/model", "/effort", "/help", "/exit"}
+	commands := []string{"/model", "/effort", "/help", "/status", "/exit"}
+	takesArgument := func(command string) bool { return command == "/model" || command == "/effort" }
 	arguments := func(command string) []string {
 		switch command {
 		case "/model":
@@ -142,13 +143,14 @@ func TestCompleteLine(t *testing.T) {
 		{"/hel", 4, "/help", true},
 		{"/m", 2, "/model ", true},
 		{"/model", 6, "/model ", true},
+		{"/status", 7, "/status", false},
 		{"/model c", 8, "/model claude-", true},
 		{"/effort ", 8, "/effort ", false},
 		{"/z", 2, "/z", false},
 		{"/hel x", 4, "/hel x", false},
 	}
 	for _, test := range cases {
-		got, _, ok := completeLine(test.line, test.pos, '\t', commands, arguments)
+		got, _, ok := completeLine(test.line, test.pos, '\t', commands, arguments, takesArgument)
 		if got != test.want || ok != test.ok {
 			t.Errorf("completeLine(%q): got %q, %t; want %q, %t", test.line, got, ok, test.want, test.ok)
 		}
