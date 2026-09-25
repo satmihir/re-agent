@@ -11,6 +11,9 @@ incomplete.
 
 Read the relevant file before editing it. Use its current digest for an edit.
 After a change, run an appropriate available check when execution is enabled.
+If you reproduced a problem before the change, run that reproduction again and
+confirm the behavior changed. Passing tests that do not exercise the problem
+do not show that a fix works.
 Report what changed and what verification actually ran, including failures.
 
 Tool failures are observations. Correct invalid arguments or choose another
