@@ -1,6 +1,6 @@
 # re:agent — Fixes From the First Benchmark
 
-Status: B1–B4 not started.
+Status: B1–B5 not started.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §6 is addressed to the implementing agent. The CLI plan's notes (`docs/reagent-cli-plan.md` §7) still apply wherever this plan does not replace them.
 
@@ -14,6 +14,7 @@ Three milestones, in order:
 - **B2.** An empty path means the workspace root, and an absolute path inside the workspace is accepted.
 - **B3.** The benchmark repeats runs, records tool failures, and compares by commit.
 - **B4.** The model catalog offers `gpt-6-luna`. This one is unrelated to the benchmark and can be done in any order.
+- **B5.** A command with a newline in it stays on one terminal row. Also unrelated to the benchmark, and also in any order.
 
 ## 2. What the benchmark showed
 
@@ -192,6 +193,43 @@ reagent chat --model gpt-6-luna
 ```
 
 In chat, ask something that needs two or three tool calls, and confirm that a second turn continues without a provider error.
+
+### B5. Multi-line commands stay on one row
+
+**Why.** `sanitize` escapes control characters but keeps `\n` and `\t`, because replies need them. `commandText` sanitizes each `exec` argument, so an argument with a newline reaches the terminal as a real line break. Models pass such arguments all the time: `bash -c` scripts, `python -c` programs, commit messages, and PR bodies. Three things break:
+
+- **The status line.** It redraws with `\r\x1b[2K`, which erases only the row the cursor is on. A label that spans three rows leaves two behind on every tick, ten times a second. Seen live with `gh pr create --body '## Summary…'`: one stale `⠋ running gh pr create …` row per tick.
+- **The activity line.** `✓ exec …` breaks at the first newline, and the rest of the argument prints at the left margin.
+- **The summary recap.** `ran …` breaks the same way. Every multi-line `python -c` in the benchmark's `progress.txt` files shows it.
+
+**Behavior.**
+
+- In `commandText`, an argument that contains `\n` is quoted, like an argument with a space, and each `\n` is shown as `↵`, the symbol the prompt already shows for pasted newlines (`lineinput.go`). Check for the newline before replacing it, so that the newline itself triggers the quotes. `cwd` gets the same `↵` treatment.
+- In `callTarget`, the `search_text` query gets the same `↵` treatment, since a query can contain a newline too.
+- The status line, the activity line, and the recap all take their text from these two functions, so change nothing else. The trace and the request keep the exact text. This is display only.
+
+Expected rendering, for the argv `["gh", "pr", "create", "--body", "## Summary\n- one"]`:
+
+```text
+gh pr create --body '## Summary↵- one'
+```
+
+**Touches.** `internal/reagent/activity.go`, `internal/reagent/activity_test.go`, `docs/reagent-v0-design.md` (§10 amendment).
+
+**Tests.** Write these first, next to `TestActivity_CommandQuoting`.
+
+- `TestActivity_MultiLineCommandIsOneRow`:
+  - `commandText` renders the argv above exactly as shown, and a `cwd` of `"a\nb"` renders as `in a↵b`.
+  - `describeActivity(call, outcome).render(false, 0)` for that `exec` call contains exactly one `\n`: the line's own ending.
+  - `recapLine` for it contains no `\n`.
+  - `statusText(0, "running "+callTarget(call), 0, 80)` contains no `\n`.
+- A `search_text` call whose query is `"a\nb"` renders its target as `"a↵b" in .`.
+
+**Docs.** A v0 §10 amendment dated 2026-09-25: newlines inside command arguments, `cwd`, and search queries are shown as `↵` in activity, status, and recap lines, so each stays one terminal row. The status line erases only its own row, and a multi-line label left stale rows behind. The trace and the request are unchanged.
+
+**Request check.** Byte-identical: the CLI plan's P1 recipe must print `identical`.
+
+**Manual check for the human.** In `reagent chat --allow-write --allow-exec`, ask the model to run exactly `["bash", "-c", "echo one\nsleep 3\necho two"]` with `exec`. While it sleeps, the status line must stay one row and redraw in place, and the activity line afterwards must read `bash -c 'echo one↵sleep 3↵echo two'`.
 
 ## 5. After the milestones
 
