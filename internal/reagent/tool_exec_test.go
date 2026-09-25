@@ -51,6 +51,28 @@ func TestExec_SuccessfulCommandReportsItsOutput(t *testing.T) {
 	}
 }
 
+func TestExec_OmittedTimeoutIsTwoMinutes(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewExecTool(ws), `{"argv":["echo","hi"],"cwd":"."}`)
+
+	var got execResult
+	data(t, outcome, &got)
+	if got.TimeoutMS != 120000 {
+		t.Fatalf("got timeout %d, want 120000", got.TimeoutMS)
+	}
+}
+
+func TestExec_ShortTimeoutIsRaisedToTheFloor(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell("sleep 0.3"), ".", 100))
+
+	var got execResult
+	data(t, outcome, &got)
+	if got.TimeoutMS != 10000 {
+		t.Fatalf("got timeout %d, want 10000", got.TimeoutMS)
+	}
+}
+
 func TestExec_ResolvesTheExecutableOnPath(t *testing.T) {
 	ws := testWorkspace(t, nil)
 	var got execResult
@@ -126,7 +148,7 @@ func TestExec_MissingExecutableAppliesNothing(t *testing.T) {
 // the outcome says so rather than implying a clean state (v0 §9).
 func TestExec_TimeoutLeavesUncertainEffects(t *testing.T) {
 	ws := testWorkspace(t, nil)
-	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell("touch marker; sleep 30"), ".", 300))
+	outcome := runTool(t, execTool{ws: ws}, execArgsJSON(shell("touch marker; sleep 30"), ".", 300))
 
 	if outcome.Code != "timeout" || outcome.Effect != EffectUnknown {
 		t.Fatalf("got %s (%s) effect=%s", outcome.Code, outcome.Message, outcome.Effect)
@@ -203,14 +225,16 @@ func TestExec_InvalidUTF8OutputIsFlagged(t *testing.T) {
 func TestExec_InvalidArguments(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
 	cases := map[string]struct{ args, code string }{
-		"empty argv":     {`{"argv":[],"cwd":".","timeout_ms":1000}`, "invalid_arguments"},
-		"empty program":  {`{"argv":[""],"cwd":".","timeout_ms":1000}`, "invalid_arguments"},
-		"zero timeout":   {`{"argv":["echo"],"cwd":".","timeout_ms":0}`, "invalid_arguments"},
-		"missing cwd":    {`{"argv":["echo"],"timeout_ms":1000}`, "invalid_path"},
-		"unknown field":  {`{"argv":["echo"],"cwd":".","timeout_ms":1000,"env":{}}`, "invalid_arguments"},
-		"cwd is a file":  {`{"argv":["echo"],"cwd":"a.txt","timeout_ms":1000}`, "not_directory"},
-		"cwd escapes":    {`{"argv":["echo"],"cwd":"..","timeout_ms":1000}`, "invalid_path"},
-		"cwd is missing": {`{"argv":["echo"],"cwd":"absent","timeout_ms":1000}`, "not_found"},
+		"empty argv":          {`{"argv":[],"cwd":".","timeout_ms":1000}`, "invalid_arguments"},
+		"empty program":       {`{"argv":[""],"cwd":".","timeout_ms":1000}`, "invalid_arguments"},
+		"zero timeout":        {`{"argv":["echo"],"cwd":".","timeout_ms":0}`, "invalid_arguments"},
+		"negative timeout":    {`{"argv":["echo"],"cwd":".","timeout_ms":-5}`, "invalid_arguments"},
+		"timeout is a string": {`{"argv":["echo"],"cwd":".","timeout_ms":"1000"}`, "invalid_arguments"},
+		"missing cwd":         {`{"argv":["echo"],"timeout_ms":1000}`, "invalid_path"},
+		"unknown field":       {`{"argv":["echo"],"cwd":".","timeout_ms":1000,"env":{}}`, "invalid_arguments"},
+		"cwd is a file":       {`{"argv":["echo"],"cwd":"a.txt","timeout_ms":1000}`, "not_directory"},
+		"cwd escapes":         {`{"argv":["echo"],"cwd":"..","timeout_ms":1000}`, "invalid_path"},
+		"cwd is missing":      {`{"argv":["echo"],"cwd":"absent","timeout_ms":1000}`, "not_found"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -249,7 +273,7 @@ func TestLoop_UncertainEffectStopsTheRun(t *testing.T) {
 	ws := testWorkspace(t, nil)
 	runs := 0
 	registry, err := NewRegistry(Mode{AllowWrite: true, AllowExec: true},
-		NewExecTool(ws), countingTool{runs: &runs})
+		execTool{ws: ws}, countingTool{runs: &runs})
 	if err != nil {
 		t.Fatal(err)
 	}
