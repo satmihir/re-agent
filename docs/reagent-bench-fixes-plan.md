@@ -1,6 +1,6 @@
 # re:agent — Fixes From the First Benchmark
 
-Status: B1, B3, and B4 complete; B2 and B5 not started.
+Status: B1 merged in #11, B3 in #13, and B4 in #9 and #10. B2, B5, and B6 not started.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §6 is addressed to the implementing agent. The CLI plan's notes (`docs/reagent-cli-plan.md` §7) still apply wherever this plan does not replace them.
 
@@ -15,12 +15,13 @@ Three milestones, in order:
 - **B3.** The benchmark repeats runs, records tool failures, and compares by commit.
 - **B4.** The model catalog offers `gpt-6-luna`. This one is unrelated to the benchmark and can be done in any order.
 - **B5.** A command with a newline in it stays on one terminal row. Also unrelated to the benchmark, and also in any order.
+- **B6.** The chat prompt wraps at the terminal's real width, and a sent message is redrawn as a grey band. Also independent.
 
 ## 2. What the benchmark showed
 
 The numbers below come from the 32 comparison runs, whose traces are under `bench/out/base-*` and `bench/out/verify-*`.
 
-**Runs killed by short timeouts.** `exec` requires `timeout_ms`, with a minimum of 1. The model asked for 1000 ms in 15 of its 96 `exec` calls, for commands such as `git log` and `python -m pytest`. Under the x86 emulation these containers run in, such commands take longer than a second. Eight calls timed out. A timed-out command has unknown effects, and v0 §9 stops the run when that happens, so **7 of 32 runs ended with `effect_unknown`**. One task, `django__django-12273`, ended this way in all four passes and never had a chance. The model's other choices were 120000 ms (50 calls), 10000 (28), 20000 (2), and 30000 (1).
+**Runs killed by short timeouts.** `exec` requires `timeout_ms`, with a minimum of 1. The model asked for 1000 ms in 15 of its 96 `exec` calls, for commands such as `git log` and `python -m pytest`. Under the x86 emulation these containers run in, such commands take longer than a second. Eight calls timed out. A timed-out command has unknown effects, and v0 §9 stops the run when that happens, so **8 of 32 runs ended with `effect_unknown`**. One task, `django__django-12273`, ended this way in all four passes and never had a chance. The model's other choices were 120000 ms (50 calls), 10000 (28), 20000 (2), and 30000 (1).
 
 **Steps wasted on paths.** `list_files` with `"path": ""` was rejected 6 times ("path must not be empty"), usually as the model's first call. One `exec` passed the workspace's absolute path as `cwd` and was rejected. The runtime section shows the model that absolute path (`Workspace: /testbed`), so using it is a reasonable mistake.
 
@@ -125,7 +126,7 @@ This milestone is Python in `bench/`, not Go. AGENTS.md's code rules still apply
 - `bench/run.py --repeat N`, default 1. With N greater than 1, the whole task list runs N times in sequence, as labels `NAME-r1` through `NAME-rN`. Each is an ordinary run directory with its own `summary.json`, so nothing downstream changes. Build re:agent once and reuse the binary for every repeat.
 - `summarize_trace` adds two fields to each task's summary:
   - `tool_failures`: counts of failed tool calls keyed `"tool:code"`, for example `{"exec:timeout": 1, "list_files:invalid_path": 1}`, taken from `tool.finished` events whose outcome is not `ok`.
-  - `stopped_by`: for any status other than `completed`, the last failed call's tool, code, and arguments truncated to 200 characters (from its `tool.started` event). `null` otherwise.
+  - `stopped_by`: for any status other than `completed`, the run's last tool call, if that call failed: its tool, code, and arguments truncated to 200 characters (from its `tool.started` event). `null` otherwise. An earlier failure cannot have stopped the run. (Amended after B3 merged: the first version reported the last failed call, which could be an unrelated failure from much earlier.)
 - `bench/compare.py` keeps its two tables and adds a third, **by commit**. It groups labels by their summary's `commit` and reports:
   - runs and resolved, as "k of n"
   - mean steps, mean input tokens, and mean output tokens per task run
@@ -230,6 +231,80 @@ gh pr create --body '## Summary↵- one'
 **Request check.** Byte-identical: the CLI plan's P1 recipe must print `identical`.
 
 **Manual check for the human.** In `reagent chat --allow-write --allow-exec`, ask the model to run exactly `["bash", "-c", "echo one\nsleep 3\necho two"]` with `exec`. While it sleeps, the status line must stay one row and redraw in place, and the activity line afterwards must read `bash -c 'echo one↵sleep 3↵echo two'`.
+
+### B6. The prompt uses the terminal's width, and a sent message becomes a grey band
+
+**Why.** Two things about typing at the chat prompt.
+
+- **It wraps at 80 columns, whatever the terminal's width.** `golang.org/x/term` assumes 80 columns until `SetSize` is called, and `lineinput.go` never calls it. Its cursor arithmetic then disagrees with the terminal: on a wide terminal it forces a line break at column 80, and on a narrow one it loses track of the cursor.
+- **Sent messages look like any other output.** In a long conversation your own messages are hard to find. Claude Code sets each one on a subtle grey band, and re:agent will do the same.
+
+**Behavior: width.**
+
+- At the start of every `terminalReader.ReadLine`, after entering raw mode, read the terminal size and call `r.terminal.SetSize(width, height)`. If the size cannot be read, leave x/term's current size alone.
+- Reading the size happens once per prompt. A resize while you are typing is not followed until the next prompt. Handling `SIGWINCH` is out of scope.
+
+**Behavior: the band.**
+
+- It applies only when the prompt's output is styled (`styledOutput` on the writer x/term echoes to: a terminal, and `NO_COLOR` unset). Everything else is unchanged.
+- After a non-empty submission, including every `\` continuation line and any slash command, `ReadLine` erases what x/term echoed and redraws the message as a band. The cursor is left at the start of the line below the band, exactly where x/term leaves it today.
+- An empty submission, Ctrl-C, and Ctrl-D draw no band.
+
+**Counting the echoed rows.** Count the rows each physical line took as it was read, before `↵` becomes `\n`:
+
+```text
+rows = (displayWidth(prompt) + displayWidth(line)) / width + 1     (integer division)
+```
+
+The `+ 1` comes from how x/term ends a line. It moves to the next row itself when the text exactly fills a row, and Enter then writes `\r\n`. So the formula holds whether or not the last row is full. `prompt` is whichever prompt that physical line was read under: `> `, `(blocked) > `, or `… `. Sum the rows over all physical lines of the submission.
+
+**Drawing the band.** Write this to the same writer, before `ReadLine` returns, still in raw mode, so every line ends with `\r\n`:
+
+1. `\x1b[<rows>A\r\x1b[J`: move up over the echoed rows, then erase from there to the end of the screen. Relative movement still works after the typed text scrolled the screen, which saved cursor positions do not.
+2. Wrap the message with `wrapStyled("> ", "  ", sanitize(message), width-1)`, so that it wraps at word boundaries with a two-column hanging indent. The message is the joined submission after `↵` → `\n` conversion, and each of its lines is wrapped separately. The wrap is `width-1` so that no row reaches the last column and makes the terminal auto-wrap.
+3. Each row: `ansiUserBand + row + "\x1b[K" + ansiReset + "\r\n"`. `\x1b[K` with a background colour set fills the rest of the row in that colour, which makes the band full width without padding.
+
+**Colour.** Add `ansiUserBand = "\x1b[48;5;236m"`, a 256-colour dark grey, next to the other constants in `render.go`. Give it a comment: it is the one deliberate exception to the 8 basic colours, because no basic colour is a subtle background, and on a light theme it shows as a dark bar. `NO_COLOR` turns it off like everything else.
+
+**Test seams.** `terminalReader` gains three fields, set in `newLineReader`:
+
+- `out io.Writer`: where x/term writes (stderr)
+- `styled bool`: `styledOutput(stderr)`
+- `size func() (width, height int, err error)`: `term.GetSize(fd)`
+
+The test helper `terminalInput` sets `out` to a buffer shared with the terminal's writer, and a fixed `size`.
+
+**Touches.** `internal/reagent/lineinput.go`, `internal/reagent/lineinput_test.go`, `internal/reagent/render.go` (the constant), `README.md` (one sentence in the chat section), `docs/reagent-v0-design.md` (§10 amendment).
+
+**Tests.** Write these first. The `rows` formula is the part most likely to be wrong, so the tests pin it at exact boundaries.
+
+- `TestTerminalReader_UsesTheTerminalWidth`: with a size of 120, typing 100 `a` then Enter writes exactly one `\r\n` before any band. With the default 80, x/term inserts a second one at column 80, and the test must fail that way first.
+- `TestTerminalReader_BandReplacesTheEcho`, styled, width 40:
+  - `hello` ends with `\x1b[1A\r\x1b[J` + `ansiUserBand + "> hello\x1b[K" + ansiReset + "\r\n"`.
+  - `first \` then `second` (a continuation) moves up 2 rows and draws the rows `> first ` and `  second`.
+  - With the `(blocked) > ` prompt, the row count uses that prompt's width.
+- `TestTerminalReader_BandRowCounting`, width 20, `> ` prompt:
+  - 17 characters (2 + 17 = 19) is 1 row
+  - 18 characters (exactly 20) is 2 rows
+  - 38 characters (exactly 40) is 3 rows
+
+  Assert the `\x1b[<n>A` in each case.
+- `TestTerminalReader_BandWrapsLongMessages`: at width 20, a 30-character message of short words becomes band rows of at most 19 cells, first `> ` then `  `.
+- `TestTerminalReader_NoBandWhenPlainOrEmpty`: when not styled, the output has no `\x1b[` from the band. When styled, an empty submission and a Ctrl-C clear draw no band.
+- A message containing `\x1b[31m` shows it escaped in the band, not as colour (P4 of the CLI plan: sanitize before style).
+
+**Docs.** A v0 §10 amendment dated with the day you do it. The prompt now takes its width from the terminal at each prompt. A submitted message is redrawn as a full-width grey band on a styled terminal only. The 256-colour background is the one exception to basic-colour styling, and why. Resizes while typing take effect at the next prompt. Also add one sentence to the README's chat section.
+
+**Request check.** Byte-identical: the CLI plan's P1 recipe must print `identical`.
+
+**Manual checks for the human.** Build to `/tmp/reagent-dev` and run `chat` in:
+
+- A terminal wider than 100 columns: a long line wraps at the real edge.
+- A terminal narrower than 80: editing a wrapped line with the arrow keys and backspace keeps the cursor where you expect it.
+- A dark theme: sent messages appear as grey bands, including a pasted multi-line message and a `\` continuation.
+- A light theme: note how the band looks, since that is the known trade-off.
+- Ctrl-C on a half-typed line clears it with no band.
+- Resize the window, then press Enter on an empty line: the next prompt uses the new width.
 
 ## 5. After the milestones
 

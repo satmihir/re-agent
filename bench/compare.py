@@ -43,6 +43,9 @@ def commit_stats(runs):
                 count = int(count or 0)
                 if count > 0:
                     failures[str(key)] += count
+        # Summaries written before tool failures were recorded lack the field,
+        # which is not the same as a run with no failures.
+        recorded_any = any("tool_failures" in task for task in tasks)
         stats[commit] = {
             "runs": len(tasks),
             "resolved": sum(bool(task.get("resolved")) for task in tasks),
@@ -50,7 +53,7 @@ def commit_stats(runs):
             "mean_input_tokens": mean(tasks, "input_tokens"),
             "mean_output_tokens": mean(tasks, "output_tokens"),
             "statuses": dict(sorted(statuses.items())),
-            "tool_failures": dict(failures),
+            "tool_failures": dict(failures) if recorded_any else None,
         }
     return stats
 
@@ -89,8 +92,11 @@ def main():
           f"{'mean out':>10s}  non-completed statuses  top tool failures")
     for commit, stats in sorted(commit_stats(runs).items()):
         statuses = ", ".join(f"{status}={count}" for status, count in stats["statuses"].items()) or "none"
-        top_failures = sorted(stats["tool_failures"].items(), key=lambda item: (-item[1], item[0]))[:3]
-        failures = ", ".join(f"{key}={count}" for key, count in top_failures) or "none"
+        if stats["tool_failures"] is None:
+            failures = "not recorded"
+        else:
+            top_failures = sorted(stats["tool_failures"].items(), key=lambda item: (-item[1], item[0]))[:3]
+            failures = ", ".join(f"{key}={count}" for key, count in top_failures) or "none"
         print(f"{commit:16s} {stats['resolved']:4d} of {stats['runs']:<6d} "
               f"{stats['mean_steps']:10.1f} {stats['mean_input_tokens']:10.1f} "
               f"{stats['mean_output_tokens']:10.1f}  {statuses}  {failures}")

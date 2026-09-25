@@ -130,7 +130,8 @@ def summarize_trace(path):
     last_request, peak = None, 0
     started_calls = {}
     tool_failures = collections.Counter()
-    last_failed = None
+    # Only the run's final tool call can have stopped it, and only if it failed.
+    last_call_failure = None
     with open(path) as f:
         for line in f:
             event = json.loads(line)
@@ -144,6 +145,7 @@ def summarize_trace(path):
             elif event["type"] == "tool.finished":
                 data = event["data"]
                 outcome = data.get("outcome") or {}
+                last_call_failure = None
                 if outcome.get("ok") is False:
                     started = started_calls.get(data.get("call_id"), {})
                     name = data.get("name") or started.get("name") or "unknown"
@@ -152,7 +154,7 @@ def summarize_trace(path):
                     if not isinstance(arguments, str):
                         arguments = ""
                     tool_failures[f"{name}:{code}"] += 1
-                    last_failed = {"tool": name, "code": code, "arguments": arguments[:200]}
+                    last_call_failure = {"tool": name, "code": code, "arguments": arguments[:200]}
             elif event["type"] == "run.finished":
                 data = event["data"]
                 usage = data.get("usage", {})
@@ -166,7 +168,7 @@ def summarize_trace(path):
                 }
     summary["peak_input_tokens"] = peak
     summary["tool_failures"] = dict(sorted(tool_failures.items()))
-    summary["stopped_by"] = last_failed if summary.get("status") != "completed" else None
+    summary["stopped_by"] = last_call_failure if summary.get("status") != "completed" else None
     if last_request is None:
         return summary
 
