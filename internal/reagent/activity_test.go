@@ -93,6 +93,33 @@ func TestActivity_CommandQuoting(t *testing.T) {
 	}
 }
 
+func TestActivity_MultiLineCommandIsOneRow(t *testing.T) {
+	args := execArgs{Argv: []string{"gh", "pr", "create", "--body", "## Summary\n- one"}, Cwd: "a\nb"}
+	if got, want := commandText(args), "gh pr create --body '## Summary↵- one' in a↵b"; got != want {
+		t.Fatalf("command: got %q, want %q", got, want)
+	}
+
+	call := ToolCall{Name: "exec", Arguments: `{"argv":["gh","pr","create","--body","## Summary\n- one"],"cwd":"a\nb"}`}
+	outcome := ToolOutcome{OK: true, Effect: EffectApplied, Data: []byte(`{}`)}
+	if got := describeActivity(call, outcome).render(false, 0); strings.Count(got, "\n") != 1 {
+		t.Fatalf("activity has %d newlines: %q", strings.Count(got, "\n"), got)
+	}
+	if got := recapLine(call, outcome); strings.Contains(got, "\n") {
+		t.Fatalf("recap has a newline: %q", got)
+	}
+	if got := statusText(0, "running "+callTarget(call), 0, 80); strings.Contains(got, "\n") {
+		t.Fatalf("status has a newline: %q", got)
+	}
+
+	search := ToolCall{Name: "search_text", Arguments: `{"query":"a\nb","path":"."}`}
+	if got, want := callTarget(search), `"a↵b" in .`; got != want {
+		t.Fatalf("search target: got %q, want %q", got, want)
+	}
+	if got := describeActivity(search, ToolOutcome{OK: true, Data: []byte(`{"matches":[],"complete":true}`)}).render(false, 0); strings.Count(got, "\n") != 1 {
+		t.Fatalf("search activity has %d newlines: %q", strings.Count(got, "\n"), got)
+	}
+}
+
 func TestActivity_EditPreviewDropsSharedLinesAndCaps(t *testing.T) {
 	old := "same\nold\ntail"
 	new := "same\nnew\ntail"

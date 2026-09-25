@@ -296,6 +296,8 @@ A `Makefile` now exists, added on request. `make check` runs gofmt, vet, and the
 
 **Amendment (2026-09-25):** The OpenAI default model is now `gpt-6-luna`. `gpt-5.6-luna` remains available as an explicit selection; existing benchmark results continue to identify the model used.
 
+**Amendment (2026-09-25):** Newlines inside command arguments, `cwd`, and search queries are shown as `↵` in activity, status, and recap lines, so each stays on one terminal row. The status line erases only its own row, and a multi-line label left stale rows behind. The trace and the request are unchanged.
+
 **Amendment (2026-09-25):** The completed-run operation recap is hidden by default because live activity already shows every call. Runs that do not complete always show their recap of effects (v1 §19.3); `--recap` also shows it for completed runs.
 
 ## 11. Design fork: native versus prompt-defined tools
