@@ -232,7 +232,7 @@ A nonzero exit remains the v1 §14.5 error observation and can be followed by an
 
 This narrow exec stop rule is mandatory despite deferring the general I18 policy. It reports what the runtime knows. It does not claim that a timed-out command changed nothing or that all its descendants were killed. Do not add a process supervisor to obtain that guarantee in v0.
 
-**Amendment (2026-09-25):** `timeout_ms` is optional. When omitted it is two minutes; a positive value below ten seconds is raised to ten seconds rather than rejected, and the result reports the effective timeout. In the first benchmark, 15 of 96 `exec` calls asked for one second, eight calls timed out, and seven of 32 runs ended with uncertain effects. The default and floor avoid wasting those runs, but an actual timeout still reports unknown effects and stops the run.
+**Amendment (2026-09-25):** `timeout_ms` is optional. When omitted it is two minutes; a positive value below ten seconds is raised to ten seconds rather than rejected, and the result reports the effective timeout. In the first benchmark, 15 of 96 `exec` calls asked for one second, eight calls timed out, and eight of 32 runs ended with uncertain effects. The default and floor avoid wasting those runs, but an actual timeout still reports unknown effects and stops the run.
 
 ## 10. One-shot CLI
 
