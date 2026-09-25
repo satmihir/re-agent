@@ -1,0 +1,7 @@
+The repository {repo} is checked out in the workspace, at the commit where the issue below was reported. Resolve the issue by changing the repository's source code. The project's Python environment is already installed.
+
+Do not change the existing tests. You may run them.
+
+<issue>
+{problem_statement}
+</issue>
