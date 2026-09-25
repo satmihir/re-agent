@@ -294,6 +294,8 @@ A `Makefile` now exists, added on request. `make check` runs gofmt, vet, and the
 
 **Amendment (2026-09-25):** The catalog now offers five models. `gpt-6-luna` joins the OpenAI entries in position 3, accepts the same reasoning efforts, and defaults to `low`; `gpt-5.6-luna` is now marked `cheap` rather than `cheapest`. The default model remains `gpt-5.6-luna`, so existing requests and benchmark comparisons are unchanged.
 
+**Amendment (2026-09-25):** The OpenAI default model is now `gpt-6-luna`. `gpt-5.6-luna` remains available as an explicit selection; existing benchmark results continue to identify the model used.
+
 **Amendment (2026-09-25):** The completed-run operation recap is hidden by default because live activity already shows every call. Runs that do not complete always show their recap of effects (v1 §19.3); `--recap` also shows it for completed runs.
 
 ## 11. Design fork: native versus prompt-defined tools

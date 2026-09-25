@@ -13,7 +13,7 @@ func TestResolveTarget_ProviderAndModel(t *testing.T) {
 		wantProvider, wantModel string
 		wantErr                 string
 	}{
-		"nothing given":         {"", "", openaiName, DefaultOpenAIModel, ""},
+		"nothing given":         {"", "", openaiName, "gpt-6-luna", ""},
 		"claude model infers":   {"", "claude-haiku-4-5", anthropicName, "claude-haiku-4-5", ""},
 		"other model is openai": {"", "gpt-x", openaiName, "gpt-x", ""},
 		"anthropic default":     {anthropicName, "", anthropicName, DefaultAnthropicModel, ""},
