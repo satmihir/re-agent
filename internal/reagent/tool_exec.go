@@ -24,21 +24,32 @@ var allowedEnvironment = []string{
 	"GOROOT", "GOPATH", "GOCACHE", "GOMODCACHE",
 }
 
+// v0 §9 amendment (2026-09-25): a model asked for one-second timeouts on
+// commands that take longer, and a timeout ends the run.
+const (
+	defaultExecTimeout = 120 * time.Second
+	minExecTimeout     = 10 * time.Second
+)
+
 // execTool runs one foreground command and reports what actually happened.
 //
 // Its hardest obligation is honesty about uncertainty: once a process has
 // started, a timeout cannot say the workspace is unchanged, so that outcome
 // stops the run rather than inviting another attempt (v0 §9).
-type execTool struct{ ws *Workspace }
+type execTool struct {
+	ws *Workspace
+	// minTimeout is minExecTimeout; tests set zero to reach a timeout quickly.
+	minTimeout time.Duration
+}
 
 // NewExecTool returns the process execution tool. It is registered only in exec
 // mode, which the human grants at launch alongside write mode (v1 §10.3).
-func NewExecTool(ws *Workspace) Tool { return execTool{ws} }
+func NewExecTool(ws *Workspace) Tool { return execTool{ws: ws, minTimeout: minExecTimeout} }
 
 type execArgs struct {
-	Argv      []string `json:"argv"`
-	Cwd       string   `json:"cwd"`
-	TimeoutMS int      `json:"timeout_ms"`
+	Argv      []string        `json:"argv"`
+	Cwd       string          `json:"cwd"`
+	TimeoutMS json.RawMessage `json:"timeout_ms"`
 }
 
 type execResult struct {
@@ -55,6 +66,7 @@ type execResult struct {
 	StderrTruncated    bool     `json:"stderr_truncated"`
 	EncodingReplaced   bool     `json:"encoding_replaced"`
 	DurationMS         int64    `json:"duration_ms"`
+	TimeoutMS          int64    `json:"timeout_ms"`
 	TerminationReason  *string  `json:"termination_reason"`
 }
 
@@ -72,9 +84,9 @@ func (execTool) Spec() ToolSpec {
     "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1,
              "description": "Executable followed by its literal arguments."},
     "cwd": {"type": "string", "description": "Existing workspace-relative directory, or . for the root."},
-    "timeout_ms": {"type": "integer", "minimum": 1, "description": "How long the command may run."}
+    "timeout_ms": {"type": "integer", "minimum": 1, "description": "Milliseconds the command may run. Defaults to 120000; values below 10000 are raised to 10000."}
   },
-  "required": ["argv", "cwd", "timeout_ms"],
+  "required": ["argv", "cwd"],
   "additionalProperties": false
 }`),
 		Effect: EffectClassExec,
@@ -86,11 +98,17 @@ func (t execTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcom
 	if bad := decodeArgs(args, &a); bad != nil {
 		return *bad, nil
 	}
+	timeoutMS, bad := optionalInt(a.TimeoutMS, "timeout_ms", int(defaultExecTimeout/time.Millisecond), 1)
+	if bad != nil {
+		return *bad, nil
+	}
+	timeout := time.Duration(timeoutMS) * time.Millisecond
+	if timeout < t.minTimeout {
+		timeout = t.minTimeout
+	}
 	switch {
 	case len(a.Argv) == 0 || a.Argv[0] == "":
 		return failOutcome("invalid_arguments", "argv must start with an executable"), nil
-	case a.TimeoutMS <= 0:
-		return failOutcome("invalid_arguments", "timeout_ms must be positive"), nil
 	}
 	for _, argument := range a.Argv {
 		if strings.ContainsRune(argument, 0) {
@@ -106,12 +124,12 @@ func (t execTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcom
 	} else if !info.IsDir() {
 		return failOutcome("not_directory", "cwd is not a directory"), nil
 	}
-	return t.run(ctx, a, dir)
+	return t.run(ctx, a, dir, timeout)
 }
 
 // run starts the command and turns whatever happened into one observation.
-func (t execTool) run(parent context.Context, a execArgs, dir string) (ToolOutcome, error) {
-	deadline, cancel := context.WithTimeout(parent, time.Duration(a.TimeoutMS)*time.Millisecond)
+func (t execTool) run(parent context.Context, a execArgs, dir string, timeout time.Duration) (ToolOutcome, error) {
+	deadline, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	stdout := &boundedWriter{limit: MaxResultBytes}
@@ -131,7 +149,7 @@ func (t execTool) run(parent context.Context, a execArgs, dir string) (ToolOutco
 	runErr := command.Run()
 	result := execResult{
 		Argv: a.Argv, ResolvedExecutable: command.Path, Cwd: a.Cwd,
-		DurationMS: time.Since(started).Milliseconds(),
+		DurationMS: time.Since(started).Milliseconds(), TimeoutMS: timeout.Milliseconds(),
 	}
 	stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
 	stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
