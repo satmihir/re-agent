@@ -52,20 +52,20 @@ Pasted text is sent as one message, however many lines it has.`)
 // conversation is the chat session plus what it needs to build a replacement
 // when the model changes.
 type conversation struct {
-	session      *Session
-	cfg          Config
-	keys         map[string]string
-	client       *http.Client
-	scripted     Model
-	trace        *Trace
-	traceDir     string
-	progress     io.Writer
-	workspace    string
-	printSummary bool
-	usage        Usage
-	stdin        *os.File
-	stdout       *os.File
-	stderr       *os.File
+	session   *Session
+	cfg       Config
+	keys      map[string]string
+	client    *http.Client
+	scripted  Model
+	trace     *Trace
+	traceDir  string
+	progress  io.Writer
+	workspace string
+	recap     bool
+	usage     Usage
+	stdin     *os.File
+	stdout    *os.File
+	stderr    *os.File
 }
 
 // available reports which providers this process holds a credential for.
@@ -456,10 +456,10 @@ func (c *conversation) runTurn(ctx context.Context, text string, stdout, stderr 
 	c.usage.Add(result.Usage)
 	showTrace := result.Status != StatusCompleted
 	if c.session.blocked != "" {
-		printResult(c.session.display, result, time.Since(started), stdout, c.printSummary, false)
+		printResult(c.session.display, result, time.Since(started), stdout, c.recap, false)
 		c.session.display.blocked(result.TracePath)
 	} else {
-		printResult(c.session.display, result, time.Since(started), stdout, c.printSummary, showTrace)
+		printResult(c.session.display, result, time.Since(started), stdout, c.recap, showTrace)
 	}
 	c.session.display.spacer()
 }

@@ -127,10 +127,9 @@ than applied to something else.
 
 ## Reading a run
 
-Every run writes an append-only JSONL trace. With `--print-summary`, its path
-is printed on stderr when the run ends: `~/Library/Caches/reagent/runs/<run-id>/`
-on macOS, `~/.cache/reagent/runs/<run-id>/` on Linux, or wherever `--trace-file`
-says.
+Every run writes an append-only JSONL trace. The path is printed on stderr when
+the run ends: `~/Library/Caches/reagent/runs/<run-id>/` on macOS,
+`~/.cache/reagent/runs/<run-id>/` on Linux, or wherever `--trace-file` says.
 There is no viewer. It is JSON, and `jq` is the viewer.
 
 ```bash
@@ -238,7 +237,7 @@ quality.
 | `--allow-write`, `--allow-exec` | Grant authority beyond reading. |
 | `--show-context` | Print the first request and exit. No key needed. |
 | `--scripted FILE` | Replay recorded responses instead of calling a provider. |
-| `--print-summary` | Print the end-of-turn summary and recap; live tool activity is unaffected. Off by default. |
+| `--recap` | Show the operation recap for completed runs. Non-completed runs always show it. |
 | `--prompt-file PATH` | `run`: read the prompt from a file, or `-` for stdin. |
 | `--trace-file PATH` | `run`: where to write the trace. |
 | `--trace-dir DIR` | `chat`: where each turn's trace goes. |

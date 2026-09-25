@@ -292,9 +292,9 @@ A `Makefile` now exists, added on request. `make check` runs gofmt, vet, and the
 
 **Amendment (2026-09-24):** `/context` reports what the conversation's next request is made of, so that decisions about managing context can start from measurement. It shows the encoded size against `MaxRequestBytes`, the input and cached tokens the last response reported, and the bytes of each part: instructions, tool definitions, the user's messages, the model's reasoning, tool calls, and text, and each tool's results. The size comes from the same encoder and size check as the request itself, and whatever the named parts do not cover is shown as JSON structure, so the rows add up to the request exactly. A request over the limit is still broken down, since a session blocked by the limit is the one most worth inspecting. Shares are of bytes, not tokens: providers report tokens only per request, and reasoning items are encrypted, so their size says little about their token cost. `read_file` results are further marked where a later `edit_file` changed the same file, or where an earlier result was byte-identical; edits made through `exec` are not detected. Like `/status`, it only reads state: it selects nothing and never changes a request. It is a chat command, not the deferred trace inspection command.
 
-**Amendment (2026-09-24):** `--print-summary` opts into the end-of-turn status, usage, elapsed time, recap, and applicable trace path for both `run` and `chat`; it is off by default. Live per-tool activity remains on stderr as operations finish, and traces are still written whether or not the summary is printed.
-
 **Amendment (2026-09-25):** The catalog now offers five models. `gpt-6-luna` joins the OpenAI entries in position 3, accepts the same reasoning efforts, and defaults to `low`; `gpt-5.6-luna` is now marked `cheap` rather than `cheapest`. The default model remains `gpt-5.6-luna`, so existing requests and benchmark comparisons are unchanged.
+
+**Amendment (2026-09-25):** The completed-run operation recap is hidden by default because live activity already shows every call. Runs that do not complete always show their recap of effects (v1 §19.3); `--recap` also shows it for completed runs.
 
 ## 11. Design fork: native versus prompt-defined tools
 

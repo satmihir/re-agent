@@ -81,8 +81,8 @@ func TestChat_EachLineIsATurnOfOneConversation(t *testing.T) {
 	if stdout != "first\nsecond\n" {
 		t.Fatalf("stdout: %q", stdout)
 	}
-	// Tool activity goes to stderr, summaries are opt-in, and pipes get no prompt.
-	if strings.Contains(stderr, "completed ·") || !strings.Contains(stderr, "✓ echo") || strings.Contains(stderr, "> ") {
+	// The completed-turn summary stays while the duplicate operation recap is hidden.
+	if !strings.Contains(stderr, "completed · 2 steps") || !strings.Contains(stderr, "✓ echo") || strings.Contains(stderr, "  ran ") || strings.Contains(stderr, "> ") {
 		t.Fatalf("stderr: %q", stderr)
 	}
 }
