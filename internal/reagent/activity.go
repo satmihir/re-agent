@@ -69,7 +69,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 		if json.Unmarshal([]byte(call.Arguments), &args) != nil || json.Unmarshal(outcome.Data, &result) != nil {
 			return a
 		}
-		a.target = "\"" + sanitize(args.Query) + "\" in " + sanitize(args.Path)
+		a.target = "\"" + oneRow(args.Query) + "\" in " + sanitize(args.Path)
 		if len(result.Matches) == 0 {
 			a.result = "no matches"
 		} else {
@@ -201,7 +201,7 @@ func callTarget(call ToolCall) string {
 	case "search_text":
 		var args searchTextArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
-			return "\"" + sanitize(args.Query) + "\" in " + sanitize(args.Path)
+			return "\"" + oneRow(args.Query) + "\" in " + sanitize(args.Path)
 		}
 	case "edit_file":
 		var args editFileArgs
@@ -264,18 +264,25 @@ func previewLines(old, new []string) []string {
 	}
 	return out
 }
+
+// v0 §10 amendment (2026-09-25): status, activity, and recap stay on one row.
+func oneRow(text string) string {
+	return strings.ReplaceAll(sanitize(text), "\n", "↵")
+}
+
 func commandText(a execArgs) string {
 	parts := make([]string, len(a.Argv))
 	for i, s := range a.Argv {
-		s = sanitize(s)
-		if s == "" || strings.ContainsAny(s, " $`\\\"'*?[]{}()<>|&;") {
+		hasNewline := strings.Contains(s, "\n")
+		s = oneRow(s)
+		if hasNewline || s == "" || strings.ContainsAny(s, " $`\\\"'*?[]{}()<>|&;") {
 			s = "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 		}
 		parts[i] = s
 	}
 	text := strings.Join(parts, " ")
 	if a.Cwd != "" && a.Cwd != "." {
-		text += " in " + sanitize(a.Cwd)
+		text += " in " + oneRow(a.Cwd)
 	}
 	return text
 }
