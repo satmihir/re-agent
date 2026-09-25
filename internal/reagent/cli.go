@@ -187,7 +187,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		conversation := &conversation{
 			session: session, cfg: cfg, keys: keys, client: client, scripted: scripted,
 			trace: trace, traceDir: options.traceDir, progress: stderr, workspace: ws.Root(),
-			usage: Usage{Known: true},
+			printSummary: options.printSummary, usage: Usage{Known: true},
 		}
 		if terminal, ok := stdin.(*os.File); ok && isTerminal(terminal) {
 			conversation.stdin = terminal
@@ -219,7 +219,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return exitRunFail
 	}
-	printResult(session.display, result, time.Since(started), stdout, true)
+	printResult(session.display, result, time.Since(started), stdout, options.printSummary, true)
 	if result.Status == StatusCompleted {
 		return exitOK
 	}
@@ -228,7 +228,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
-	showContext, allowWrite, allowExec                                             bool
+	showContext, allowWrite, allowExec, printSummary                               bool
 	maxSteps, maxToolCalls                                                         int
 }
 
@@ -242,6 +242,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.showContext, "show-context", false, "print the request the first step would send, then exit")
 	fs.BoolVar(&o.allowWrite, "allow-write", false, "let the model change workspace files with edit_file")
 	fs.BoolVar(&o.allowExec, "allow-exec", false, "let the model run commands with exec; requires --allow-write")
+	fs.BoolVar(&o.printSummary, "print-summary", false, "print the end-of-turn summary and recap")
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
 	fs.StringVar(&o.traceDir, "trace-dir", "", "write each turn's trace under this directory")
@@ -260,6 +261,7 @@ var runFlagGroups = []flagGroup{
 	{"Authority", []string{"workspace", "allow-write", "allow-exec"}},
 	{"Input", []string{"prompt-file"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
+	{"Output", []string{"print-summary"}},
 	{"Tracing", []string{"trace-file"}},
 	{"Offline", []string{"show-context", "scripted"}},
 }
@@ -268,6 +270,7 @@ var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
 	{"Authority", []string{"workspace", "allow-write", "allow-exec"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
+	{"Output", []string{"print-summary"}},
 	{"Tracing", []string{"trace-dir"}},
 	{"Offline", []string{"scripted"}},
 }
@@ -300,7 +303,8 @@ func writeCommandHelp(w io.Writer, command string, fs *flag.FlagSet) {
 		fmt.Fprintln(w, "usage: reagent run [flags] \"prompt\"")
 		fmt.Fprintln(w, "       reagent run [flags] --prompt-file PATH")
 		fmt.Fprintln(w, "\nRuns one task to completion and exits. The reply goes to stdout; progress")
-		fmt.Fprintln(w, "and the summary go to stderr. Flags go before the prompt.")
+		fmt.Fprintln(w, "and tool activity go to stderr. --print-summary adds the run summary.")
+		fmt.Fprintln(w, "Flags go before the prompt.")
 	} else {
 		fmt.Fprintln(w, "usage: reagent chat [flags]")
 		fmt.Fprintln(w, "\nHolds a conversation, one turn per line typed. /help inside lists its commands.")
@@ -423,12 +427,12 @@ func startupError(stderr io.Writer, message string) int {
 	return exitUsage
 }
 
-// printResult prints the reply, then a summary that never dresses a failure up
-// as an answer. A completed run means the model replied, not that it was right
-// (I17).
-func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, showTrace bool) {
+// printResult prints the reply and, when requested, a separate run summary.
+func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, printSummary, showTrace bool) {
 	d.reply(stdout, result.Reply)
-	d.summary(result, elapsed, showTrace)
+	if printSummary {
+		d.summary(result, elapsed, showTrace)
+	}
 }
 
 // readPrompt loads a run's prompt from a file, or from stdin when the path is

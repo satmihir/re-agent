@@ -27,8 +27,59 @@ func TestMain_ScriptedRunPrintsReplyOnStdout(t *testing.T) {
 	if got := strings.TrimSpace(stdout.String()); got != "The tool returned: the timeout is 30s." {
 		t.Fatalf("stdout: %q", got)
 	}
-	if !strings.Contains(stderr.String(), "trace: "+trace) {
-		t.Fatalf("stderr: %q", stderr.String())
+	if strings.Contains(stderr.String(), "completed ·") || strings.Contains(stderr.String(), "trace: ") {
+		t.Fatalf("default output included the summary: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "✓ echo") {
+		t.Fatalf("default output lost live tool activity: %q", stderr.String())
+	}
+	if _, err := os.Stat(trace); err != nil {
+		t.Fatalf("trace was not written: %v", err)
+	}
+}
+
+func TestMain_ScriptedRunPrintSummaryOptIn(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	trace := filepath.Join(t.TempDir(), "events.jsonl")
+
+	code := Main(context.Background(), []string{"run",
+		"--scripted", "../../testdata/scripts/echo_then_answer.json",
+		"--trace-file", trace, "--print-summary",
+		"Where is the timeout set?"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "completed ·") || !strings.Contains(stderr.String(), "trace: "+trace) {
+		t.Fatalf("summary or trace path missing: %q", stderr.String())
+	}
+}
+
+func TestMain_ChatPrintSummaryIsOptIn(t *testing.T) {
+	for _, printSummary := range []bool{false, true} {
+		name := "default"
+		if printSummary {
+			name = "enabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := []string{"chat", "--scripted", "../../testdata/scripts/echo_then_answer.json",
+				"--trace-dir", filepath.Join(t.TempDir(), "traces")}
+			if printSummary {
+				args = append(args, "--print-summary")
+			}
+
+			code := Main(context.Background(), args, strings.NewReader("Where is the timeout set?\n"), &stdout, &stderr)
+			if code != exitOK {
+				t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+			}
+			if got := strings.TrimSpace(stdout.String()); got != "The tool returned: the timeout is 30s." {
+				t.Fatalf("stdout: %q", got)
+			}
+			if got := strings.Contains(stderr.String(), "completed ·"); got != printSummary {
+				t.Fatalf("summary present = %t, requested %t: %q", got, printSummary, stderr.String())
+			}
+		})
 	}
 }
 

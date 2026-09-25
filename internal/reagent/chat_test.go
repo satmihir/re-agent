@@ -81,8 +81,8 @@ func TestChat_EachLineIsATurnOfOneConversation(t *testing.T) {
 	if stdout != "first\nsecond\n" {
 		t.Fatalf("stdout: %q", stdout)
 	}
-	// Diagnostics go to stderr, replies do not; no prompt is printed to a pipe.
-	if !strings.Contains(stderr, "completed · 2 steps") || strings.Contains(stderr, "> ") {
+	// Tool activity goes to stderr, summaries are opt-in, and pipes get no prompt.
+	if strings.Contains(stderr, "completed ·") || !strings.Contains(stderr, "✓ echo") || strings.Contains(stderr, "> ") {
 		t.Fatalf("stderr: %q", stderr)
 	}
 }
