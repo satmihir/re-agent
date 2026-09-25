@@ -56,6 +56,7 @@ func TestResolveEffort_AutoIsPerModelThenPerProvider(t *testing.T) {
 		{"auto", anthropicName, "claude-haiku-4-5", ""},
 		{"auto", anthropicName, "claude-sonnet-5", "low"},
 		{"auto", openaiName, "gpt-5.6-luna", "low"},
+		{"auto", openaiName, "gpt-6-luna", "low"},
 		// Anything outside the catalog falls back to the provider's default.
 		{"auto", anthropicName, "claude-something-new", ""},
 		{"auto", openaiName, "gpt-experimental", DefaultReasoningEffort},
