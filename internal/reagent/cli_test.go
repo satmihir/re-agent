@@ -27,8 +27,149 @@ func TestMain_ScriptedRunPrintsReplyOnStdout(t *testing.T) {
 	if got := strings.TrimSpace(stdout.String()); got != "The tool returned: the timeout is 30s." {
 		t.Fatalf("stdout: %q", got)
 	}
-	if !strings.Contains(stderr.String(), "trace: "+trace) {
-		t.Fatalf("stderr: %q", stderr.String())
+	if !strings.Contains(stderr.String(), "completed ·") || !strings.Contains(stderr.String(), "trace: "+trace) {
+		t.Fatalf("summary or trace path missing: %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "  ran ") || strings.Contains(stderr.String(), "  changed ") {
+		t.Fatalf("completed run unexpectedly printed a recap: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "✓ echo") {
+		t.Fatalf("default output lost live tool activity: %q", stderr.String())
+	}
+}
+
+func writeEditExecScript(t *testing.T, root string, complete bool) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editArgs, err := json.Marshal(editFileArgs{
+		Path: "a.txt", ExpectedSHA256: digestOfFile(t, ws, "a.txt"), OldText: "before", NewText: "after",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execArgsJSON, err := json.Marshal(execArgs{
+		Argv: []string{"true"}, Cwd: ".", TimeoutMS: json.RawMessage("1000"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses := []ModelResponse{turn(
+		callBlock("call_edit", "edit_file", string(editArgs)),
+		callBlock("call_exec", "exec", string(execArgsJSON)),
+	)}
+	if complete {
+		responses = append(responses, turn(textBlock("finished")))
+	}
+	script, err := json.Marshal(responses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "responses.json")
+	if err := os.WriteFile(path, script, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func recapRunArgs(root, script, trace string, recap bool) []string {
+	args := []string{"run", "--workspace", root, "--allow-write", "--allow-exec",
+		"--scripted", script, "--trace-file", trace}
+	if recap {
+		args = append(args, "--recap")
+	}
+	return append(args, "apply the requested changes")
+}
+
+func TestMain_CompletedRunRecapIsOptIn(t *testing.T) {
+	for _, recap := range []bool{false, true} {
+		name := "default"
+		if recap {
+			name = "enabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			root := t.TempDir()
+			script := writeEditExecScript(t, root, true)
+			trace := filepath.Join(t.TempDir(), "events.jsonl")
+			args := recapRunArgs(root, script, trace, recap)
+			code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr)
+			if code != exitOK {
+				t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "completed · 2 steps · 2 tool calls") || !strings.Contains(stderr.String(), "trace: "+trace) {
+				t.Fatalf("summary or trace path missing: %q", stderr.String())
+			}
+			changed := strings.Contains(stderr.String(), "  changed a.txt\n")
+			ran := strings.Contains(stderr.String(), "  ran     true\n")
+			if changed != recap || ran != recap {
+				t.Fatalf("recap present changed=%t ran=%t, requested %t: %q", changed, ran, recap, stderr.String())
+			}
+		})
+	}
+}
+
+func TestMain_NoncompletedRunAlwaysShowsRecap(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	root := t.TempDir()
+	script := writeEditExecScript(t, root, false)
+	trace := filepath.Join(t.TempDir(), "events.jsonl")
+	args := []string{"run", "--workspace", root, "--allow-write", "--allow-exec",
+		"--scripted", script, "--trace-file", trace, "attempt the changes"}
+
+	if code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code != exitRunFail {
+		t.Fatalf("exit %d, want %d; stderr: %s", code, exitRunFail, stderr.String())
+	}
+	for _, want := range []string{
+		"protocol_error · 2 steps · 2 tool calls", "script exhausted after 1 responses",
+		"  changed a.txt\n", "  ran     true\n", "trace: " + trace,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr lacks %q:\n%s", want, stderr.String())
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "a.txt")); err != nil || string(got) != "after\n" {
+		t.Fatalf("edited file = %q, error %v", got, err)
+	}
+}
+
+func TestMain_ChatRecapIsOptIn(t *testing.T) {
+	for _, recap := range []bool{false, true} {
+		name := "default"
+		if recap {
+			name = "enabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			root := t.TempDir()
+			script := writeEditExecScript(t, root, true)
+			args := []string{"chat", "--workspace", root, "--allow-write", "--allow-exec",
+				"--scripted", script, "--trace-dir", filepath.Join(t.TempDir(), "traces")}
+			if recap {
+				args = append(args, "--recap")
+			}
+
+			code := Main(context.Background(), args, strings.NewReader("apply the requested changes\n"), &stdout, &stderr)
+			if code != exitOK {
+				t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+			}
+			if got := strings.TrimSpace(stdout.String()); got != "finished" {
+				t.Fatalf("stdout: %q", got)
+			}
+			if !strings.Contains(stderr.String(), "completed · 2 steps · 2 tool calls") {
+				t.Fatalf("completed status missing: %q", stderr.String())
+			}
+			changed := strings.Contains(stderr.String(), "  changed a.txt\n")
+			ran := strings.Contains(stderr.String(), "  ran     true\n")
+			if changed != recap || ran != recap {
+				t.Fatalf("recap present changed=%t ran=%t, requested %t: %q", changed, ran, recap, stderr.String())
+			}
+		})
 	}
 }
 

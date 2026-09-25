@@ -294,6 +294,8 @@ A `Makefile` now exists, added on request. `make check` runs gofmt, vet, and the
 
 **Amendment (2026-09-25):** The catalog now offers five models. `gpt-6-luna` joins the OpenAI entries in position 3, accepts the same reasoning efforts, and defaults to `low`; `gpt-5.6-luna` is now marked `cheap` rather than `cheapest`. The default model remains `gpt-5.6-luna`, so existing requests and benchmark comparisons are unchanged.
 
+**Amendment (2026-09-25):** The completed-run operation recap is hidden by default because live activity already shows every call. Runs that do not complete always show their recap of effects (v1 §19.3); `--recap` also shows it for completed runs.
+
 ## 11. Design fork: native versus prompt-defined tools
 
 v0 uses native function calling. The alternative is **prompt-defined tool calling**: put tool descriptions and a response grammar in the instructions, request text such as a JSON `tool_call`/`final` union, and parse it in the harness. Native calling supplies provider-defined call/result structure and correlation; prompt-defined calling exposes how an agreed text protocol becomes executable behavior. The latter gives the harness direct control over its grammar and works with a text interface, but adds format failures, escaping and validation work, locally assigned call IDs, and ambiguity between prose and instructions. Native schemas still require local validation; prompt-defined grammars do not make a provider's entire conversation state portable. Neither approach executes a tool until the harness dispatches it.

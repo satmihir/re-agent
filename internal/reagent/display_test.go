@@ -11,7 +11,7 @@ import (
 func TestDisplay_PlainOutputHasNoEscapes(t *testing.T) {
 	var b bytes.Buffer
 	d := NewDisplay(&b)
-	d.summary(RunResult{Status: StatusCompleted, Steps: 1}, time.Second, false)
+	d.summary(RunResult{Status: StatusCompleted, Steps: 1}, time.Second, false, false)
 	if bytes.Contains(b.Bytes(), []byte("\x1b")) {
 		t.Fatal(b.String())
 	}
@@ -27,10 +27,20 @@ func TestDisplay_SummaryLine(t *testing.T) {
 	}
 	for _, test := range cases {
 		var b bytes.Buffer
-		NewDisplay(&b).summary(test.result, time.Second, false)
+		NewDisplay(&b).summary(test.result, time.Second, false, false)
 		if got := b.String(); got != test.want {
 			t.Fatalf("got %q, want %q", got, test.want)
 		}
+	}
+}
+
+func TestDisplay_HidesRecapWhenNotRequested(t *testing.T) {
+	var b bytes.Buffer
+	d := NewDisplay(&b)
+	d.recap = []string{"changed config.txt", "ran go test ./..."}
+	d.summary(RunResult{Status: StatusCompleted}, time.Second, false, false)
+	if strings.Contains(b.String(), "changed config.txt") || strings.Contains(b.String(), "go test ./...") {
+		t.Fatalf("recap printed without being requested: %q", b.String())
 	}
 }
 
@@ -38,7 +48,7 @@ func TestDisplay_AlignsRecapVerbs(t *testing.T) {
 	var b bytes.Buffer
 	d := NewDisplay(&b)
 	d.recap = []string{"changed config.txt", "ran go test ./..."}
-	d.summary(RunResult{Status: StatusCompleted}, time.Second, false)
+	d.summary(RunResult{Status: StatusCompleted}, time.Second, false, true)
 	if got := b.String(); !bytes.Contains([]byte(got), []byte("  changed config.txt\n  ran     go test ./...\n")) {
 		t.Fatalf("recap is not aligned: %q", got)
 	}

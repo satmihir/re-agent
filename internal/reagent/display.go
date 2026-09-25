@@ -163,7 +163,7 @@ func (d *Display) reply(stdout io.Writer, text string) {
 	columns := min(terminalColumns(stdout), maxReplyColumns)
 	fmt.Fprintln(stdout, display(text, styledOutput(stdout), columns))
 }
-func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace bool) {
+func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, showRecap bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.eraseStatusLocked()
@@ -198,11 +198,13 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace boo
 		}
 		fmt.Fprintf(d.w, "  %s\n", sanitize(reason))
 	}
-	for _, line := range d.recap {
-		if strings.HasPrefix(line, "ran ") {
-			line = "ran     " + strings.TrimPrefix(line, "ran ")
+	if showRecap {
+		for _, line := range d.recap {
+			if strings.HasPrefix(line, "ran ") {
+				line = "ran     " + strings.TrimPrefix(line, "ran ")
+			}
+			fmt.Fprintf(d.w, "  %s\n", line)
 		}
-		fmt.Fprintf(d.w, "  %s\n", line)
 	}
 	if showTrace {
 		d.traceLocked(result.TracePath)

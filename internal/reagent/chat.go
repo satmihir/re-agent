@@ -61,6 +61,7 @@ type conversation struct {
 	traceDir  string
 	progress  io.Writer
 	workspace string
+	recap     bool
 	usage     Usage
 	stdin     *os.File
 	stdout    *os.File
@@ -455,10 +456,10 @@ func (c *conversation) runTurn(ctx context.Context, text string, stdout, stderr 
 	c.usage.Add(result.Usage)
 	showTrace := result.Status != StatusCompleted
 	if c.session.blocked != "" {
-		printResult(c.session.display, result, time.Since(started), stdout, false)
+		printResult(c.session.display, result, time.Since(started), stdout, c.recap, false)
 		c.session.display.blocked(result.TracePath)
 	} else {
-		printResult(c.session.display, result, time.Since(started), stdout, showTrace)
+		printResult(c.session.display, result, time.Since(started), stdout, c.recap, showTrace)
 	}
 	c.session.display.spacer()
 }
