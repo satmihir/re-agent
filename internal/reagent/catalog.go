@@ -33,9 +33,11 @@ type modelInfo struct {
 // a year, and --model still accepts any name a provider knows.
 var modelCatalog = []modelInfo{
 	{ID: "gpt-5.6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
-		Note: "cheapest"},
+		Note: "cheap"},
 	{ID: "gpt-5.6-terra", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
 		Note: "more capable, costs more"},
+	{ID: "gpt-6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
+		Note: "cheapest"},
 	{ID: "claude-haiku-4-5", Provider: anthropicName, Efforts: nil, Effort: "",
 		Note: "cheapest; no effort setting"},
 	{ID: "claude-sonnet-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
