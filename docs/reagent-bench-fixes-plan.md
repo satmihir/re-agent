@@ -1,6 +1,6 @@
 # re:agent — Fixes From the First Benchmark
 
-Status: B1–B5 not started.
+Status: B1, B3, and B4 complete; B2 and B5 not started.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §6 is addressed to the implementing agent. The CLI plan's notes (`docs/reagent-cli-plan.md` §7) still apply wherever this plan does not replace them.
 
