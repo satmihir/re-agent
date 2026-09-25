@@ -14,9 +14,9 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 	if err != nil || byName.Provider != anthropicName {
 		t.Fatalf("got %+v %v", byName, err)
 	}
-	byPosition, err := selectModel("3")
+	byPosition, err := selectModel("1")
 	if err != nil || byPosition.ID != "gpt-6-luna" {
-		t.Fatalf("position 3 got %+v %v", byPosition, err)
+		t.Fatalf("position 1 got %+v %v", byPosition, err)
 	}
 	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", ""} {
 		if _, err := selectModel(choice); err == nil {
@@ -57,8 +57,8 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 	listing := renderModels("gpt-5.6-luna", map[string]bool{openaiName: true})
 
 	for _, want := range []string{
-		"1  gpt-5.6-luna      openai     current",
-		"3  gpt-6-luna        openai",
+		"1  gpt-6-luna        openai",
+		"2  gpt-5.6-luna      openai     current",
 		"4  claude-haiku-4-5  anthropic  no key",
 		"models marked no key need ANTHROPIC_API_KEY",
 		"a model change starts a fresh session",
