@@ -114,6 +114,22 @@ func optionalInt(raw json.RawMessage, field string, def, least int) (int, *ToolO
 	return n, nil
 }
 
+// optionalBool reads an optional boolean. An omitted field is false; null is
+// rejected because v0 tool arguments do not use it to mean absence (v0 §5).
+func optionalBool(raw json.RawMessage, field string) (bool, *ToolOutcome) {
+	if len(raw) == 0 {
+		return false, nil
+	}
+	if string(raw) == "null" {
+		return false, failPtr("invalid_arguments", field+" must be omitted rather than null")
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, failPtr("invalid_arguments", field+" must be a boolean")
+	}
+	return value, nil
+}
+
 // okOutcome builds a successful outcome. A marshalling failure is an
 // implementation defect, not something the model can act on, so it is an error.
 func okOutcome(data any) (ToolOutcome, error) {

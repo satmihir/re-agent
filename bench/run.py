@@ -20,6 +20,7 @@ import argparse
 import collections
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -32,6 +33,8 @@ DATASET = "SWE-bench/SWE-bench_Verified"
 PATH = "/opt/miniconda3/envs/testbed/bin:/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 MAX_STEPS = 50
 MAX_TOOL_CALLS = 50
+SEARCH_COMMANDS = {"grep", "rg", "egrep", "fgrep"}
+SHELL_COMMANDS = {"bash", "sh", "zsh"}
 
 
 def positive_int(value):
@@ -118,17 +121,66 @@ def size(value):
     return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode())
 
 
+def shell_searches_code(script):
+    """Avoid counting a search name that appears only in a command's arguments."""
+    lexer = shlex.shlex(script, posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return False
+
+    command_start = True
+    for i, token in enumerate(tokens):
+        if token in {"|", ";", "&", "&&", "||", "("}:
+            command_start = True
+            continue
+        if not command_start:
+            continue
+        executable = os.path.basename(token)
+        if executable in SEARCH_COMMANDS:
+            return True
+        if executable == "git" and i + 1 < len(tokens) and tokens[i + 1] == "grep":
+            return True
+        command_start = False
+    return False
+
+
+def exec_searches_code(arguments):
+    try:
+        argv = json.loads(arguments).get("argv")
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv):
+        return False
+
+    executable = os.path.basename(argv[0])
+    if executable in SEARCH_COMMANDS:
+        return True
+    if executable == "git":
+        return len(argv) > 1 and argv[1] == "grep"
+    if executable in SHELL_COMMANDS:
+        for i, argument in enumerate(argv[1:], 1):
+            if argument in {"-c", "-lc"}:
+                return i + 1 < len(argv) and shell_searches_code(argv[i + 1])
+    return False
+
+
 def summarize_trace(path):
     """Counts, token usage, and the final request's makeup, from one trace.
 
     The makeup mirrors /context by category, measured on the logical request
     rather than the encoded one, so the shares are close but not byte-exact.
     """
-    summary = {"status": "no_trace", "tool_failures": {}, "stopped_by": None}
+    summary = {"status": "no_trace", "tool_failures": {}, "stopped_by": None,
+               "calls_by_tool": {}, "exec_searches": 0}
     if not os.path.exists(path):
         return summary
     last_request, peak = None, 0
     started_calls = {}
+    calls_by_tool = collections.Counter()
+    exec_searches = 0
     tool_failures = collections.Counter()
     # Only the run's final tool call can have stopped it, and only if it failed.
     last_call_failure = None
@@ -142,6 +194,10 @@ def summarize_trace(path):
             elif event["type"] == "tool.started":
                 data = event["data"]
                 started_calls[data["call_id"]] = data
+                name = data.get("name") or "unknown"
+                calls_by_tool[name] += 1
+                if name == "exec" and exec_searches_code(data.get("arguments", "")):
+                    exec_searches += 1
             elif event["type"] == "tool.finished":
                 data = event["data"]
                 outcome = data.get("outcome") or {}
@@ -169,6 +225,8 @@ def summarize_trace(path):
     summary["peak_input_tokens"] = peak
     summary["tool_failures"] = dict(sorted(tool_failures.items()))
     summary["stopped_by"] = last_call_failure if summary.get("status") != "completed" else None
+    summary["calls_by_tool"] = dict(sorted(calls_by_tool.items()))
+    summary["exec_searches"] = exec_searches
     if last_request is None:
         return summary
 

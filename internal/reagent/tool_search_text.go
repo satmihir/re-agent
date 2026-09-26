@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -16,17 +17,18 @@ var excludedDirs = map[string]bool{
 	"venv": true, "dist": true, "build": true,
 }
 
-// searchTextTool finds literal matches so the model can choose which ranges are
-// worth reading. Its central obligation is to say when it did not see
-// everything, so a bounded search is never mistaken for an exhaustive one.
+// searchTextTool finds matches so the model can choose which ranges are worth
+// reading. Its central obligation is to say when it did not see everything, so
+// a bounded search is never mistaken for an exhaustive one.
 type searchTextTool struct{ ws *Workspace }
 
-// NewSearchTextTool returns the literal text search tool.
+// NewSearchTextTool returns the text search tool, which is literal by default.
 func NewSearchTextTool(ws *Workspace) Tool { return searchTextTool{ws} }
 
 type searchTextArgs struct {
 	Path       string          `json:"path"`
 	Query      string          `json:"query"`
+	Regex      json.RawMessage `json:"regex"`
 	MaxResults json.RawMessage `json:"max_results"`
 }
 
@@ -49,8 +51,9 @@ type searchTextResult struct {
 func (searchTextTool) Spec() ToolSpec {
 	return ToolSpec{
 		Name: "search_text",
-		Description: "Search a workspace file or directory for a literal, case-sensitive string. " +
-			"Not a regular expression. Returns one match per matching line with its path and line number. " +
+		Description: "Search a workspace file or directory for a literal, case-sensitive string, or with `regex` true, " +
+			"a Go RE2 regular expression matched against each line (use `|` for alternatives and `(?i)` to ignore case). " +
+			"Returns one match per matching line with its path and line number. " +
 			"max_results defaults to as many matches as fit in one result. " +
 			"complete reports whether the whole scope was searched; when it is false, do not " +
 			"conclude the query is absent.",
@@ -58,7 +61,8 @@ func (searchTextTool) Spec() ToolSpec {
   "type": "object",
   "properties": {
     "path": {"type": "string", "description": "Workspace-relative file or directory, or . for the root."},
-    "query": {"type": "string", "description": "Literal case-sensitive single-line query."},
+    "query": {"type": "string", "description": "Single-line query: a literal string, or a pattern when regex is true."},
+    "regex": {"type": "boolean", "description": "Treat query as a regular expression. Defaults to false."},
     "max_results": {"type": "integer", "minimum": 1, "description": "Maximum matching lines. Defaults to as many as fit."}
   },
   "required": ["path", "query"],
@@ -77,11 +81,27 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	if bad != nil {
 		return *bad, nil
 	}
+	regex, bad := optionalBool(a.Regex, "regex")
+	if bad != nil {
+		return *bad, nil
+	}
 	switch {
 	case a.Query == "":
 		return failOutcome("invalid_arguments", "query must not be empty"), nil
 	case strings.ContainsAny(a.Query, "\n\r\x00"):
 		return failOutcome("invalid_arguments", "query must be one line without NUL bytes"), nil
+	}
+	match := func(line string) bool { return strings.Contains(line, a.Query) }
+	// v0 §5 amendment (2026-09-25): reject regexes that could match every line.
+	if regex {
+		re, err := regexp.Compile(a.Query)
+		if err != nil {
+			return failOutcome("invalid_arguments", "regex does not compile: "+err.Error()), nil
+		}
+		if re.MatchString("") {
+			return failOutcome("invalid_arguments", "pattern matches the empty string, so it would match every line"), nil
+		}
+		match = re.MatchString
 	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {
@@ -92,7 +112,7 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 		return *osOutcome(err), nil
 	}
 
-	s := &scan{query: a.Query, maxResults: maxResults, complete: true}
+	s := &scan{match: match, maxResults: maxResults, complete: true}
 	if info.IsDir() {
 		t.walk(abs, s)
 	} else {
@@ -144,7 +164,7 @@ func (t searchTextTool) walk(root string, s *scan) {
 // scan accumulates one search. complete stays true only while nothing that
 // could have held a match went unseen.
 type scan struct {
-	query      string
+	match      func(string) bool
 	maxResults int
 	matches    []searchMatch
 	files      int
@@ -173,7 +193,7 @@ func (s *scan) scanFile(path string, snap *snapshot) {
 			s.stop("max_results")
 			return
 		}
-		if strings.Contains(line, s.query) {
+		if s.match(line) {
 			s.matches = append(s.matches, searchMatch{Path: path, Line: i + 1, Text: line})
 		}
 	}

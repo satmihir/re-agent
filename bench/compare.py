@@ -35,16 +35,23 @@ def commit_stats(runs):
             if status != "completed"
         )
         failures = collections.Counter()
+        search_text_calls, exec_searches = 0, 0
+        recorded_calls, recorded_searches = False, False
         for task in tasks:
             recorded = task.get("tool_failures") or {}
-            if not isinstance(recorded, dict):
-                continue
-            for key, count in recorded.items():
-                count = int(count or 0)
-                if count > 0:
-                    failures[str(key)] += count
-        # Summaries written before tool failures were recorded lack the field,
-        # which is not the same as a run with no failures.
+            if isinstance(recorded, dict):
+                for key, count in recorded.items():
+                    count = int(count or 0)
+                    if count > 0:
+                        failures[str(key)] += count
+            calls = task.get("calls_by_tool")
+            if isinstance(calls, dict):
+                recorded_calls = True
+                search_text_calls += int(calls.get("search_text") or 0)
+            if "exec_searches" in task:
+                recorded_searches = True
+                exec_searches += int(task.get("exec_searches") or 0)
+        # Missing fields in older summaries are not the same as recorded zeroes.
         recorded_any = any("tool_failures" in task for task in tasks)
         stats[commit] = {
             "runs": len(tasks),
@@ -54,6 +61,8 @@ def commit_stats(runs):
             "mean_output_tokens": mean(tasks, "output_tokens"),
             "statuses": dict(sorted(statuses.items())),
             "tool_failures": dict(failures) if recorded_any else None,
+            "mean_search_text_calls": search_text_calls / len(tasks) if recorded_calls else None,
+            "exec_searches": exec_searches if recorded_searches else None,
         }
     return stats
 
@@ -89,7 +98,8 @@ def main():
 
     print()
     print(f"{'commit':16s} {'resolved':>11s} {'mean steps':>10s} {'mean in':>10s} "
-          f"{'mean out':>10s}  non-completed statuses  top tool failures")
+          f"{'mean out':>10s}  non-completed statuses  top tool failures  "
+          f"{'mean search_text':>16s} {'exec_searches':>13s}")
     for commit, stats in sorted(commit_stats(runs).items()):
         statuses = ", ".join(f"{status}={count}" for status, count in stats["statuses"].items()) or "none"
         if stats["tool_failures"] is None:
@@ -97,9 +107,14 @@ def main():
         else:
             top_failures = sorted(stats["tool_failures"].items(), key=lambda item: (-item[1], item[0]))[:3]
             failures = ", ".join(f"{key}={count}" for key, count in top_failures) or "none"
+        mean_search_text = stats["mean_search_text_calls"]
+        mean_search_text = "not recorded" if mean_search_text is None else f"{mean_search_text:.1f}"
+        exec_searches = stats["exec_searches"]
+        exec_searches = "not recorded" if exec_searches is None else str(exec_searches)
         print(f"{commit:16s} {stats['resolved']:4d} of {stats['runs']:<6d} "
               f"{stats['mean_steps']:10.1f} {stats['mean_input_tokens']:10.1f} "
-              f"{stats['mean_output_tokens']:10.1f}  {statuses}  {failures}")
+              f"{stats['mean_output_tokens']:10.1f}  {statuses}  {failures}  "
+              f"{mean_search_text:>16s} {exec_searches:>13s}")
 
 
 if __name__ == "__main__":

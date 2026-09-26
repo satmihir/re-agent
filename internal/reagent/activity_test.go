@@ -65,6 +65,21 @@ func TestActivity_DescribesEachTool(t *testing.T) {
 	}
 }
 
+func TestActivity_RegexSearchTarget(t *testing.T) {
+	regex := ToolCall{Name: "search_text", Arguments: `{"query":"a|b","regex":true,"path":"."}`}
+	if got, want := callTarget(regex), "/a|b/ in ."; got != want {
+		t.Fatalf("regex target: got %q, want %q", got, want)
+	}
+	if got, want := describeActivity(regex, ToolOutcome{OK: true, Data: []byte(`{"matches":[],"complete":true}`)}).render(false, 0), "  ✓ search_text /a|b/ in . → no matches\n"; got != want {
+		t.Fatalf("regex activity: got %q, want %q", got, want)
+	}
+
+	literal := ToolCall{Name: "search_text", Arguments: `{"query":"a|b","path":"."}`}
+	if got, want := callTarget(literal), `"a|b" in .`; got != want {
+		t.Fatalf("literal target: got %q, want %q", got, want)
+	}
+}
+
 func TestActivity_ExecFailureAndTimeout(t *testing.T) {
 	call := ToolCall{Name: "exec", Arguments: `{"argv":["sh","-c","exit 3"],"cwd":"."}`}
 	tests := []struct {

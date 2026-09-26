@@ -69,7 +69,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 		if json.Unmarshal([]byte(call.Arguments), &args) != nil || json.Unmarshal(outcome.Data, &result) != nil {
 			return a
 		}
-		a.target = "\"" + oneRow(args.Query) + "\" in " + sanitize(args.Path)
+		a.target = searchTextTarget(args)
 		if len(result.Matches) == 0 {
 			a.result = "no matches"
 		} else {
@@ -201,7 +201,7 @@ func callTarget(call ToolCall) string {
 	case "search_text":
 		var args searchTextArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
-			return "\"" + oneRow(args.Query) + "\" in " + sanitize(args.Path)
+			return searchTextTarget(args)
 		}
 	case "edit_file":
 		var args editFileArgs
@@ -221,6 +221,16 @@ func callTarget(call ToolCall) string {
 	}
 	return truncateWidth(sanitize(argumentSummary(call.Arguments)), 160)
 }
+
+func searchTextTarget(args searchTextArgs) string {
+	query := "\"" + oneRow(args.Query) + "\""
+	var regex bool
+	if json.Unmarshal(args.Regex, &regex) == nil && regex {
+		query = "/" + oneRow(args.Query) + "/"
+	}
+	return query + " in " + sanitize(args.Path)
+}
+
 func recapLine(call ToolCall, outcome ToolOutcome) string {
 	if call.Name == "edit_file" && outcome.Effect != EffectNone {
 		return "changed " + callTarget(call)

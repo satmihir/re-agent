@@ -44,6 +44,47 @@ func TestSearchText_DoesNotInterpretRegularExpressions(t *testing.T) {
 	}
 }
 
+func TestSearchText_RegexAlternation(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{
+		"a.txt": "getmembers\n",
+		"b.txt": "getattr_static\n",
+		"c.txt": "other\n",
+	})
+	tool := NewSearchTextTool(ws)
+
+	var regex searchTextResult
+	data(t, runTool(t, tool, `{"path":".","query":"getmembers|getattr_static","regex":true}`), &regex)
+	if got, want := matchLocations(regex.Matches), "a.txt:1 b.txt:1"; got != want {
+		t.Fatalf("regex matches: got %q, want %q", got, want)
+	}
+
+	var literal searchTextResult
+	data(t, runTool(t, tool, `{"path":".","query":"getmembers|getattr_static"}`), &literal)
+	if len(literal.Matches) != 0 {
+		t.Fatalf("literal search unexpectedly matched: %q", matchLocations(literal.Matches))
+	}
+}
+
+func TestSearchText_RegexAnchorsPerLine(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "func first()\n\tfunc indented()\nx := func nested()\n"})
+	var got searchTextResult
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"^func ","regex":true}`), &got)
+
+	if want := "a.txt:1"; matchLocations(got.Matches) != want {
+		t.Fatalf("got %q, want %q", matchLocations(got.Matches), want)
+	}
+}
+
+func TestSearchText_RegexCaseInsensitive(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "TODO\ntodo\nToDo later\n"})
+	var got searchTextResult
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"(?i)todo","regex":true}`), &got)
+
+	if want := "a.txt:1 a.txt:2 a.txt:3"; matchLocations(got.Matches) != want {
+		t.Fatalf("got %q, want %q", matchLocations(got.Matches), want)
+	}
+}
+
 func TestSearchText_ZeroMatchesIsComplete(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "nothing here\n"})
 	var got searchTextResult
@@ -111,6 +152,19 @@ func TestSearchText_MaxResultsReportsIncompleteness(t *testing.T) {
 	}
 }
 
+func TestSearchText_RegexKeepsBudgetAndCompleteness(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "hit\nhit\n"})
+	var got searchTextResult
+	data(t, runTool(t, NewSearchTextTool(ws), `{"path":".","query":"h.t","regex":true,"max_results":1}`), &got)
+
+	if len(got.Matches) != 1 || got.Complete {
+		t.Fatalf("got %+v", got)
+	}
+	if got.StopReason == nil || *got.StopReason != "max_results" {
+		t.Fatalf("got stop reason %v", got.StopReason)
+	}
+}
+
 // An unreadable file is an error when the model names it, and a counted skip
 // when the walk merely passes it.
 func TestSearchText_UnreadableFileErrorsWhenNamedAndSkipsWhenWalked(t *testing.T) {
@@ -166,16 +220,27 @@ func TestSearchText_ShortensAnOversizedMatch(t *testing.T) {
 
 func TestSearchText_InvalidQueries(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
-	for name, args := range map[string]string{
-		"empty":      `{"path":".","query":""}`,
-		"newline":    `{"path":".","query":"a\nb"}`,
-		"nul byte":   `{"path":".","query":"a\u0000b"}`,
-		"no query":   `{"path":"."}`,
-		"zero limit": `{"path":".","query":"x","max_results":0}`,
+	for name, test := range map[string]struct {
+		args        string
+		wantMessage string
+	}{
+		"empty":             {args: `{"path":".","query":""}`},
+		"newline":           {args: `{"path":".","query":"a\nb"}`},
+		"nul byte":          {args: `{"path":".","query":"a\u0000b"}`},
+		"no query":          {args: `{"path":"."}`},
+		"zero limit":        {args: `{"path":".","query":"x","max_results":0}`},
+		"regex compile":     {args: `{"path":"missing.txt","query":"(","regex":true}`, wantMessage: "regex does not compile"},
+		"regex empty match": {args: `{"path":".","query":"a*","regex":true}`, wantMessage: "empty string"},
+		"regex null":        {args: `{"path":".","query":"x","regex":null}`, wantMessage: "omitted rather than null"},
+		"regex not boolean": {args: `{"path":".","query":"x","regex":"true"}`, wantMessage: "must be a boolean"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := runTool(t, NewSearchTextTool(ws), args); got.Code != "invalid_arguments" {
+			got := runTool(t, NewSearchTextTool(ws), test.args)
+			if got.Code != "invalid_arguments" {
 				t.Fatalf("got %s (%s)", got.Code, got.Message)
+			}
+			if test.wantMessage != "" && !strings.Contains(got.Message, test.wantMessage) {
+				t.Fatalf("message %q does not contain %q", got.Message, test.wantMessage)
 			}
 		})
 	}
