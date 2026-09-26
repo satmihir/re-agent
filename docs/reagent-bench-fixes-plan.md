@@ -1,6 +1,6 @@
 # re:agent — Fixes From the First Benchmark
 
-Status: B1 merged in #11, B3 in #13, and B4 in #9 and #10. B2, B5, and B6 not started.
+Status: B1 merged in #11, B3 in #13, B4 in #9 and #10, and B5 in #16. B2, B6, and B7 not started.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §6 is addressed to the implementing agent. The CLI plan's notes (`docs/reagent-cli-plan.md` §7) still apply wherever this plan does not replace them.
 
@@ -8,7 +8,7 @@ This plan is written for re:agent to implement, one milestone per session, with 
 
 We ran re:agent on eight SWE-bench Verified tasks with `gpt-5.6-luna` at low effort: two versions, two passes each, 32 runs. The runs exposed two harness problems that have nothing to do with the model's skill. Both cost whole runs or wasted steps, and both add noise that hides the effect of any other change. This plan fixes them and makes the benchmark report such problems directly, so the next one is found without reading traces by hand.
 
-Three milestones, in order:
+The milestones:
 
 - **B1.** `exec` gets a default timeout and a floor.
 - **B2.** An empty path means the workspace root, and an absolute path inside the workspace is accepted.
@@ -16,6 +16,7 @@ Three milestones, in order:
 - **B4.** The model catalog offers `gpt-6-luna`. This one is unrelated to the benchmark and can be done in any order.
 - **B5.** A command with a newline in it stays on one terminal row. Also unrelated to the benchmark, and also in any order.
 - **B6.** The chat prompt wraps at the terminal's real width, and a sent message is redrawn as a grey band. Also independent.
+- **B7.** `search_text` accepts an opt-in regular expression, and the benchmark counts searches so the effect can be measured.
 
 ## 2. What the benchmark showed
 
@@ -306,6 +307,87 @@ The test helper `terminalInput` sets `out` to a buffer shared with the terminal'
 - Ctrl-C on a half-typed line clears it with no band.
 - Resize the window, then press Enter on an empty line: the next prompt uses the new width.
 
+### B7. Regular-expression search
+
+**Why.** In the 32 comparison runs, `search_text` was used 125 times as the literal search it is, and only once with a query that looked like a regex (a literal with brackets, which worked). When the model wanted more, it left the tool. 7 of 96 `exec` calls were code searches with `grep` or `rg`, and **all 7 searched for several names at once**, such as `grep -RIn "getmembers\|inspect.getattr_static\|getattr_static"`. Each replaces three or four literal searches, and every search is a whole step that re-sends the context. The evidence is thin: all 7 come from two runs of one task, `sphinx-doc__sphinx-9461`. That is why this milestone includes the measurement. A `grep` through `exec` is also a worse tool:
+- its output is cut by `| head` rather than fitted to the result budget with `complete` reported
+- it counts as an effect-bearing command
+- it is not available at all without `--allow-exec`
+
+v1 §26 lists regex search as the experiment to run when discovery costs too much, and this milestone measures whether it does.
+
+**Behavior.**
+
+- `search_text` gains an optional boolean `regex`, default `false`. **Literal remains the default.** Switching it would break queries like `ref_context['py:class']` or `foo(`, whose characters mean something in a regex.
+- With `regex: true`, `query` is a Go `regexp` pattern (RE2 syntax), compiled once and matched against each line separately with `MatchString`. So `^` and `$` anchor to line boundaries, alternation uses `|`, and `(?i)` makes a pattern case-insensitive. RE2 runs in linear time, so no pattern a model writes can hang the walk. Use the standard library only.
+- Everything else is unchanged:
+  - one match per matching line
+  - the same result fields
+  - the same walk, withheld files, excluded directories, and skip counting
+  - the same budget trimming, `complete`, and `stop_reason`
+- Validation happens before any file is read, and each failure is `invalid_arguments`:
+  - The existing checks still apply to the query text: non-empty, one line, no NUL.
+  - A pattern that does not compile fails with `regex does not compile: <the error>`. Go's error names the problem, for example `missing closing )`.
+  - A pattern that matches the empty string fails with `pattern matches the empty string, so it would match every line`. Examples are `a*`, `^`, and `x|`. Test this with `re.MatchString("")`.
+  - `regex` given as JSON `null` fails, following v0 §5's rule that null is not a substitute for omission. A value that is not a boolean, such as `"true"`, also fails.
+- **Code shape.**
+  - `scan` holds `match func(line string) bool` in place of `query string`. Literal search sets it to a `strings.Contains` closure, and regex search to `re.MatchString`. `scanFile` calls `s.match(line)`. That is the whole change to the scan.
+  - Parse `regex` with a small `optionalBool(raw, field)` helper next to `optionalInt` in `tools.go`, with the same null handling.
+  - `searchTextArgs.Regex` is a `json.RawMessage`.
+
+**Model-facing text.**
+
+- The tool description replaces "a literal, case-sensitive string. Not a regular expression." with: "a literal, case-sensitive string, or with `regex` true, a Go RE2 regular expression matched against each line (use `|` for alternatives and `(?i)` to ignore case)."
+- The `query` property's description becomes "Single-line query: a literal string, or a pattern when regex is true."
+- Add the property:
+
+  ```json
+  "regex": {"type": "boolean", "description": "Treat query as a regular expression. Defaults to false."}
+  ```
+
+**Display.** A regex search shows its pattern between slashes, so activity and status lines tell the two kinds apart: `✓ search_text /getmembers|getattr_static/ in sphinx → 5 matches in 2 files`. Both places that format the search target, `callTarget` and the `search_text` case in `describeActivity`, must do this, through the same `oneRow` helper B5 added.
+
+**Benchmark measurement** (Python, in `bench/`). This is what shows whether B7 helped:
+
+- `summarize_trace` adds:
+  - `calls_by_tool`: counts of `tool.started` events by tool name
+  - `exec_searches`: the number of `exec` calls that search code. That means the executable's base name is `grep`, `rg`, `egrep`, or `fgrep`; or argv starts `git grep`; or argv is `bash`, `sh`, or `zsh` with `-c` or `-lc`, and the script runs one of those at a command position (the start, or after `|`, `;`, `&`, `&&`, `||`, or `(`). Do not match on a substring anywhere: `git log --grep=…` is not a code search. This rule finds exactly 7 in the 32 comparison runs.
+- The by-commit table in `compare.py` adds two columns: mean `search_text` calls per task run, and the total `exec_searches`. Summaries written before B7 have neither field, so show `not recorded` there, as B3's follow-up did for tool failures.
+
+**Touches.** `internal/reagent/tool_search_text.go`, `internal/reagent/tool_search_text_test.go`, `internal/reagent/tools.go` (`optionalBool`), `internal/reagent/activity.go`, `internal/reagent/activity_test.go`, `bench/run.py`, `bench/compare.py`, `docs/reagent-v0-design.md` (§5 amendment), and `README.md`, whose "what it does not do" list says "Search is literal, not regular expressions." That sentence must change.
+
+**Tests.** Write these first.
+
+- `TestSearchText_DoesNotInterpretRegularExpressions` stays exactly as it is. The default must not change.
+- `TestSearchText_RegexAlternation`: one file with `getmembers`, another with `getattr_static`, and a third with neither. `getmembers|getattr_static` with `regex: true` returns exactly the two lines. The same query without `regex` returns no matches.
+- `TestSearchText_RegexAnchorsPerLine`: `^func ` matches only lines that start with `func `, not an indented `	func ` or `x := func `.
+- `TestSearchText_RegexCaseInsensitive`: `(?i)todo` matches `TODO` and `todo`.
+- `TestSearchText_InvalidQueries` gains these cases, all `invalid_arguments`:
+  - `(` with regex (the message contains `does not compile`)
+  - `a*` with regex (the message contains `empty string`)
+  - `"regex": null`
+  - `"regex": "true"`
+- `TestSearchText_RegexKeepsBudgetAndCompleteness`: a regex search that hits `max_results` reports `complete: false` and `stop_reason: "max_results"`, just as the literal test does.
+- `TestActivity_DescribesEachTool` or its neighbour: a regex search renders its target as `/a|b/ in .`, and a literal one keeps `"a|b" in .`.
+- For the benchmark, `summarize_trace` gives:
+  - `exec_searches` 5 on `bench/out/base-b/sphinx-doc__sphinx-9461/events.jsonl`
+  - `exec_searches` 0 on `bench/out/verify-b/sphinx-doc__sphinx-8638/events.jsonl`, whose only candidates are `git log --grep` calls
+  - `calls_by_tool` summing to the run's `tool_calls` in both
+
+**Docs.** A v0 §5 amendment with the day you do it. It should say that `search_text` accepts an opt-in RE2 pattern, and that literal remains the default and why. Name the validation rules (it compiles, it cannot match the empty string, null is rejected), and cite the benchmark evidence and v1 §26. Say too that the benchmark now counts searches, so the effect can be measured.
+
+**Request check.** Like B1, only one tool definition changes. Use §6.2's B1 command with `search_text` in place of `exec`, and include the new definition in the report.
+
+**Measuring it, for the human.** After merging, run the benchmark on the commit before B7 and on B7, twice each, and compare:
+
+```bash
+python bench/run.py --label pre-b7 --ref <commit before B7> --repeat 2
+python bench/run.py --label b7 --ref <B7 merge commit> --repeat 2
+python bench/compare.py pre-b7-r1 pre-b7-r2 b7-r1 b7-r2
+```
+
+Expect `exec_searches` to fall, and mean steps to fall slightly. The resolved count should not move much, since B7 changes how the model searches, not how well it fixes.
+
 ## 5. After the milestones
 
 The human then re-runs the baseline, which is the work this plan exists to make trustworthy:
@@ -396,4 +478,5 @@ Not done or uncertain: <anything the human should look at>
 1. **120-second default and 10-second floor** (B1). The alternative is rejecting short timeouts with `invalid_arguments`, which is simpler but costs a step each time and invites the next short guess.
 2. **Absolute paths inside the workspace are accepted** (B2). The alternative is fixing only the empty path, which covers most of the rejections seen, and keeping v0 §4 and v1 §11.1's rule as written.
 3. **The verification instruction stays unmerged** on `verify-behavior` until the baseline is re-run.
-4. **`gpt-6-luna` is offered but not the default** (B4). Making it the default would halve the benchmark's cost, but every comparison so far used `gpt-5.6-luna`, so switching needs a new baseline.
+4. **`gpt-6-luna` is offered but not the default** (B4). Resolved differently: #15 made `gpt-6-luna` the default model. The benchmark still passes `--model gpt-5.6-luna` explicitly, so its comparisons stay on one model.
+5. **Regex is opt-in, not the default** (B7). The alternative is a separate `queries` list of literals searched together, which covers the alternation seen in the traces without regex semantics. Regex also covers anchors and case-insensitivity, and RE2 keeps it safe.
