@@ -252,7 +252,8 @@ harness's exit code.
 ## What it deliberately does not do
 
 There is no streaming, no conversational session, no subagents, no compaction,
-no retrieval, and no sandbox. Search is literal, not regular expressions.
+no retrieval, and no sandbox. Search is literal by default; opt-in regular
+expressions use Go RE2.
 Editing cannot create or delete files. The workspace path checks stop obvious
 escapes but are not a security boundary.
 

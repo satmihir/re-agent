@@ -102,7 +102,7 @@ Keep the outcome envelope from **v1 §5.3** for every tool, including the fake t
 |---|---|---|
 | `list_files` | v1 §12.1: immediate-directory listing, ordering, result fields, pagination | `path` required; `offset` defaults to 0; omitted `limit` means as many entries as fit |
 | `read_file` | v1 §12.2: numbered ranges, full-snapshot digest, result fields | `path` required; `start_line` defaults to 1; omitted `max_lines` means as many lines as fit |
-| `search_text` | v1 §12.3: literal case-sensitive matches, result fields, incompleteness reporting | `path` and `query` required; omitted `max_results` means as many matches as fit |
+| `search_text` | v1 §12.3: literal case-sensitive matches by default, opt-in Go RE2 matches, result fields, incompleteness reporting | `path` and `query` required; `regex` defaults to false; omitted `max_results` means as many matches as fit |
 
 **Relaxation:** These tools use ordinary optional arguments and the three byte constants instead of v1's numeric maxima, line cap, traversal quotas, and read timeouts; v1 §§12 and 15.1 restore those bounds.
 
@@ -119,6 +119,8 @@ Implement argument checking with typed decoding, required-field checks, unknown-
 Declare native function tools with **`strict: false` explicitly**. This permits ordinary optional fields without adopting the strict-schema nullable-field convention. Local checks remain required; malformed model arguments are useful observations to learn from.
 
 **Relaxation:** Strict-schema normalization and the required-nullable convention are deferred to v1 §10.1 and Appendix A.
+
+**Amendment (2026-09-25):** `search_text` accepts an opt-in `regex: true` Go RE2 pattern, matched against each line; literal, case-sensitive matching remains the default because ordinary source queries can contain regex syntax, such as `foo(`. Reject patterns that do not compile, match the empty string, or use `regex: null`. This runs v1 §26's discovery-cost experiment: 7 of 96 benchmark `exec` calls searched code with `grep` or `rg`; all seven searched several names at once, in two runs of one task. The benchmark now counts `search_text` calls and code-searching `exec` calls to measure the effect.
 
 ## 6. Context and the live adapter
 
