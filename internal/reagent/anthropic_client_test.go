@@ -22,6 +22,16 @@ const anthropicCallReply = `{
   "usage": {"input_tokens": 100, "output_tokens": 30, "cache_creation_input_tokens": 50, "cache_read_input_tokens": 20}
 }`
 
+const anthropicTwoCallReply = `{
+  "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
+  "stop_reason": "tool_use",
+  "content": [
+    {"type":"thinking","thinking":"","signature":"opaque-sig"},
+    {"type":"tool_use","id":"toolu_1","name":"echo","input":{"text":"first"}},
+    {"type":"tool_use","id":"toolu_2","name":"echo","input":{"text":"second"}}
+  ]
+}`
+
 const anthropicTextReply = `{
   "id": "msg_2", "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
   "stop_reason": "end_turn",
@@ -88,6 +98,64 @@ func TestAnthropic_RoundTripPreservesNativeBlocks(t *testing.T) {
 	if got := result.Usage; !got.Known || got.InputTokens != 320 || got.CachedInputTokens != 20 || got.OutputTokens != 42 {
 		t.Fatalf("got %+v", got)
 	}
+}
+
+// A single Messages response can contain several tool_use blocks. The next
+// request must carry the original blocks and all their results in order.
+func TestAnthropic_BatchedCallsRoundTripSequentially(t *testing.T) {
+	api := newFakeAPI(t, okReply(anthropicTwoCallReply), okReply(anthropicTextReply))
+	cfg, tracePath, result := runAnthropic(t, api)
+	if result.Status != StatusCompleted || result.Steps != 2 || result.ToolCalls != 2 {
+		t.Fatalf("got status %s, %d steps, %d calls: %s", result.Status, result.Steps, result.ToolCalls, result.Reason)
+	}
+	sent := api.received()
+	if len(sent) != 2 {
+		t.Fatalf("got %d requests, want 2", len(sent))
+	}
+	preview, err := PreviewRequest(cfg, "find the marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sent[0]) != string(preview) {
+		t.Fatalf("first live request differs from preview\ngot %s\nwant %s", sent[0], preview)
+	}
+	var first, second decodedMessages
+	if err := json.Unmarshal(sent[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(sent[1], &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.ToolChoice == nil || first.ToolChoice.DisableParallelToolUse || second.ToolChoice == nil || second.ToolChoice.DisableParallelToolUse {
+		t.Fatal("the model was not permitted to batch tool calls")
+	}
+	if len(second.Messages) != 3 || len(second.Messages[1].Content) != 3 || len(second.Messages[2].Content) != 2 {
+		t.Fatalf("follow-up did not carry user, assistant and two tool results: %+v", second.Messages)
+	}
+	assistant := second.Messages[1].Content
+	if !strings.Contains(string(assistant[0]), `"signature":"opaque-sig"`) {
+		t.Fatalf("thinking block was not returned verbatim: %s", assistant[0])
+	}
+	for i, expected := range []struct{ id, text string }{{"toolu_1", "first"}, {"toolu_2", "second"}} {
+		var call messagesBlock
+		if err := json.Unmarshal(assistant[i+1], &call); err != nil {
+			t.Fatal(err)
+		}
+		if call.Type != "tool_use" || call.ID != expected.id || string(call.Input) != `{"text":"`+expected.text+`"}` {
+			t.Fatalf("native tool_use %d changed: %+v", i, call)
+		}
+		var output messagesToolResult
+		if err := json.Unmarshal(second.Messages[2].Content[i], &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.Type != "tool_result" || output.ToolUseID != expected.id || !strings.Contains(output.Content, expected.text) {
+			t.Fatalf("result %d was not paired with its call: %+v", i, output)
+		}
+		if (output.CacheControl != nil) != (i == 1) {
+			t.Fatalf("cache breakpoint placed on wrong result: %+v", output)
+		}
+	}
+	assertSequentialBatchTrace(t, tracePath, "toolu_1", "toolu_2")
 }
 
 // tool_use input arrives already parsed; its raw bytes, spacing included, are

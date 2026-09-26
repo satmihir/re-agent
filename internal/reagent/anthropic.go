@@ -104,13 +104,14 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 
 	markCachePoint(messages)
 
+	// Permit several tool_use blocks per response; dispatch remains sequential.
 	body, err := json.Marshal(messagesRequest{
 		Model:        req.Model,
 		MaxTokens:    anthropicMaxTokens,
 		System:       system,
 		Messages:     messages,
 		Tools:        tools,
-		ToolChoice:   &messagesToolChoice{Type: "auto", DisableParallelToolUse: true},
+		ToolChoice:   &messagesToolChoice{Type: "auto", DisableParallelToolUse: false},
 		OutputConfig: outputConfig,
 	})
 	if err != nil {

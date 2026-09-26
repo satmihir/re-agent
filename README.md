@@ -57,7 +57,11 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 Both providers write the same trace format, so a run on one can be compared
-with a run on the other line for line.
+with a run on the other line for line. A model may propose several tool calls
+in one response; the harness checks the entire batch against the per-run call
+budget, then executes the tools one at a time in model order. This can save
+model requests when the calls do not depend on each other's results; it does
+not execute tools concurrently.
 
 For a conversation rather than a single task, use `chat`. Each line you type
 is one turn, and the model sees every turn before it, including the files it
@@ -240,7 +244,7 @@ quality.
 | `--prompt-file PATH` | `run`: read the prompt from a file, or `-` for stdin. |
 | `--trace-file PATH` | `run`: where to write the trace. |
 | `--trace-dir DIR` | `chat`: where each turn's trace goes. |
-| `--max-steps`, `--max-tool-calls` | Run budgets. Default 20 and 40. |
+| `--max-steps`, `--max-tool-calls` | Per-run budgets (per turn in chat). Default 200 and 400. |
 
 `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is required only for a live run on
 that provider.

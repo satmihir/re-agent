@@ -43,7 +43,7 @@ func TestEncodeAnthropic_SendsTheFixedMessagesParameters(t *testing.T) {
 	if got.MaxTokens != anthropicMaxTokens {
 		t.Fatalf("got max_tokens %d", got.MaxTokens)
 	}
-	if got.ToolChoice == nil || got.ToolChoice.Type != "auto" || !got.ToolChoice.DisableParallelToolUse {
+	if got.ToolChoice == nil || got.ToolChoice.Type != "auto" || got.ToolChoice.DisableParallelToolUse {
 		t.Fatalf("got tool_choice %+v", got.ToolChoice)
 	}
 	// The system block carries the cache breakpoint for the stable prefix.

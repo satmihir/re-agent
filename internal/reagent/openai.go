@@ -115,6 +115,7 @@ func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 	if proxied {
 		truncation = ""
 	}
+	// The model may return several calls in one response; dispatch remains sequential.
 	body, err := json.Marshal(responsesRequest{
 		Model:             req.Model,
 		Instructions:      req.Instructions,
@@ -122,7 +123,7 @@ func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 		Tools:             tools,
 		Reasoning:         reasoning,
 		ToolChoice:        "auto",
-		ParallelToolCalls: false,
+		ParallelToolCalls: true,
 		Store:             false,
 		Include:           []string{"reasoning.encrypted_content"},
 		Truncation:        truncation,
