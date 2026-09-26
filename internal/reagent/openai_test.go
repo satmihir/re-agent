@@ -132,6 +132,16 @@ func TestEncodeRequest_RefusesAnAssistantTurnWithoutProviderItems(t *testing.T) 
 	}
 }
 
+// The old 1 MiB threshold is not a request limit; the ceiling is just a sanity check.
+func TestEncodeRequest_AllowsMoreThanOneMiB(t *testing.T) {
+	body, err := EncodeOpenAIRequest(ModelRequest{History: []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("x", 2<<20)}},
+	}})
+	if err != nil || len(body) <= 1<<20 || len(body) > MaxRequestBytes {
+		t.Fatalf("encoded %d bytes, error %v", len(body), err)
+	}
+}
+
 // The size check happens here, before any transport exists (v1 §8.5).
 func TestEncodeRequest_RejectsAnOversizedRequest(t *testing.T) {
 	huge := strings.Repeat("x", MaxRequestBytes)

@@ -132,6 +132,15 @@ func TestEncodeAnthropic_EffortIsOptional(t *testing.T) {
 	}
 }
 
+func TestEncodeAnthropic_AllowsMoreThanOneMiB(t *testing.T) {
+	body, err := EncodeAnthropicRequest(ModelRequest{History: []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("x", 2<<20)}},
+	}})
+	if err != nil || len(body) <= 1<<20 || len(body) > MaxRequestBytes {
+		t.Fatalf("encoded %d bytes, error %v", len(body), err)
+	}
+}
+
 func TestEncodeAnthropic_RejectsAnOversizedRequest(t *testing.T) {
 	_, err := EncodeAnthropicRequest(ModelRequest{History: []Entry{
 		{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("x", MaxRequestBytes)}},

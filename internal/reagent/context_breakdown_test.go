@@ -137,7 +137,7 @@ func TestContextBreakdown_OverTheLimitIsStillMeasured(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 	rendered := got.render()
-	if !strings.Contains(rendered, "over the 1.0 MiB limit") || strings.Contains(rendered, "JSON structure") {
+	if !strings.Contains(rendered, "over the 10.0 MiB limit") || strings.Contains(rendered, "JSON structure") {
 		t.Fatalf("rendered:\n%s", rendered)
 	}
 }
@@ -148,7 +148,7 @@ func TestChat_ContextReportsTheNextRequest(t *testing.T) {
 	var stderr bytes.Buffer
 	c.commandContext(&stderr)
 	for _, want := range []string{
-		"next request  ", "% of the 1.0 MiB limit\n", "last request  2.4k tokens in (2.0k cached)\n",
+		"next request  ", "% of the 10.0 MiB limit\n", "last request  2.4k tokens in (2.0k cached)\n",
 		"  instructions  ", "  read_file results  ", "\n    file edited since  ", "\n    exact repeat  ",
 		"  edit_file results  ", "  JSON structure  ", "shares are of request bytes, not tokens",
 	} {

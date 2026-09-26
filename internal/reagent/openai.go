@@ -21,9 +21,9 @@ const DefaultReasoningEffort = "low"
 // It is a byte bound, not a token estimate: the provider may still refuse a
 // smaller body for its own context limit (v1 §8.5). It exists to fail locally
 // before sending something absurd, not to control cost; the step and tool-call
-// budgets do that. At roughly four bytes per token this is around a quarter of
-// the million-token window both current providers offer.
-const MaxRequestBytes = 1 << 20
+// budgets do that. The 10 MiB ceiling leaves room for large contexts; the
+// provider's own token limit can still be lower.
+const MaxRequestBytes = 10 << 20
 
 // responsesRequest is the Responses body v0 sends (v1 §9.2). Every field is
 // fixed except the model, instructions, input, and tools.
