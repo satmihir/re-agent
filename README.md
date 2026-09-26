@@ -83,12 +83,12 @@ last trace. `/trace` prints the last turn's trace, `/reset` starts over, and
 `$EDITOR`, then `vi`; saving a non-empty message sends it as one turn, and it
 needs an interactive terminal. `/help` lists every command and key binding.
 
-`/context` shows what the next request is made of: its size against the 1 MiB
-request limit, the tokens the last request reported, and how many bytes the
-instructions, tool definitions, your messages, the model's reasoning and tool
-calls, and each tool's results take up. File reads are also counted where a
-later edit changed the file, or where an earlier read returned the same bytes,
-since both are context the model no longer needs.
+`/context` shows what the next request is made of: its size against the 10 MiB
+per-request sanity limit, the tokens the last request reported, and how many
+bytes the instructions, tool definitions, your messages, the model's reasoning
+and tool calls, and each tool's results take up. File reads are also counted
+where a later edit changed the file, or where an earlier read returned the same
+bytes, since both are context the model no longer needs.
 
 The prompt has the usual line editing: the up and down arrows walk the
 turns you have typed this session, and left, right, and backspace work as you
