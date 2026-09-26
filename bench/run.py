@@ -7,8 +7,8 @@ and the run's trace is summarized next to the score.
 
 Usage, from the repository root, with OPENAI_API_KEY set, or with
 API_PROXY_URL and API_PROXY_PROVIDER set to route OpenAI requests through a
-proxy. re:agent runs inside a container, so a proxy on this machine must be
-addressed as host.docker.internal rather than localhost:
+proxy. re:agent runs inside a container, where localhost is the container
+itself, so a localhost proxy URL reaches it as host.docker.internal:
 
     python bench/run.py --label NAME [--ref REF] [--model M] [--effort E] [--repeat N] [INSTANCE_ID ...]
 
@@ -23,6 +23,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -38,6 +39,18 @@ MAX_STEPS = 50
 MAX_TOOL_CALLS = 50
 SEARCH_COMMANDS = {"grep", "rg", "egrep", "fgrep"}
 SHELL_COMMANDS = {"bash", "sh", "zsh"}
+
+
+def container_proxy_url(url):
+    """The proxy URL as a container sees it: localhost there is the container."""
+    return re.sub(r"^(https?://)(localhost|127\.0\.0\.1)(?=[:/]|$)", r"\1host.docker.internal", url)
+
+
+def proxy_env():
+    """docker exec arguments for the proxy URL, rewritten for the container, or
+    nothing when no proxy is set, so an unset variable stays unset inside."""
+    url = os.environ.get("API_PROXY_URL")
+    return ["-e", "API_PROXY_URL=" + container_proxy_url(url)] if url else []
 
 
 def positive_int(value):
@@ -95,7 +108,7 @@ def run_task(task, binary, model, effort, out):
         started = time.time()
         with open(os.path.join(out, "reply.md"), "w") as reply, open(os.path.join(out, "progress.txt"), "w") as progress:
             code = subprocess.run(
-                ["docker", "exec", "-e", "OPENAI_API_KEY", "-e", "API_PROXY_URL", "-e", "API_PROXY_PROVIDER",
+                ["docker", "exec", "-e", "OPENAI_API_KEY", *proxy_env(), "-e", "API_PROXY_PROVIDER",
                  "-e", "PATH=" + PATH, "-w", "/testbed", name,
                  "reagent", "run", "--model", model, "--reasoning-effort", effort, "--workspace", "/testbed",
                  "--allow-write", "--allow-exec",
@@ -325,9 +338,7 @@ def main():
     args = parser.parse_args()
     if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("API_PROXY_URL"):
         sys.exit("set OPENAI_API_KEY, or API_PROXY_URL and API_PROXY_PROVIDER")
-    if "://localhost" in os.environ.get("API_PROXY_URL", "") or "://127.0.0.1" in os.environ.get("API_PROXY_URL", ""):
-        sys.exit("re:agent runs in a container, where localhost is the container itself; "
-                 "use host.docker.internal for a proxy on this machine")
+
 
     from datasets import load_dataset  # installed with swebench
 
