@@ -42,7 +42,7 @@ func (editFileTool) Spec() ToolSpec {
 			"Read the file first and pass the SHA-256 digest read_file returned; a stale digest " +
 			"is refused without changing anything. old_text must occur exactly once and is matched " +
 			"byte for byte, with no whitespace or case normalization. An empty new_text deletes the " +
-			"matched text. Creating and deleting files is not supported. Requires write mode.",
+			"matched text. Creating and deleting files is not supported. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {

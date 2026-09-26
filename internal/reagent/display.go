@@ -319,7 +319,7 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 			d.headerLine(via)
 		}
 		d.headerLine(fmt.Sprintf("workspace %s · %s · %d steps, %d tool calls per turn", workspace, mode, cfg.MaxSteps, cfg.MaxToolCalls))
-		if cfg.Registry.Mode().AllowExec {
+		if !cfg.Registry.Mode().ReadOnly {
 			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
 		}
 		d.headerLine("/help for commands · Ctrl-D to exit")
@@ -329,7 +329,7 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 	if via != "" {
 		d.headerLine(via)
 	}
-	if cfg.Registry.Mode().AllowExec {
+	if !cfg.Registry.Mode().ReadOnly {
 		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
 	}
 }

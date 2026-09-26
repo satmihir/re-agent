@@ -48,7 +48,7 @@ func TestBuildContext_HistoryIsCopied(t *testing.T) {
 // environment, so its whole contents are pinned here.
 func TestInstructions_RuntimeSectionContents(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
-	registry, err := NewRegistry(Mode{AllowWrite: true}, NewReadFileTool(ws))
+	registry, err := NewRegistry(Mode{}, NewReadFileTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestInstructions_RuntimeSectionContents(t *testing.T) {
 		"Reasoning effort: low\n" +
 		"Platform: " + runtime.GOOS + "\n" +
 		"Workspace: /tmp/example\n" +
-		"Mode: read and write\n" +
+		"Mode: read, write, and execute\n" +
 		"Budget: 20 model requests and 40 tool calls per run\n"
 	if section != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", section, want)

@@ -77,7 +77,7 @@ func (execTool) Spec() ToolSpec {
 			"directory. No shell is inserted, so arguments are passed literally; invoke a shell " +
 			"explicitly if you need one. Captures bounded stdout and stderr and the exit status. " +
 			"Commands run with the host user's authority and may read, write, and use the network. " +
-			"A command that times out leaves uncertain effects and ends the run. Requires exec mode.",
+			"A command that times out leaves uncertain effects and ends the run. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {

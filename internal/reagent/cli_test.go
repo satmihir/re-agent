@@ -78,7 +78,7 @@ func writeEditExecScript(t *testing.T, root string, complete bool) string {
 }
 
 func recapRunArgs(root, script, trace string, recap bool) []string {
-	args := []string{"run", "--workspace", root, "--allow-write", "--allow-exec",
+	args := []string{"run", "--workspace", root,
 		"--scripted", script, "--trace-file", trace}
 	if recap {
 		args = append(args, "--recap")
@@ -119,7 +119,7 @@ func TestMain_NoncompletedRunAlwaysShowsRecap(t *testing.T) {
 	root := t.TempDir()
 	script := writeEditExecScript(t, root, false)
 	trace := filepath.Join(t.TempDir(), "events.jsonl")
-	args := []string{"run", "--workspace", root, "--allow-write", "--allow-exec",
+	args := []string{"run", "--workspace", root,
 		"--scripted", script, "--trace-file", trace, "attempt the changes"}
 
 	if code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code != exitRunFail {
@@ -148,7 +148,7 @@ func TestMain_ChatRecapIsOptIn(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			root := t.TempDir()
 			script := writeEditExecScript(t, root, true)
-			args := []string{"chat", "--workspace", root, "--allow-write", "--allow-exec",
+			args := []string{"chat", "--workspace", root,
 				"--scripted", script, "--trace-dir", filepath.Join(t.TempDir(), "traces")}
 			if recap {
 				args = append(args, "--recap")
@@ -175,10 +175,10 @@ func TestMain_ChatRecapIsOptIn(t *testing.T) {
 
 func TestMain_FlagAfterPromptIsRefused(t *testing.T) {
 	for flag, want := range map[string]string{
-		"--allow-write":      "--allow-write",
-		"--allow-write=true": "--allow-write",
-		"-model=x":           "--model",
-		"--help":             "--help",
+		"--read-only":      "--read-only",
+		"--read-only=true": "--read-only",
+		"-model=x":         "--model",
+		"--help":           "--help",
 	} {
 		t.Run(flag, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -353,7 +353,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws))
+	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewEditFileTool(ws), NewExecTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,9 +417,8 @@ func TestMain_ConflictingAndMissingModes(t *testing.T) {
 	}
 }
 
-// Write mode is granted at launch, and the preview shows exactly which tools
-// that grant declared.
-func TestMain_AllowWriteDeclaresTheEditTool(t *testing.T) {
+// The preview shows all tools by default and only read tools in read-only mode.
+func TestMain_ReadOnlyWithholdsMutatingTools(t *testing.T) {
 	t.Setenv("REAGENT_MODEL", "")
 	root := t.TempDir()
 
@@ -442,11 +441,11 @@ func TestMain_AllowWriteDeclaresTheEditTool(t *testing.T) {
 		return strings.Join(names, ",") + " | " + strings.SplitN(mode, "\n", 2)[0]
 	}
 
-	if got := declared(); got != "list_files,read_file,search_text | Mode: read only" {
-		t.Fatalf("read-only run declared %q", got)
+	if got := declared(); got != "edit_file,exec,list_files,read_file,search_text | Mode: read, write, and execute" {
+		t.Fatalf("default run declared %q", got)
 	}
-	if got := declared("--allow-write"); got != "edit_file,list_files,read_file,search_text | Mode: read and write" {
-		t.Fatalf("write run declared %q", got)
+	if got := declared("--read-only"); got != "list_files,read_file,search_text | Mode: read only" {
+		t.Fatalf("read-only run declared %q", got)
 	}
 }
 
