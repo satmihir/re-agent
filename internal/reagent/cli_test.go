@@ -237,6 +237,18 @@ func TestMain_ChatPromptDoesNotReportAMisplacedFlag(t *testing.T) {
 	}
 }
 
+func TestMain_ChatUsesDefaultPerTurnBudgets(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"chat", "--scripted", "../../testdata/scripts/echo_then_answer.json"},
+		strings.NewReader("/status\n"), &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "budget     200 steps, 400 tool calls per turn") {
+		t.Fatalf("chat budget: %s", stderr.String())
+	}
+}
+
 func TestMain_HelpGoesToStdoutAndExitsZero(t *testing.T) {
 	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}, {"help", "run"}, {"help", "chat"}, {"run", "-h"}, {"chat", "--help"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -360,7 +372,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 	want, err := PreviewRequest(Config{
 		Provider: openaiName, Model: DefaultOpenAIModel, ReasoningEffort: DefaultReasoningEffort,
 		Registry: registry, WorkspacePath: ws.Root(),
-		MaxSteps: 20, MaxToolCalls: 40,
+		MaxSteps: 200, MaxToolCalls: 400,
 	}, "Where is the timeout set?")
 	if err != nil {
 		t.Fatal(err)

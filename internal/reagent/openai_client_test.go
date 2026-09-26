@@ -93,6 +93,15 @@ const callReply = `{
   "usage": {"input_tokens":100,"input_tokens_details":{"cached_tokens":20},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":10}}
 }`
 
+const twoCallReply = `{
+  "id": "resp_1", "model": "test-model", "status": "completed",
+  "output": [
+    {"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque-blob"},
+    {"type":"function_call","id":"fc_1","status":"completed","call_id":"call_1","name":"echo","arguments":"{\"text\":\"first\"}"},
+    {"type":"function_call","id":"fc_2","status":"completed","call_id":"call_2","name":"echo","arguments":"{\"text\":\"second\"}"}
+  ]
+}`
+
 const textReply = `{
   "id": "resp_2", "model": "test-model", "status": "completed",
   "output": [
@@ -156,6 +165,105 @@ func TestOpenAI_RoundTripPreservesNativeItems(t *testing.T) {
 	// Cached input and reasoning tokens are subsets, never added again.
 	if got := result.Usage; !got.Known || got.InputTokens != 250 || got.OutputTokens != 42 {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// Multiple calls share one model response, but each tool executes in provider order.
+func TestOpenAI_BatchedCallsRoundTripSequentially(t *testing.T) {
+	api := newFakeAPI(t, okReply(twoCallReply), okReply(textReply))
+	cfg, tracePath, result := runAgainst(t, api, NewHTTPClient())
+	if result.Status != StatusCompleted || result.Steps != 2 || result.ToolCalls != 2 {
+		t.Fatalf("got status %s, %d steps, %d calls: %s", result.Status, result.Steps, result.ToolCalls, result.Reason)
+	}
+	sent := api.received()
+	if len(sent) != 2 {
+		t.Fatalf("got %d requests, want 2", len(sent))
+	}
+	preview, err := PreviewRequest(cfg, "find the marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sent[0]) != string(preview) {
+		t.Fatalf("first live request differs from preview\ngot %s\nwant %s", sent[0], preview)
+	}
+	var first, second decodedRequest
+	if err := json.Unmarshal(sent[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(sent[1], &second); err != nil {
+		t.Fatal(err)
+	}
+	if !first.ParallelToolCalls || !second.ParallelToolCalls {
+		t.Fatal("the model was not permitted to batch tool calls")
+	}
+	if len(second.Input) != 6 {
+		t.Fatalf("got %d input items, want user, reasoning, two calls, two results", len(second.Input))
+	}
+	if !strings.Contains(string(second.Input[1]), `"encrypted_content":"opaque-blob"`) {
+		t.Fatalf("reasoning item was not returned verbatim: %s", second.Input[1])
+	}
+	for i, expected := range []struct{ id, text string }{{"call_1", "first"}, {"call_2", "second"}} {
+		var call responsesItem
+		if err := json.Unmarshal(second.Input[i+2], &call); err != nil {
+			t.Fatal(err)
+		}
+		if call.Type != "function_call" || call.CallID != expected.id || call.Arguments != `{"text":"`+expected.text+`"}` {
+			t.Fatalf("native call %d changed: %+v", i, call)
+		}
+		var output responsesToolOutput
+		if err := json.Unmarshal(second.Input[i+4], &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.Type != "function_call_output" || output.CallID != expected.id || !strings.Contains(output.Output, expected.text) {
+			t.Fatalf("result %d was not paired with its call: %+v", i, output)
+		}
+	}
+	assertSequentialBatchTrace(t, tracePath, "call_1", "call_2")
+}
+
+func TestOpenAI_BatchedCallsOverBudgetExecuteNone(t *testing.T) {
+	api := newFakeAPI(t, okReply(twoCallReply))
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model, cfg.MaxToolCalls = openaiName, "test-model", 1
+	trace := NewTrace(io.Discard)
+	model := NewOpenAIModel("sk-secret-key", api.server.URL, NewHTTPClient(), trace)
+	session, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "find the marker")
+	if result.Status != StatusLimitExceeded || result.ToolCalls != 0 || len(api.received()) != 1 {
+		t.Fatalf("got status %s, %d accepted calls, %d requests", result.Status, result.ToolCalls, len(api.received()))
+	}
+	observations := results(session)
+	if len(observations) != 2 || observations[0].Outcome.Code != "not_executed" || observations[1].Outcome.Code != "not_executed" {
+		t.Fatalf("batch was partly executed: %+v", observations)
+	}
+	for _, e := range readEvents(t, result.TracePath) {
+		if e.Type == "tool.started" {
+			t.Fatalf("tool ran despite a rejected batch: %+v", e)
+		}
+	}
+}
+
+func assertSequentialBatchTrace(t *testing.T, path string, ids ...string) {
+	t.Helper()
+	var got, want []string
+	for _, id := range ids {
+		want = append(want, "tool.started:"+id, "tool.finished:"+id)
+	}
+	for _, e := range readEvents(t, path) {
+		if e.Type != "tool.started" && e.Type != "tool.finished" {
+			continue
+		}
+		data, ok := e.Data.(map[string]any)
+		if !ok {
+			t.Fatalf("tool event data is %T", e.Data)
+		}
+		id, ok := data["call_id"].(string)
+		if !ok {
+			t.Fatalf("tool event missing call_id: %v", data)
+		}
+		got = append(got, e.Type+":"+id)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("tool events in order %v, want %v", got, want)
 	}
 }
 

@@ -39,7 +39,7 @@ func encode(t *testing.T, req ModelRequest) ([]byte, decodedRequest) {
 func TestEncodeRequest_SendsTheFixedResponsesParameters(t *testing.T) {
 	body, got := encode(t, ModelRequest{Model: "m", Instructions: "be useful"})
 
-	if got.ToolChoice != "auto" || got.ParallelToolCalls || got.Store || got.Stream {
+	if got.ToolChoice != "auto" || !got.ParallelToolCalls || got.Store || got.Stream {
 		t.Fatalf("got %+v", got)
 	}
 	if got.Truncation != "disabled" || len(got.Include) != 1 || got.Include[0] != "reasoning.encrypted_content" {

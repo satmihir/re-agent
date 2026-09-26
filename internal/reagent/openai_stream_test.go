@@ -1,9 +1,12 @@
 package reagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -21,10 +24,11 @@ func sse(events ...string) string {
 }
 
 const (
-	streamReasoning = `{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque-blob"}`
-	streamCall      = `{"type":"function_call","id":"fc_1","status":"completed","call_id":"call_1","name":"echo","arguments":"{\"text\":\"marker\"}"}`
-	streamText      = `{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The marker is marker."}]}`
-	streamUsage     = `{"input_tokens":864,"input_tokens_details":{"cached_tokens":800},"output_tokens":29,"output_tokens_details":{"reasoning_tokens":7}}`
+	streamReasoning  = `{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque-blob"}`
+	streamCall       = `{"type":"function_call","id":"fc_1","status":"completed","call_id":"call_1","name":"echo","arguments":"{\"text\":\"marker\"}"}`
+	streamSecondCall = `{"type":"function_call","id":"fc_2","status":"completed","call_id":"call_2","name":"echo","arguments":"{\"text\":\"second\"}"}`
+	streamText       = `{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The marker is marker."}]}`
+	streamUsage      = `{"input_tokens":864,"input_tokens_details":{"cached_tokens":800},"output_tokens":29,"output_tokens_details":{"reasoning_tokens":7}}`
 )
 
 func itemDone(index int, item string) string {
@@ -77,6 +81,57 @@ func TestOpenAIStream_ItemsFillAnEmptyFinalOutput(t *testing.T) {
 	if got.ResponseID != "resp_1" || got.Usage != (Usage{Known: true, InputTokens: 864, CachedInputTokens: 800, OutputTokens: 29, ReasoningTokens: 7}) {
 		t.Fatalf("id %q, usage %+v", got.ResponseID, got.Usage)
 	}
+}
+
+// The proxied live path must assemble out-of-order stream items before it can
+// dispatch and return a batch. A second streamed request carries both results.
+func TestOpenAIProxy_BatchedCallsRoundTrip(t *testing.T) {
+	api := newFakeAPI(t,
+		okReply(sse(itemDone(2, streamSecondCall), itemDone(0, streamReasoning), itemDone(1, streamCall), completed(`[]`))),
+		okReply(streamedTextReply()))
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model, cfg.Proxied = openaiName, DefaultOpenAIModel, true
+	trace := NewTrace(io.Discard)
+	model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	_, result := oneTurn(t, context.Background(), cfg, model, trace, path, "find the marker")
+	if result.Status != StatusCompleted || result.Steps != 2 || result.ToolCalls != 2 {
+		t.Fatalf("got status %s, %d steps, %d calls: %s", result.Status, result.Steps, result.ToolCalls, result.Reason)
+	}
+	sent := api.received()
+	if len(sent) != 2 {
+		t.Fatalf("got %d requests, want 2", len(sent))
+	}
+	preview, err := PreviewRequest(cfg, "find the marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sent[0]) != string(preview) {
+		t.Fatalf("proxied request differs from preview\ngot %s\nwant %s", sent[0], preview)
+	}
+	var first, second decodedRequest
+	if err := json.Unmarshal(sent[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(sent[1], &second); err != nil {
+		t.Fatal(err)
+	}
+	if !first.Stream || !first.ParallelToolCalls || !second.Stream || !second.ParallelToolCalls {
+		t.Fatalf("proxy did not request streamed batches: first %+v second %+v", first, second)
+	}
+	if len(second.Input) != 6 || string(second.Input[1]) != streamReasoning || string(second.Input[2]) != streamCall || string(second.Input[3]) != streamSecondCall {
+		t.Fatalf("native items were not returned in output order: %s", second.Input)
+	}
+	for i, id := range []string{"call_1", "call_2"} {
+		var output responsesToolOutput
+		if err := json.Unmarshal(second.Input[i+4], &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.CallID != id || output.Type != "function_call_output" {
+			t.Fatalf("result %d was not paired with its call: %+v", i, output)
+		}
+	}
+	assertSequentialBatchTrace(t, path, "call_1", "call_2")
 }
 
 // OpenAI's own stream repeats the output in its final event; that is used.

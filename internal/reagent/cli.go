@@ -252,8 +252,8 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
 	fs.StringVar(&o.traceDir, "trace-dir", "", "write each turn's trace under this directory")
-	fs.IntVar(&o.maxSteps, "max-steps", 20, "maximum model requests in one run")
-	fs.IntVar(&o.maxToolCalls, "max-tool-calls", 40, "maximum accepted tool calls in one run")
+	fs.IntVar(&o.maxSteps, "max-steps", 200, "maximum model requests in one run")
+	fs.IntVar(&o.maxToolCalls, "max-tool-calls", 400, "maximum accepted tool calls in one run")
 	return o
 }
 
