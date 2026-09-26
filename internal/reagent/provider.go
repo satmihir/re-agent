@@ -134,7 +134,9 @@ func (p apiProxy) shown() string { return redacted(p.endpoint) }
 func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, trace *Trace) Model {
 	if proxy.serves(provider) {
 		// Only OpenAI can be proxied, and the proxy is sent no key.
-		return NewOpenAIModel("", proxy.endpoint, client, trace)
+		model := NewOpenAIModel("", proxy.endpoint, client, trace)
+		model.proxied = true
+		return model
 	}
 	if provider == anthropicName {
 		return NewAnthropicModel(apiKey, "", client, trace)
@@ -148,15 +150,16 @@ func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, 
 // plausible-looking assembly path (v0 §6.1).
 func PreviewRequest(cfg Config, prompt string) ([]byte, error) {
 	history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: prompt}}}
-	return encodeRequest(cfg.Provider, BuildContext(cfg, RequestScope{Step: 1}, history))
+	return encodeRequest(cfg, BuildContext(cfg, RequestScope{Step: 1}, history))
 }
 
-// encodeRequest is the provider's own encoder, size check included.
-func encodeRequest(provider string, req ModelRequest) ([]byte, error) {
-	if provider == anthropicName {
+// encodeRequest is the encoder the live adapter for cfg uses, size check
+// included, in the proxy form when requests go to a proxy.
+func encodeRequest(cfg Config, req ModelRequest) ([]byte, error) {
+	if cfg.Provider == anthropicName {
 		return EncodeAnthropicRequest(req)
 	}
-	return EncodeOpenAIRequest(req)
+	return encodeOpenAIRequest(req, cfg.Proxied)
 }
 
 // nativeItemLabel names a provider output item's type for /context. Unknown

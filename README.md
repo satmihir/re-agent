@@ -255,7 +255,9 @@ export API_PROXY_PROVIDER=openai
 ```
 
 The URL is the full endpoint and is used exactly as given; `http` and `https`
-are both accepted. The proxy is sent no `Authorization` header, even when
+are both accepted. Proxied requests ask for a stream and leave out
+`truncation`, which some proxies require; the stream is read to the end and
+used exactly like an ordinary reply, and `--show-context` shows this form. The proxy is sent no `Authorization` header, even when
 `OPENAI_API_KEY` is set, and OpenAI runs no longer need a key. Anthropic runs
 are unaffected, and `openai` is the only provider a proxy can serve for now.
 The header, `/status`, and `/model` say when requests are going to the proxy,

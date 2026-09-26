@@ -14,6 +14,9 @@ const openAIEndpoint = "https://api.openai.com/v1/responses"
 // and a set of headers around the shared transport.
 type OpenAIModel struct {
 	transport *transport
+	// proxied sends the proxy form of each request and reads the reply as an
+	// event stream (v0 §6 amendment of 2026-09-25).
+	proxied bool
 }
 
 // NewOpenAIModel wires the adapter. The key reaches only the Authorization
@@ -42,7 +45,7 @@ func (m *OpenAIModel) Name() string { return openaiProvider }
 func (m *OpenAIModel) Generate(ctx context.Context, req ModelRequest) (ModelResponse, error) {
 	// The body is prepared once and reused byte for byte across attempts, so a
 	// retry cannot quietly ask a different question.
-	body, err := EncodeOpenAIRequest(req)
+	body, err := encodeOpenAIRequest(req, m.proxied)
 	if err != nil {
 		var modelErr *ModelError
 		if errors.As(err, &modelErr) {
@@ -57,6 +60,13 @@ func (m *OpenAIModel) Generate(ctx context.Context, req ModelRequest) (ModelResp
 	}
 	if status != http.StatusOK {
 		return ModelResponse{}, providerError(status, raw)
+	}
+	if m.proxied {
+		// The trace already holds the stream exactly as it arrived; what is
+		// assembled from it is the body a non-streamed request would return.
+		if raw, err = assembleOpenAIStream(raw); err != nil {
+			return ModelResponse{}, err
+		}
 	}
 	return normalizeOpenAIResponse(raw)
 }

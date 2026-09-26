@@ -125,6 +125,7 @@ func (c *conversation) commandModel(argument string, stderr io.Writer) {
 // be one this one rejects.
 func (c *conversation) switchTo(info modelInfo) {
 	c.cfg.Provider, c.cfg.Model, c.cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
+	c.cfg.Proxied = c.proxy.serves(info.Provider)
 	model := newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, c.trace)
 	c.session = NewSession(c.cfg, model, c.trace, c.progress)
 	c.usage = Usage{Known: true}

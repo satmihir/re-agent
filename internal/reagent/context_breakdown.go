@@ -33,7 +33,7 @@ type contextBreakdown struct {
 func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 	req := BuildContext(cfg, RequestScope{}, history)
 	var b contextBreakdown
-	body, err := encodeRequest(cfg.Provider, req)
+	body, err := encodeRequest(cfg, req)
 	var modelErr *ModelError
 	switch {
 	case errors.As(err, &modelErr) && modelErr.Status == StatusLimitExceeded:

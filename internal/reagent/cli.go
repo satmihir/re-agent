@@ -140,6 +140,13 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if options.script != "" {
 		cfg.Provider, cfg.Model = "scripted", "scripted"
 	}
+	// Read before the preview, because a proxy changes the request's form and
+	// the preview must be the request itself (v0 §6.1).
+	proxy, err := readAPIProxy(os.Getenv(proxyURLVariable), os.Getenv(proxyProviderVariable))
+	if err != nil {
+		return startupError(stderr, err.Error())
+	}
+	cfg.Proxied = proxy.serves(cfg.Provider)
 
 	// The preview is built before any live dependency exists, which is why it
 	// needs no credentials and creates no trace (v0 §6.1).
@@ -161,10 +168,6 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	keys := map[string]string{
 		openaiName:    os.Getenv(apiKeyVariable(openaiName)),
 		anthropicName: os.Getenv(apiKeyVariable(anthropicName)),
-	}
-	proxy, err := readAPIProxy(os.Getenv(proxyURLVariable), os.Getenv(proxyProviderVariable))
-	if err != nil {
-		return startupError(stderr, err.Error())
 	}
 	if options.script == "" && keys[provider] == "" && !proxy.serves(provider) {
 		return startupError(stderr, apiKeyVariable(provider)+" is not set; use --scripted or --show-context to work offline")
