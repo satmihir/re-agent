@@ -83,6 +83,14 @@ last trace. `/trace` prints the last turn's trace, `/reset` starts over, and
 `$EDITOR`, then `vi`; saving a non-empty message sends it as one turn, and it
 needs an interactive terminal. `/help` lists every command and key binding.
 
+A line starting with `!` runs the rest of it yourself, without a model turn:
+`!go test ./...`, then "fix that". The command runs through `/bin/sh` in the
+workspace, with the same environment allowlist as `exec`, so it cannot print
+your API key into the conversation. Its output streams to the terminal, and the
+command, its exit status, and up to 32 KiB of output join the conversation, so
+the model sees them with your next message. It needs no tool mode, since you
+are the one running it, and Ctrl-C stops the command rather than the chat.
+
 `/context` shows what the next request is made of: its size against the 10 MiB
 per-request sanity limit, the tokens the last request reported, and how many
 bytes the instructions, tool definitions, your messages, the model's reasoning

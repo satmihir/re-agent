@@ -132,7 +132,8 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 // The differences from the Responses encoding are the shape of a turn, not its
 // meaning: an assistant turn is one message whose content is the provider's
 // own blocks, kept verbatim (I15), and every tool result answering that turn
-// goes into one user message, which is what the API requires.
+// goes into one user message, which is what the API requires. A ! command and
+// the message typed after it are likewise one user message of two blocks.
 func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 	var messages []messagesMessage
 	var pendingResults []messagesToolResult
@@ -143,15 +144,28 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 			pendingResults = nil
 		}
 	}
+	appendUserText := func(text string) {
+		flushResults()
+		block := messagesTextBlock{Type: "text", Text: text}
+		if last := len(messages) - 1; last >= 0 && messages[last].Role == "user" {
+			if blocks, ok := messages[last].Content.([]messagesTextBlock); ok {
+				messages[last].Content = append(blocks, block)
+				return
+			}
+		}
+		messages = append(messages, messagesMessage{Role: "user", Content: []messagesTextBlock{block}})
+	}
 
 	for _, entry := range history {
 		switch entry.Kind {
 		case EntryUser:
-			flushResults()
-			messages = append(messages, messagesMessage{
-				Role:    "user",
-				Content: []messagesTextBlock{{Type: "text", Text: entry.User.Text}},
-			})
+			appendUserText(entry.User.Text)
+		case EntryShell:
+			text, err := shellCommandText(*entry.Shell)
+			if err != nil {
+				return nil, err
+			}
+			appendUserText(text)
 		case EntryAssistant:
 			flushResults()
 			native := entry.Assistant.Native
