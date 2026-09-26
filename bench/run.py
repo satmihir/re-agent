@@ -7,7 +7,7 @@ and the run's trace is summarized next to the score.
 
 Usage, from the repository root, with OPENAI_API_KEY set:
 
-    python bench/run.py --label NAME [--ref REF] [--model M] [--repeat N] [INSTANCE_ID ...]
+    python bench/run.py --label NAME [--ref REF] [--model M] [--effort E] [--repeat N] [INSTANCE_ID ...]
 
 With no instance ids, every task in bench/tasks.txt runs. --ref builds re:agent
 from that commit instead of the working tree, which is how two versions are
@@ -74,7 +74,7 @@ def build(ref, binary):
         sh("git", "worktree", "remove", "--force", source, cwd=ROOT)
 
 
-def run_task(task, binary, model, out):
+def run_task(task, binary, model, effort, out):
     """Runs one task in a fresh container and keeps its reply, trace, and diff."""
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(BENCH, "prompt.txt")) as f:
@@ -93,7 +93,8 @@ def run_task(task, binary, model, out):
         with open(os.path.join(out, "reply.md"), "w") as reply, open(os.path.join(out, "progress.txt"), "w") as progress:
             code = subprocess.run(
                 ["docker", "exec", "-e", "OPENAI_API_KEY", "-e", "PATH=" + PATH, "-w", "/testbed", name,
-                 "reagent", "run", "--model", model, "--workspace", "/testbed", "--allow-write", "--allow-exec",
+                 "reagent", "run", "--model", model, "--reasoning-effort", effort, "--workspace", "/testbed",
+                 "--allow-write", "--allow-exec",
                  "--max-steps", str(MAX_STEPS), "--max-tool-calls", str(MAX_TOOL_CALLS),
                  "--trace-file", "/tmp/events.jsonl", "--prompt-file", "/tmp/prompt.md"],
                 stdout=reply, stderr=progress).returncode
@@ -279,7 +280,7 @@ def score(predictions, label, out):
         return set(json.load(f).get("resolved_ids", []))
 
 
-def run_label(label, ids, rows, binary, model, commit, show_label):
+def run_label(label, ids, rows, binary, model, effort, commit, show_label):
     """Runs and scores one labeled pass over the requested tasks."""
     out = os.path.join(BENCH, "out", label)
     os.makedirs(out, exist_ok=True)
@@ -288,7 +289,7 @@ def run_label(label, ids, rows, binary, model, commit, show_label):
     for instance_id in ids:
         print(f"== {prefix}{instance_id}", flush=True)
         task_out = os.path.join(out, instance_id)
-        ran = run_task(rows[instance_id], binary, model, task_out)
+        ran = run_task(rows[instance_id], binary, model, effort, task_out)
         results[instance_id] = {"exit_code": ran["exit_code"], "seconds": ran["seconds"],
                                 "patch_lines": ran["patch"].count("\n"),
                                 **summarize_trace(os.path.join(task_out, "events.jsonl"))}
@@ -300,7 +301,7 @@ def run_label(label, ids, rows, binary, model, commit, show_label):
     for instance_id, result in results.items():
         result["resolved"] = instance_id in resolved
     with open(os.path.join(out, "summary.json"), "w") as f:
-        json.dump({"label": label, "commit": commit, "model": model,
+        json.dump({"label": label, "commit": commit, "model": model, "effort": effort,
                    "max_steps": MAX_STEPS, "max_tool_calls": MAX_TOOL_CALLS, "tasks": results}, f, indent=2)
     print(f"resolved {len(resolved)} of {len(ids)}; summary in {os.path.relpath(out, ROOT)}/summary.json")
 
@@ -309,7 +310,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--label", required=True, help="names this run's output directory")
     parser.add_argument("--ref", help="commit to build re:agent from; defaults to the working tree")
-    parser.add_argument("--model", default="gpt-5.6-luna")
+    # The baseline since 2026-09-25: gpt-6-luna at high effort resolved 6 of 16
+    # runs to gpt-5.6-luna's 4 at low, for about 1.75 times the cost.
+    parser.add_argument("--model", default="gpt-6-luna")
+    parser.add_argument("--effort", default="high",
+                        help="reasoning effort to request; auto uses re:agent's catalog default for the model")
     parser.add_argument("--repeat", type=positive_int, default=1, metavar="N",
                         help="run the task list N times (default: 1)")
     parser.add_argument("ids", nargs="*", help="instance ids; defaults to bench/tasks.txt")
@@ -331,7 +336,7 @@ def main():
     binary = os.path.join(build_out, "reagent")
     commit = build(args.ref, binary)
     for label in labels:
-        run_label(label, ids, rows, binary, args.model, commit, len(labels) > 1)
+        run_label(label, ids, rows, binary, args.model, args.effort, commit, len(labels) > 1)
 
 
 if __name__ == "__main__":

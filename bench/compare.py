@@ -22,11 +22,15 @@ def mean(tasks, key):
 
 
 def commit_stats(runs):
-    """Aggregates selected task-runs by their summary commit."""
+    """Aggregates selected task-runs by commit, model, and reasoning effort.
+
+    The same commit run on two models is two different experiments, so they
+    are never pooled. Summaries from before effort was recorded say "default".
+    """
     grouped = {}
     for run in runs.values():
-        commit = str(run.get("commit") or "unknown")
-        grouped.setdefault(commit, []).extend(run.get("tasks", {}).values())
+        key = f"{run.get('commit') or 'unknown'} {run.get('model') or '?'}@{run.get('effort') or 'default'}"
+        grouped.setdefault(key, []).extend(run.get("tasks", {}).values())
 
     stats = {}
     for commit, tasks in grouped.items():
@@ -97,7 +101,7 @@ def main():
               f"{total['input_tokens']:9d} {total['cached_input_tokens']:9d} {total['output_tokens']:8d}")
 
     print()
-    print(f"{'commit':16s} {'resolved':>11s} {'mean steps':>10s} {'mean in':>10s} "
+    print(f"{'commit model@effort':34s} {'resolved':>11s} {'mean steps':>10s} {'mean in':>10s} "
           f"{'mean out':>10s}  non-completed statuses  top tool failures  "
           f"{'mean search_text':>16s} {'exec_searches':>13s}")
     for commit, stats in sorted(commit_stats(runs).items()):
@@ -111,7 +115,7 @@ def main():
         mean_search_text = "not recorded" if mean_search_text is None else f"{mean_search_text:.1f}"
         exec_searches = stats["exec_searches"]
         exec_searches = "not recorded" if exec_searches is None else str(exec_searches)
-        print(f"{commit:16s} {stats['resolved']:4d} of {stats['runs']:<6d} "
+        print(f"{commit:34s} {stats['resolved']:4d} of {stats['runs']:<6d} "
               f"{stats['mean_steps']:10.1f} {stats['mean_input_tokens']:10.1f} "
               f"{stats['mean_output_tokens']:10.1f}  {statuses}  {failures}  "
               f"{mean_search_text:>16s} {exec_searches:>13s}")
