@@ -3,6 +3,7 @@ package reagent
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -25,7 +26,8 @@ func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int,
 		keys := &keyReader{inner: f}
 		terminal := term.NewTerminal(terminalIO{Reader: keys, Writer: stderr}, "> ")
 		terminal.AutoCompleteCallback = complete
-		reader := &terminalReader{fd: int(f.Fd()), terminal: terminal, keys: keys, prompt: "> "}
+		reader := &terminalReader{fd: int(f.Fd()), terminal: terminal, keys: keys, prompt: "> ",
+			out: stderr, styled: styledOutput(stderr), size: func() (int, int, error) { return term.GetSize(int(f.Fd())) }}
 		terminal.History = &reader.history
 		return reader
 	}
@@ -165,6 +167,10 @@ type terminalReader struct {
 	terminal *term.Terminal
 	keys     *keyReader
 	enterRaw func() (func(), error)
+	out      io.Writer
+	styled   bool
+	size     func() (width, height int, err error)
+	width    int // x/term starts at 80; keep the last successful size for redraws.
 	prompt   string
 	history  promptHistory
 }
@@ -194,11 +200,20 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 		return "", err
 	}
 	defer restore()
+	// v0 §10 amendment (2026-09-26): x/term otherwise edits at 80 columns.
+	if r.width == 0 {
+		r.width = 80
+	}
+	if width, height, sizeErr := r.size(); sizeErr == nil && width > 0 && height > 0 {
+		if r.terminal.SetSize(width, height) == nil {
+			r.width = width
+		}
+	}
 	r.terminal.SetBracketedPasteMode(true)
 	defer r.terminal.SetBracketedPasteMode(false)
 	defer r.terminal.SetPrompt(r.prompt)
 
-	line, err = r.readPhysicalLine()
+	line, rows, err := r.readPhysicalLine(r.prompt)
 	if err != nil {
 		return "", err
 	}
@@ -206,30 +221,49 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 		line = strings.TrimSuffix(line, "\\")
 		r.terminal.SetPrompt("… ")
 		var next string
-		next, err = r.readPhysicalLine()
+		var nextRows int
+		next, nextRows, err = r.readPhysicalLine("… ")
 		if err != nil {
 			return "", err
 		}
+		rows += nextRows
 		line += "\n" + next
+	}
+	if r.styled && line != "" {
+		r.drawUserBand(line, rows)
 	}
 	return line, nil
 }
 
-// readPhysicalLine normalizes a single x/term submission. x/term owns history,
-// so this deliberately does not add the normalized multi-line result again.
-func (r *terminalReader) readPhysicalLine() (string, error) {
+// readPhysicalLine counts the echo before converting pasted ↵ to newlines.
+// x/term owns history, so the normalized submission is not added again.
+func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
 	line, err := r.terminal.ReadLine()
 	if err == term.ErrPasteIndicator {
 		err = nil
 	}
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if line == "" && r.keys.interrupts > 0 {
 		r.keys.interrupts--
-		return "", errInterrupted
+		return "", 0, errInterrupted
 	}
-	return strings.ReplaceAll(line, "↵", "\n"), nil
+	rows := (displayWidth(prompt)+displayWidth(line))/r.width + 1
+	return strings.ReplaceAll(line, "↵", "\n"), rows, nil
+}
+
+// v0 §10 amendment (2026-09-26): redraw from the echoed rows rather than a
+// saved cursor position, which would be invalid after the input scrolls.
+func (r *terminalReader) drawUserBand(message string, rows int) {
+	fmt.Fprintf(r.out, "\x1b[%dA\r\x1b[J", rows)
+	first := "> "
+	for _, line := range strings.Split(sanitize(message), "\n") {
+		for _, row := range wrapStyled(first, "  ", line, r.width-1) {
+			fmt.Fprint(r.out, ansiUserBand, row, "\x1b[K", ansiReset, "\r\n")
+		}
+		first = "  "
+	}
 }
 
 type scannerReader struct{ scanner *bufio.Scanner }

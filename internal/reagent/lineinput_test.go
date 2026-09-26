@@ -1,7 +1,10 @@
 package reagent
 
 import (
+	"bytes"
+	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -11,10 +14,12 @@ import (
 
 func terminalInput(input io.Reader) *terminalReader {
 	keys := &keyReader{inner: input}
-	terminal := term.NewTerminal(terminalIO{Reader: keys, Writer: io.Discard}, "> ")
-	reader := &terminalReader{terminal: terminal, keys: keys, prompt: "> ", enterRaw: func() (func(), error) {
-		return func() {}, nil
-	}}
+	out := &bytes.Buffer{}
+	terminal := term.NewTerminal(terminalIO{Reader: keys, Writer: out}, "> ")
+	reader := &terminalReader{terminal: terminal, keys: keys, prompt: "> ", out: out,
+		size: func() (int, int, error) { return 80, 24, nil }, enterRaw: func() (func(), error) {
+			return func() {}, nil
+		}}
 	terminal.History = &reader.history
 	return reader
 }
@@ -109,6 +114,180 @@ func TestTerminalReader_BackslashContinues(t *testing.T) {
 	line, err := reader.ReadLine()
 	if err != nil || line != "first \nsecond" {
 		t.Fatalf("got %q, %v", line, err)
+	}
+}
+
+func TestTerminalReader_UsesTheTerminalWidth(t *testing.T) {
+	reader := terminalInput(strings.NewReader(strings.Repeat("a", 100) + "\r"))
+	reader.size = func() (int, int, error) { return 120, 30, nil }
+	line, err := reader.ReadLine()
+	if err != nil || line != strings.Repeat("a", 100) {
+		t.Fatalf("got %q, %v", line, err)
+	}
+	if got := strings.Count(reader.out.(*bytes.Buffer).String(), "\r\n"); got != 1 {
+		t.Fatalf("echo has %d line endings, want 1", got)
+	}
+}
+
+func TestTerminalReader_BandReplacesTheEcho(t *testing.T) {
+	cases := []struct {
+		name, input, prompt, wantLine, wantBand string
+	}{
+		{"single", "hello\r", "> ", "hello", "\x1b[1A\r\x1b[J" + ansiUserBand + "> hello\x1b[K" + ansiReset + "\r\n"},
+		{"continuation", "first \\\rsecond\r", "> ", "first \nsecond", "\x1b[2A\r\x1b[J" + ansiUserBand + "> first \x1b[K" + ansiReset + "\r\n" + ansiUserBand + "  second\x1b[K" + ansiReset + "\r\n"},
+		{"blocked", strings.Repeat("a", 29) + "\r", "(blocked) > ", strings.Repeat("a", 29), "\x1b[2A\r\x1b[J" + ansiUserBand + "> " + strings.Repeat("a", 29) + "\x1b[K" + ansiReset + "\r\n"},
+		{"slash command", "/help\r", "> ", "/help", "\x1b[1A\r\x1b[J" + ansiUserBand + "> /help\x1b[K" + ansiReset + "\r\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := terminalInput(strings.NewReader(tc.input))
+			reader.styled = true
+			reader.size = func() (int, int, error) { return 40, 24, nil }
+			reader.SetPrompt(tc.prompt)
+			line, err := reader.ReadLine()
+			if err != nil || line != tc.wantLine {
+				t.Fatalf("got %q, %v; want %q", line, err, tc.wantLine)
+			}
+			got := strings.TrimSuffix(reader.out.(*bytes.Buffer).String(), "\x1b[?2004l")
+			if !strings.HasSuffix(got, tc.wantBand) {
+				t.Fatalf("band output %q does not end with %q", got, tc.wantBand)
+			}
+		})
+	}
+}
+
+func TestTerminalReader_BandReplacesPastedEcho(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[200~first\rsecond\x1b[201~\r"))
+	reader.styled = true
+	reader.size = func() (int, int, error) { return 40, 24, nil }
+	line, err := reader.ReadLine()
+	if err != nil || line != "first\nsecond" {
+		t.Fatalf("got %q, %v", line, err)
+	}
+	want := "\x1b[1A\r\x1b[J" + ansiUserBand + "> first\x1b[K" + ansiReset + "\r\n" + ansiUserBand + "  second\x1b[K" + ansiReset + "\r\n"
+	got := strings.TrimSuffix(reader.out.(*bytes.Buffer).String(), "\x1b[?2004l")
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("band output %q does not end with %q", got, want)
+	}
+}
+
+func TestTerminalReader_BandRowCounting(t *testing.T) {
+	for _, tc := range []struct{ characters, rows int }{{17, 1}, {18, 2}, {38, 3}} {
+		reader := terminalInput(strings.NewReader(strings.Repeat("a", tc.characters) + "\r"))
+		reader.styled = true
+		reader.size = func() (int, int, error) { return 20, 24, nil }
+		if _, err := reader.ReadLine(); err != nil {
+			t.Fatal(err)
+		}
+		want := "\x1b[" + strconv.Itoa(tc.rows) + "A\r\x1b[J"
+		if got := reader.out.(*bytes.Buffer).String(); !strings.Contains(got, want) {
+			t.Errorf("%d characters: missing %q in %q", tc.characters, want, got)
+		}
+	}
+}
+
+func TestTerminalReader_BandWrapsLongMessages(t *testing.T) {
+	message := "one two three four five six seven eight"
+	reader := terminalInput(strings.NewReader(message + "\r"))
+	reader.styled = true
+	reader.size = func() (int, int, error) { return 20, 24, nil }
+	if _, err := reader.ReadLine(); err != nil {
+		t.Fatal(err)
+	}
+	band := strings.Split(reader.out.(*bytes.Buffer).String(), "\x1b[J")[1]
+	band = strings.TrimSuffix(band, "\x1b[?2004l")
+	rows := strings.Split(strings.TrimSuffix(band, "\r\n"), "\r\n")
+	if len(rows) < 2 || !strings.HasPrefix(rows[0], ansiUserBand+"> ") || !strings.HasPrefix(rows[1], ansiUserBand+"  ") {
+		t.Fatalf("unexpected wrapped band: %q", band)
+	}
+	for _, row := range rows {
+		if width := displayWidth(row); width > 19 {
+			t.Errorf("band row is %d cells: %q", width, row)
+		}
+	}
+}
+
+func TestTerminalReader_NoBandWhenPlainOrEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		styled      bool
+		wantErr     error
+	}{
+		{"plain", "hello\r", false, nil},
+		{"empty", "\r", true, nil},
+		{"interrupt", "half typed\x03", true, errInterrupted},
+		{"eof", "\x04", true, io.EOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := terminalInput(strings.NewReader(tc.input))
+			reader.styled = tc.styled
+			_, err := reader.ReadLine()
+			if err != tc.wantErr {
+				t.Fatalf("got %v, want %v", err, tc.wantErr)
+			}
+			if got := reader.out.(*bytes.Buffer).String(); strings.Contains(got, ansiUserBand) || strings.Contains(got, "\x1b[J") {
+				t.Fatalf("unexpected band in %q", got)
+			}
+		})
+	}
+}
+
+func TestTerminalReader_BandSanitizesMessage(t *testing.T) {
+	reader := terminalInput(strings.NewReader(""))
+	reader.width = 80
+	// x/term consumes typed ESC sequences; test the redraw with one supplied
+	// directly so the last safety boundary still has to escape it.
+	reader.drawUserBand("hi \x1b[31m", 1)
+	band := strings.Split(reader.out.(*bytes.Buffer).String(), "\x1b[J")[1]
+	if strings.Contains(band, "\x1b[31m") || !strings.Contains(band, `hi \x1b[31m`) {
+		t.Fatalf("band did not escape input: %q", band)
+	}
+}
+
+func TestTerminalReader_ResizesAtEachPrompt(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\r" + strings.Repeat("a", 100) + "\r"))
+	calls := 0
+	reader.size = func() (int, int, error) {
+		calls++
+		if calls == 1 {
+			return 80, 24, nil
+		}
+		return 120, 24, nil
+	}
+	if _, err := reader.ReadLine(); err != nil {
+		t.Fatal(err)
+	}
+	reader.out.(*bytes.Buffer).Reset()
+	if _, err := reader.ReadLine(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || strings.Count(reader.out.(*bytes.Buffer).String(), "\r\n") != 1 {
+		t.Fatalf("size reads = %d; echo = %q", calls, reader.out.(*bytes.Buffer).String())
+	}
+}
+
+func TestTerminalReader_SizeFailureKeepsPreviousWidth(t *testing.T) {
+	reader := terminalInput(strings.NewReader(strings.Repeat("a", 100) + "\r"))
+	reader.size = func() (int, int, error) { return 0, 0, errors.New("no size") }
+	if _, err := reader.ReadLine(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(reader.out.(*bytes.Buffer).String(), "\r\n"); got != 2 {
+		t.Fatalf("echo has %d line endings, want default width's 2", got)
+	}
+
+	reader = terminalInput(strings.NewReader("\r" + strings.Repeat("a", 100) + "\r"))
+	reader.size = func() (int, int, error) { return 120, 24, nil }
+	if _, err := reader.ReadLine(); err != nil {
+		t.Fatal(err)
+	}
+	reader.out.(*bytes.Buffer).Reset()
+	reader.size = func() (int, int, error) { return 0, 0, errors.New("no size") }
+	if _, err := reader.ReadLine(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(reader.out.(*bytes.Buffer).String(), "\r\n"); got != 1 {
+		t.Fatalf("echo has %d line endings, want previous width's 1", got)
 	}
 }
 
