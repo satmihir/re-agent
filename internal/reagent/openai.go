@@ -37,7 +37,7 @@ type responsesRequest struct {
 	ParallelToolCalls bool                `json:"parallel_tool_calls"`
 	Store             bool                `json:"store"`
 	Include           []string            `json:"include"`
-	Truncation        string              `json:"truncation"`
+	Truncation        string              `json:"truncation,omitempty"`
 	Stream            bool                `json:"stream"`
 }
 
@@ -80,7 +80,14 @@ type responsesToolOutput struct {
 //
 // The live adapter and --show-context both call this, which is what makes the
 // preview the request itself rather than a description of it (v0 §6.1).
-func EncodeOpenAIRequest(req ModelRequest) ([]byte, error) {
+func EncodeOpenAIRequest(req ModelRequest) ([]byte, error) { return encodeOpenAIRequest(req, false) }
+
+// encodeOpenAIRequest encodes the direct form, or with proxied the proxy form
+// (v0 §6 amendment of 2026-09-25). The proxy form asks for a stream, which a
+// proxy may insist on, and leaves out truncation, which a proxy may reject;
+// "disabled" is what the API assumes when it is absent, so the question asked
+// is the same.
+func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 	input, err := encodeHistory(req.History)
 	if err != nil {
 		return nil, err
@@ -104,6 +111,10 @@ func EncodeOpenAIRequest(req ModelRequest) ([]byte, error) {
 		reasoning = &responsesReasoning{Effort: req.ReasoningEffort}
 	}
 
+	truncation := "disabled"
+	if proxied {
+		truncation = ""
+	}
 	body, err := json.Marshal(responsesRequest{
 		Model:             req.Model,
 		Instructions:      req.Instructions,
@@ -114,8 +125,8 @@ func EncodeOpenAIRequest(req ModelRequest) ([]byte, error) {
 		ParallelToolCalls: false,
 		Store:             false,
 		Include:           []string{"reasoning.encrypted_content"},
-		Truncation:        "disabled",
-		Stream:            false,
+		Truncation:        truncation,
+		Stream:            proxied,
 	})
 	if err != nil {
 		return nil, err

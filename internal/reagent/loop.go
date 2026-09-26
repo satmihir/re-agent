@@ -20,6 +20,9 @@ type Config struct {
 	WorkspacePath   string
 	MaxSteps        int
 	MaxToolCalls    int
+	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
+	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
+	Proxied bool
 }
 
 // Run executes one user submission to a terminal outcome. It appends to its

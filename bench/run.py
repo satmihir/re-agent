@@ -5,7 +5,10 @@ copied in, and run once against /testbed with write and exec authority. The
 tracked-file diff it leaves behind is scored by the official SWE-bench harness,
 and the run's trace is summarized next to the score.
 
-Usage, from the repository root, with OPENAI_API_KEY set:
+Usage, from the repository root, with OPENAI_API_KEY set, or with
+API_PROXY_URL and API_PROXY_PROVIDER set to route OpenAI requests through a
+proxy. re:agent runs inside a container, where localhost is the container
+itself, so a localhost proxy URL reaches it as host.docker.internal:
 
     python bench/run.py --label NAME [--ref REF] [--model M] [--effort E] [--repeat N] [INSTANCE_ID ...]
 
@@ -20,6 +23,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -35,6 +39,18 @@ MAX_STEPS = 50
 MAX_TOOL_CALLS = 50
 SEARCH_COMMANDS = {"grep", "rg", "egrep", "fgrep"}
 SHELL_COMMANDS = {"bash", "sh", "zsh"}
+
+
+def container_proxy_url(url):
+    """The proxy URL as a container sees it: localhost there is the container."""
+    return re.sub(r"^(https?://)(localhost|127\.0\.0\.1)(?=[:/]|$)", r"\1host.docker.internal", url)
+
+
+def proxy_env():
+    """docker exec arguments for the proxy URL, rewritten for the container, or
+    nothing when no proxy is set, so an unset variable stays unset inside."""
+    url = os.environ.get("API_PROXY_URL")
+    return ["-e", "API_PROXY_URL=" + container_proxy_url(url)] if url else []
 
 
 def positive_int(value):
@@ -92,7 +108,8 @@ def run_task(task, binary, model, effort, out):
         started = time.time()
         with open(os.path.join(out, "reply.md"), "w") as reply, open(os.path.join(out, "progress.txt"), "w") as progress:
             code = subprocess.run(
-                ["docker", "exec", "-e", "OPENAI_API_KEY", "-e", "PATH=" + PATH, "-w", "/testbed", name,
+                ["docker", "exec", "-e", "OPENAI_API_KEY", *proxy_env(), "-e", "API_PROXY_PROVIDER",
+                 "-e", "PATH=" + PATH, "-w", "/testbed", name,
                  "reagent", "run", "--model", model, "--reasoning-effort", effort, "--workspace", "/testbed",
                  "--allow-write", "--allow-exec",
                  "--max-steps", str(MAX_STEPS), "--max-tool-calls", str(MAX_TOOL_CALLS),
@@ -319,8 +336,9 @@ def main():
                         help="run the task list N times (default: 1)")
     parser.add_argument("ids", nargs="*", help="instance ids; defaults to bench/tasks.txt")
     args = parser.parse_args()
-    if not os.environ.get("OPENAI_API_KEY"):
-        sys.exit("OPENAI_API_KEY is not set")
+    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("API_PROXY_URL"):
+        sys.exit("set OPENAI_API_KEY, or API_PROXY_URL and API_PROXY_PROVIDER")
+
 
     from datasets import load_dataset  # installed with swebench
 

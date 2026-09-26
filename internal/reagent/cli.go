@@ -140,6 +140,13 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if options.script != "" {
 		cfg.Provider, cfg.Model = "scripted", "scripted"
 	}
+	// Read before the preview, because a proxy changes the request's form and
+	// the preview must be the request itself (v0 §6.1).
+	proxy, err := readAPIProxy(os.Getenv(proxyURLVariable), os.Getenv(proxyProviderVariable))
+	if err != nil {
+		return startupError(stderr, err.Error())
+	}
+	cfg.Proxied = proxy.serves(cfg.Provider)
 
 	// The preview is built before any live dependency exists, which is why it
 	// needs no credentials and creates no trace (v0 §6.1).
@@ -162,7 +169,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		openaiName:    os.Getenv(apiKeyVariable(openaiName)),
 		anthropicName: os.Getenv(apiKeyVariable(anthropicName)),
 	}
-	if options.script == "" && keys[provider] == "" {
+	if options.script == "" && keys[provider] == "" && !proxy.serves(provider) {
 		return startupError(stderr, apiKeyVariable(provider)+" is not set; use --scripted or --show-context to work offline")
 	}
 
@@ -172,7 +179,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	trace := NewTrace(stderr)
 	defer trace.Close()
 	client := NewHTTPClient()
-	live := newLiveModel(provider, keys[provider], client, trace)
+	live := newLiveModel(provider, keys[provider], proxy, client, trace)
 	var scripted Model
 	if options.script != "" {
 		if scripted, err = LoadScript(options.script); err != nil {
@@ -181,11 +188,15 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		live = scripted
 	}
 	session := NewSession(cfg, live, trace, stderr)
+	endpoint := ""
+	if options.script == "" && proxy.serves(provider) {
+		endpoint = proxy.shown()
+	}
 
 	if command == "chat" {
-		session.display.header(cfg, ws.Root(), true)
+		session.display.header(cfg, ws.Root(), endpoint, true)
 		conversation := &conversation{
-			session: session, cfg: cfg, keys: keys, client: client, scripted: scripted,
+			session: session, cfg: cfg, keys: keys, proxy: proxy, client: client, scripted: scripted,
 			trace: trace, traceDir: options.traceDir, progress: stderr, workspace: ws.Root(),
 			recap: options.recap, usage: Usage{Known: true},
 		}
@@ -200,7 +211,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return chat(ctx, conversation, newLineReader(stdin, stderr, complete), stdout, stderr)
 	}
 
-	session.display.header(cfg, ws.Root(), false)
+	session.display.header(cfg, ws.Root(), endpoint, false)
 
 	// One-shot: the first Ctrl-C cancels the run.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
@@ -294,6 +305,8 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  reagent run --workspace . --show-context \"Where is the budget?\" | jq .")
 	fmt.Fprintln(w, "\nenvironment:")
 	fmt.Fprintln(w, "  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run")
+	fmt.Fprintln(w, "  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,")
+	fmt.Fprintln(w, "                                      with no key; the provider must be openai")
 	fmt.Fprintln(w, "  REAGENT_MODEL                       default model")
 	fmt.Fprintln(w, "  NO_COLOR                            turn off styling")
 }

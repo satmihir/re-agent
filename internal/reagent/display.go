@@ -299,7 +299,9 @@ func modelPresentation(cfg Config) (model, provider, effort string) {
 	return cfg.Model, cfg.Provider, effort
 }
 
-func (d *Display) header(cfg Config, workspace string, chat bool) {
+// header names the model, authority, and workspace. endpoint is non-empty only
+// when a proxy stands in for the provider, which the person should always see.
+func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 	mode := cfg.Registry.Mode().String()
 	model, provider, effort := modelPresentation(cfg)
 	details := ""
@@ -307,8 +309,15 @@ func (d *Display) header(cfg Config, workspace string, chat bool) {
 		details = " (" + provider + ", " + effort + ")"
 	}
 	workspace = shortPath(workspace)
+	via := ""
+	if endpoint != "" {
+		via = "requests go to " + sanitize(endpoint) + " (" + proxyURLVariable + ")"
+	}
 	if chat {
 		d.headerTitle("re:agent chat · ", model, details)
+		if via != "" {
+			d.headerLine(via)
+		}
 		d.headerLine(fmt.Sprintf("workspace %s · %s · %d steps, %d tool calls per turn", workspace, mode, cfg.MaxSteps, cfg.MaxToolCalls))
 		if cfg.Registry.Mode().AllowExec {
 			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
@@ -317,6 +326,9 @@ func (d *Display) header(cfg Config, workspace string, chat bool) {
 		return
 	}
 	d.headerTitle("re:agent · ", model, details+" · "+mode+" · "+workspace)
+	if via != "" {
+		d.headerLine(via)
+	}
 	if cfg.Registry.Mode().AllowExec {
 		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
 	}

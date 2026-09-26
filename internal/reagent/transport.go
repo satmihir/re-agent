@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -78,7 +79,7 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte) (i
 	digest := sha256.Sum256(body)
 	t.trace.Write("api.attempt.started", step, map[string]any{
 		"attempt":        attempt,
-		"endpoint":       t.endpoint,
+		"endpoint":       redacted(t.endpoint),
 		"request_body":   string(body),
 		"request_sha256": hex.EncodeToString(digest[:]),
 	})
@@ -117,6 +118,16 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte) (i
 		"body_utf8_replaced": replaced,
 	})
 	return response.StatusCode, raw, nil
+}
+
+// redacted masks a password in an endpoint URL, which a proxy URL may carry,
+// so a trace never records it.
+func redacted(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	return u.Redacted()
 }
 
 func (t *transport) failed(step, attempt, status int, started time.Time, err error) {
