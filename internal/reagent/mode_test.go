@@ -9,7 +9,7 @@ func TestRegistry_ModeDecidesWhatTheModelIsToldAbout(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
 	tools := []Tool{NewReadFileTool(ws), NewEditFileTool(ws)}
 
-	readOnly, err := NewRegistry(Mode{}, tools...)
+	readOnly, err := NewRegistry(Mode{ReadOnly: true}, tools...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestRegistry_ModeDecidesWhatTheModelIsToldAbout(t *testing.T) {
 		t.Fatal("edit_file is not remembered as a tool this build has")
 	}
 
-	writable, err := NewRegistry(Mode{AllowWrite: true}, tools...)
+	writable, err := NewRegistry(Mode{}, tools...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestRegistry_ModeDecidesWhatTheModelIsToldAbout(t *testing.T) {
 // touched. Nothing the model sends can widen the mode (v1 §10.3).
 func TestLoop_WithheldToolIsPermissionDeniedNotMissing(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"main.go": source})
-	registry, err := NewRegistry(Mode{}, NewReadFileTool(ws), NewEditFileTool(ws))
+	registry, err := NewRegistry(Mode{ReadOnly: true}, NewReadFileTool(ws), NewEditFileTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestLoop_WithheldToolIsPermissionDeniedNotMissing(t *testing.T) {
 // A run that stops after an edit still reports the edit it made (v1 §19.3).
 func TestLoop_ReportsEffectsEvenWhenTheRunFails(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"main.go": source})
-	registry, err := NewRegistry(Mode{AllowWrite: true}, NewEditFileTool(ws))
+	registry, err := NewRegistry(Mode{}, NewEditFileTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,9 +109,8 @@ func TestLoop_ReportsEffectsEvenWhenTheRunFails(t *testing.T) {
 func TestInstructions_NameTheMode(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
 	for name, mode := range map[string]Mode{
-		"read only":                {},
-		"read and write":           {AllowWrite: true},
-		"read, write, and execute": {AllowWrite: true, AllowExec: true},
+		"read only":                {ReadOnly: true},
+		"read, write, and execute": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			registry, err := NewRegistry(mode, NewReadFileTool(ws))

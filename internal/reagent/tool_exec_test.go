@@ -3,7 +3,6 @@ package reagent
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,7 +271,7 @@ func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
 func TestLoop_UncertainEffectStopsTheRun(t *testing.T) {
 	ws := testWorkspace(t, nil)
 	runs := 0
-	registry, err := NewRegistry(Mode{AllowWrite: true, AllowExec: true},
+	registry, err := NewRegistry(Mode{},
 		execTool{ws: ws}, countingTool{runs: &runs})
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +307,7 @@ func TestLoop_UncertainEffectStopsTheRun(t *testing.T) {
 // A completed failure is different: the model gets the output and can continue.
 func TestLoop_FailingCommandCanBeFollowedByAnotherStep(t *testing.T) {
 	ws := testWorkspace(t, nil)
-	registry, err := NewRegistry(Mode{AllowWrite: true, AllowExec: true}, NewExecTool(ws))
+	registry, err := NewRegistry(Mode{}, NewExecTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,30 +322,16 @@ func TestLoop_FailingCommandCanBeFollowedByAnotherStep(t *testing.T) {
 	}
 }
 
-func TestExec_IsWithheldWithoutExecMode(t *testing.T) {
+func TestExec_IsWithheldInReadOnlyMode(t *testing.T) {
 	ws := testWorkspace(t, nil)
-	registry, err := NewRegistry(Mode{AllowWrite: true}, NewExecTool(ws), NewEditFileTool(ws))
+	registry, err := NewRegistry(Mode{ReadOnly: true}, NewExecTool(ws), NewEditFileTool(ws))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, active := registry.Lookup("exec"); active {
-		t.Fatal("exec is active without exec mode")
-	}
-	if _, active := registry.Lookup("edit_file"); !active {
-		t.Fatal("edit_file is inactive in write mode")
-	}
-	if !registry.known("exec") {
-		t.Fatal("exec is not remembered as a withheld tool")
-	}
-}
-
-func TestMain_AllowExecRequiresAllowWrite(t *testing.T) {
-	var stdout, stderr io.Writer = &strings.Builder{}, &strings.Builder{}
-	code := Main(context.Background(), []string{"run", "--workspace", t.TempDir(),
-		"--allow-exec", "--show-context", "a task"}, strings.NewReader(""), stdout, stderr)
-
-	if code != exitUsage {
-		t.Fatalf("exit %d, want %d", code, exitUsage)
+	for _, name := range []string{"exec", "edit_file"} {
+		if _, active := registry.Lookup(name); active || !registry.known(name) {
+			t.Fatalf("%s: active=%v known=%v", name, active, registry.known(name))
+		}
 	}
 }
 

@@ -105,19 +105,18 @@ a different answer from a tool that does not exist.
 
 | Mode | Flags | Tools |
 |---|---|---|
-| Read | none | `list_files`, `read_file`, `search_text` |
-| Write | `--allow-write` | adds `edit_file` |
-| Execute | `--allow-write --allow-exec` | adds `exec` |
+| Default | none | `list_files`, `read_file`, `search_text`, `edit_file`, `exec` |
+| Read only | `--read-only` | `list_files`, `read_file`, `search_text` |
 
-`--allow-exec` requires `--allow-write` because commands can write anyway.
+Read-only mode withholds both editing and execution, since commands can write.
 Commands run as you, with your filesystem and your network. That is not a
 sandbox and the tool description says so.
 
 ```bash
-./reagent run --workspace ./repo --allow-write \
+./reagent run --workspace ./repo \
   "Set the default timeout to 30 seconds and explain the edit."
 
-./reagent run --workspace ./repo --allow-write --allow-exec \
+./reagent run --workspace ./repo \
   "Find why the timeout test fails, fix it, and rerun the test."
 ```
 
@@ -234,7 +233,7 @@ quality.
 | `--provider` | `openai` or `anthropic`. Inferred from the model name when omitted. |
 | `--model` | Model to request. Falls back to `REAGENT_MODEL`, then the provider's default. |
 | `--reasoning-effort` | `auto` picks the provider's default; empty omits the parameter. |
-| `--allow-write`, `--allow-exec` | Grant authority beyond reading. |
+| `--read-only` | Withhold editing and execution tools (off by default). |
 | `--show-context` | Print the first request and exit. No key needed. |
 | `--scripted FILE` | Replay recorded responses instead of calling a provider. |
 | `--recap` | Show the operation recap for completed runs. Non-completed runs always show it. |

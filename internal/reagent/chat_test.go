@@ -305,7 +305,7 @@ func TestChat_StatusReportsSessionState(t *testing.T) {
 	})
 	_, stderr := chatSession(t, model, "question\n/status\n/reset\n/status\n/exit\n")
 	for _, want := range []string{
-		"model      ", "mode       read only", "1 turn", "1.2k in (800 cached) · 30 out", "last trace ",
+		"model      ", "mode       read, write, and execute", "1 turn", "1.2k in (800 cached) · 30 out", "last trace ",
 		"session    0 turns · 0 in (0 cached) · 0 out",
 	} {
 		if !strings.Contains(stderr, want) {

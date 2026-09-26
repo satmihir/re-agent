@@ -94,10 +94,6 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, "--scripted replays recorded responses, so it takes no --model or --provider")
 	case options.script != "" && options.showContext:
 		return usage(stderr, command, "--show-context previews a live request, so it cannot be combined with --scripted")
-	case options.allowExec && !options.allowWrite:
-		// Commands can write, so enabling them without acknowledging writes
-		// would understate the authority being granted (v1 §10.3).
-		return usage(stderr, command, "--allow-exec also permits writing, so it requires --allow-write")
 	}
 
 	if options.promptFile != "" {
@@ -123,7 +119,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		// exercised without touching the workspace (v0 §10).
 		tools = append(tools, NewEchoTool())
 	}
-	mode := Mode{AllowWrite: options.allowWrite, AllowExec: options.allowExec}
+	mode := Mode{ReadOnly: options.readOnly}
 	registry, err := NewRegistry(mode, tools...)
 	if err != nil {
 		return usage(stderr, command, err.Error())
@@ -239,7 +235,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
-	showContext, allowWrite, allowExec, recap                                      bool
+	showContext, readOnly, recap                                                   bool
 	maxSteps, maxToolCalls                                                         int
 }
 
@@ -251,8 +247,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.StringVar(&o.reasoning, "reasoning-effort", "auto", "reasoning effort to request; auto picks the provider's default, empty omits the parameter")
 	fs.StringVar(&o.script, "scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	fs.BoolVar(&o.showContext, "show-context", false, "print the request the first step would send, then exit")
-	fs.BoolVar(&o.allowWrite, "allow-write", false, "let the model change workspace files with edit_file")
-	fs.BoolVar(&o.allowExec, "allow-exec", false, "let the model run commands with exec; requires --allow-write")
+	fs.BoolVar(&o.readOnly, "read-only", false, "withhold write and exec tools; only allow reading")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
@@ -269,7 +264,7 @@ type flagGroup struct {
 
 var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
-	{"Authority", []string{"workspace", "allow-write", "allow-exec"}},
+	{"Authority", []string{"workspace", "read-only"}},
 	{"Input", []string{"prompt-file"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
@@ -279,7 +274,7 @@ var runFlagGroups = []flagGroup{
 
 var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
-	{"Authority", []string{"workspace", "allow-write", "allow-exec"}},
+	{"Authority", []string{"workspace", "read-only"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir"}},
@@ -301,7 +296,7 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  reagent version                  the build's version")
 	fmt.Fprintln(w, "\nexamples:")
 	fmt.Fprintln(w, "  reagent chat --workspace ./repo")
-	fmt.Fprintln(w, "  reagent run --workspace ./repo --allow-write \"Set the default timeout to 30s.\"")
+	fmt.Fprintln(w, "  reagent run --workspace ./repo \"Set the default timeout to 30s.\"")
 	fmt.Fprintln(w, "  reagent run --workspace . --show-context \"Where is the budget?\" | jq .")
 	fmt.Fprintln(w, "\nenvironment:")
 	fmt.Fprintln(w, "  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run")

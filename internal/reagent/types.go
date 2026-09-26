@@ -148,37 +148,24 @@ const (
 	EffectUnknown EffectState = "unknown"
 )
 
-// Mode is the authority the human granted at launch. Nothing the model sends
-// can widen it: not prompt text, not tool output, not a hallucinated call
-// (v1 §10.3).
+// Mode limits tool authority at launch. Nothing the model sends can widen it.
+// ReadOnly withholds both write and exec tools, since commands can write too.
 type Mode struct {
-	AllowWrite bool
-	AllowExec  bool
+	ReadOnly bool
 }
 
 // String is the explanatory line the model sees. The tools array is what
 // actually authorizes anything.
 func (m Mode) String() string {
-	switch {
-	case m.AllowExec:
-		return "read, write, and execute"
-	case m.AllowWrite:
-		return "read and write"
-	default:
+	if m.ReadOnly {
 		return "read only"
 	}
+	return "read, write, and execute"
 }
 
 // allows reports whether this mode permits a tool of the given effect class.
 func (m Mode) allows(effect EffectClass) bool {
-	switch effect {
-	case EffectClassWrite:
-		return m.AllowWrite
-	case EffectClassExec:
-		return m.AllowExec
-	default:
-		return true
-	}
+	return !m.ReadOnly || (effect != EffectClassWrite && effect != EffectClassExec)
 }
 
 // EffectRecord is one thing a run did outside its own memory. It is derived
