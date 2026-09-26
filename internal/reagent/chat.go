@@ -37,6 +37,7 @@ func chatHelp() string {
 	}
 	b.WriteString(`keys
   Enter            send
+  !COMMAND         run COMMAND in the workspace; its output joins the conversation
   \ at line end    continue on the next line
   ↑ ↓              earlier messages
   Tab              complete a command, model, or effort
@@ -277,6 +278,63 @@ func (c *conversation) commandEdit(ctx context.Context, stdout, stderr io.Writer
 	c.runTurn(ctx, text, stdout, stderr)
 }
 
+// commandShell runs one ! command and adds it to the conversation without
+// starting a turn (v0 §10 amendment of 2026-09-26). Like a turn, it has its
+// own interrupt handler, so Ctrl-C stops the command and not the chat.
+func (c *conversation) commandShell(ctx context.Context, command string, stdout, stderr io.Writer) {
+	if command == "" {
+		fmt.Fprintln(stderr, "!COMMAND runs COMMAND in the workspace; its output joins the conversation")
+		return
+	}
+	shellCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+
+	live := &lineEnd{w: stdout}
+	record, err := runShellCommand(shellCtx, c.cfg.WorkspacePath, command, live)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
+		return
+	}
+	c.session.recordShell(record)
+	if live.open {
+		fmt.Fprintln(stdout)
+	}
+
+	elapsed := formatElapsed(time.Duration(record.DurationMS) * time.Millisecond)
+	var status string
+	switch {
+	case record.Interrupted:
+		status = "interrupted after " + elapsed
+	case record.Signal != nil:
+		status = fmt.Sprintf("killed by %s after %s", *record.Signal, elapsed)
+	default:
+		status = fmt.Sprintf("exit %d · %s", *record.ExitCode, elapsed)
+	}
+	footer := status + " · added to the conversation"
+	if record.OutputTruncated {
+		footer += " · output truncated"
+	}
+	if styledOutput(stderr) {
+		footer = ansiDim + footer + ansiReset
+	}
+	fmt.Fprintln(stderr, footer)
+	c.session.display.spacer()
+}
+
+// lineEnd remembers whether output stopped mid-line, so what follows a
+// command's output starts on a row of its own.
+type lineEnd struct {
+	w    io.Writer
+	open bool
+}
+
+func (l *lineEnd) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		l.open = p[len(p)-1] != '\n'
+	}
+	return l.w.Write(p)
+}
+
 // editorCommand chooses the configured editor, falling back to vi.
 func editorCommand() []string {
 	for _, value := range []string{os.Getenv("VISUAL"), os.Getenv("EDITOR"), "vi"} {
@@ -396,6 +454,8 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			fmt.Fprintln(stderr, "fresh session; the conversation so far is no longer sent")
 		case command == "/edit":
 			c.commandEdit(ctx, stdout, stderr)
+		case strings.HasPrefix(line, "!") && !strings.Contains(line, "\n"):
+			c.commandShell(ctx, strings.TrimSpace(line[1:]), stdout, stderr)
 		case strings.HasPrefix(line, "/"):
 			message := fmt.Sprintf("unknown command %s;", sanitize(command))
 			if suggestion := commandSuggestion(command); suggestion != "" {

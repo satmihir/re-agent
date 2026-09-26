@@ -52,7 +52,7 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 	// The conversation's own parts come first in a fixed order, then each
 	// tool's results in the order the tools were first used.
 	sizes := map[string]int{}
-	order := []string{"your messages", "model reasoning", "model tool calls", "model text"}
+	order := []string{"your messages", "your commands", "model reasoning", "model tool calls", "model text"}
 	add := func(label string, n int) {
 		if _, seen := sizes[label]; !seen && strings.HasSuffix(label, " results") {
 			order = append(order, label)
@@ -76,6 +76,12 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 		switch entry.Kind {
 		case EntryUser:
 			add("your messages", encodedSize(entry.User.Text))
+		case EntryShell:
+			text, err := shellCommandText(*entry.Shell)
+			if err != nil {
+				return contextBreakdown{}, err
+			}
+			add("your commands", encodedSize(text))
 		case EntryAssistant:
 			for _, item := range entry.Assistant.Native.Items {
 				var kind struct {

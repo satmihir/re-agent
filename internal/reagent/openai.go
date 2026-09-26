@@ -157,6 +157,15 @@ func encodeHistory(history []Entry) ([]any, error) {
 				Role:    "user",
 				Content: []responsesContent{{Type: "input_text", Text: entry.User.Text}},
 			})
+		case EntryShell:
+			text, err := shellCommandText(*entry.Shell)
+			if err != nil {
+				return nil, err
+			}
+			input = append(input, responsesMessage{
+				Role:    "user",
+				Content: []responsesContent{{Type: "input_text", Text: text}},
+			})
 		case EntryAssistant:
 			native := entry.Assistant.Native
 			if native.Provider != openaiProvider {

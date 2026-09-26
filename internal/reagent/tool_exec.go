@@ -184,12 +184,7 @@ func classifyRun(parent, deadline context.Context, runErr error, result *execRes
 		return "process_start_failed", runErr.Error(), EffectNone
 	}
 
-	if exitErr != nil {
-		describeExit(exitErr, result)
-	} else {
-		zero := 0
-		result.ExitCode = &zero
-	}
+	result.ExitCode, result.Signal = exitStatus(exitErr)
 
 	// Checked before the deadline, because a cancelled run is cancelled even
 	// though its derived deadline also reports an error (v1 §15.3).
@@ -210,15 +205,20 @@ func classifyRun(parent, deadline context.Context, runErr error, result *execRes
 	return "ok", "", EffectApplied
 }
 
-func describeExit(exitErr *exec.ExitError, result *execResult) {
+// exitStatus reads how a started process ended: an exit code, or the signal
+// that killed it. A nil error is a clean exit.
+func exitStatus(exitErr *exec.ExitError) (*int, *string) {
+	if exitErr == nil {
+		zero := 0
+		return &zero, nil
+	}
 	state := exitErr.ProcessState
 	if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 		name := status.Signal().String()
-		result.Signal = &name
-		return
+		return nil, &name
 	}
 	code := state.ExitCode()
-	result.ExitCode = &code
+	return &code, nil
 }
 
 // trimToResultBudget shortens captured output until the whole encoded outcome

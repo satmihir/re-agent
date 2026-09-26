@@ -15,6 +15,7 @@ const (
 	EntryUser      EntryKind = "user"
 	EntryAssistant EntryKind = "assistant"
 	EntryTool      EntryKind = "tool"
+	EntryShell     EntryKind = "shell"
 )
 
 // Entry is one accepted item of the transcript. Exactly one pointer is set.
@@ -23,11 +24,27 @@ type Entry struct {
 	User      *UserTurn      `json:"user,omitempty"`
 	Assistant *ModelResponse `json:"assistant,omitempty"`
 	Tool      *ToolResult    `json:"tool,omitempty"`
+	Shell     *ShellCommand  `json:"shell,omitempty"`
 }
 
 // UserTurn is one accepted user submission. v0 has no exhibits (v1 §8.3).
 type UserTurn struct {
 	Text string `json:"text"`
+}
+
+// ShellCommand is a command the user ran with ! in chat, and what it printed
+// (v0 §10 amendment of 2026-09-26). The model sees it but never caused it.
+type ShellCommand struct {
+	Kind             string  `json:"kind"`
+	Command          string  `json:"command"`
+	ExitCode         *int    `json:"exit_code"`
+	Signal           *string `json:"signal"`
+	Interrupted      bool    `json:"interrupted"`
+	Output           string  `json:"output"`
+	OutputBytesSeen  int     `json:"output_bytes_seen"`
+	OutputTruncated  bool    `json:"output_truncated"`
+	EncodingReplaced bool    `json:"encoding_replaced"`
+	DurationMS       int64   `json:"duration_ms"`
 }
 
 // BlockKind labels one normalized piece of model output.

@@ -433,3 +433,84 @@ func TestComposeInEditor(t *testing.T) {
 		t.Fatal("failing editor succeeded")
 	}
 }
+
+// requestRecorder keeps every request a scripted model was asked to answer.
+type requestRecorder struct {
+	*ScriptedModel
+	requests []ModelRequest
+}
+
+func (m *requestRecorder) Generate(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+	m.requests = append(m.requests, req)
+	return m.ScriptedModel.Generate(ctx, req)
+}
+
+func TestChat_BangRunsLocallyAndSpendsNothing(t *testing.T) {
+	model := NewScriptedModel()
+	stdout, stderr := chatSession(t, model, "!echo hi\n!printf partial\n")
+
+	// Output that stops mid-line is ended, so nothing after it shares its row.
+	if stdout != "hi\npartial\n" {
+		t.Fatalf("stdout: %q", stdout)
+	}
+	if !strings.Contains(stderr, "exit 0 · ") || !strings.Contains(stderr, "added to the conversation") {
+		t.Fatalf("stderr: %q", stderr)
+	}
+	if model.next != 0 {
+		t.Fatalf("the model was called %d times", model.next)
+	}
+}
+
+func TestChat_BangAloneExplainsUsage(t *testing.T) {
+	stdout, stderr := chatSession(t, NewScriptedModel(), "!\n!   \n")
+	if stdout != "" || strings.Count(stderr, "!COMMAND runs COMMAND") != 2 {
+		t.Fatalf("stdout %q, stderr %q", stdout, stderr)
+	}
+}
+
+// A paste is one submission of several lines; one that happens to start with
+// ! is still a message, never a script.
+func TestChat_MultiLineBangIsAMessage(t *testing.T) {
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{line: "![diagram](a.png)\nwhat does this show?"}}}
+	model := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("a diagram")))}
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if len(model.requests) != 1 || model.requests[0].History[0].Kind != EntryUser {
+		t.Fatalf("requests: %+v", model.requests)
+	}
+}
+
+func TestChat_ShellOutputReachesTheNextRequest(t *testing.T) {
+	model := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("it printed a marker")))}
+	var out, errs bytes.Buffer
+	cfg := testConfig(t)
+	cfg.WorkspacePath = t.TempDir()
+	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	input := newLineReader(strings.NewReader("!echo marker-4417; exit 2\nwhat did that print?\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+
+	if len(model.requests) != 1 {
+		t.Fatalf("got %d requests", len(model.requests))
+	}
+	history := model.requests[0].History
+	if len(history) != 2 || history[0].Kind != EntryShell || history[1].Kind != EntryUser {
+		t.Fatalf("history: %+v", history)
+	}
+	if shell := history[0].Shell; shell.Output != "marker-4417\n" || *shell.ExitCode != 2 {
+		t.Fatalf("shell: %+v", shell)
+	}
+	// A command is context, not a turn.
+	if session.Turns() != 1 || !strings.Contains(errs.String(), "exit 2 · ") {
+		t.Fatalf("turns %d, stderr %q", session.Turns(), errs.String())
+	}
+}

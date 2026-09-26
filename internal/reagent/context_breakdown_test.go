@@ -24,8 +24,9 @@ func toolEntry(t *testing.T, name string, data any) Entry {
 	return Entry{Kind: EntryTool, Tool: &ToolResult{CallID: "call", Name: name, Outcome: outcome}}
 }
 
-// editedHistory reads a file, edits it, reads it again twice, and replies. The
-// first read is stale and the last is a repeat of the one before it.
+// editedHistory reads a file, edits it, reads it again twice, and replies; then
+// the user runs a command and asks again. The first read is stale and the last
+// is a repeat of the one before it.
 func editedHistory(t *testing.T, provider, reasoning, call, text string) []Entry {
 	before := map[string]any{"path": "a.go", "sha256": "old", "lines": []string{"package a", "var x = 1"}}
 	after := map[string]any{"path": "a.go", "sha256": "new", "lines": []string{"package a", "var x = 2"}}
@@ -40,6 +41,8 @@ func editedHistory(t *testing.T, provider, reasoning, call, text string) []Entry
 		assistantEntry(provider, Usage{}, call),
 		toolEntry(t, "read_file", after),
 		assistantEntry(provider, Usage{Known: true, InputTokens: 2400, CachedInputTokens: 2000}, text),
+		shellEntry("vet: ok\n"),
+		{Kind: EntryUser, User: &UserTurn{Text: "and now?"}},
 	}
 }
 
@@ -93,6 +96,10 @@ func TestContextBreakdown_PartsAddUpToTheEncodedRequest(t *testing.T) {
 			}
 			if part(t, got, "model reasoning") != len(test.reasoning) || part(t, got, "model tool calls") != 4*len(test.call) {
 				t.Fatalf("model items were misattributed: %+v", got.parts)
+			}
+			command, _ := shellCommandText(*history[len(history)-2].Shell)
+			if part(t, got, "your commands") != encodedSize(command) {
+				t.Fatalf("the command was misattributed: %+v", got.parts)
 			}
 			if structure := part(t, got, "JSON structure"); structure <= 0 || structure > len(body)/2 {
 				t.Fatalf("structure is %d of %d bytes", structure, len(body))

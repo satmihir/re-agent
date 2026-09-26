@@ -65,6 +65,12 @@ func (s *Session) Reset() {
 	s.lastTrace = ""
 }
 
+// recordShell appends a command the user ran with !. It is not a turn: no run
+// starts, and the model sees it with the next one.
+func (s *Session) recordShell(command ShellCommand) {
+	s.history = append(s.history, Entry{Kind: EntryShell, Shell: &command})
+}
+
 // LastTrace is the path of the most recent run's trace, or empty.
 func (s *Session) LastTrace() string { return s.lastTrace }
 
