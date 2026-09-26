@@ -55,6 +55,7 @@ type conversation struct {
 	session   *Session
 	cfg       Config
 	keys      map[string]string
+	proxy     apiProxy
 	client    *http.Client
 	scripted  Model
 	trace     *Trace
@@ -71,8 +72,8 @@ type conversation struct {
 // available reports which providers this process holds a credential for.
 func (c *conversation) available() map[string]bool {
 	return map[string]bool{
-		openaiName:    c.keys[openaiName] != "",
-		anthropicName: c.keys[anthropicName] != "",
+		openaiName:    c.keys[openaiName] != "" || c.proxy.serves(openaiName),
+		anthropicName: c.keys[anthropicName] != "" || c.proxy.serves(anthropicName),
 	}
 }
 
@@ -100,19 +101,23 @@ func (c *conversation) commandModel(argument string, stderr io.Writer) {
 	case info.ID == c.cfg.Model:
 		fmt.Fprintf(stderr, "already using %s\n", info.ID)
 		return
-	case c.keys[info.Provider] == "":
+	case c.keys[info.Provider] == "" && !c.proxy.serves(info.Provider):
 		fmt.Fprintf(stderr, "%s needs %s, which is not set\n", info.ID, apiKeyVariable(info.Provider))
 		return
 	}
 
 	discarded := c.session.Turns()
 	c.switchTo(info)
+	route := info.Provider
+	if c.proxy.serves(info.Provider) {
+		route += " via " + proxyURLVariable
+	}
 	if discarded > 0 {
 		fmt.Fprintf(stderr, "switched to %s (%s); fresh session, %d turns discarded\n",
-			info.ID, info.Provider, discarded)
+			info.ID, route, discarded)
 		return
 	}
-	fmt.Fprintf(stderr, "switched to %s (%s)\n", info.ID, info.Provider)
+	fmt.Fprintf(stderr, "switched to %s (%s)\n", info.ID, route)
 }
 
 // switchTo replaces the session with one built for a different model. Effort
@@ -120,7 +125,7 @@ func (c *conversation) commandModel(argument string, stderr io.Writer) {
 // be one this one rejects.
 func (c *conversation) switchTo(info modelInfo) {
 	c.cfg.Provider, c.cfg.Model, c.cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
-	model := newLiveModel(info.Provider, c.keys[info.Provider], c.client, c.trace)
+	model := newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, c.trace)
 	c.session = NewSession(c.cfg, model, c.trace, c.progress)
 	c.usage = Usage{Known: true}
 }
@@ -164,6 +169,9 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 		fmt.Fprintf(stderr, "model      %s\n", sanitize(model))
 	} else {
 		fmt.Fprintf(stderr, "model      %s (%s), %s\n", sanitize(model), sanitize(provider), sanitize(effort))
+	}
+	if c.scripted == nil && c.proxy.serves(c.cfg.Provider) {
+		fmt.Fprintf(stderr, "endpoint   %s (%s)\n", sanitize(c.proxy.shown()), proxyURLVariable)
 	}
 	fmt.Fprintf(stderr, "workspace  %s\n", sanitize(workspace))
 	fmt.Fprintf(stderr, "mode       %s\n", sanitize(c.cfg.Registry.Mode().String()))

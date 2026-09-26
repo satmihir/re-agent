@@ -244,7 +244,24 @@ quality.
 | `--max-steps`, `--max-tool-calls` | Run budgets. Default 20 and 40. |
 
 `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is required only for a live run on
-that provider. Exit codes are 0 for a
+that provider.
+
+To send OpenAI requests through a proxy that speaks the Responses API, such as
+a gateway that resells it, set both of these:
+
+```bash
+export API_PROXY_URL=http://localhost:8080/v1/responses
+export API_PROXY_PROVIDER=openai
+```
+
+The URL is the full endpoint and is used exactly as given; `http` and `https`
+are both accepted. The proxy is sent no `Authorization` header, even when
+`OPENAI_API_KEY` is set, and OpenAI runs no longer need a key. Anthropic runs
+are unaffected, and `openai` is the only provider a proxy can serve for now.
+The header, `/status`, and `/model` say when requests are going to the proxy,
+and the trace records its URL with any password masked.
+
+Exit codes are 0 for a
 completed reply or a successful preview, 1 for a run that did not complete, and
 2 for a bad invocation. A failing command inside a run does not become the
 harness's exit code.

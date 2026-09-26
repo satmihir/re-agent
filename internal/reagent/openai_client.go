@@ -6,8 +6,8 @@ import (
 	"net/http"
 )
 
-// openAIEndpoint is fixed. v0 exposes no user-selectable base URL; tests pass
-// their own to the constructor (v1 §9.1).
+// openAIEndpoint is the provider's own. v1 §9.1 exposes no user-selectable base
+// URL; v0 allows one proxy in its place (v0 §6 amendment of 2026-09-25).
 const openAIEndpoint = "https://api.openai.com/v1/responses"
 
 // OpenAIModel calls the Responses API directly. It is an encoder, a decoder,
@@ -17,14 +17,19 @@ type OpenAIModel struct {
 }
 
 // NewOpenAIModel wires the adapter. The key reaches only the Authorization
-// header: never a request body, a trace, or an error.
+// header: never a request body, a trace, or an error. An empty key sends no
+// Authorization header at all, which is how a proxy is called.
 func NewOpenAIModel(apiKey, endpoint string, client *http.Client, trace *Trace) *OpenAIModel {
 	if endpoint == "" {
 		endpoint = openAIEndpoint
 	}
+	headers := map[string]string{}
+	if apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
+	}
 	return &OpenAIModel{transport: &transport{
 		endpoint:        endpoint,
-		headers:         map[string]string{"Authorization": "Bearer " + apiKey},
+		headers:         headers,
 		requestIDHeader: "x-request-id",
 		client:          client,
 		trace:           trace,

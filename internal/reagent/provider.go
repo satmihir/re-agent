@@ -3,6 +3,7 @@ package reagent
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -85,9 +86,56 @@ func apiKeyVariable(provider string) string {
 	return "OPENAI_API_KEY"
 }
 
-// newLiveModel constructs the adapter for a provider. The endpoint is empty in
-// production; tests pass a local server.
-func newLiveModel(provider, apiKey string, client *http.Client, trace *Trace) Model {
+// The proxy's environment variables (v0 §6 amendment of 2026-09-25).
+const (
+	proxyURLVariable      = "API_PROXY_URL"
+	proxyProviderVariable = "API_PROXY_PROVIDER"
+)
+
+// apiProxy is an endpoint that receives one provider's requests in place of the
+// provider itself, such as a gateway that resells the same API. It
+// authenticates callers on its own terms, so no API key is ever sent to it.
+type apiProxy struct {
+	provider string
+	endpoint string
+}
+
+// readAPIProxy validates the two proxy variables, which only mean something
+// together. The URL is the full endpoint and is used exactly as given.
+func readAPIProxy(endpoint, provider string) (apiProxy, error) {
+	switch {
+	case endpoint == "" && provider == "":
+		return apiProxy{}, nil
+	case endpoint == "":
+		return apiProxy{}, fmt.Errorf("%s is set but %s is not", proxyProviderVariable, proxyURLVariable)
+	case provider == "":
+		return apiProxy{}, fmt.Errorf("%s is set but %s is not; set it to %s", proxyURLVariable, proxyProviderVariable, openaiName)
+	case provider != openaiName:
+		return apiProxy{}, fmt.Errorf("%s %q is not supported; only %s is", proxyProviderVariable, provider, openaiName)
+	}
+	// The parse error is not repeated, because it would quote a URL that may
+	// hold a password.
+	u, err := url.Parse(endpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return apiProxy{}, fmt.Errorf("%s must be a full http or https URL, such as http://localhost:8080/v1/responses", proxyURLVariable)
+	}
+	return apiProxy{provider: provider, endpoint: endpoint}, nil
+}
+
+// serves reports whether a provider's requests go to this proxy.
+func (p apiProxy) serves(provider string) bool { return p.provider != "" && p.provider == provider }
+
+// shown is the endpoint as it may be displayed or traced, with any password
+// masked.
+func (p apiProxy) shown() string { return redacted(p.endpoint) }
+
+// newLiveModel constructs the adapter for a provider. Without a proxy the
+// endpoint is the provider's own; tests pass a local server.
+func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, trace *Trace) Model {
+	if proxy.serves(provider) {
+		// Only OpenAI can be proxied, and the proxy is sent no key.
+		return NewOpenAIModel("", proxy.endpoint, client, trace)
+	}
 	if provider == anthropicName {
 		return NewAnthropicModel(apiKey, "", client, trace)
 	}
