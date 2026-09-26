@@ -18,6 +18,9 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 	if err != nil || byPosition.ID != "gpt-6-luna" {
 		t.Fatalf("position 1 got %+v %v", byPosition, err)
 	}
+	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6-sol" {
+		t.Fatalf("position 2 got %+v %v", sol, err)
+	}
 	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", ""} {
 		if _, err := selectModel(choice); err == nil {
 			t.Fatalf("%q was accepted", choice)
@@ -58,8 +61,9 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 
 	for _, want := range []string{
 		"1  gpt-6-luna        openai",
-		"2  gpt-5.6-luna      openai     current",
-		"4  claude-haiku-4-5  anthropic  no key",
+		"2  gpt-6-sol         openai",
+		"3  gpt-5.6-luna      openai     current",
+		"5  claude-haiku-4-5  anthropic  no key",
 		"models marked no key need ANTHROPIC_API_KEY",
 		"a model change starts a fresh session",
 	} {
@@ -101,6 +105,7 @@ func TestModelCatalog_EffortSupport(t *testing.T) {
 		{"gpt-5.6-luna", "none,low,medium,high,xhigh,max"},
 		{"gpt-5.6-terra", "none,low,medium,high,xhigh,max"},
 		{"gpt-6-luna", "none,low,medium,high,xhigh,max"},
+		{"gpt-6-sol", "none,low,medium,high,xhigh,max"},
 		{"claude-haiku-4-5", ""},
 		{"claude-sonnet-5", "low,medium,high,xhigh,max"},
 	} {

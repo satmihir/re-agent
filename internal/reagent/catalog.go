@@ -34,6 +34,8 @@ type modelInfo struct {
 var modelCatalog = []modelInfo{
 	{ID: "gpt-6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
 		Note: "cheapest"},
+	{ID: "gpt-6-sol", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
+		Note: "most capable, costs most"},
 	{ID: "gpt-5.6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
 		Note: "cheap"},
 	{ID: "gpt-5.6-terra", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
