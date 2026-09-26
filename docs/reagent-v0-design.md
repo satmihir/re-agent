@@ -296,6 +296,8 @@ A `Makefile` now exists, added on request. `make check` runs gofmt, vet, and the
 
 **Amendment (2026-09-25):** The catalog now offers five models. `gpt-6-luna` joins the OpenAI entries in position 3, accepts the same reasoning efforts, and defaults to `low`; `gpt-5.6-luna` is now marked `cheap` rather than `cheapest`. The default model remains `gpt-5.6-luna`, so existing requests and benchmark comparisons are unchanged.
 
+**Amendment (2026-09-25):** The catalog now offers six models: `gpt-6-sol` joins in position 2, after `gpt-6-luna`, which #10 moved to position 1. It defaults to `low` effort and shares the other OpenAI entries' effort list. A proxy's model listing advertised an `ultra` effort for it, but the API rejects `ultra`, so the list stays the one the API accepts; an explicit `--reasoning-effort` is still passed through unchecked. The default model is unchanged.
+
 **Amendment (2026-09-25):** The OpenAI default model is now `gpt-6-luna`. `gpt-5.6-luna` remains available as an explicit selection; existing benchmark results continue to identify the model used.
 
 **Amendment (2026-09-25):** Newlines inside command arguments, `cwd`, and search queries are shown as `↵` in activity, status, and recap lines, so each stays on one terminal row. The status line erases only its own row, and a multi-line label left stale rows behind. The trace and the request are unchanged.
