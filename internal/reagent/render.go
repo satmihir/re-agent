@@ -21,6 +21,9 @@ const (
 	ansiRed    = "\x1b[31m"
 	ansiGreen  = "\x1b[32m"
 	ansiYellow = "\x1b[33m"
+	// v0 §10 amendment (2026-09-26): no basic colour makes a subtle background;
+	// on light themes this deliberate 256-colour exception shows as a dark bar.
+	ansiUserBand = "\x1b[48;5;236m"
 )
 
 // isTerminalControl reports characters that must never reach a terminal as
