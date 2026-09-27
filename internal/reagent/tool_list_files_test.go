@@ -43,6 +43,15 @@ func TestListFiles_SortedAndPaginated(t *testing.T) {
 	}
 }
 
+func TestListFiles_EmptyPathListsTheRoot(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"b.txt": "x", "a.txt": "x", "sub/c.txt": "x"})
+	var got listFilesResult
+	data(t, runTool(t, NewListFilesTool(ws), `{"path":""}`), &got)
+	if listedNames(got.Entries) != "a.txt,b.txt,sub" || got.Path != "" || !got.Complete {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestListFiles_ExcludesWithheldEntriesAndCountsThem(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{
 		"a.txt": "x", ".git/config": "x", ".env": "x", ".env.local": "x", ".envrc": "x",
