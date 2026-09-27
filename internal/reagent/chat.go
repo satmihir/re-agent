@@ -529,6 +529,9 @@ func (c *conversation) runTurn(ctx context.Context, text string, stdout, stderr 
 		c.session.display.blocked(result.TracePath)
 	} else {
 		printResult(c.session.display, result, time.Since(started), stdout, c.recap, showTrace)
+		if result.Resumable {
+			c.session.display.resumable()
+		}
 	}
 	c.session.display.spacer()
 }

@@ -132,8 +132,9 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 // The differences from the Responses encoding are the shape of a turn, not its
 // meaning: an assistant turn is one message whose content is the provider's
 // own blocks, kept verbatim (I15), and every tool result answering that turn
-// goes into one user message, which is what the API requires. A ! command and
-// the message typed after it are likewise one user message of two blocks.
+// goes into one user message, which is what the API requires. Text that follows
+// another user message, such as a ! command or a turn whose request failed,
+// joins that message, so user and assistant messages still alternate.
 func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 	var messages []messagesMessage
 	var pendingResults []messagesToolResult
@@ -148,7 +149,20 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 		flushResults()
 		block := messagesTextBlock{Type: "text", Text: text}
 		if last := len(messages) - 1; last >= 0 && messages[last].Role == "user" {
-			if blocks, ok := messages[last].Content.([]messagesTextBlock); ok {
+			switch blocks := messages[last].Content.(type) {
+			case []messagesTextBlock:
+				messages[last].Content = append(blocks, block)
+				return
+			case []messagesToolResult:
+				// A run that failed after its tools ran leaves their results
+				// last; text joins them, results first, as the API requires.
+				mixed := make([]any, 0, len(blocks)+1)
+				for _, result := range blocks {
+					mixed = append(mixed, result)
+				}
+				messages[last].Content = append(mixed, block)
+				return
+			case []any:
 				messages[last].Content = append(blocks, block)
 				return
 			}
@@ -213,6 +227,12 @@ func markCachePoint(messages []messagesMessage) {
 	case []messagesToolResult:
 		if len(content) > 0 {
 			content[len(content)-1].CacheControl = ephemeralCache
+		}
+	case []any:
+		// Mixed content always ends with the text appended after results.
+		if text, ok := content[len(content)-1].(messagesTextBlock); ok {
+			text.CacheControl = ephemeralCache
+			content[len(content)-1] = text
 		}
 	}
 }

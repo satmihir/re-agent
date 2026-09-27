@@ -156,3 +156,72 @@ func TestTrace_ReopensForEachRun(t *testing.T) {
 		t.Fatalf("second run's first event is %+v", events[0])
 	}
 }
+
+// failingThen fails its first request with err, then answers from a script.
+type failingThen struct {
+	err    error
+	failed bool
+	next   *ScriptedModel
+}
+
+func (m *failingThen) Name() string { return "failing" }
+func (m *failingThen) Generate(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+	if !m.failed {
+		m.failed = true
+		return ModelResponse{}, m.err
+	}
+	return m.next.Generate(ctx, req)
+}
+
+// A failed model request appends nothing, so the transcript still ends where a
+// request can be built from, and the next submission continues from there.
+func TestSession_FailedModelRequestLeavesTheSessionUsable(t *testing.T) {
+	model := &failingThen{
+		err:  &ModelError{Status: StatusProviderError, Message: "provider reported a stream error (server_is_overloaded): overloaded"},
+		next: NewScriptedModel(turn(textBlock("back again"))),
+	}
+	session, first, second := twoTurns(t, testConfig(t), model, t.TempDir())
+
+	if first.Status != StatusProviderError || !first.Resumable {
+		t.Fatalf("first: %s resumable=%v", first.Status, first.Resumable)
+	}
+	if session.blocked != "" || second.Status != StatusCompleted || second.Reply != "back again" {
+		t.Fatalf("blocked %q, second %s %q", session.blocked, second.Status, second.Reply)
+	}
+	kinds := []EntryKind{EntryUser, EntryUser, EntryAssistant}
+	if len(session.history) != len(kinds) {
+		t.Fatalf("history has %d entries", len(session.history))
+	}
+	for i, kind := range kinds {
+		if session.history[i].Kind != kind {
+			t.Fatalf("entry %d is %s, want %s", i, session.history[i].Kind, kind)
+		}
+	}
+}
+
+func TestSession_CancelledRequestIsResumable(t *testing.T) {
+	session := NewSession(testConfig(t), NewScriptedModel(turn(textBlock("answered"))), NewTrace(io.Discard), io.Discard)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	first, err := session.Turn(cancelled, "q", "run1", filepath.Join(t.TempDir(), "1.jsonl"))
+	if err != nil || first.Status != StatusCancelled || !first.Resumable || session.blocked != "" {
+		t.Fatalf("got %s resumable=%v blocked=%q err=%v", first.Status, first.Resumable, session.blocked, err)
+	}
+	second, err := session.Turn(context.Background(), "q again", "run2", filepath.Join(t.TempDir(), "2.jsonl"))
+	if err != nil || second.Status != StatusCompleted {
+		t.Fatalf("got %s %v", second.Status, err)
+	}
+}
+
+// A request over the size limit only grows if resent, so it still blocks.
+func TestSession_OversizeRequestStillBlocks(t *testing.T) {
+	model := &failingThen{
+		err:  &ModelError{Status: StatusLimitExceeded, Message: "request is over the limit"},
+		next: NewScriptedModel(),
+	}
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), io.Discard)
+	first, err := session.Turn(context.Background(), "q", "run1", filepath.Join(t.TempDir(), "1.jsonl"))
+	if err != nil || first.Resumable || session.blocked != string(StatusLimitExceeded) {
+		t.Fatalf("got %s resumable=%v blocked=%q err=%v", first.Status, first.Resumable, session.blocked, err)
+	}
+}

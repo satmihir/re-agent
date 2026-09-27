@@ -39,6 +39,9 @@ type Run struct {
 	steps   int
 	calls   int
 	usage   Usage
+	// resumable is set only where a run stops before a response is accepted
+	// (v0 §10 amendment of 2026-09-26).
+	resumable bool
 }
 
 func newRun(session *Session, runID string) *Run {
@@ -78,6 +81,7 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 
 	for {
 		if ctx.Err() != nil {
+			r.resumable = true
 			return r.finish(StatusCancelled, "cancelled before the next model request", "")
 		}
 
@@ -94,6 +98,10 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 			status, usage := classifyModelError(err)
 			r.usage.Add(usage)
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": err.Error()})
+			// Nothing was appended, so the transcript still ends where this
+			// request was built from. A request too large to send is not
+			// resumable: sending it again would only make it larger.
+			r.resumable = status == StatusProviderError || status == StatusCancelled
 			return r.finish(status, err.Error(), "")
 		}
 		if reason := r.validateResponse(resp); reason != "" {
@@ -272,7 +280,7 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 	result := RunResult{
 		Status: status, Reason: reason, Reply: reply,
 		Steps: r.steps, ToolCalls: r.calls, Usage: r.usage, TracePath: r.trace.Path(),
-		Effects: r.effects,
+		Effects: r.effects, Resumable: r.resumable,
 	}
 	r.trace.Write("run.finished", r.steps, result)
 	return result

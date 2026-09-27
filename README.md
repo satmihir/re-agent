@@ -109,7 +109,10 @@ Tab completes slash commands, model names after `/model`, and effort names
 after `/effort`. Piped input is still read one line at a time, so scripting
 `chat` is unaffected. A turn that ends badly, for instance by running out of
 steps, blocks the session until `/reset`, so a conversation is never silently
-continued from a state the harness could not account for.
+continued from a state the harness could not account for. The exception is a
+model request that failed or was cancelled before any reply was accepted, such
+as a provider overload: nothing was appended, so your next message simply
+continues from the last completed step.
 
 ## What it can do
 

@@ -169,6 +169,12 @@ func TestOpenAIStream_Failures(t *testing.T) {
 		"error event": {
 			sse(`{"type":"error","message":"rate limited"}`), StatusProviderError, "rate limited",
 		},
+		// The event a proxied gpt-6-sol request actually ended with, whose
+		// message is nested under error.
+		"nested error event": {
+			sse(`{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","headers":{"x-retry-metadata":"NO_MORE_RETRY"},"message":"Our servers are currently overloaded. Please try again later.","param":null},"sequence_number":2}`),
+			StatusProviderError, "(server_is_overloaded): Our servers are currently overloaded.",
+		},
 		"cut off": {
 			sse(`{"type":"response.created","response":{"status":"in_progress"}}`, itemDone(0, streamText)),
 			StatusIncompleteResp, "stream ended before the response completed",

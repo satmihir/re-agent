@@ -212,6 +212,19 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 }
 
 // blocked makes a non-continuable turn actionable before showing its trace.
+// resumable says that a failed turn left nothing to undo, so the user knows the
+// next message simply carries on (v0 §10 amendment of 2026-09-26).
+func (d *Display) resumable() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.eraseStatusLocked()
+	text := "  nothing was lost; your next message continues from the last completed step"
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	fmt.Fprintln(d.w, text)
+}
+
 func (d *Display) blocked(tracePath string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

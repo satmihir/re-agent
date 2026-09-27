@@ -13,7 +13,16 @@ type streamEvent struct {
 	Response    json.RawMessage `json:"response"`
 	Item        json.RawMessage `json:"item"`
 	OutputIndex *int            `json:"output_index"`
+	Code        string          `json:"code"`
 	Message     string          `json:"message"`
+	Error       *streamError    `json:"error"`
+}
+
+// streamError is the error an error event may nest instead of carrying its
+// code and message at the top level.
+type streamError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // assembleOpenAIStream rebuilds the body a non-streamed request would have
@@ -41,7 +50,7 @@ func assembleOpenAIStream(raw []byte) ([]byte, error) {
 		case "response.failed":
 			return nil, streamFailure(event.Response)
 		case "error":
-			return nil, &ModelError{Status: StatusProviderError, Message: "provider reported a stream error: " + event.Message}
+			return nil, &ModelError{Status: StatusProviderError, Message: streamErrorMessage(event)}
 		case "response.completed", "response.incomplete":
 			// An incomplete response is normalized like a non-streamed one,
 			// which is what reports it and its reason.
@@ -104,6 +113,20 @@ func streamData(raw []byte) []string {
 	}
 	flush()
 	return events
+}
+
+// streamErrorMessage reads an error event in either shape. A proxied request
+// was seen ending with the nested one, whose message the top-level field
+// missed (v0 §10 amendment of 2026-09-26).
+func streamErrorMessage(event streamEvent) string {
+	code, message := event.Code, event.Message
+	if event.Error != nil {
+		code, message = event.Error.Code, event.Error.Message
+	}
+	if code != "" {
+		return fmt.Sprintf("provider reported a stream error (%s): %s", code, message)
+	}
+	return "provider reported a stream error: " + message
 }
 
 // streamFailure reports a failed response with the provider's own reason and
