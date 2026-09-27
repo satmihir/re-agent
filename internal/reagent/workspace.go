@@ -161,25 +161,46 @@ func osOutcome(err error) *ToolOutcome {
 // v0 stops there: it does not sync, re-check the digest immediately before the
 // rename, or reconcile an interrupted publication (v1 §13.4 restores those).
 func publish(abs string, content []byte, mode os.FileMode) error {
-	temp, err := os.CreateTemp(filepath.Dir(abs), ".reagent-*")
+	name, err := stageFile(abs, content, mode)
 	if err != nil {
 		return err
 	}
-	name := temp.Name()
 	// Harmless once the rename has consumed the temporary file.
 	defer os.Remove(name)
+	return os.Rename(name, abs)
+}
 
+// v0 §8 amendment (2026-09-27): linking a staged file makes create exclusive;
+// rename would overwrite an unguarded file that appeared during this call.
+func publishNew(abs string, content []byte) error {
+	name, err := stageFile(abs, content, 0o600)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(name)
+	return os.Link(name, abs)
+}
+
+func stageFile(abs string, content []byte, mode os.FileMode) (string, error) {
+	temp, err := os.CreateTemp(filepath.Dir(abs), ".reagent-*")
+	if err != nil {
+		return "", err
+	}
+	name := temp.Name()
 	if _, err := temp.Write(content); err != nil {
 		temp.Close()
-		return err
+		os.Remove(name)
+		return "", err
 	}
 	if err := temp.Close(); err != nil {
-		return err
+		os.Remove(name)
+		return "", err
 	}
 	if err := os.Chmod(name, mode); err != nil {
-		return err
+		os.Remove(name)
+		return "", err
 	}
-	return os.Rename(name, abs)
+	return name, nil
 }
 
 // digestOf is the same SHA-256 a snapshot reports, for bytes about to be

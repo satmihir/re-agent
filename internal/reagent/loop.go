@@ -258,9 +258,14 @@ func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 	if outcome.Effect != EffectNone {
 		// Recorded from the outcome, so a failed run still reports what it
 		// actually changed (v1 §19.3).
+		summary := argumentSummary(call.Arguments)
+		if call.Name == "write_file" || call.Name == "delete_file" {
+			// v0 §8 amendment (2026-09-27): never put content in the effect recap.
+			summary = "path=" + callTarget(*call)
+		}
 		r.effects = append(r.effects, EffectRecord{
 			Step: r.steps, CallID: call.CallID, Tool: call.Name,
-			Summary: argumentSummary(call.Arguments), Effect: outcome.Effect,
+			Summary: summary, Effect: outcome.Effect,
 		})
 	}
 	r.trace.Write("tool.finished", r.steps, result)

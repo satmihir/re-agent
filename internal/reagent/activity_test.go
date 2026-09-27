@@ -14,6 +14,8 @@ func TestActivity_FailedCallsUseToolTargets(t *testing.T) {
 	}{
 		{ToolCall{Name: "read_file", Arguments: `{"path":"missing.txt"}`}, "not_found", "missing", "  ✗ read_file missing.txt → not_found: missing\n"},
 		{ToolCall{Name: "edit_file", Arguments: `{"path":"conf.txt","old_text":"x","new_text":"y"}`}, "stale_file", "stale", "  ✗ edit_file conf.txt → stale_file: stale\n"},
+		{ToolCall{Name: "write_file", Arguments: `{"path":"conf.txt","content":"secret"}`}, "invalid_arguments", "exists", "  ✗ write_file conf.txt → invalid_arguments: exists\n"},
+		{ToolCall{Name: "delete_file", Arguments: `{"path":"conf.txt"}`}, "stale_file", "stale", "  ✗ delete_file conf.txt → stale_file: stale\n"},
 		{ToolCall{Name: "exec", Arguments: `{"argv":["sh","-c","exit 3"],"cwd":"."}`}, "command_failed", "failed", "  ✗ exec sh -c 'exit 3' → command_failed: failed\n"},
 	}
 	for _, test := range tests {
@@ -52,6 +54,9 @@ func TestActivity_DescribesEachTool(t *testing.T) {
 		{"search", ToolCall{Name: "search_text", Arguments: `{"query":"q","path":"."}`}, `{"matches":[{"path":"a"},{"path":"b"}],"complete":true}`, "  ✓ search_text \"q\" in . → 2 matches in 2 files\n"},
 		{"search incomplete", ToolCall{Name: "search_text", Arguments: `{"query":"q","path":"."}`}, `{"matches":[],"complete":false}`, "  ✓ search_text \"q\" in . → no matches, incomplete\n"},
 		{"edit", ToolCall{Name: "edit_file", Arguments: `{"path":"a","old_text":"x","new_text":"y"}`}, `{"changed":true}`, "  ✓ edit_file a → +1 -1\n      - x\n      + y\n"},
+		{"create", ToolCall{Name: "write_file", Arguments: `{"path":"new.go","content":"private"}`}, `{"operation":"create","size_bytes":1200}`, "  ✓ write_file new.go (created, 1.2 KB)\n"},
+		{"overwrite", ToolCall{Name: "write_file", Arguments: `{"path":"a.go","content":"replacement"}`}, `{"operation":"overwrite"}`, "  ✓ write_file a.go (replaced)\n"},
+		{"delete", ToolCall{Name: "delete_file", Arguments: `{"path":"old.go"}`}, `{"operation":"delete"}`, "  ✓ delete_file old.go\n"},
 		{"exec", ToolCall{Name: "exec", Arguments: `{"argv":["true"],"cwd":"."}`}, `{"exit_code":0,"duration_ms":500}`, "  ✓ exec true → exit 0 in 0.5s\n"},
 		{"echo", ToolCall{Name: "echo", Arguments: `{"text":"hello"}`}, `{}`, "  ✓ echo \"hello\"\n"},
 	}
@@ -62,6 +67,22 @@ func TestActivity_DescribesEachTool(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestActivity_FileWriterRecap(t *testing.T) {
+	for _, tc := range []struct{ tool, args, result, want string }{
+		{"write_file", `{"path":"a.go","content":"new"}`, `{"operation":"create"}`, "created a.go"},
+		{"write_file", `{"path":"a.go","content":"new","expected_sha256":"x"}`, `{"operation":"overwrite"}`, "changed a.go"},
+		{"delete_file", `{"path":"a.go","expected_sha256":"x"}`, `{"operation":"delete"}`, "deleted a.go"},
+	} {
+		call := ToolCall{Name: tc.tool, Arguments: tc.args}
+		if got := recapLine(call, ToolOutcome{Effect: EffectApplied, Data: []byte(tc.result)}); got != tc.want {
+			t.Fatalf("%s: got %q, want %q", tc.tool, got, tc.want)
+		}
+		if got := recapLine(call, ToolOutcome{Effect: EffectNone}); got != "" {
+			t.Fatalf("a refused change was recapped: %s", got)
+		}
 	}
 }
 
