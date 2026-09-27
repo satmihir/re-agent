@@ -26,7 +26,17 @@ type fakeLineReader struct {
 		line string
 		err  error
 	}
-	prompts []string
+	prompts       []string
+	chosen        int
+	chooseErr     error
+	chooseCalls   int
+	choiceCurrent int
+}
+
+func (r *fakeLineReader) Choose(_ string, _ []choice, current int) (int, error) {
+	r.chooseCalls++
+	r.choiceCurrent = current
+	return r.chosen, r.chooseErr
 }
 
 func (r *fakeLineReader) ReadLine() (string, error) {
@@ -190,6 +200,74 @@ func newConversation(t *testing.T, model, effort string, turns int) *conversatio
 	return c
 }
 
+func TestChat_ModelPickerSwitches(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "low", 1)
+	before := c.session
+	input := &fakeLineReader{chosen: 1}
+	input.reads = append(input.reads, struct {
+		line string
+		err  error
+	}{line: "/model"})
+	var out, errs bytes.Buffer
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if input.chooseCalls != 1 || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
+		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.cfg.Model, out.String())
+	}
+	if !strings.Contains(errs.String(), "switched to gpt-6-sol") {
+		t.Fatalf("stderr: %s", errs.String())
+	}
+}
+
+func TestChat_ModelPickerCancelKeepsTheModel(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "low", 2)
+	before := c.session
+	input := &fakeLineReader{chooseErr: errCancelled}
+	input.reads = append(input.reads, struct {
+		line string
+		err  error
+	}{line: "/model"})
+	var out, errs bytes.Buffer
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if c.session != before || c.session.Turns() != 2 || strings.TrimSpace(errs.String()) != "kept gpt-6-luna" {
+		t.Fatalf("session changed or wrong result: %s", errs.String())
+	}
+}
+
+func TestChat_ModelWithoutATerminalPrintsTheList(t *testing.T) {
+	model := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("reply")))}
+	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c.session = NewSession(c.cfg, model, NewTrace(io.Discard), io.Discard)
+	var out, errs bytes.Buffer
+	input := newLineReader(strings.NewReader("/model\n2\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if len(model.requests) != 1 || model.requests[0].History[0].User.Text != "2" || c.cfg.Model != "gpt-6-luna" || !strings.Contains(errs.String(), "switch with /model <number or name>") {
+		t.Fatalf("requests %+v; stderr %s", model.requests, errs.String())
+	}
+}
+
+func TestChat_EffortPickerKeepsSession(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "low", 2)
+	before := c.session
+	input := &fakeLineReader{chosen: 3}
+	input.reads = append(input.reads, struct {
+		line string
+		err  error
+	}{line: "/effort"})
+	var out, errs bytes.Buffer
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if input.choiceCurrent != 1 || c.cfg.ReasoningEffort != "high" || c.session != before || c.session.Turns() != 2 || !strings.Contains(errs.String(), "reasoning effort is now high") {
+		t.Fatalf("effort %q, current %d, stderr %s", c.cfg.ReasoningEffort, input.choiceCurrent, errs.String())
+	}
+}
+
 // A model change cannot continue an existing conversation, because the
 // transcript holds items bound to the model that produced them.
 func TestConversation_SwitchingModelStartsAFreshSession(t *testing.T) {
@@ -197,7 +275,7 @@ func TestConversation_SwitchingModelStartsAFreshSession(t *testing.T) {
 	before := c.session
 
 	var stderr bytes.Buffer
-	c.commandModel("claude-haiku-4-5", &stderr)
+	c.commandModel("claude-haiku-4-5", nil, &stderr)
 
 	if c.session == before || c.session.ID == before.ID {
 		t.Fatal("the session was reused across a model change")
@@ -243,7 +321,7 @@ func TestConversation_ModelSelectionRefusals(t *testing.T) {
 			before := conv.session
 
 			var stderr bytes.Buffer
-			conv.commandModel(c.choice, &stderr)
+			conv.commandModel(c.choice, nil, &stderr)
 
 			if !strings.Contains(stderr.String(), c.want) {
 				t.Fatalf("got %q, want it to mention %q", stderr.String(), c.want)
@@ -262,7 +340,7 @@ func TestConversation_EffortChangeKeepsTheConversation(t *testing.T) {
 	before := c.session
 
 	var stderr bytes.Buffer
-	c.commandEffort("xhigh", &stderr)
+	c.commandEffort("xhigh", nil, &stderr)
 
 	if c.cfg.ReasoningEffort != "xhigh" || c.session.cfg.ReasoningEffort != "xhigh" {
 		t.Fatalf("got %q", c.cfg.ReasoningEffort)
@@ -277,7 +355,7 @@ func TestConversation_EffortChangeKeepsTheConversation(t *testing.T) {
 	// A model that rejects the parameter is refused locally, without a request.
 	haiku := newConversation(t, "claude-haiku-4-5", "", 0)
 	stderr.Reset()
-	haiku.commandEffort("high", &stderr)
+	haiku.commandEffort("high", nil, &stderr)
 	if haiku.cfg.ReasoningEffort != "" || !strings.Contains(stderr.String(), "takes no reasoning effort") {
 		t.Fatalf("got %q after %q", haiku.cfg.ReasoningEffort, stderr.String())
 	}
@@ -289,8 +367,8 @@ func TestChat_ModelAndEffortDoNotApplyToAScriptedRun(t *testing.T) {
 	for _, want := range []string{
 		"no model to choose",
 		"reasoning effort has no effect",
-		"/model    [number or name]   list models",
-		"/effort   [number or name]   list reasoning efforts",
+		"/model    [number or name]   choose a model (picker on a terminal",
+		"/effort   [number or name]   choose reasoning effort (picker on a terminal)",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("stderr lacks %q:\n%s", want, stderr)

@@ -17,8 +17,8 @@ import (
 type chatCommand struct{ name, argument, help string }
 
 var chatCommands = []chatCommand{
-	{"/model", "[number or name]", "list models, or switch (starts a fresh session)"},
-	{"/effort", "[number or name]", "list reasoning efforts, or set one"},
+	{"/model", "[number or name]", "choose a model (picker on a terminal; switch starts fresh)"},
+	{"/effort", "[number or name]", "choose reasoning effort (picker on a terminal)"},
 	{"/status", "", "model, mode, workspace, turns, and tokens so far"},
 	{"/context", "", "what the next request is made of, by size"},
 	{"/trace", "", "path of the last turn's trace"},
@@ -41,6 +41,7 @@ func chatHelp() string {
   \ at line end    continue on the next line
   ↑ ↓              earlier messages
   Tab              complete a command, model, or effort
+  /model /effort   picker: ↑↓/kj move, Enter/1–9 choose, Esc/q/Ctrl-C/Ctrl-D cancel
   Ctrl-C           cancel the running turn, or clear the line; twice to exit
   Ctrl-L           clear the screen
   Ctrl-A Ctrl-E    start or end of line
@@ -84,14 +85,32 @@ func (c *conversation) available() map[string]bool {
 // items bound to the model that produced them, so no existing conversation can
 // be continued on a different one; v1 §6.1 forbids mid-session model changes
 // for the same reason.
-func (c *conversation) commandModel(argument string, stderr io.Writer) {
+func (c *conversation) commandModel(argument string, input lineReader, stderr io.Writer) {
 	if c.scripted != nil {
 		fmt.Fprintln(stderr, "a scripted run replays recorded responses, so it has no model to choose")
 		return
 	}
 	if argument == "" {
-		fmt.Fprintln(stderr, renderModels(c.cfg.Model, c.available()))
-		return
+		current := -1
+		for i, info := range modelCatalog {
+			if info.ID == c.cfg.Model {
+				current = i
+				break
+			}
+		}
+		index, err := input.Choose("Select a model", modelChoices(c.cfg.Model, c.available()), current)
+		switch {
+		case errors.Is(err, errNotInteractive):
+			fmt.Fprintln(stderr, renderModels(c.cfg.Model, c.available()))
+			return
+		case errors.Is(err, errCancelled):
+			fmt.Fprintf(stderr, "kept %s\n", c.cfg.Model)
+			return
+		case err != nil:
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return
+		}
+		argument = modelCatalog[index].ID
 	}
 	info, err := selectModel(argument)
 	if err != nil {
@@ -135,7 +154,7 @@ func (c *conversation) switchTo(info modelInfo) {
 // commandEffort lists or sets the reasoning effort for the current model. The
 // conversation survives, because effort is a request parameter rather than
 // part of the transcript.
-func (c *conversation) commandEffort(argument string, stderr io.Writer) {
+func (c *conversation) commandEffort(argument string, input lineReader, stderr io.Writer) {
 	if c.scripted != nil {
 		fmt.Fprintln(stderr, "a scripted run sends no requests, so reasoning effort has no effect")
 		return
@@ -147,8 +166,30 @@ func (c *conversation) commandEffort(argument string, stderr io.Writer) {
 		return
 	}
 	if argument == "" {
-		fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
-		return
+		if len(info.Efforts) == 0 {
+			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
+			return
+		}
+		current := -1
+		for i, effort := range info.Efforts {
+			if effort == c.cfg.ReasoningEffort {
+				current = i
+				break
+			}
+		}
+		index, err := input.Choose("Select reasoning effort", effortChoices(info, c.cfg.ReasoningEffort), current)
+		switch {
+		case errors.Is(err, errNotInteractive):
+			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
+			return
+		case errors.Is(err, errCancelled):
+			fmt.Fprintf(stderr, "kept %s\n", c.cfg.ReasoningEffort)
+			return
+		case err != nil:
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return
+		}
+		argument = info.Efforts[index]
 	}
 	effort, err := selectEffort(info, argument)
 	if err != nil {
@@ -435,9 +476,9 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 		case command == "/help":
 			fmt.Fprintln(stderr, chatHelp())
 		case command == "/model":
-			c.commandModel(argument, stderr)
+			c.commandModel(argument, input, stderr)
 		case command == "/effort":
-			c.commandEffort(argument, stderr)
+			c.commandEffort(argument, input, stderr)
 		case command == "/status":
 			c.commandStatus(stderr)
 		case command == "/context":

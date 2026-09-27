@@ -5,6 +5,43 @@ import (
 	"testing"
 )
 
+func TestModelChoices_AgreeWithTheCatalogAndAvailability(t *testing.T) {
+	choices := modelChoices("gpt-6-luna", map[string]bool{openaiName: true})
+	if len(choices) != len(modelCatalog) {
+		t.Fatalf("got %d choices", len(choices))
+	}
+	for i, info := range modelCatalog {
+		if choices[i].label != info.ID || choices[i].detail != info.Provider || !strings.Contains(choices[i].note, info.Note) {
+			t.Fatalf("choice %d: %+v", i, choices[i])
+		}
+	}
+	if choices[0].disabled || !strings.Contains(choices[0].note, "current") || !choices[4].disabled || !strings.Contains(choices[4].note, "needs ANTHROPIC_API_KEY") {
+		t.Fatalf("availability: %+v", choices)
+	}
+	if row := renderPicker(choices, 0, 80, false)[4]; !strings.Contains(row, "needs ANTHROPIC_API_KEY") {
+		t.Fatalf("missing requirement was cut off: %q", row)
+	}
+	if modelChoices("claude-haiku-4-5", map[string]bool{openaiName: true})[4].disabled {
+		t.Fatal("the current model must remain selectable without a key")
+	}
+}
+
+func TestEffortChoices_AgreeWithVocabulary(t *testing.T) {
+	info, _ := findModel("claude-sonnet-5")
+	choices := effortChoices(info, "high")
+	if len(choices) != len(info.Efforts) {
+		t.Fatalf("choices: %+v", choices)
+	}
+	for i, effort := range info.Efforts {
+		if choices[i].label != effort || choices[i].disabled {
+			t.Fatalf("choice %d: %+v", i, choices[i])
+		}
+	}
+	if choices[2].note != "current" {
+		t.Fatalf("current: %+v", choices[2])
+	}
+}
+
 func TestSelectModel_ByPositionOrName(t *testing.T) {
 	first, err := selectModel("1")
 	if err != nil || first.ID != modelCatalog[0].ID {
