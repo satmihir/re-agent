@@ -85,6 +85,19 @@ func TestEditFile_AfterDigestAllowsNextEdit(t *testing.T) {
 	}
 }
 
+func TestEditFile_CorrectDigestIsAcceptedWithoutARead(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source})
+	current := digestOfFile(t, ws, "main.go")
+	var got editFileResult
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+current+
+		`","old_text":"timeout = 0","new_text":"timeout = 30"}`)
+	data(t, outcome, &got)
+	if outcome.Effect != EffectApplied || got.BeforeSHA256 != current ||
+		fileContent(t, ws, "main.go") != strings.Replace(source, "timeout = 0", "timeout = 30", 1) {
+		t.Fatalf("got %+v, %+v", outcome, got)
+	}
+}
+
 func TestEditFile_MalformedDigest(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"main.go": source})
 	for name, digest := range map[string]string{
@@ -103,7 +116,7 @@ func TestEditFile_MalformedDigest(t *testing.T) {
 }
 
 func TestEditFile_UnknownDigestIsNotStale(t *testing.T) {
-	ws := testWorkspace(t, map[string]string{"main.go": source, "other.go": source})
+	ws := testWorkspace(t, map[string]string{"main.go": source, "other.go": "const timeout = 1\n"})
 	current := readDigest(t, ws, "main.go")
 	unknown := strings.Repeat("a", 64)
 	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+unknown+
@@ -112,10 +125,10 @@ func TestEditFile_UnknownDigestIsNotStale(t *testing.T) {
 	if outcome.OK || outcome.Code != "unknown_digest" || outcome.Effect != EffectNone || outcome.Message != want {
 		t.Fatalf("got %+v, want %q", outcome, want)
 	}
-	// The same bytes in another file do not authorize editing that file.
+	// A digest seen on one path does not explain a mismatch on another.
 	outcome = runTool(t, NewEditFileTool(ws), `{"path":"other.go","expected_sha256":"`+current+
 		`","old_text":"timeout","new_text":"delay"}`)
-	if outcome.Code != "unknown_digest" || outcome.Effect != EffectNone || fileContent(t, ws, "other.go") != source {
+	if outcome.Code != "unknown_digest" || outcome.Effect != EffectNone || fileContent(t, ws, "other.go") != "const timeout = 1\n" {
 		t.Fatalf("got %+v", outcome)
 	}
 	if fileContent(t, ws, "main.go") != source {
@@ -138,6 +151,30 @@ func TestEditFile_StaleAfterAnotherWrite(t *testing.T) {
 	}
 	if fileContent(t, ws, "main.go") != changed {
 		t.Fatal("a refused edit changed the file")
+	}
+}
+
+func TestEditFile_StaleRetryWithTheReportedDigestSucceeds(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source})
+	before := readDigest(t, ws, "main.go")
+	changed := strings.Replace(source, "timeout = 0", "timeout = 1", 1)
+	if err := os.WriteFile(filepath.Join(ws.Root(), "main.go"), []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+before+
+		`","old_text":"timeout = 1","new_text":"timeout = 30"}`)
+	const prefix = "the file has changed since it was read; its current digest is "
+	reported, ok := strings.CutPrefix(first.Message, prefix)
+	if first.Code != "stale_file" || first.Effect != EffectNone || !ok || reported != digestOfFile(t, ws, "main.go") {
+		t.Fatalf("got %+v", first)
+	}
+	var got editFileResult
+	second := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+reported+
+		`","old_text":"timeout = 1","new_text":"timeout = 30"}`)
+	data(t, second, &got)
+	if second.Effect != EffectApplied || got.BeforeSHA256 != reported ||
+		fileContent(t, ws, "main.go") != strings.Replace(source, "timeout = 0", "timeout = 30", 1) {
+		t.Fatalf("got %+v, %+v", second, got)
 	}
 }
 

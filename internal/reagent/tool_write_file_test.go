@@ -41,7 +41,7 @@ func TestWriteFile_CreatesAndOverwrites(t *testing.T) {
 	}
 }
 
-func TestFileWriters_ReturnedDigestsAuthorizeNextWrite(t *testing.T) {
+func TestFileWriters_ReturnedDigestsWorkForNextWrite(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"old.txt": "old"})
 	var made writeFileResult
 	data(t, runTool(t, NewWriteFileTool(ws), `{"path":"new.txt","content":"first"}`), &made)
@@ -58,6 +58,26 @@ func TestFileWriters_ReturnedDigestsAuthorizeNextWrite(t *testing.T) {
 	data(t, runTool(t, NewDeleteFileTool(ws), `{"path":"old.txt","expected_sha256":"`+replaced.AfterSHA256+`"}`), &deleted)
 	if deleted.BeforeSHA256 != replaced.AfterSHA256 || fileContent(t, ws, "new.txt") != "second" {
 		t.Fatalf("overwrite %+v, delete %+v", replaced, deleted)
+	}
+}
+
+func TestFileWriters_CorrectDigestWorksWithoutRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool func(*Workspace) Tool
+		args func(string) string
+	}{
+		{"write", NewWriteFileTool, func(d string) string { return `{"path":"old.txt","content":"new","expected_sha256":"` + d + `"}` }},
+		{"delete", NewDeleteFileTool, func(d string) string { return `{"path":"old.txt","expected_sha256":"` + d + `"}` }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"old.txt": "old"})
+			digest := digestOfFile(t, ws, "old.txt")
+			outcome := runTool(t, tc.tool(ws), tc.args(digest))
+			if !outcome.OK || outcome.Effect != EffectApplied {
+				t.Fatalf("got %+v", outcome)
+			}
+		})
 	}
 }
 

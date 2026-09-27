@@ -44,8 +44,8 @@ func OpenWorkspace(path string) (*Workspace, error) {
 // Root is the absolute directory, shown to the model as runtime context.
 func (w *Workspace) Root() string { return w.root }
 
-// v0 §8 amendment (2026-09-27, U3): only digests actually returned for this
-// resolved path can authorize a later file write. Tools share the workspace.
+// v0 §8 amendment (2026-09-27, U3): returned digests distinguish stale
+// mismatches from unknown ones for each path. Tools share the workspace.
 func (w *Workspace) remember(path, digest string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

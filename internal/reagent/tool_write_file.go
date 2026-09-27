@@ -211,20 +211,20 @@ func fileTarget(info os.FileInfo) *ToolOutcome {
 	return nil
 }
 
-// v0 §8 amendment (2026-09-27, U3): a digest never returned for this path
-// is not evidence that the file changed. All three writers share this check.
+// v0 §8 amendment (2026-09-27, U3): provenance diagnoses only mismatches;
+// a matching digest is valid whether or not a tool returned it before.
 func (w *Workspace) checkFileDigest(abs, expected string) (*snapshot, *ToolOutcome) {
 	snap, bad := readSnapshot(abs)
 	if bad != nil {
 		return nil, bad
 	}
-	if !w.returned(abs, expected) {
-		return nil, failPtr("unknown_digest", "this is not a digest read_file returned for this file; its current digest is "+snap.sha256)
+	if snap.sha256 == expected {
+		return snap, nil
 	}
-	if snap.sha256 != expected {
+	if w.returned(abs, expected) {
 		return nil, failPtr("stale_file", "the file has changed since it was read; its current digest is "+snap.sha256)
 	}
-	return snap, nil
+	return nil, failPtr("unknown_digest", "this is not a digest read_file returned for this file; its current digest is "+snap.sha256)
 }
 
 func appliedOutcome(result any) (ToolOutcome, error) {

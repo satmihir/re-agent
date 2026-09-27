@@ -59,11 +59,10 @@ func writeEditExecScript(t *testing.T, root string, complete bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	responses := []ModelResponse{
-		turn(callBlock("call_read", "read_file", `{"path":"a.txt"}`)),
-		turn(callBlock("call_edit", "edit_file", string(editArgs)),
-			callBlock("call_exec", "exec", string(execArgsJSON))),
-	}
+	responses := []ModelResponse{turn(
+		callBlock("call_edit", "edit_file", string(editArgs)),
+		callBlock("call_exec", "exec", string(execArgsJSON)),
+	)}
 	if complete {
 		responses = append(responses, turn(textBlock("finished")))
 	}
@@ -103,7 +102,7 @@ func TestMain_CompletedRunRecapIsOptIn(t *testing.T) {
 			if code != exitOK {
 				t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 			}
-			if !strings.Contains(stderr.String(), "completed · 3 steps · 3 tool calls") || !strings.Contains(stderr.String(), "trace: "+trace) {
+			if !strings.Contains(stderr.String(), "completed · 2 steps · 2 tool calls") || !strings.Contains(stderr.String(), "trace: "+trace) {
 				t.Fatalf("summary or trace path missing: %q", stderr.String())
 			}
 			changed := strings.Contains(stderr.String(), "  changed a.txt\n")
@@ -127,7 +126,7 @@ func TestMain_NoncompletedRunAlwaysShowsRecap(t *testing.T) {
 		t.Fatalf("exit %d, want %d; stderr: %s", code, exitRunFail, stderr.String())
 	}
 	for _, want := range []string{
-		"protocol_error · 3 steps · 3 tool calls", "script exhausted after 2 responses",
+		"protocol_error · 2 steps · 2 tool calls", "script exhausted after 1 responses",
 		"  changed a.txt\n", "  ran     true\n", "trace: " + trace,
 	} {
 		if !strings.Contains(stderr.String(), want) {
@@ -162,7 +161,7 @@ func TestMain_ChatRecapIsOptIn(t *testing.T) {
 			if got := strings.TrimSpace(stdout.String()); got != "finished" {
 				t.Fatalf("stdout: %q", got)
 			}
-			if !strings.Contains(stderr.String(), "completed · 3 steps · 3 tool calls") {
+			if !strings.Contains(stderr.String(), "completed · 2 steps · 2 tool calls") {
 				t.Fatalf("completed status missing: %q", stderr.String())
 			}
 			changed := strings.Contains(stderr.String(), "  changed a.txt\n")

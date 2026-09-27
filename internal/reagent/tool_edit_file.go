@@ -10,9 +10,8 @@ import (
 
 // editFileTool replaces one exact, uniquely matching piece of text in one file.
 //
-// The digest the model supplies is the whole safety mechanism: it proves the
-// model read the bytes it is editing, so an edit written against a stale view
-// is refused rather than applied to something else (v1 §13.3).
+// The digest precondition prevents edits against stale bytes, whether the
+// digest came from read_file or another source (v1 §13.3; v0 §8 U3).
 type editFileTool struct{ ws *Workspace }
 
 // NewEditFileTool returns the file editing tool. It is registered only in write

@@ -78,7 +78,7 @@ func TestLoop_ReportsEffectsEvenWhenTheRunFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{Model: "test", Registry: registry, WorkspacePath: ws.Root(), MaxSteps: 20, MaxToolCalls: 40}
-	digest := readDigest(t, ws, "main.go")
+	digest := digestOfFile(t, ws, "main.go")
 
 	// The script stops after the edit, so the run ends without a final reply.
 	_, result := runScript(t, cfg, turn(callBlock("call_1", "edit_file",
