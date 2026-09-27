@@ -264,7 +264,7 @@ func recapLine(call ToolCall, outcome ToolOutcome) string {
 		if result.Operation == "create" {
 			return "created " + callTarget(call)
 		}
-		return "changed " + callTarget(call)
+		return "replaced " + callTarget(call)
 	case "delete_file":
 		return "deleted " + callTarget(call)
 	case "exec":

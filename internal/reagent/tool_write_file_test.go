@@ -18,7 +18,7 @@ func TestWriteFile_CreatesAndOverwrites(t *testing.T) {
 		made.SizeBytes != len("hello\n") || fileContent(t, ws, "sub/new.txt") != "hello\n" {
 		t.Fatalf("create: %+v %+v", create, made)
 	}
-	if info, err := os.Stat(filepath.Join(ws.Root(), "sub/new.txt")); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(filepath.Join(ws.Root(), "sub/new.txt")); err != nil || info.Mode().Perm() != 0o644 {
 		t.Fatalf("created file mode: %v, %v", info, err)
 	}
 

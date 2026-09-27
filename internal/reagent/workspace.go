@@ -173,7 +173,7 @@ func publish(abs string, content []byte, mode os.FileMode) error {
 // v0 §8 amendment (2026-09-27): linking a staged file makes create exclusive;
 // rename would overwrite an unguarded file that appeared during this call.
 func publishNew(abs string, content []byte) error {
-	name, err := stageFile(abs, content, 0o600)
+	name, err := stageFile(abs, content, 0o644)
 	if err != nil {
 		return err
 	}

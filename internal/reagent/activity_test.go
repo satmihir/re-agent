@@ -73,7 +73,7 @@ func TestActivity_DescribesEachTool(t *testing.T) {
 func TestActivity_FileWriterRecap(t *testing.T) {
 	for _, tc := range []struct{ tool, args, result, want string }{
 		{"write_file", `{"path":"a.go","content":"new"}`, `{"operation":"create"}`, "created a.go"},
-		{"write_file", `{"path":"a.go","content":"new","expected_sha256":"x"}`, `{"operation":"overwrite"}`, "changed a.go"},
+		{"write_file", `{"path":"a.go","content":"new","expected_sha256":"x"}`, `{"operation":"overwrite"}`, "replaced a.go"},
 		{"delete_file", `{"path":"a.go","expected_sha256":"x"}`, `{"operation":"delete"}`, "deleted a.go"},
 	} {
 		call := ToolCall{Name: tc.tool, Arguments: tc.args}
