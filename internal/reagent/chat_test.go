@@ -514,3 +514,33 @@ func TestChat_ShellOutputReachesTheNextRequest(t *testing.T) {
 		t.Fatalf("turns %d, stderr %q", session.Turns(), errs.String())
 	}
 }
+
+// A model request that failed appended nothing, so the conversation goes on
+// without a /reset (v0 §10 amendment of 2026-09-26).
+func TestChat_ProviderErrorDoesNotBlock(t *testing.T) {
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{line: "first"}, {line: "second"}}}
+	model := &failingThen{
+		err:  &ModelError{Status: StatusProviderError, Message: "provider reported a stream error (server_is_overloaded): try later"},
+		next: NewScriptedModel(turn(textBlock("recovered"))),
+	}
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if out.String() != "recovered\n" {
+		t.Fatalf("stdout %q, stderr %q", out.String(), errs.String())
+	}
+	if !strings.Contains(errs.String(), "server_is_overloaded") || !strings.Contains(errs.String(), "your next message continues") {
+		t.Fatalf("stderr: %q", errs.String())
+	}
+	for _, prompt := range input.prompts {
+		if prompt != "> " {
+			t.Fatalf("prompts: %#v", input.prompts)
+		}
+	}
+}

@@ -48,7 +48,7 @@ func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunR
 
 	result := newRun(s, runID).Execute(ctx, text)
 	s.lastTrace = result.TracePath
-	if !continuable(result.Status) {
+	if !continuable(result.Status) && !result.Resumable {
 		s.blocked = string(result.Status)
 	}
 	return result, nil

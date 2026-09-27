@@ -191,3 +191,45 @@ func TestEncodeAnthropic_CacheBreakpoints(t *testing.T) {
 		t.Fatalf("got %d breakpoints, want 2", breakpoints)
 	}
 }
+
+// A turn whose model request failed leaves its user message unanswered, and the
+// next one follows it directly. They travel as one user message, since the
+// Messages API expects user and assistant turns to alternate.
+func TestEncodeAnthropic_UnansweredUserTurnJoinsTheNext(t *testing.T) {
+	_, got := encodeAnthropic(t, ModelRequest{History: []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: "first"}},
+		{Kind: EntryUser, User: &UserTurn{Text: "second"}},
+	}})
+	if len(got.Messages) != 1 || got.Messages[0].Role != "user" || len(got.Messages[0].Content) != 2 {
+		t.Fatalf("got %+v", got.Messages)
+	}
+	var second messagesTextBlock
+	if err := json.Unmarshal(got.Messages[0].Content[1], &second); err != nil || second.Text != "second" {
+		t.Fatalf("got %+v %v", second, err)
+	}
+}
+
+// A run that failed after its tools ran leaves the transcript ending in their
+// results. The next message joins them: tool results first, then the text.
+func TestEncodeAnthropic_TextAfterToolResultsJoinsThem(t *testing.T) {
+	call := json.RawMessage(`{"type":"tool_use","id":"toolu_1","name":"echo","input":{"text":"a"}}`)
+	assistant := ModelResponse{Native: NativeOutput{Provider: anthropicProvider, Items: []json.RawMessage{call}}}
+	_, got := encodeAnthropic(t, ModelRequest{History: []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: "the task"}},
+		{Kind: EntryAssistant, Assistant: &assistant},
+		{Kind: EntryTool, Tool: &ToolResult{CallID: "toolu_1", Name: "echo", Outcome: ToolOutcome{OK: true, Code: "ok"}}},
+		{Kind: EntryUser, User: &UserTurn{Text: "carry on"}},
+	}})
+
+	if len(got.Messages) != 3 || got.Messages[2].Role != "user" || len(got.Messages[2].Content) != 2 {
+		t.Fatalf("got %+v", got.Messages)
+	}
+	var result messagesToolResult
+	var text messagesTextBlock
+	if err := json.Unmarshal(got.Messages[2].Content[0], &result); err != nil || result.Type != "tool_result" || result.CacheControl != nil {
+		t.Fatalf("first block %+v %v", result, err)
+	}
+	if err := json.Unmarshal(got.Messages[2].Content[1], &text); err != nil || text.Text != "carry on" || text.CacheControl == nil {
+		t.Fatalf("second block %+v %v", text, err)
+	}
+}

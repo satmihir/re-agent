@@ -258,4 +258,8 @@ type RunResult struct {
 	// Effects lists what the run actually changed, so a failed run still
 	// reports the edits it made before stopping.
 	Effects []EffectRecord `json:"effects,omitempty"`
+	// Resumable means the run stopped before a model response was accepted,
+	// with nothing uncertain since the last completed step, so the session may
+	// go on from where it stood (v0 §10 amendment of 2026-09-26).
+	Resumable bool `json:"resumable,omitempty"`
 }

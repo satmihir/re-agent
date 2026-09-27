@@ -286,6 +286,10 @@ func TestLoop_UncertainEffectStopsTheRun(t *testing.T) {
 	if result.Status != StatusEffectUnknown {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
 	}
+	// Unlike a failed model request, this outcome cannot be continued from.
+	if result.Resumable || run.blocked != string(StatusEffectUnknown) {
+		t.Fatalf("resumable=%v blocked=%q", result.Resumable, run.blocked)
+	}
 	if result.Steps != 1 {
 		t.Fatalf("took %d steps; no further model request may follow", result.Steps)
 	}
