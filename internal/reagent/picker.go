@@ -48,6 +48,37 @@ func decodeKey(chunk []byte) key {
 	return keyUnknown
 }
 
+// v0 §10 amendment (2026-09-26): a terminal read may contain several keys.
+// Consume unknown escape sequences as a unit so their digits cannot select a row.
+func decodeKeys(chunk []byte) []key {
+	var keys []key
+	for i := 0; i < len(chunk); {
+		if chunk[i] == '\x1b' && i+1 < len(chunk) && (chunk[i+1] == '[' || chunk[i+1] == 'O') {
+			if i+3 <= len(chunk) {
+				if k := decodeKey(chunk[i : i+3]); k != keyUnknown {
+					keys = append(keys, k)
+					i += 3
+					continue
+				}
+			}
+			i += 2
+			for i < len(chunk) {
+				b := chunk[i]
+				i++
+				if b >= 0x40 && b <= 0x7e {
+					break
+				}
+			}
+			continue
+		}
+		if k := decodeKey(chunk[i : i+1]); k != keyUnknown {
+			keys = append(keys, k)
+		}
+		i++
+	}
+	return keys
+}
+
 type pickerState struct {
 	options []choice
 	cursor  int

@@ -161,7 +161,7 @@ func renderModels(current string, available map[string]bool) string {
 	if len(missing) > 0 {
 		fmt.Fprintf(&out, "\nmodels marked no key need %s\n", strings.Join(missing, " or "))
 	}
-	out.WriteString("\nswitch with /model <number or name>; a model change starts a fresh session")
+	out.WriteString("\na model change starts a fresh session; /model <number or name> switches")
 	return out.String()
 }
 

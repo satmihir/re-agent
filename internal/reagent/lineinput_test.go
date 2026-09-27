@@ -48,6 +48,35 @@ func TestTerminalReader_ChooseWithArrows(t *testing.T) {
 	}
 }
 
+func TestTerminalReader_ChooseWithBundledKeys(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[B\x1b[B\r"))
+	index, err := reader.Choose("Select a model", []choice{{label: "one"}, {label: "two"}, {label: "three"}}, 0)
+	if err != nil || index != 2 {
+		t.Fatalf("bundled keys chose %d, err %v", index, err)
+	}
+}
+
+func TestTerminalReader_ChooseStopsAtFirstDecision(t *testing.T) {
+	options := []choice{{label: "one"}, {label: "two"}}
+	reader := terminalInput(strings.NewReader("\x1b[B\r\x1b"))
+	if index, err := reader.Choose("Select", options, 0); err != nil || index != 1 {
+		t.Fatalf("selection before cancel: %d, %v", index, err)
+	}
+	reader = terminalInput(strings.NewReader("\x1b\r"))
+	if _, err := reader.Choose("Select", options, 0); err != errCancelled {
+		t.Fatalf("cancel before selection: %v", err)
+	}
+}
+
+func TestTerminalReader_ChooseIgnoresUnknownEscape(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[5~\x1b[B\r"))
+	options := []choice{{label: "one"}, {label: "two"}, {label: "three"}, {label: "four"}, {label: "five"}}
+	index, err := reader.Choose("Select", options, 0)
+	if err != nil || index != 1 {
+		t.Fatalf("unknown escape chose %d, err %v", index, err)
+	}
+}
+
 func TestTerminalReader_EscapeCancels(t *testing.T) {
 	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\x1b")}})
 	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != errCancelled {
@@ -87,6 +116,19 @@ func TestTerminalReader_ChooseCancelKeepsPasteWorking(t *testing.T) {
 	}
 	if line, err := reader.ReadLine(); err != nil || line != "a\nb" {
 		t.Fatalf("paste after cancel: %q, %v", line, err)
+	}
+}
+
+func TestTerminalReader_ChooseNarrowHeaderKeepsCancelHint(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\r"))
+	reader.size = func() (int, int, error) { return 30, 24, nil }
+	if _, err := reader.Choose("Select reasoning effort", []choice{{label: "low"}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	header := strings.SplitN(reader.out.(*bytes.Buffer).String(), "\r\n", 2)[0]
+	header = strings.TrimPrefix(header, "\x1b[?25l\x1b[2K")
+	if !strings.Contains(header, "esc") || displayWidth(header) > 29 {
+		t.Fatalf("narrow header %q", header)
 	}
 }
 

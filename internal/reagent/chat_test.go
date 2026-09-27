@@ -246,7 +246,7 @@ func TestChat_ModelWithoutATerminalPrintsTheList(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if len(model.requests) != 1 || model.requests[0].History[0].User.Text != "2" || c.cfg.Model != "gpt-6-luna" || !strings.Contains(errs.String(), "switch with /model <number or name>") {
+	if len(model.requests) != 1 || model.requests[0].History[0].User.Text != "2" || c.cfg.Model != "gpt-6-luna" || !strings.Contains(errs.String(), "/model <number or name> switches\n") {
 		t.Fatalf("requests %+v; stderr %s", model.requests, errs.String())
 	}
 }
@@ -265,6 +265,23 @@ func TestChat_EffortPickerKeepsSession(t *testing.T) {
 	}
 	if input.choiceCurrent != 1 || c.cfg.ReasoningEffort != "high" || c.session != before || c.session.Turns() != 2 || !strings.Contains(errs.String(), "reasoning effort is now high") {
 		t.Fatalf("effort %q, current %d, stderr %s", c.cfg.ReasoningEffort, input.choiceCurrent, errs.String())
+	}
+}
+
+func TestChat_EffortPickerCancelWithUnsetEffort(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "", 1)
+	before := c.session
+	input := &fakeLineReader{chooseErr: errCancelled}
+	input.reads = append(input.reads, struct {
+		line string
+		err  error
+	}{line: "/effort"})
+	var out, errs bytes.Buffer
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if input.choiceCurrent != 1 || c.cfg.ReasoningEffort != "" || c.session != before || c.session.Turns() != 1 || strings.TrimSpace(errs.String()) != "kept provider default" {
+		t.Fatalf("cursor %d, effort %q, session %p/%p, stderr %q", input.choiceCurrent, c.cfg.ReasoningEffort, c.session, before, errs.String())
 	}
 }
 

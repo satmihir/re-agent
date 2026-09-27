@@ -22,6 +22,32 @@ func TestDecodeKey(t *testing.T) {
 	}
 }
 
+func TestDecodeKeys_BundledInput(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  []key
+	}{
+		{"\x1b[B\x1b[B\r", []key{keyDown, keyDown, keyEnter}},
+		{"\x1bOA\x1bOB3", []key{keyUp, keyDown, key3}},
+		{"\x1b[5~\x1b[B\r", []key{keyDown, keyEnter}}, // unknown sequences must not select row 5
+		{"\x1b[200~\r", []key{keyEnter}},
+		{"?\x1b", []key{keyCancel}},
+		{"\x1b", []key{keyCancel}},
+	} {
+		got := decodeKeys([]byte(tc.input))
+		if len(got) != len(tc.want) {
+			t.Errorf("decodeKeys(%q) = %v, want %v", tc.input, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("decodeKeys(%q) = %v, want %v", tc.input, got, tc.want)
+				break
+			}
+		}
+	}
+}
+
 func TestPickerState_SkipsDisabledAndStopsAtEnds(t *testing.T) {
 	p := pickerState{options: []choice{{label: "1"}, {label: "2", disabled: true}, {label: "3", disabled: true}, {label: "4"}}, cursor: 0}
 	p.move(-1)

@@ -170,9 +170,13 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
 			return
 		}
+		selected := c.cfg.ReasoningEffort
+		if selected == "" {
+			selected = info.Effort
+		}
 		current := -1
 		for i, effort := range info.Efforts {
-			if effort == c.cfg.ReasoningEffort {
+			if effort == selected {
 				current = i
 				break
 			}
@@ -183,7 +187,11 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
 			return
 		case errors.Is(err, errCancelled):
-			fmt.Fprintf(stderr, "kept %s\n", c.cfg.ReasoningEffort)
+			kept := c.cfg.ReasoningEffort
+			if kept == "" {
+				kept = "provider default"
+			}
+			fmt.Fprintf(stderr, "kept %s\n", kept)
 			return
 		case err != nil:
 			fmt.Fprintf(stderr, "error: %v\n", err)

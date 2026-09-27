@@ -265,6 +265,11 @@ func (r *terminalReader) Choose(title string, options []choice, current int) (in
 		}
 	}
 	p := pickerState{options: options, cursor: cursor}
+	header := sanitize(title) + "  ↑↓ move · enter · esc"
+	if displayWidth(header) > width-1 {
+		header = "↑↓ move · enter · esc  " + sanitize(title)
+	}
+	header = truncateWidth(header, width-1)
 	rows := len(options) + 1
 	fmt.Fprint(r.out, "\x1b[?25l")
 	defer func() {
@@ -274,17 +279,16 @@ func (r *terminalReader) Choose(title string, options []choice, current int) (in
 		if redraw {
 			fmt.Fprintf(r.out, "\x1b[%dA\r", rows)
 		}
-		fmt.Fprintf(r.out, "\x1b[2K%s\r\n", truncateWidth(sanitize(title)+"  ↑↓ move · enter choose · esc cancel", width-1))
+		fmt.Fprintf(r.out, "\x1b[2K%s\r\n", header)
 		for _, row := range renderPicker(options, p.cursor, width, r.styled) {
 			fmt.Fprint(r.out, "\x1b[2K", row, "\r\n")
 		}
 	}
 	draw(false)
 	for {
-		var chunk [32]byte
+		var chunk [256]byte
 		n, readErr := r.keys.inner.Read(chunk[:])
-		if n > 0 {
-			k := decodeKey(chunk[:n])
+		for _, k := range decodeKeys(chunk[:n]) {
 			if k == keyUp || k == keyDown {
 				if k == keyUp {
 					p.move(-1)
