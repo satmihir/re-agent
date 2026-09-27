@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -19,7 +20,9 @@ import (
 // are not a sandbox and do not defend against filesystem aliases; v1 §11.1
 // restores rooted access.
 type Workspace struct {
-	root string
+	root    string
+	mu      sync.Mutex
+	digests map[string]map[string]bool
 }
 
 // OpenWorkspace resolves the directory once, at startup.
@@ -35,11 +38,28 @@ func OpenWorkspace(path string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace %s is not a directory", root)
 	}
-	return &Workspace{root: root}, nil
+	return &Workspace{root: root, digests: make(map[string]map[string]bool)}, nil
 }
 
 // Root is the absolute directory, shown to the model as runtime context.
 func (w *Workspace) Root() string { return w.root }
+
+// v0 §8 amendment (2026-09-27, U3): only digests actually returned for this
+// resolved path can authorize a later file write. Tools share the workspace.
+func (w *Workspace) remember(path, digest string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.digests[path] == nil {
+		w.digests[path] = make(map[string]bool)
+	}
+	w.digests[path][digest] = true
+}
+
+func (w *Workspace) returned(path, digest string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.digests[path][digest]
+}
 
 // resolve turns a model-supplied relative path into an absolute one, or into
 // the observation explaining why it will not.

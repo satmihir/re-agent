@@ -14,6 +14,8 @@ import (
 type writeFileTool struct{ ws *Workspace }
 type deleteFileTool struct{ ws *Workspace }
 
+const invalidExpectedDigest = "expected_sha256 must be the 64-character digest read_file returned"
+
 // NewWriteFileTool returns the whole-file creation and replacement tool.
 func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws} }
 
@@ -113,7 +115,7 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 	hasDigest := len(a.ExpectedSHA256) != 0
 	if hasDigest {
 		if err := json.Unmarshal(a.ExpectedSHA256, &expected); err != nil || !digestPattern.MatchString(expected) {
-			return failOutcome("invalid_arguments", "expected_sha256 must be 64 lowercase hex characters"), nil
+			return failOutcome("invalid_arguments", invalidExpectedDigest), nil
 		}
 	}
 	abs, bad := t.ws.resolve(a.Path)
@@ -132,9 +134,15 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 			}
 			return *osOutcome(err), nil
 		}
-		return appliedOutcome(writeFileResult{
+		result := writeFileResult{
 			Operation: "create", Path: t.ws.relative(abs), AfterSHA256: digestOf(content), SizeBytes: len(content),
-		})
+		}
+		outcome, err := appliedOutcome(result)
+		if err != nil {
+			return ToolOutcome{}, err
+		}
+		t.ws.remember(abs, result.AfterSHA256)
+		return outcome, nil
 	}
 	if err != nil {
 		return *osOutcome(err), nil
@@ -145,17 +153,23 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 	if !hasDigest {
 		return failOutcome("invalid_arguments", "the file exists; read it and pass its sha256 to overwrite it"), nil
 	}
-	snap, bad := checkFileDigest(abs, expected)
+	snap, bad := t.ws.checkFileDigest(abs, expected)
 	if bad != nil {
 		return *bad, nil
 	}
 	if err := publish(abs, []byte(content), info.Mode().Perm()); err != nil {
 		return *osOutcome(err), nil
 	}
-	return appliedOutcome(writeFileResult{
+	result := writeFileResult{
 		Operation: "overwrite", Path: t.ws.relative(abs), BeforeSHA256: &snap.sha256,
 		AfterSHA256: digestOf(content), SizeBytes: len(content),
-	})
+	}
+	outcome, err := appliedOutcome(result)
+	if err != nil {
+		return ToolOutcome{}, err
+	}
+	t.ws.remember(abs, result.AfterSHA256)
+	return outcome, nil
 }
 
 func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcome, error) {
@@ -164,7 +178,7 @@ func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 		return *bad, nil
 	}
 	if !digestPattern.MatchString(a.ExpectedSHA256) {
-		return failOutcome("invalid_arguments", "expected_sha256 must be 64 lowercase hex characters"), nil
+		return failOutcome("invalid_arguments", invalidExpectedDigest), nil
 	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {
@@ -177,7 +191,7 @@ func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	if bad := fileTarget(info); bad != nil {
 		return *bad, nil
 	}
-	snap, bad := checkFileDigest(abs, a.ExpectedSHA256)
+	snap, bad := t.ws.checkFileDigest(abs, a.ExpectedSHA256)
 	if bad != nil {
 		return *bad, nil
 	}
@@ -197,11 +211,15 @@ func fileTarget(info os.FileInfo) *ToolOutcome {
 	return nil
 }
 
-// checkFileDigest is shared by all three file writers; U3 extends its mismatch classification.
-func checkFileDigest(abs, expected string) (*snapshot, *ToolOutcome) {
+// v0 §8 amendment (2026-09-27, U3): a digest never returned for this path
+// is not evidence that the file changed. All three writers share this check.
+func (w *Workspace) checkFileDigest(abs, expected string) (*snapshot, *ToolOutcome) {
 	snap, bad := readSnapshot(abs)
 	if bad != nil {
 		return nil, bad
+	}
+	if !w.returned(abs, expected) {
+		return nil, failPtr("unknown_digest", "this is not a digest read_file returned for this file; its current digest is "+snap.sha256)
 	}
 	if snap.sha256 != expected {
 		return nil, failPtr("stale_file", "the file has changed since it was read; its current digest is "+snap.sha256)

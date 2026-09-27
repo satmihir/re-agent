@@ -3,6 +3,7 @@ package reagent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,17 @@ func digestOfFile(t *testing.T, ws *Workspace, name string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func readDigest(t *testing.T, ws *Workspace, name string) string {
+	t.Helper()
+	args, err := json.Marshal(map[string]string{"path": name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result readFileResult
+	data(t, runTool(t, NewReadFileTool(ws), string(args)), &result)
+	return result.SHA256
+}
+
 func fileContent(t *testing.T, ws *Workspace, name string) string {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(ws.Root(), name))
@@ -32,7 +44,7 @@ func fileContent(t *testing.T, ws *Workspace, name string) string {
 
 func TestEditFile_ReplacesTheUniqueMatch(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"main.go": source})
-	before := digestOfFile(t, ws, "main.go")
+	before := readDigest(t, ws, "main.go")
 
 	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+before+
 		`","old_text":"const timeout = 0","new_text":"const timeout = 30"}`)
@@ -59,24 +71,96 @@ func TestEditFile_ReplacesTheUniqueMatch(t *testing.T) {
 	}
 }
 
-// The digest is the whole safety mechanism: an edit written against a stale
-// view is refused, and the file is untouched (v1 §13.3).
-func TestEditFile_StaleDigestChangesNothing(t *testing.T) {
+func TestEditFile_AfterDigestAllowsNextEdit(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"main.go": source})
-	stale := strings.Repeat("a", 64)
-
-	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+stale+
-		`","old_text":"const timeout = 0","new_text":"const timeout = 30"}`)
-
-	if outcome.OK || outcome.Code != "stale_file" || outcome.Effect != EffectNone {
-		t.Fatalf("got %+v", outcome)
+	before := readDigest(t, ws, "main.go")
+	var first editFileResult
+	data(t, runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+before+
+		`","old_text":"timeout = 0","new_text":"timeout = 30"}`), &first)
+	var second editFileResult
+	data(t, runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+first.AfterSHA256+
+		`","old_text":"timeout = 30","new_text":"timeout = 60"}`), &second)
+	if second.BeforeSHA256 != first.AfterSHA256 || fileContent(t, ws, "main.go") != strings.Replace(source, "timeout = 0", "timeout = 60", 1) {
+		t.Fatalf("first %+v, second %+v", first, second)
 	}
-	// The current digest is reported so the model can re-read and retry.
-	if !strings.Contains(outcome.Message, digestOfFile(t, ws, "main.go")) {
-		t.Fatalf("the current digest was not offered: %s", outcome.Message)
+}
+
+func TestEditFile_MalformedDigest(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source})
+	for name, digest := range map[string]string{
+		"63 characters": strings.Repeat("a", 63),
+		"uppercase":     strings.ToUpper(digestOfFile(t, ws, "main.go")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+digest+
+				`","old_text":"timeout","new_text":"delay"}`)
+			if outcome.OK || outcome.Code != "invalid_arguments" || outcome.Effect != EffectNone ||
+				outcome.Message != "expected_sha256 must be the 64-character digest read_file returned" {
+				t.Fatalf("got %+v", outcome)
+			}
+		})
+	}
+}
+
+func TestEditFile_UnknownDigestIsNotStale(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source, "other.go": source})
+	current := readDigest(t, ws, "main.go")
+	unknown := strings.Repeat("a", 64)
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+unknown+
+		`","old_text":"timeout","new_text":"delay"}`)
+	want := "this is not a digest read_file returned for this file; its current digest is " + current
+	if outcome.OK || outcome.Code != "unknown_digest" || outcome.Effect != EffectNone || outcome.Message != want {
+		t.Fatalf("got %+v, want %q", outcome, want)
+	}
+	// The same bytes in another file do not authorize editing that file.
+	outcome = runTool(t, NewEditFileTool(ws), `{"path":"other.go","expected_sha256":"`+current+
+		`","old_text":"timeout","new_text":"delay"}`)
+	if outcome.Code != "unknown_digest" || outcome.Effect != EffectNone || fileContent(t, ws, "other.go") != source {
+		t.Fatalf("got %+v", outcome)
 	}
 	if fileContent(t, ws, "main.go") != source {
 		t.Fatal("a refused edit changed the file")
+	}
+}
+
+func TestEditFile_StaleAfterAnotherWrite(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source})
+	stale := readDigest(t, ws, "main.go")
+	changed := strings.Replace(source, "timeout = 0", "timeout = 1", 1)
+	if err := os.WriteFile(filepath.Join(ws.Root(), "main.go"), []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+stale+
+		`","old_text":"timeout","new_text":"delay"}`)
+	want := "the file has changed since it was read; its current digest is " + digestOfFile(t, ws, "main.go")
+	if outcome.OK || outcome.Code != "stale_file" || outcome.Effect != EffectNone || outcome.Message != want {
+		t.Fatalf("got %+v, want %q", outcome, want)
+	}
+	if fileContent(t, ws, "main.go") != changed {
+		t.Fatal("a refused edit changed the file")
+	}
+}
+
+func TestEditFile_NoOpEditRejected(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source})
+	before := readDigest(t, ws, "main.go")
+	path := filepath.Join(ws.Root(), "main.go")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+before+
+		`","old_text":"timeout","new_text":"timeout"}`)
+	if outcome.OK || outcome.Code != "invalid_arguments" || outcome.Effect != EffectNone ||
+		outcome.Message != "old_text and new_text are the same, so the edit changes nothing" {
+		t.Fatalf("got %+v", outcome)
+	}
+	if digestOfFile(t, ws, "main.go") != before {
+		t.Fatal("a refused edit changed the file")
+	}
+	after, err := os.Stat(path)
+	if err != nil || !after.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("a refused edit rewrote the file: %v, %v", after, err)
 	}
 }
 
@@ -84,9 +168,9 @@ func TestEditFile_RejectedEditsLeaveTheFileAlone(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{
 		"main.go": source,
 		"twice":   "repeat\nrepeat\n",
-		"big":     strings.Repeat("x", MaxFileBytes-100) + "MARKER",
+		"big":     strings.Repeat("x\n", (MaxFileBytes-100)/2) + "MARKER",
 	})
-	digest := func(name string) string { return digestOfFile(t, ws, name) }
+	digest := func(name string) string { return readDigest(t, ws, name) }
 
 	cases := map[string]struct{ args, code string }{
 		"missing text": {`{"path":"main.go","expected_sha256":"` + digest("main.go") +
@@ -129,46 +213,17 @@ func TestEditFile_RejectedEditsLeaveTheFileAlone(t *testing.T) {
 func TestEditFile_OverlappingMatchesAreAmbiguous(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "aaa"})
 	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
-		digestOfFile(t, ws, "a.txt")+`","old_text":"aa","new_text":"b"}`)
+		readDigest(t, ws, "a.txt")+`","old_text":"aa","new_text":"b"}`)
 
 	if outcome.Code != "ambiguous_edit" {
 		t.Fatalf("got %s (%s)", outcome.Code, outcome.Message)
 	}
 }
 
-// Replacing text with itself is reported, not performed (v1 §13.3).
-func TestEditFile_NoOpDoesNotRewriteTheFile(t *testing.T) {
-	ws := testWorkspace(t, map[string]string{"main.go": source})
-	path := filepath.Join(ws.Root(), "main.go")
-	before, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+
-		digestOfFile(t, ws, "main.go")+`","old_text":"timeout","new_text":"timeout"}`)
-
-	var got editFileResult
-	data(t, outcome, &got)
-	if got.Changed || outcome.Effect != EffectNone {
-		t.Fatalf("got %+v effect=%s", got, outcome.Effect)
-	}
-	if got.BeforeSHA256 != got.AfterSHA256 {
-		t.Fatalf("a no-op reported different digests: %+v", got)
-	}
-	after, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !after.ModTime().Equal(before.ModTime()) {
-		t.Fatal("the file was rewritten to report a no-op")
-	}
-}
-
 func TestEditFile_EmptyNewTextDeletesTheMatch(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "keep\nremove\n"})
 	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
-		digestOfFile(t, ws, "a.txt")+`","old_text":"remove\n","new_text":""}`)
+		readDigest(t, ws, "a.txt")+`","old_text":"remove\n","new_text":""}`)
 
 	var got editFileResult
 	data(t, outcome, &got)
@@ -185,7 +240,7 @@ func TestEditFile_PreservesPermissionBits(t *testing.T) {
 	}
 
 	runTool(t, NewEditFileTool(ws), `{"path":"script.sh","expected_sha256":"`+
-		digestOfFile(t, ws, "script.sh")+`","old_text":"old","new_text":"new"}`)
+		readDigest(t, ws, "script.sh")+`","old_text":"old","new_text":"new"}`)
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -226,7 +281,7 @@ func TestEditFile_RefusesAnUnreadableTarget(t *testing.T) {
 func TestEditFile_RefusesAResultWithNulBytes(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "hello\n"})
 	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+
-		digestOfFile(t, ws, "a.txt")+`","old_text":"hello","new_text":"he\u0000llo"}`)
+		readDigest(t, ws, "a.txt")+`","old_text":"hello","new_text":"he\u0000llo"}`)
 
 	if outcome.Code != "binary_file" || outcome.Effect != EffectNone {
 		t.Fatalf("got %+v", outcome)
@@ -240,7 +295,7 @@ func TestEditFile_RefusesAResultWithNulBytes(t *testing.T) {
 // reports no effect rather than an uncertain one.
 func TestEditFile_FailedPublicationAppliesNothing(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "hello\n"})
-	digest := digestOfFile(t, ws, "a.txt")
+	digest := readDigest(t, ws, "a.txt")
 	if err := os.Chmod(ws.Root(), 0o555); err != nil {
 		t.Skipf("cannot make the directory read-only: %v", err)
 	}

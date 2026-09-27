@@ -26,7 +26,7 @@ func TestWriteFile_CreatesAndOverwrites(t *testing.T) {
 	if err := os.Chmod(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	before := digestOfFile(t, ws, "sub/old.txt")
+	before := readDigest(t, ws, "sub/old.txt")
 	overwrite := runTool(t, NewWriteFileTool(ws), `{"path":"sub/old.txt","content":"after\n","expected_sha256":"`+before+`"}`)
 	var replaced writeFileResult
 	data(t, overwrite, &replaced)
@@ -41,12 +41,55 @@ func TestWriteFile_CreatesAndOverwrites(t *testing.T) {
 	}
 }
 
+func TestFileWriters_ReturnedDigestsAuthorizeNextWrite(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"old.txt": "old"})
+	var made writeFileResult
+	data(t, runTool(t, NewWriteFileTool(ws), `{"path":"new.txt","content":"first"}`), &made)
+	var updated writeFileResult
+	data(t, runTool(t, NewWriteFileTool(ws), `{"path":"new.txt","content":"second","expected_sha256":"`+made.AfterSHA256+`"}`), &updated)
+	if updated.BeforeSHA256 == nil || *updated.BeforeSHA256 != made.AfterSHA256 {
+		t.Fatalf("create %+v, overwrite %+v", made, updated)
+	}
+	oldDigest := readDigest(t, ws, "old.txt")
+	var replaced writeFileResult
+	data(t, runTool(t, NewWriteFileTool(ws), `{"path":"old.txt","content":"changed","expected_sha256":"`+
+		oldDigest+`"}`), &replaced)
+	var deleted deleteFileResult
+	data(t, runTool(t, NewDeleteFileTool(ws), `{"path":"old.txt","expected_sha256":"`+replaced.AfterSHA256+`"}`), &deleted)
+	if deleted.BeforeSHA256 != replaced.AfterSHA256 || fileContent(t, ws, "new.txt") != "second" {
+		t.Fatalf("overwrite %+v, delete %+v", replaced, deleted)
+	}
+}
+
+func TestFileWriters_StaleAfterExternalChange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool func(*Workspace) Tool
+		args func(string) string
+	}{
+		{"write", NewWriteFileTool, func(d string) string { return `{"path":"old.txt","content":"new","expected_sha256":"` + d + `"}` }},
+		{"delete", NewDeleteFileTool, func(d string) string { return `{"path":"old.txt","expected_sha256":"` + d + `"}` }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"old.txt": "old"})
+			stale := readDigest(t, ws, "old.txt")
+			if err := os.WriteFile(filepath.Join(ws.Root(), "old.txt"), []byte("changed"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			outcome := runTool(t, tc.tool(ws), tc.args(stale))
+			if outcome.Code != "stale_file" || outcome.Effect != EffectNone || fileContent(t, ws, "old.txt") != "changed" {
+				t.Fatalf("got %+v", outcome)
+			}
+		})
+	}
+}
+
 func TestWriteFile_RefusedChangesLeaveWorkspaceAlone(t *testing.T) {
 	badDigest := strings.Repeat("a", 64)
 	cases := []struct {
 		name, args, code, message string
 	}{
-		{"stale overwrite", `{"path":"old.txt","content":"new","expected_sha256":"` + badDigest + `"}`, "stale_file", ""},
+		{"unknown overwrite", `{"path":"old.txt","content":"new","expected_sha256":"` + badDigest + `"}`, "unknown_digest", ""},
 		{"existing no digest", `{"path":"old.txt","content":"new"}`, "invalid_arguments", "the file exists; read it and pass its sha256 to overwrite it"},
 		{"missing with digest", `{"path":"absent","content":"new","expected_sha256":"` + badDigest + `"}`, "not_found", ""},
 		{"missing parent", `{"path":"missing/new.txt","content":"new"}`, "not_found", ""},
@@ -56,7 +99,9 @@ func TestWriteFile_RefusedChangesLeaveWorkspaceAlone(t *testing.T) {
 		{"too large", `{"path":"big.txt","content":"` + strings.Repeat("x", MaxFileBytes+1) + `"}`, "file_too_large", ""},
 		{"invalid utf8", "{\"path\":\"bad.txt\",\"content\":\"" + string([]byte{0xff}) + "\"}", "invalid_utf8", ""},
 		{"nul", `{"path":"nul.txt","content":"a\u0000b"}`, "binary_file", ""},
-		{"null digest", `{"path":"new.txt","content":"x","expected_sha256":null}`, "invalid_arguments", ""},
+		{"null digest", `{"path":"new.txt","content":"x","expected_sha256":null}`, "invalid_arguments", "expected_sha256 must be the 64-character digest read_file returned"},
+		{"short digest", `{"path":"old.txt","content":"x","expected_sha256":"` + strings.Repeat("a", 63) + `"}`, "invalid_arguments", "expected_sha256 must be the 64-character digest read_file returned"},
+		{"uppercase digest", `{"path":"old.txt","content":"x","expected_sha256":"` + strings.Repeat("A", 64) + `"}`, "invalid_arguments", "expected_sha256 must be the 64-character digest read_file returned"},
 		{"null content", `{"path":"new.txt","content":null}`, "invalid_arguments", ""},
 		{"missing content", `{"path":"new.txt"}`, "invalid_arguments", ""},
 		{"unknown field", `{"path":"new.txt","content":"x","force":true}`, "invalid_arguments", ""},
@@ -98,7 +143,7 @@ func TestWriteFile_ExclusiveCreateDoesNotReplaceAnArrival(t *testing.T) {
 
 func TestDeleteFile_DeletesOnlyMatchingRegularFile(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"gone.txt": "remove\n", "keep.txt": "stay"})
-	before := digestOfFile(t, ws, "gone.txt")
+	before := readDigest(t, ws, "gone.txt")
 	outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"gone.txt","expected_sha256":"`+before+`"}`)
 	var got deleteFileResult
 	data(t, outcome, &got)
@@ -115,7 +160,7 @@ func TestDeleteFile_DeletesOnlyMatchingRegularFile(t *testing.T) {
 
 func TestDeleteFile_Refusals(t *testing.T) {
 	cases := []struct{ name, args, code string }{
-		{"stale", `{"path":"old.txt","expected_sha256":"` + strings.Repeat("a", 64) + `"}`, "stale_file"},
+		{"unknown", `{"path":"old.txt","expected_sha256":"` + strings.Repeat("a", 64) + `"}`, "unknown_digest"},
 		{"directory", `{"path":"sub","expected_sha256":"` + strings.Repeat("a", 64) + `"}`, "invalid_arguments"},
 		{"missing", `{"path":"absent","expected_sha256":"` + strings.Repeat("a", 64) + `"}`, "not_found"},
 		{"missing digest", `{"path":"old.txt"}`, "invalid_arguments"},
@@ -133,6 +178,15 @@ func TestDeleteFile_Refusals(t *testing.T) {
 				t.Fatal("refused deletion removed the file")
 			}
 		})
+	}
+}
+
+func TestDeleteFile_MalformedDigestMessage(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"old.txt": "old"})
+	outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"old.txt","expected_sha256":"`+strings.Repeat("a", 63)+`"}`)
+	if outcome.OK || outcome.Code != "invalid_arguments" || outcome.Effect != EffectNone ||
+		outcome.Message != "expected_sha256 must be the 64-character digest read_file returned" {
+		t.Fatalf("got %+v", outcome)
 	}
 }
 
@@ -191,7 +245,7 @@ func TestRegistry_ReadOnlyWithholdsFileWriters(t *testing.T) {
 
 func TestLoop_FileWriterEffectsOmitContentAndDigest(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"old.txt": "old"})
-	before := digestOfFile(t, ws, "old.txt")
+	before := readDigest(t, ws, "old.txt")
 	registry, err := NewRegistry(Mode{}, NewWriteFileTool(ws), NewDeleteFileTool(ws))
 	if err != nil {
 		t.Fatal(err)
