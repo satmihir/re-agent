@@ -12,11 +12,14 @@ import (
 )
 
 var errInterrupted = errors.New("interrupted")
+var errCancelled = errors.New("cancelled")
+var errNotInteractive = errors.New("not interactive")
 
 // lineReader supplies one complete submission at a time. Terminal input gets
 // editing; piped input remains one line per turn.
 type lineReader interface {
 	ReadLine() (string, error)
+	Choose(title string, options []choice, current int) (int, error)
 	SetPrompt(string)
 }
 
@@ -181,21 +184,24 @@ func (r *terminalReader) SetPrompt(p string) {
 	r.terminal.SetPrompt(p)
 }
 
+// v0 §10 amendment (2026-09-26): the prompt and picker share raw-mode entry.
+func (r *terminalReader) rawMode() (func(), error) {
+	if r.enterRaw != nil {
+		return r.enterRaw()
+	}
+	state, err := term.MakeRaw(r.fd)
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = term.Restore(r.fd, state) }, nil
+}
+
 // ReadLine enters raw mode only while it reads a submission. During a turn the
 // terminal stays cooked, so Ctrl-C continues to raise SIGINT and cancel that
 // turn, and type-ahead still arrives as newline. At an idle prompt keyReader
 // translates Ctrl-C into errInterrupted instead of ending the conversation.
 func (r *terminalReader) ReadLine() (line string, err error) {
-	restore := func() {}
-	if r.enterRaw != nil {
-		restore, err = r.enterRaw()
-	} else {
-		var state *term.State
-		state, err = term.MakeRaw(r.fd)
-		if err == nil {
-			restore = func() { _ = term.Restore(r.fd, state) }
-		}
-	}
+	restore, err := r.rawMode()
 	if err != nil {
 		return "", err
 	}
@@ -235,6 +241,73 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 	return line, nil
 }
 
+// v0 §10 amendment (2026-09-26): the picker reads raw terminal chunks rather
+// than the paste reader, which would hold a lone Esc until another key arrives.
+func (r *terminalReader) Choose(title string, options []choice, current int) (int, error) {
+	width, height, err := r.size()
+	if err != nil || width < 2 || height < len(options)+2 || len(options) == 0 {
+		return 0, errNotInteractive
+	}
+	restore, err := r.rawMode()
+	if err != nil {
+		return 0, err
+	}
+	defer restore()
+
+	cursor := current
+	if cursor < 0 || cursor >= len(options) || options[cursor].disabled {
+		cursor = 0
+		for cursor < len(options) && options[cursor].disabled {
+			cursor++
+		}
+		if cursor == len(options) {
+			return 0, errNotInteractive
+		}
+	}
+	p := pickerState{options: options, cursor: cursor}
+	header := sanitize(title) + "  ↑↓ move · enter · esc"
+	if displayWidth(header) > width-1 {
+		header = "↑↓ move · enter · esc  " + sanitize(title)
+	}
+	header = truncateWidth(header, width-1)
+	rows := len(options) + 1
+	fmt.Fprint(r.out, "\x1b[?25l")
+	defer func() {
+		fmt.Fprintf(r.out, "\x1b[%dA\r\x1b[J\x1b[?25h", rows)
+	}()
+	draw := func(redraw bool) {
+		if redraw {
+			fmt.Fprintf(r.out, "\x1b[%dA\r", rows)
+		}
+		fmt.Fprintf(r.out, "\x1b[2K%s\r\n", header)
+		for _, row := range renderPicker(options, p.cursor, width, r.styled) {
+			fmt.Fprint(r.out, "\x1b[2K", row, "\r\n")
+		}
+	}
+	draw(false)
+	for {
+		var chunk [256]byte
+		n, readErr := r.keys.inner.Read(chunk[:])
+		for _, k := range decodeKeys(chunk[:n]) {
+			if k == keyUp || k == keyDown {
+				if k == keyUp {
+					p.move(-1)
+				} else {
+					p.move(1)
+				}
+				draw(true)
+			} else if index, done, cancelled := p.choose(k); done {
+				return index, nil
+			} else if cancelled {
+				return 0, errCancelled
+			}
+		}
+		if readErr != nil {
+			return 0, readErr
+		}
+	}
+}
+
 // readPhysicalLine counts the echo before converting pasted ↵ to newlines.
 // x/term owns history, so the normalized submission is not added again.
 func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
@@ -269,6 +342,9 @@ func (r *terminalReader) drawUserBand(message string, rows int) {
 type scannerReader struct{ scanner *bufio.Scanner }
 
 func (r *scannerReader) SetPrompt(string) {}
+func (r *scannerReader) Choose(string, []choice, int) (int, error) {
+	return 0, errNotInteractive
+}
 func (r *scannerReader) ReadLine() (string, error) {
 	if !r.scanner.Scan() {
 		if err := r.scanner.Err(); err != nil {

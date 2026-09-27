@@ -24,6 +24,132 @@ func terminalInput(input io.Reader) *terminalReader {
 	return reader
 }
 
+// pickerKeys gives each simulated keystroke its own terminal read.
+type pickerKeys struct{ chunks [][]byte }
+
+func (r *pickerKeys) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[0])
+	r.chunks = r.chunks[1:]
+	return n, nil
+}
+
+func TestTerminalReader_ChooseWithArrows(t *testing.T) {
+	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\x1b[B"), []byte("\x1bOB"), []byte("\r")}})
+	index, err := reader.Choose("Select a model", []choice{{label: "one"}, {label: "two"}, {label: "three"}}, 0)
+	if err != nil || index != 2 {
+		t.Fatalf("index %d, err %v", index, err)
+	}
+	out := reader.out.(*bytes.Buffer).String()
+	if !strings.Contains(out, "\x1b[?25l") || !strings.Contains(out, "\x1b[?25h") || !strings.HasSuffix(out, "\x1b[J\x1b[?25h") {
+		t.Fatalf("picker was not erased and cursor restored: %q", out)
+	}
+}
+
+func TestTerminalReader_ChooseWithBundledKeys(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[B\x1b[B\r"))
+	index, err := reader.Choose("Select a model", []choice{{label: "one"}, {label: "two"}, {label: "three"}}, 0)
+	if err != nil || index != 2 {
+		t.Fatalf("bundled keys chose %d, err %v", index, err)
+	}
+}
+
+func TestTerminalReader_ChooseStopsAtFirstDecision(t *testing.T) {
+	options := []choice{{label: "one"}, {label: "two"}}
+	reader := terminalInput(strings.NewReader("\x1b[B\r\x1b"))
+	if index, err := reader.Choose("Select", options, 0); err != nil || index != 1 {
+		t.Fatalf("selection before cancel: %d, %v", index, err)
+	}
+	reader = terminalInput(strings.NewReader("\x1b\r"))
+	if _, err := reader.Choose("Select", options, 0); err != errCancelled {
+		t.Fatalf("cancel before selection: %v", err)
+	}
+}
+
+func TestTerminalReader_ChooseIgnoresUnknownEscape(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[5~\x1b[B\r"))
+	options := []choice{{label: "one"}, {label: "two"}, {label: "three"}, {label: "four"}, {label: "five"}}
+	index, err := reader.Choose("Select", options, 0)
+	if err != nil || index != 1 {
+		t.Fatalf("unknown escape chose %d, err %v", index, err)
+	}
+}
+
+func TestTerminalReader_EscapeCancels(t *testing.T) {
+	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\x1b")}})
+	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != errCancelled {
+		t.Fatalf("got %v, want errCancelled", err)
+	}
+	if !strings.HasSuffix(reader.out.(*bytes.Buffer).String(), "\x1b[J\x1b[?25h") {
+		t.Fatal("cancel did not clean up the picker")
+	}
+}
+
+func TestTerminalReader_ChooseReadErrorRestoresTerminal(t *testing.T) {
+	reader := terminalInput(&pickerKeys{})
+	restored := false
+	reader.enterRaw = func() (func(), error) { return func() { restored = true }, nil }
+	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != io.EOF {
+		t.Fatalf("got %v", err)
+	}
+	if !restored || !strings.HasSuffix(reader.out.(*bytes.Buffer).String(), "\x1b[J\x1b[?25h") {
+		t.Fatal("read error left terminal in picker mode")
+	}
+}
+
+func TestTerminalReader_ChooseLeavesTheNextPromptWorking(t *testing.T) {
+	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\r"), []byte("hello\r")}})
+	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := reader.ReadLine(); err != nil || line != "hello" {
+		t.Fatalf("next prompt: %q, %v", line, err)
+	}
+}
+
+func TestTerminalReader_ChooseCancelKeepsPasteWorking(t *testing.T) {
+	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\x03"), []byte("\x1b[200~a\rb\x1b[201~\r")}})
+	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != errCancelled {
+		t.Fatalf("picker: %v", err)
+	}
+	if line, err := reader.ReadLine(); err != nil || line != "a\nb" {
+		t.Fatalf("paste after cancel: %q, %v", line, err)
+	}
+}
+
+func TestTerminalReader_ChooseNarrowHeaderKeepsCancelHint(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\r"))
+	reader.size = func() (int, int, error) { return 30, 24, nil }
+	if _, err := reader.Choose("Select reasoning effort", []choice{{label: "low"}}, 0); err != nil {
+		t.Fatal(err)
+	}
+	header := strings.SplitN(reader.out.(*bytes.Buffer).String(), "\r\n", 2)[0]
+	header = strings.TrimPrefix(header, "\x1b[?25l\x1b[2K")
+	if !strings.Contains(header, "esc") || displayWidth(header) > 29 {
+		t.Fatalf("narrow header %q", header)
+	}
+}
+
+func TestTerminalReader_ChooseShortTerminalFallsBack(t *testing.T) {
+	reader := terminalInput(strings.NewReader(""))
+	reader.size = func() (int, int, error) { return 40, 2, nil }
+	if _, err := reader.Choose("Select", []choice{{label: "one"}, {label: "two"}}, 0); err != errNotInteractive {
+		t.Fatalf("got %v", err)
+	}
+	if reader.out.(*bytes.Buffer).Len() != 0 {
+		t.Fatal("a too-short terminal was drawn on")
+	}
+}
+
+func TestScannerReader_ChooseIsNotInteractive(t *testing.T) {
+	reader := newLineReader(strings.NewReader("hi\n"), io.Discard, nil)
+	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != errNotInteractive {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestTerminalReader_ArrowKeysRecallHistory(t *testing.T) {
 	reader := terminalInput(strings.NewReader("first\rsecond\r\x1b[A\r"))
 	for i, want := range []string{"first", "second", "second"} {

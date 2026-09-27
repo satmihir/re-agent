@@ -71,17 +71,20 @@ already read.
 ./reagent chat --workspace ./some-repo
 ```
 
-`/model` lists the models available with the credentials you have set, and
-`/model 2` or `/model claude-sonnet-5` switches. A model change starts a fresh
-session, since a conversation cannot continue on a different model. `/effort`
-does the same for reasoning effort, which the current model's own vocabulary
-decides, and which changes without discarding the conversation.
+On a terminal, `/model` opens an arrow-key picker for available models: ↑/↓
+(or `k`/`j`) move, Enter or a row number chooses, and Esc, `q`, Ctrl-C, or
+Ctrl-D cancels. `/model 2` or `/model claude-sonnet-5` still switches directly.
+A model change starts a fresh session, since a conversation cannot continue on
+a different model. `/effort` opens the same picker for the current model's
+reasoning efforts; changing effort keeps the conversation. With piped input,
+these commands list the choices instead; use explicit arguments to select.
 
 `/status` reports the current model, authority, workspace, session totals, and
 last trace. `/trace` prints the last turn's trace, `/reset` starts over, and
 `/exit` or Ctrl-D leaves. `/edit` opens an empty message in `$VISUAL`, then
 `$EDITOR`, then `vi`; saving a non-empty message sends it as one turn, and it
-needs an interactive terminal. `/help` lists every command and key binding.
+needs an interactive terminal. `/help` lists every command and key binding,
+including the picker keys.
 
 A line starting with `!` runs the rest of it yourself, without a model turn:
 `!go test ./...`, then "fix that". The command runs through `/bin/sh` in the

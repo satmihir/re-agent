@@ -133,7 +133,7 @@ func TestConversation_ProxyMakesOpenAIModelsUsable(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	c.commandModel("gpt-6-luna", &stderr)
+	c.commandModel("gpt-6-luna", nil, &stderr)
 	if !strings.Contains(stderr.String(), "switched to gpt-6-luna (openai via API_PROXY_URL)") {
 		t.Fatalf("switch: %s", stderr.String())
 	}

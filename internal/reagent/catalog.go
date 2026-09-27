@@ -100,6 +100,35 @@ func selectEffort(info modelInfo, choice string) (string, error) {
 		info.ID, choice, strings.Join(info.Efforts, ", "))
 }
 
+// v0 §10 amendment (2026-09-26): picker rows follow the same catalog and
+// wording as the non-terminal listings, but also say which key is missing.
+func modelChoices(current string, available map[string]bool) []choice {
+	choices := make([]choice, 0, len(modelCatalog))
+	for _, info := range modelCatalog {
+		row := choice{label: info.ID, detail: info.Provider, note: info.Note}
+		if info.ID == current {
+			row.note += "  current"
+		} else if !available[info.Provider] {
+			row.note = "needs " + apiKeyVariable(info.Provider) + "  " + info.Note
+			row.disabled = true
+		}
+		choices = append(choices, row)
+	}
+	return choices
+}
+
+func effortChoices(info modelInfo, current string) []choice {
+	choices := make([]choice, 0, len(info.Efforts))
+	for _, effort := range info.Efforts {
+		row := choice{label: effort}
+		if effort == current {
+			row.note = "current"
+		}
+		choices = append(choices, row)
+	}
+	return choices
+}
+
 // renderModels lists the catalog, marking the model in use and any whose
 // provider has no credential in this process.
 //
@@ -132,7 +161,7 @@ func renderModels(current string, available map[string]bool) string {
 	if len(missing) > 0 {
 		fmt.Fprintf(&out, "\nmodels marked no key need %s\n", strings.Join(missing, " or "))
 	}
-	out.WriteString("\nswitch with /model <number or name>; a model change starts a fresh session")
+	out.WriteString("\na model change starts a fresh session; /model <number or name> switches")
 	return out.String()
 }
 
