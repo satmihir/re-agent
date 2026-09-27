@@ -83,14 +83,10 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	}
 
 	// One snapshot answers both the digest check and the replacement, so the
-	// bytes compared are exactly the bytes edited.
-	snap, bad := readSnapshot(abs)
+	// bytes compared are exactly the bytes edited (v0 §8 amendment, 2026-09-27).
+	snap, bad := checkFileDigest(abs, a.ExpectedSHA256)
 	if bad != nil {
 		return *bad, nil
-	}
-	if snap.sha256 != a.ExpectedSHA256 {
-		return failOutcome("stale_file",
-			"the file has changed since it was read; its current digest is "+snap.sha256), nil
 	}
 
 	before := string(snap.content)
