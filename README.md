@@ -1,4 +1,9 @@
-# re:agent
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" alt="re:agent" width="320">
+  </picture>
+</h1>
 
 An AI agent harness written from first principles, in Go, to understand how one
 works. It builds a request, reads what the model asked for, runs the tools it
