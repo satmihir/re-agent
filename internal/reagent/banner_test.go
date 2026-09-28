@@ -51,6 +51,25 @@ func TestWelcome_DrawsTheFlaskBesideTheDetails(t *testing.T) {
 	}
 }
 
+func TestHeader_ShowsLoadedProjectInstructionsOnlyInChat(t *testing.T) {
+	cfg := welcomeConfig(t)
+	project := strings.Repeat("x", 5036)
+	cfg.ProjectInstructions = &project
+	var plain, run, styled bytes.Buffer
+	(&Display{w: &plain}).header(cfg, "/work/repo", "", true)
+	(&Display{w: &run}).header(cfg, "/work/repo", "", false)
+	(&Display{w: &styled, styled: true}).welcome(cfg, "/work/repo", "", welcomeColumns)
+	label := "AGENTS.md loaded (5.0 KB)"
+	if !strings.Contains(plain.String(), label) || !strings.Contains(stripANSI(styled.String()), label) || strings.Contains(run.String(), label) {
+		t.Fatalf("plain %q, run %q, styled %q", plain.String(), run.String(), stripANSI(styled.String()))
+	}
+	for _, row := range strings.Split(strings.TrimSuffix(styled.String(), "\n"), "\n") {
+		if displayWidth(row) >= welcomeColumns {
+			t.Fatalf("welcome wrapped: %q", stripANSI(row))
+		}
+	}
+}
+
 func TestWelcome_FitsTheTerminal(t *testing.T) {
 	var out bytes.Buffer
 	d := &Display{w: &out, styled: true}

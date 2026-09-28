@@ -18,8 +18,10 @@ type Config struct {
 	ReasoningEffort string
 	Registry        *Registry
 	WorkspacePath   string
-	MaxSteps        int
-	MaxToolCalls    int
+	// v0 §6 U5: nil means no root AGENTS.md was loaded; an empty file is present.
+	ProjectInstructions *string
+	MaxSteps            int
+	MaxToolCalls        int
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool

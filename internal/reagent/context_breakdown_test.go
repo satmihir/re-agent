@@ -126,6 +126,27 @@ func TestContextBreakdown_WorkspaceSnapshots(t *testing.T) {
 	}
 }
 
+func TestContextBreakdown_ProjectInstructions(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Provider = provider
+			project := "Use the project's tool conventions.\n"
+			cfg.ProjectInstructions = &project
+			got, err := measureContext(cfg, []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := cfg
+			base.ProjectInstructions = nil
+			want := encodedSize(instructions(cfg)) - encodedSize(instructions(base))
+			if part(t, got, "project instructions") != want || part(t, got, "instructions") != encodedSize(instructions(base)) || got.counted() != got.total || !strings.Contains(got.render(), "project instructions") {
+				t.Fatalf("project instructions were not measured separately: %+v", got)
+			}
+		})
+	}
+}
+
 func TestContextBreakdown_StaleAndRepeatedReads(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider = openaiName

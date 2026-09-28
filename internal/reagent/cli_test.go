@@ -268,6 +268,9 @@ func TestHelp_ListsEachCommandsOwnFlags(t *testing.T) {
 			if code := Main(context.Background(), []string{"help", command}, strings.NewReader(""), &stdout, &stderr); code != exitOK {
 				t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 			}
+			if !strings.Contains(stdout.String(), "--no-project-instructions") {
+				t.Fatalf("project instruction flag missing from %s help: %s", command, stdout.String())
+			}
 			if command == "run" && (!strings.Contains(stdout.String(), "--prompt-file") || strings.Contains(stdout.String(), "--trace-dir")) {
 				t.Fatalf("run help: %s", stdout.String())
 			}
@@ -341,6 +344,93 @@ func TestMain_UsageErrors(t *testing.T) {
 				t.Fatalf("exit %d, want %d", code, exitUsage)
 			}
 		})
+	}
+}
+
+func TestMain_ProjectInstructionsAtLaunch(t *testing.T) {
+	for _, tc := range []struct {
+		name, warning           string
+		content                 []byte
+		create, skip, directory bool
+	}{
+		{name: "missing"},
+		{name: "valid", create: true, content: []byte("project-only\n")},
+		{name: "empty is present", create: true},
+		{name: "exactly 32 KiB", create: true, content: bytes.Repeat([]byte("x"), 32<<10)},
+		{name: "too large", create: true, content: bytes.Repeat([]byte("x"), (32<<10)+1), warning: "larger than 32 KiB"},
+		{name: "directory", directory: true, warning: "not a regular file"},
+		{name: "invalid UTF-8", create: true, content: []byte{0xff}, warning: "not UTF-8"},
+		{name: "disabled", create: true, content: []byte("project-only\n"), skip: true},
+		{name: "disabled invalid file", create: true, content: []byte{0xff}, skip: true},
+	} {
+		for _, provider := range []string{openaiName, anthropicName} {
+			t.Run(tc.name+"/"+provider, func(t *testing.T) {
+				root := t.TempDir()
+				if tc.create {
+					if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), tc.content, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.directory {
+					if err := os.Mkdir(filepath.Join(root, "AGENTS.md"), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				args := []string{"run", "--workspace", root, "--provider", provider, "--show-context"}
+				if tc.skip {
+					args = append(args, "--no-project-instructions")
+				}
+				args = append(args, "task")
+				var stdout, stderr bytes.Buffer
+				if code := Main(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code != exitOK {
+					t.Fatalf("exit %d: %s", code, stderr.String())
+				}
+				var request struct {
+					Instructions string              `json:"instructions"`
+					System       []messagesTextBlock `json:"system"`
+				}
+				if err := json.Unmarshal(stdout.Bytes(), &request); err != nil {
+					t.Fatal(err)
+				}
+				text := request.Instructions
+				if provider == anthropicName {
+					text = request.System[0].Text
+				}
+				loaded := tc.create && !tc.skip && tc.warning == ""
+				if strings.Contains(text, "# Project instructions (AGENTS.md)") != loaded {
+					t.Fatalf("loaded=%t, instructions tail: %q", loaded, text[len(text)-min(len(text), 100):])
+				}
+				if loaded && !strings.HasSuffix(text, "\n# Project instructions (AGENTS.md)\n\n"+string(tc.content)) {
+					t.Fatalf("project instructions were changed: %q", text[len(text)-min(len(text), 100):])
+				}
+				if tc.warning == "" && stderr.Len() != 0 || tc.warning != "" && (!strings.Contains(stderr.String(), tc.warning) || strings.Count(stderr.String(), "\n") != 1) {
+					t.Fatalf("warning: %q", stderr.String())
+				}
+			})
+		}
+	}
+}
+
+func TestMain_ProjectInstructionsOnlyFromRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "child")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(parent, "AGENTS.md"), filepath.Join(root, "nested", "AGENTS.md")} {
+		if err := os.WriteFile(path, []byte("outside the root\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Main(context.Background(), []string{"run", "--workspace", root, "--show-context", "task"}, strings.NewReader(""), &stdout, &stderr); code != exitOK || stderr.Len() != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Project instructions (AGENTS.md)") || strings.Contains(stdout.String(), "outside the root") {
+		t.Fatalf("read a parent or nested AGENTS.md: %s", stdout.String())
 	}
 }
 

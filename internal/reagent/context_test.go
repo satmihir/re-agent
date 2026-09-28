@@ -72,6 +72,27 @@ func TestInstructions_RuntimeSectionContents(t *testing.T) {
 	}
 }
 
+func TestContext_ProjectInstructionsFollowTheRuntimeSection(t *testing.T) {
+	cfg := testConfig(t)
+	project := "Local convention: use make check.\n\n"
+	plain := instructions(cfg)
+	cfg.ProjectInstructions = &project
+	got := instructions(cfg)
+	if got != plain+"\n# Project instructions (AGENTS.md)\n\n"+project {
+		t.Fatalf("project section does not follow runtime exactly:\n%q", got)
+	}
+	first := BuildContext(cfg, RequestScope{Step: 1}, nil)
+	later := BuildContext(cfg, RequestScope{Step: 2}, nil)
+	if first.Instructions != later.Instructions {
+		t.Fatal("project instructions changed between steps")
+	}
+	empty := ""
+	cfg.ProjectInstructions = &empty
+	if got := instructions(cfg); got != plain+"\n# Project instructions (AGENTS.md)\n\n" {
+		t.Fatalf("an empty but present file was omitted: %q", got)
+	}
+}
+
 // An unset effort means no such parameter is sent, and the section says so
 // rather than naming a value the harness did not choose.
 func TestInstructions_UnsetEffortIsNamedAsTheProvidersDefault(t *testing.T) {

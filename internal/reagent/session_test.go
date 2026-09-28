@@ -65,6 +65,40 @@ func TestSession_SecondTurnContinuesTheTranscript(t *testing.T) {
 	}
 }
 
+func TestSession_ProjectInstructionsAreFrozenAtLaunch(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(path, []byte("original project rule"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t)
+	cfg.ProjectInstructions = loadProjectInstructions(ws, false, io.Discard)
+	session := NewSession(cfg, NewScriptedModel(turn(textBlock("first")), turn(textBlock("second"))), NewTrace(io.Discard), io.Discard)
+	traceDir := t.TempDir()
+	if _, err := session.Turn(context.Background(), "one", "run1", filepath.Join(traceDir, "1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("changed project rule"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Turn(context.Background(), "two", "run2", filepath.Join(traceDir, "2.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	var request ModelRequest
+	events := readEvents(t, filepath.Join(traceDir, "2.jsonl"))
+	data, _ := json.Marshal(events[1].Data)
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(request.Instructions, "original project rule") || strings.Contains(request.Instructions, "changed project rule") {
+		t.Fatalf("project instructions were reread: %q", request.Instructions)
+	}
+}
+
 // I04 spans the session: a call id from an earlier turn cannot be reused.
 func TestSession_CallIDsAreUniqueAcrossTurns(t *testing.T) {
 	_, _, second := twoTurns(t, testConfig(t), NewScriptedModel(

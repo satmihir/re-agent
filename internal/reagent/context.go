@@ -50,9 +50,14 @@ func instructions(cfg Config) string {
 	}
 	// The model named here is the one requested. A provider may serve a dated
 	// snapshot of it, which the trace records separately from the response.
-	return defaultInstructions + fmt.Sprintf(
+	text := defaultInstructions + fmt.Sprintf(
 		"\n# Runtime\n\nProvider: %s\nModel: %s\nReasoning effort: %s\nPlatform: %s\n"+
 			"Workspace: %s\nMode: %s\nBudget: %d model requests and %d tool calls per run\n",
 		cfg.Provider, cfg.Model, effort, runtime.GOOS,
 		cfg.WorkspacePath, cfg.Registry.Mode().String(), cfg.MaxSteps, cfg.MaxToolCalls)
+	// v0 §6 U5: the launch-time copy follows the fixed runtime section.
+	if cfg.ProjectInstructions != nil {
+		text += "\n# Project instructions (AGENTS.md)\n\n" + *cfg.ProjectInstructions
+	}
+	return text
 }
