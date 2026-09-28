@@ -7,6 +7,11 @@
 
 <p align="center"><b>A coding agent built from first principles, and largely built by itself.</b></p>
 
+<p align="center">
+  <a href="https://github.com/satmihir/re-agent/actions/workflows/ci.yml"><img src="https://github.com/satmihir/re-agent/actions/workflows/ci.yml/badge.svg" alt="Build and tests"></a>
+  <a href="https://github.com/satmihir/re-agent/actions/workflows/ci.yml"><img src="https://satmihir.github.io/re-agent/coverage.svg" alt="Coverage"></a>
+</p>
+
 re:agent is a coding agent harness in Go. It builds each model request, reads
 what the model asks for, runs only the tools you granted, feeds the results
 back, and repeats. The whole agent is one package of about 7,000 lines, with
@@ -164,6 +169,12 @@ bad invocation.
 make check    # gofmt, vet, and the full test suite, offline, with no keys
 make live     # two real API round trips; reads keys from .env and spends tokens
 ```
+
+GitHub Actions builds, vets, and runs the offline suite with coverage on pushes
+to `main` and on pull requests. The total appears in the run summary. On pushes
+to `main`, the workflow publishes the coverage badge to GitHub Pages; enable
+Pages with **GitHub Actions** as its build and deployment source for the badge
+to appear.
 
 A test that reaches the internet is a bug. [`AGENTS.md`](AGENTS.md) holds the
 house rules for any agent working here, re:agent included.
