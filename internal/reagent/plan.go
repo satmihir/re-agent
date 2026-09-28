@@ -2,7 +2,7 @@ package reagent
 
 import "strings"
 
-// v0 §10 PM1: the mode travels with each user turn, not the cached instruction prefix.
+// v0 §10 amendment (2026-09-28): turn markers leave the cached prefix intact.
 const planMarker = `re:agent plan mode is on for this message. Explore and plan; change nothing.
 - Read, list, and search freely. edit_file, write_file, delete_file, and exec are refused while plan mode is on, and only the user can end it.
 - A request to do the work, made in plan mode, is a request to plan it.
@@ -11,6 +11,7 @@ const planMarker = `re:agent plan mode is on for this message. Explore and plan;
 
 const planEndedMarker = "re:agent plan mode ended before this message. Tools are available again as the launch mode allows."
 
+// planMarkerFor derives "ended" from the last user entry, so an unused toggle leaves no mark.
 func planMarkerFor(history []Entry, on bool) string {
 	if on {
 		return "on"
@@ -26,6 +27,7 @@ func planMarkerFor(history []Entry, on bool) string {
 	return ""
 }
 
+// planText maps a recorded turn marker to the fixed text sent to either provider.
 func planText(marker string) string {
 	switch marker {
 	case "on":
@@ -62,6 +64,7 @@ func findPlan(reply string) (start, end int, found bool) {
 	return start, end, found && open < 0
 }
 
+// planContent removes only the tag lines from a block found by findPlan.
 func planContent(block string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(block, "<plan>\n"), "</plan>"), "\n")
 }

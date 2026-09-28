@@ -227,8 +227,8 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			continue
 		}
 
-		// v0 §10 PM1: the launch mode is checked first by Lookup; plan mode
-		// only removes authority it granted, and never starts a refused tool.
+		// v0 §10 amendment (2026-09-28): Lookup checks launch mode first.
+		// Plan mode only removes authority and never starts a refused tool.
 		if r.session.planMode && tool.Spec().Effect != EffectClassRead {
 			r.recordResult(call, failOutcome("plan_mode", call.Name+" is refused in plan mode, which only the user can end. Put the change in the plan; to see a command's output, ask the user to run it with !."))
 			continue

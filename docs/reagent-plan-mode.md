@@ -61,6 +61,7 @@ This partly reverses v1 §10.3, "the human selects the operating mode at process
 - `/plan <text>` turns plan mode on, if it is off, and sends the text as a message.
 - `chat --plan` starts in plan mode. `run --plan` runs its one message in plan mode.
 - While plan mode is on, the chat prompt is `plan> ` instead of `> `, and `/status` and the welcome show `plan mode` beside the mode.
+- At launch, `run --plan` also shows `plan mode` beside the launch mode. Its header and the plain `chat --plan` header replace the ordinary exec notice with `! plan mode: exec and file changes are refused while plan mode is on`. The notice does not imply that ending plan mode grants tools withheld by `--read-only`. Without plan mode, headers are unchanged.
 - Plan mode is a chat setting, like the model. `/reset` and `/model` keep it.
 - `!cmd` still works in plan mode. The user runs it, not the model, and its output joins the conversation as usual. It is how the user shows the model `git log` or a test run while planning.
 

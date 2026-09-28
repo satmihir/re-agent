@@ -334,7 +334,7 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 		}
 	}
 	mode := cfg.Registry.Mode().String()
-	if chat && cfg.PlanMode {
+	if cfg.PlanMode {
 		mode += " · plan mode"
 	}
 	model, provider, effort := modelPresentation(cfg)
@@ -343,6 +343,13 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 		details = " (" + provider + ", " + effort + ")"
 	}
 	workspace = shortPath(workspace)
+	notice := ""
+	switch {
+	case cfg.PlanMode:
+		notice = "! plan mode: exec and file changes are refused while plan mode is on"
+	case !cfg.Registry.Mode().ReadOnly:
+		notice = "! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network"
+	}
 	via := ""
 	if endpoint != "" {
 		via = "requests go to " + sanitize(endpoint) + " (" + proxyURLVariable + ")"
@@ -356,8 +363,8 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 		if loaded := projectInstructionsLabel(cfg); loaded != "" {
 			d.headerLine(loaded)
 		}
-		if !cfg.Registry.Mode().ReadOnly {
-			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+		if notice != "" {
+			d.headerLine(notice)
 		}
 		d.headerLine("/help for commands · Ctrl-D to exit")
 		return
@@ -366,8 +373,8 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 	if via != "" {
 		d.headerLine(via)
 	}
-	if !cfg.Registry.Mode().ReadOnly {
-		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+	if notice != "" {
+		d.headerLine(notice)
 	}
 }
 
