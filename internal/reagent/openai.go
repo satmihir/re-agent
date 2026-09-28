@@ -158,6 +158,9 @@ func encodeHistory(history []Entry) ([]any, error) {
 			if len(entry.User.Workspace) > 0 {
 				parts = append(parts, responsesContent{Type: "input_text", Text: workspacePreamble + string(entry.User.Workspace)})
 			}
+			if marker := planText(entry.User.Plan); marker != "" {
+				parts = append(parts, responsesContent{Type: "input_text", Text: marker})
+			}
 			input = append(input, responsesMessage{Role: "user", Content: parts})
 		case EntryShell:
 			text, err := shellCommandText(*entry.Shell)

@@ -77,6 +77,7 @@ cannot grant tools beyond the chosen mode.
 
 | | |
 |---|---|
+| `/plan`, `/plan <text>` | Toggle plan mode, or start planning with a message. The model may read but cannot edit or run commands until you turn it off. |
 | `/model`, `/effort` | Pick a model or reasoning effort with the arrow keys. |
 | `!command` | Run a shell command yourself; its output joins the conversation. |
 | `/context` | What the next request is made of, including project instructions and past workspace snapshots, byte by byte. |
@@ -96,6 +97,12 @@ You grant tools at launch, and nothing the model says can widen that grant.
 |---|---|
 | Default | `list_files`, `read_file`, `search_text`, `edit_file`, `write_file`, `delete_file`, `exec` |
 | `--read-only` | `list_files`, `read_file`, `search_text` |
+
+Plan mode (`chat --plan`, `run --plan`, or `/plan` in chat) narrows the launch
+mode: the harness refuses model calls to `edit_file`, `write_file`,
+`delete_file`, and `exec` with `plan_mode`, even though they remain declared.
+`--read-only` remains the ceiling. A user-run `!command` still works in chat;
+it is not a model tool call. Turn plan mode off with `/plan` to implement.
 
 - **Edits are guarded.** Every change to an existing file must carry that
   file's current SHA-256 digest, as `read_file` reports it. An edit written
@@ -154,6 +161,7 @@ cite them by section, for example `// v0 §6.2`.
 | `--model`, `--provider` | Model to use. Falls back to `REAGENT_MODEL`, then the provider's default. |
 | `--reasoning-effort` | Effort from the model's own vocabulary; `auto` for the provider's default. |
 | `--read-only` | Withhold writing and execution. |
+| `--plan` | Start `run` or `chat` in plan mode; the model may only use read tools. |
 | `--no-project-instructions` | Do not load the workspace root's `AGENTS.md`. |
 | `--max-steps`, `--max-tool-calls` | Budget per run or chat turn. Defaults 200 and 400. |
 | `--scripted FILE` | Replay recorded model responses instead of calling a provider. |

@@ -86,6 +86,42 @@ func TestWelcome_FitsTheTerminal(t *testing.T) {
 	}
 }
 
+func TestHeader_RunPlanModeReplacesExecNotice(t *testing.T) {
+	cfg := welcomeConfig(t)
+	cfg.PlanMode = true
+	var out bytes.Buffer
+	(&Display{w: &out}).header(cfg, "/work/repo", "", false)
+	for _, want := range []string{
+		"re:agent · gpt-6-luna (openai, effort low) · read, write, and execute · plan mode · /work/repo\n",
+		"! plan mode: exec and file changes are refused while plan mode is on\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in %q", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "! exec mode:") {
+		t.Fatalf("run in plan mode claims exec is available: %q", out.String())
+	}
+}
+
+func TestHeader_PlainChatPlanModeReplacesExecNotice(t *testing.T) {
+	cfg := welcomeConfig(t)
+	cfg.PlanMode = true
+	var out bytes.Buffer
+	(&Display{w: &out}).header(cfg, "/work/repo", "", true)
+	for _, want := range []string{
+		"workspace /work/repo · read, write, and execute · plan mode · 20 steps, 40 tool calls per turn\n",
+		"! plan mode: exec and file changes are refused while plan mode is on\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in %q", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "! exec mode:") {
+		t.Fatalf("chat in plan mode claims exec is available: %q", out.String())
+	}
+}
+
 // Without styling there is no flask: piped output, NO_COLOR, and tests see the
 // plain header they always have.
 func TestHeader_PlainWithoutStyling(t *testing.T) {

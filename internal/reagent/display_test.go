@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+func TestDisplay_PlanBlockDropsTheTags(t *testing.T) {
+	var out, errs bytes.Buffer
+	d := NewDisplay(&errs)
+	reply := "A note.\n<plan>\n- Change parser\n- Test parser\n</plan>\nDone."
+	d.reply(&out, reply, true)
+	if strings.Contains(out.String(), "<plan>") || strings.Contains(out.String(), "</plan>") || !strings.Contains(out.String(), "plan\n- Change parser\n- Test parser") || !strings.Contains(out.String(), "A note.") || !strings.Contains(out.String(), "Done.") {
+		t.Fatalf("rendered: %q", out.String())
+	}
+}
+
 func TestDisplay_PlainOutputHasNoEscapes(t *testing.T) {
 	var b bytes.Buffer
 	d := NewDisplay(&b)

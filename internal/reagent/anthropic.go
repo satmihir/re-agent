@@ -178,6 +178,9 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 			if len(entry.User.Workspace) > 0 {
 				appendUserText(workspacePreamble + string(entry.User.Workspace))
 			}
+			if marker := planText(entry.User.Plan); marker != "" {
+				appendUserText(marker)
+			}
 		case EntryShell:
 			text, err := shellCommandText(*entry.Shell)
 			if err != nil {

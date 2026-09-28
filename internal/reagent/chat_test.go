@@ -154,6 +154,85 @@ func TestChat_BlockedSessionExplainsAndResetRecovers(t *testing.T) {
 	}
 }
 
+func TestChat_PlanTogglesAndChangesThePrompt(t *testing.T) {
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs}
+	input := &fakeLineReader{}
+	for _, line := range []string{"/plan", "/status", "/plan", "/status"} {
+		input.reads = append(input.reads, struct {
+			line string
+			err  error
+		}{line: line})
+	}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if got := input.prompts; len(got) != 5 || got[0] != "> " || got[1] != "plan> " || got[2] != "plan> " || got[3] != "> " || got[4] != "> " {
+		t.Fatalf("prompts: %q", got)
+	}
+	if !strings.Contains(errs.String(), "plan mode on: edits and commands are refused until /plan again\n") || !strings.Contains(errs.String(), "plan mode off\n") || !strings.Contains(errs.String(), "mode       read, write, and execute · plan mode") {
+		t.Fatalf("stderr: %q", errs.String())
+	}
+	if session.Turns() != 0 {
+		t.Fatalf("commands spent turns: %+v", session.history)
+	}
+}
+
+func TestChat_PlanReplyKeepsHistoryVerbatim(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("<plan>\nDo this.\n</plan>")))
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/plan work\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if strings.Contains(out.String(), "<plan>") || !strings.Contains(out.String(), "plan\nDo this.") || session.history[1].Assistant.Blocks[0].Text != "<plan>\nDo this.\n</plan>" {
+		t.Fatalf("display %q, history %+v", out.String(), session.history)
+	}
+}
+
+func TestChat_PlanWithTextSendsInPlanMode(t *testing.T) {
+	model := NewScriptedModel(turn(textBlock("plan")))
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/plan fix the parser\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if session.Turns() != 1 || session.history[0].User.Plan != "on" || session.history[0].User.Text != "fix the parser" || model.next != 1 {
+		t.Fatalf("history: %+v; calls %d", session.history, model.next)
+	}
+}
+
+func TestChat_PlanSurvivesResetAndModel(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c.session.planMode = true
+	c.session.Reset()
+	if !c.session.planMode {
+		t.Fatal("reset lost plan mode")
+	}
+	c.switchTo(modelCatalog[1])
+	if !c.session.planMode {
+		t.Fatal("model switch lost plan mode")
+	}
+}
+
+func TestChat_ShellCommandWorksInPlanMode(t *testing.T) {
+	var out, errs bytes.Buffer
+	cfg := testConfig(t)
+	cfg.WorkspacePath = t.TempDir()
+	session := NewSession(cfg, NewScriptedModel(turn(textBlock("ok"))), NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: cfg, scripted: session.model, traceDir: t.TempDir(), progress: &errs}
+	input := newLineReader(strings.NewReader("/plan\n!echo hi\nquestion\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if len(session.history) < 2 || session.history[0].Kind != EntryShell || !strings.Contains(session.history[0].Shell.Output, "hi") || session.history[1].User.Plan != "on" {
+		t.Fatalf("history: %+v", session.history)
+	}
+}
+
 func TestChat_EOFExitsCleanly(t *testing.T) {
 	stdout, _ := chatSession(t, NewScriptedModel(turn(textBlock("x"))), "")
 	if stdout != "" {

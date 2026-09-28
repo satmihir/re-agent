@@ -17,6 +17,7 @@ import (
 type chatCommand struct{ name, argument, help string }
 
 var chatCommands = []chatCommand{
+	{"/plan", "[text]", "toggle planning; optional text starts a planning turn"},
 	{"/model", "[number or name]", "choose a model (picker on a terminal; switch starts fresh)"},
 	{"/effort", "[number or name]", "choose reasoning effort (picker on a terminal)"},
 	{"/status", "", "model, mode, workspace, turns, and tokens so far"},
@@ -147,9 +148,9 @@ func (c *conversation) switchTo(info modelInfo) {
 	c.cfg.Provider, c.cfg.Model, c.cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
 	c.cfg.Proxied = c.proxy.serves(info.Provider)
 	model := newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, c.trace)
-	snapshot := c.session.snapshot
+	snapshot, planMode := c.session.snapshot, c.session.planMode
 	c.session = NewSession(c.cfg, model, c.trace, c.progress)
-	c.session.snapshot = snapshot
+	c.session.snapshot, c.session.planMode = snapshot, planMode
 	c.usage = Usage{Known: true}
 }
 
@@ -227,7 +228,11 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 		fmt.Fprintf(stderr, "endpoint   %s (%s)\n", sanitize(c.proxy.shown()), proxyURLVariable)
 	}
 	fmt.Fprintf(stderr, "workspace  %s\n", sanitize(workspace))
-	fmt.Fprintf(stderr, "mode       %s\n", sanitize(c.cfg.Registry.Mode().String()))
+	mode := c.cfg.Registry.Mode().String()
+	if c.session.planMode {
+		mode += " · plan mode"
+	}
+	fmt.Fprintf(stderr, "mode       %s\n", sanitize(mode))
 	fmt.Fprintf(stderr, "budget     %d steps, %d tool calls per turn\n", c.cfg.MaxSteps, c.cfg.MaxToolCalls)
 	if c.usage.Known {
 		fmt.Fprintf(stderr, "session    %s · %s in (%s cached) · %s out\n", plural(c.session.Turns(), "turn", "turns"), formatCount(c.usage.InputTokens), formatCount(c.usage.CachedInputTokens), formatCount(c.usage.OutputTokens))
@@ -449,8 +454,11 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 	var interrupted time.Time
 	for {
 		prompt := "> "
+		if c.session.planMode {
+			prompt = "plan> "
+		}
 		if c.session.blocked != "" {
-			prompt = "(blocked) > "
+			prompt = "(blocked) " + prompt
 		}
 		input.SetPrompt(prompt)
 		typed, err := input.ReadLine()
@@ -485,6 +493,20 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			return exitOK
 		case command == "/help":
 			fmt.Fprintln(stderr, chatHelp())
+		case command == "/plan":
+			if argument == "" {
+				c.session.planMode = !c.session.planMode
+			} else {
+				c.session.planMode = true
+			}
+			if c.session.planMode {
+				fmt.Fprintln(stderr, "plan mode on: edits and commands are refused until /plan again")
+			} else {
+				fmt.Fprintln(stderr, "plan mode off")
+			}
+			if argument != "" {
+				c.runTurn(ctx, argument, stdout, stderr)
+			}
 		case command == "/model":
 			c.commandModel(argument, input, stderr)
 		case command == "/effort":
@@ -576,10 +598,10 @@ func (c *conversation) runTurn(ctx context.Context, text string, stdout, stderr 
 	c.usage.Add(result.Usage)
 	showTrace := result.Status != StatusCompleted
 	if c.session.blocked != "" {
-		printResult(c.session.display, result, time.Since(started), stdout, c.recap, false)
+		printResult(c.session.display, result, time.Since(started), stdout, c.recap, false, true)
 		c.session.display.blocked(result.TracePath)
 	} else {
-		printResult(c.session.display, result, time.Since(started), stdout, c.recap, showTrace)
+		printResult(c.session.display, result, time.Since(started), stdout, c.recap, showTrace, true)
 		if result.Resumable {
 			c.session.display.resumable()
 		}

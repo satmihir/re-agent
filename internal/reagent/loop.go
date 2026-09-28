@@ -25,6 +25,8 @@ type Config struct {
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
+	// PlanMode is the initial plan setting; a chat can toggle it between turns.
+	PlanMode bool
 }
 
 // Run executes one user submission to a terminal outcome. It appends to its
@@ -63,7 +65,7 @@ func NewID() string {
 // Execute is the agent loop: build a context, obtain one model response,
 // validate it, execute the tools it asked for, append the observations, repeat
 // (v1 §7.2). Everything that reaches the model passes through here.
-func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMessage) RunResult {
+func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMessage, plan string) RunResult {
 	s := r.session
 	defer s.display.stopStatus()
 	// The history a run starts from is embedded so its trace can be read on
@@ -79,7 +81,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"tools":           r.cfg.Registry.Specs(),
 		"initial_history": s.history,
 	})
-	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace}})
+	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}})
 
 	for {
 		if ctx.Err() != nil {
@@ -222,6 +224,13 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			} else {
 				r.recordResult(call, failOutcome("tool_unavailable", "no tool named "+call.Name))
 			}
+			continue
+		}
+
+		// v0 §10 amendment (2026-09-28): Lookup checks launch mode first.
+		// Plan mode only removes authority and never starts a refused tool.
+		if r.session.planMode && tool.Spec().Effect != EffectClassRead {
+			r.recordResult(call, failOutcome("plan_mode", call.Name+" is refused in plan mode, which only the user can end. Put the change in the plan; to see a command's output, ask the user to run it with !."))
 			continue
 		}
 

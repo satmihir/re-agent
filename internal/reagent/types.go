@@ -31,6 +31,7 @@ type Entry struct {
 type UserTurn struct {
 	Text      string          `json:"text"`
 	Workspace json.RawMessage `json:"workspace,omitempty"`
+	Plan      string          `json:"plan,omitempty"`
 }
 
 // ShellCommand is a command the user ran with ! in chat, and what it printed

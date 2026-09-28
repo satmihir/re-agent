@@ -12,6 +12,64 @@ import (
 	"testing"
 )
 
+func TestRun_PlanFlag(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		t.Run(provider, func(t *testing.T) {
+			var out, errs bytes.Buffer
+			code := Main(context.Background(), []string{"run", "--workspace", t.TempDir(), "--provider", provider, "--plan", "--show-context", "plan this"}, strings.NewReader(""), &out, &errs)
+			if code != exitOK {
+				t.Fatalf("exit %d: %s", code, errs.String())
+			}
+			if !strings.Contains(out.String(), "re:agent plan mode is on for this message") || !strings.Contains(out.String(), "plan this") || strings.Contains(out.String(), `"plan":"on"`) {
+				t.Fatalf("request: %s", out.String())
+			}
+		})
+	}
+}
+
+func TestRun_PlanBlockPrintsTheOriginalReply(t *testing.T) {
+	text := "<plan>\n- Fix the parser\n</plan>"
+	script, err := json.Marshal([]ModelResponse{turn(textBlock(text))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "responses.json")
+	if err := os.WriteFile(path, script, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	code := Main(context.Background(), []string{"run", "--workspace", t.TempDir(), "--plan", "--scripted", path, "plan"}, strings.NewReader(""), &out, &errs)
+	if code != exitOK || out.String() != text+"\n" {
+		t.Fatalf("exit %d; reply %q; stderr %s", code, out.String(), errs.String())
+	}
+}
+
+func TestChat_PlanFlagStartsInPlanMode(t *testing.T) {
+	var out, errs bytes.Buffer
+	root, traceDir := t.TempDir(), t.TempDir()
+	code := Main(context.Background(), []string{"chat", "--workspace", root, "--trace-dir", traceDir, "--plan", "--scripted", "../../testdata/scripts/echo_then_answer.json"}, strings.NewReader("question\n/exit\n"), &out, &errs)
+	if code != exitOK || !strings.Contains(errs.String(), "plan mode") {
+		t.Fatalf("exit %d; stderr %s", code, errs.String())
+	}
+	paths, err := filepath.Glob(filepath.Join(traceDir, "*", "events.jsonl"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("traces: %q; %v", paths, err)
+	}
+	var request ModelRequest
+	for _, event := range readEvents(t, paths[0]) {
+		if event.Type == "model.requested" {
+			data, _ := json.Marshal(event.Data)
+			if err := json.Unmarshal(data, &request); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if len(request.History) == 0 || request.History[0].User.Plan != "on" {
+		t.Fatalf("request: %+v", request)
+	}
+}
+
 func TestMain_ScriptedRunPrintsReplyOnStdout(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	trace := filepath.Join(t.TempDir(), "events.jsonl")

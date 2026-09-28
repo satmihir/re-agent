@@ -148,7 +148,7 @@ func (d *Display) toolFinished(call ToolCall, outcome ToolOutcome) {
 		d.recap = append(d.recap, recap)
 	}
 }
-func (d *Display) reply(stdout io.Writer, text string) {
+func (d *Display) reply(stdout io.Writer, text string, showPlan bool) {
 	if text == "" {
 		return
 	}
@@ -161,7 +161,19 @@ func (d *Display) reply(stdout io.Writer, text string) {
 	// Measured on stdout rather than d.w: the reply is written there, and the
 	// two differ when only stderr is redirected.
 	columns := min(terminalColumns(stdout), maxReplyColumns)
-	fmt.Fprintln(stdout, display(text, styledOutput(stdout), columns))
+	styled := styledOutput(stdout)
+	if showPlan {
+		if start, end, found := findPlan(text); found {
+			label := "plan"
+			if styled {
+				label = ansiDim + label + ansiReset
+			}
+			fmt.Fprintln(stdout, display(text[:start], styled, columns)+label+"\n"+
+				display(planContent(text[start:end]), styled, columns)+display(text[end:], styled, columns))
+			return
+		}
+	}
+	fmt.Fprintln(stdout, display(text, styled, columns))
 }
 func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, showRecap bool) {
 	d.mu.Lock()
@@ -322,12 +334,22 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 		}
 	}
 	mode := cfg.Registry.Mode().String()
+	if cfg.PlanMode {
+		mode += " · plan mode"
+	}
 	model, provider, effort := modelPresentation(cfg)
 	details := ""
 	if provider != "" {
 		details = " (" + provider + ", " + effort + ")"
 	}
 	workspace = shortPath(workspace)
+	notice := ""
+	switch {
+	case cfg.PlanMode:
+		notice = "! plan mode: exec and file changes are refused while plan mode is on"
+	case !cfg.Registry.Mode().ReadOnly:
+		notice = "! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network"
+	}
 	via := ""
 	if endpoint != "" {
 		via = "requests go to " + sanitize(endpoint) + " (" + proxyURLVariable + ")"
@@ -341,8 +363,8 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 		if loaded := projectInstructionsLabel(cfg); loaded != "" {
 			d.headerLine(loaded)
 		}
-		if !cfg.Registry.Mode().ReadOnly {
-			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+		if notice != "" {
+			d.headerLine(notice)
 		}
 		d.headerLine("/help for commands · Ctrl-D to exit")
 		return
@@ -351,8 +373,8 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 	if via != "" {
 		d.headerLine(via)
 	}
-	if !cfg.Registry.Mode().ReadOnly {
-		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
+	if notice != "" {
+		d.headerLine(notice)
 	}
 }
 
