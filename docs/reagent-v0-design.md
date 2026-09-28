@@ -88,6 +88,8 @@ Path checking rejects absolute paths, `..` components, and `.git` components bef
 
 **Amendment (2026-09-23):** `.env` and `.env.*` components are rejected the same way as `.git`, and listing and walking omit them. Anything a tool reads reaches the provider and the trace, and those files conventionally hold the very keys the harness keeps out of both. This is a name rule, not a secrets policy; `exec` is not bound by it.
 
+**Amendment (2026-09-25):** Deliberately changing the absolute-path rule above and in v1 §11.1: an empty tool path means the workspace root, and an absolute path is accepted only if its cleaned, workspace-relative form stays inside the root. NUL is rejected before normalization; the relative form still passes the `..`, `.git`, and `.env` checks. Paths outside the root remain rejected. This prevents wasted calls: the first benchmark saw six rejected `list_files` calls with an empty path. This is lexical normalization, not symlink resolution or a sandbox. Tool schemas still prefer workspace-relative paths; requests do not change.
+
 **Relaxation:** Lexical path checks replace rooted access and file-type/symlink defenses; no `os.Root`, FIFO handling, or further symlink policy is built, and v1 §11.1 restores them.
 
 These checks do not establish workspace containment against filesystem aliases. Do not describe them as a sandbox. No further policy mechanism belongs in this slice.

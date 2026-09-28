@@ -61,16 +61,23 @@ func (w *Workspace) returned(path, digest string) bool {
 	return w.digests[path][digest]
 }
 
-// resolve turns a model-supplied relative path into an absolute one, or into
-// the observation explaining why it will not.
+// resolve turns a model-supplied path into an absolute one, or into the
+// observation explaining why it will not.
 func (w *Workspace) resolve(rel string) (string, *ToolOutcome) {
-	switch {
-	case rel == "":
-		return "", failPtr("invalid_path", "path must not be empty")
-	case strings.ContainsRune(rel, 0):
+	if strings.ContainsRune(rel, 0) {
 		return "", failPtr("invalid_path", "path must not contain a NUL byte")
-	case filepath.IsAbs(rel):
-		return "", failPtr("invalid_path", "path must be relative to the workspace")
+	}
+	// v0 §4 amendment (2026-09-25): tolerate an empty root path and absolute
+	// paths inside the workspace; the same lexical checks still apply.
+	if rel == "" {
+		rel = "."
+	}
+	if filepath.IsAbs(rel) {
+		inside, err := filepath.Rel(w.root, filepath.Clean(rel))
+		if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+			return "", failPtr("invalid_path", "path must be inside the workspace, "+w.root)
+		}
+		rel = inside
 	}
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
 		switch {

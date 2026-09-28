@@ -54,15 +54,19 @@ func data(t *testing.T, outcome ToolOutcome, dst any) {
 func TestWorkspace_RejectsPathsOutsideTheContract(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
 	cases := map[string]string{
-		"empty":         "",
-		"absolute":      "/etc/passwd",
-		"parent":        "../secrets",
-		"nested parent": "sub/../../secrets",
-		"git":           ".git/config",
-		"git deep":      "sub/.git/config",
-		"env":           ".env",
-		"env variant":   "sub/.env.local",
-		"nul":           "a\x00b",
+		"absolute":         "/etc/passwd",
+		"absolute git":     filepath.Join(ws.Root(), ".git", "config"),
+		"absolute env":     filepath.Join(ws.Root(), ".env"),
+		"absolute variant": filepath.Join(ws.Root(), "sub", ".env.local"),
+		"absolute parent":  ws.Root() + "/../x",
+		"parent":           "../secrets",
+		"nested parent":    "sub/../../secrets",
+		"git":              ".git/config",
+		"git deep":         "sub/.git/config",
+		"env":              ".env",
+		"env variant":      "sub/.env.local",
+		"nul":              "a\x00b",
+		"absolute nul":     filepath.Join(ws.Root(), "a") + "\x00b",
 	}
 	for name, path := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -70,6 +74,38 @@ func TestWorkspace_RejectsPathsOutsideTheContract(t *testing.T) {
 				t.Fatalf("got %v, want invalid_path", bad)
 			}
 		})
+	}
+}
+
+func TestWorkspace_EmptyAndAbsolutePathsInsideResolve(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
+	for _, c := range []struct{ path, want string }{
+		{"", ws.Root()},
+		{ws.Root(), ws.Root()},
+		{filepath.Join(ws.Root(), "a.txt"), filepath.Join(ws.Root(), "a.txt")},
+		{"a.txt", filepath.Join(ws.Root(), "a.txt")},
+		{ws.Root() + "/sub/../a.txt", filepath.Join(ws.Root(), "a.txt")},
+	} {
+		got, bad := ws.resolve(c.path)
+		if bad != nil || got != c.want {
+			t.Errorf("resolve(%q) = %q, %v; want %q", c.path, got, bad, c.want)
+		}
+	}
+}
+
+func TestWorkspace_AbsolutePathOutsideReportsWorkspace(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	_, bad := ws.resolve(filepath.Join(filepath.Dir(ws.Root()), "elsewhere"))
+	if bad == nil || bad.Code != "invalid_path" || bad.Message != "path must be inside the workspace, "+ws.Root() {
+		t.Fatalf("got %v, want invalid_path naming the workspace", bad)
+	}
+}
+
+func TestWorkspace_AbsoluteNULIsCheckedBeforeNormalization(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	_, bad := ws.resolve("/outside\x00path")
+	if bad == nil || bad.Code != "invalid_path" || bad.Message != "path must not contain a NUL byte" {
+		t.Fatalf("got %v, want NUL rejection", bad)
 	}
 }
 

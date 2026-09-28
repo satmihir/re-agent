@@ -50,6 +50,25 @@ func TestExec_SuccessfulCommandReportsItsOutput(t *testing.T) {
 	}
 }
 
+func TestExec_EmptyAndAbsoluteCwdUseWorkspaceRoot(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "x"})
+	for name, cwd := range map[string]string{"empty": "", "absolute": ws.Root()} {
+		t.Run(name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]any{"argv": []string{"/bin/sh", "-c", "test -f a.txt"}, "cwd": cwd})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got execResult
+			data(t, runTool(t, NewExecTool(ws), string(args)), &got)
+			if got.Cwd != cwd || got.ExitCode == nil || *got.ExitCode != 0 {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+	// Decoding an omitted string cwd yields empty, which now also resolves to root.
+	data(t, runTool(t, NewExecTool(ws), `{"argv":["/bin/sh","-c","test -f a.txt"]}`), new(execResult))
+}
+
 func TestExec_OmittedTimeoutIsTwoMinutes(t *testing.T) {
 	ws := testWorkspace(t, nil)
 	outcome := runTool(t, NewExecTool(ws), `{"argv":["echo","hi"],"cwd":"."}`)
@@ -229,7 +248,6 @@ func TestExec_InvalidArguments(t *testing.T) {
 		"zero timeout":        {`{"argv":["echo"],"cwd":".","timeout_ms":0}`, "invalid_arguments"},
 		"negative timeout":    {`{"argv":["echo"],"cwd":".","timeout_ms":-5}`, "invalid_arguments"},
 		"timeout is a string": {`{"argv":["echo"],"cwd":".","timeout_ms":"1000"}`, "invalid_arguments"},
-		"missing cwd":         {`{"argv":["echo"],"timeout_ms":1000}`, "invalid_path"},
 		"unknown field":       {`{"argv":["echo"],"cwd":".","timeout_ms":1000,"env":{}}`, "invalid_arguments"},
 		"cwd is a file":       {`{"argv":["echo"],"cwd":"a.txt","timeout_ms":1000}`, "not_directory"},
 		"cwd escapes":         {`{"argv":["echo"],"cwd":"..","timeout_ms":1000}`, "invalid_path"},
