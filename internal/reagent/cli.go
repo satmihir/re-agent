@@ -2,6 +2,7 @@ package reagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -147,7 +148,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// The preview is built before any live dependency exists, which is why it
 	// needs no credentials and creates no trace (v0 §6.1).
 	if options.showContext {
-		body, err := PreviewRequest(cfg, prompt)
+		body, err := PreviewRequest(cfg, prompt, collectSnapshot(ctx, ws.Root()))
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return exitRunFail
@@ -184,6 +185,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		live = scripted
 	}
 	session := NewSession(cfg, live, trace, stderr)
+	// v0 §6 amendment (2026-09-27): each accepted turn collects its own state.
+	session.snapshot = func(ctx context.Context) json.RawMessage { return collectSnapshot(ctx, ws.Root()) }
 	endpoint := ""
 	if options.script == "" && proxy.serves(provider) {
 		endpoint = proxy.shown()

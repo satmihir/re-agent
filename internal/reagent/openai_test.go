@@ -120,6 +120,25 @@ func TestEncodeRequest_SendsNativeItemsAndNotTheirText(t *testing.T) {
 	}
 }
 
+func TestEncodeRequest_WorkspaceStateIsSecondTextPart(t *testing.T) {
+	state := json.RawMessage(`{"kind":"workspace_state","date":"2026-09-27"}`)
+	_, got := encode(t, ModelRequest{History: []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task", Workspace: state}}}})
+	var user responsesMessage
+	if len(got.Input) != 1 {
+		t.Fatalf("input: %+v", got.Input)
+	}
+	if err := json.Unmarshal(got.Input[0], &user); err != nil {
+		t.Fatal(err)
+	}
+	if user.Role != "user" || len(user.Content) != 2 || user.Content[0].Text != "task" || user.Content[1].Text != workspacePreamble+string(state) {
+		t.Fatalf("user: %+v", user)
+	}
+	_, plain := encode(t, ModelRequest{History: []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}}})
+	if string(plain.Input[0]) != `{"role":"user","content":[{"type":"input_text","text":"task"}]}` {
+		t.Fatalf("plain user changed: %s", plain.Input[0])
+	}
+}
+
 func TestEncodeRequest_RefusesAnAssistantTurnWithoutProviderItems(t *testing.T) {
 	_, err := EncodeOpenAIRequest(ModelRequest{History: []Entry{
 		{Kind: EntryAssistant, Assistant: &ModelResponse{

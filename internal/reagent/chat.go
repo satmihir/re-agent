@@ -147,7 +147,9 @@ func (c *conversation) switchTo(info modelInfo) {
 	c.cfg.Provider, c.cfg.Model, c.cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
 	c.cfg.Proxied = c.proxy.serves(info.Provider)
 	model := newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, c.trace)
+	snapshot := c.session.snapshot
 	c.session = NewSession(c.cfg, model, c.trace, c.progress)
+	c.session.snapshot = snapshot
 	c.usage = Usage{Known: true}
 }
 

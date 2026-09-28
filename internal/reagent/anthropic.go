@@ -174,6 +174,10 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 		switch entry.Kind {
 		case EntryUser:
 			appendUserText(entry.User.Text)
+			// v0 §6 amendment (2026-09-27): keep both parts in one user message.
+			if len(entry.User.Workspace) > 0 {
+				appendUserText(workspacePreamble + string(entry.User.Workspace))
+			}
 		case EntryShell:
 			text, err := shellCommandText(*entry.Shell)
 			if err != nil {

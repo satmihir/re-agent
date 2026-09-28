@@ -108,6 +108,24 @@ func TestContextBreakdown_PartsAddUpToTheEncodedRequest(t *testing.T) {
 	}
 }
 
+func TestContextBreakdown_WorkspaceSnapshots(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Provider = provider
+			snapshot := json.RawMessage(`{"kind":"workspace_state","date":"2026-09-27"}`)
+			history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task", Workspace: snapshot}}}
+			got, err := measureContext(cfg, history)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if part(t, got, "workspace snapshots") != encodedSize(workspacePreamble+string(snapshot)) || got.counted() != got.total || !strings.Contains(got.render(), "workspace snapshots") {
+				t.Fatalf("breakdown: %+v", got)
+			}
+		})
+	}
+}
+
 func TestContextBreakdown_StaleAndRepeatedReads(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider = openaiName

@@ -61,7 +61,7 @@ func NewID() string {
 // Execute is the agent loop: build a context, obtain one model response,
 // validate it, execute the tools it asked for, append the observations, repeat
 // (v1 §7.2). Everything that reaches the model passes through here.
-func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
+func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMessage) RunResult {
 	s := r.session
 	defer s.display.stopStatus()
 	// The history a run starts from is embedded so its trace can be read on
@@ -77,7 +77,7 @@ func (r *Run) Execute(ctx context.Context, prompt string) RunResult {
 		"tools":           r.cfg.Registry.Specs(),
 		"initial_history": s.history,
 	})
-	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}})
+	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace}})
 
 	for {
 		if ctx.Err() != nil {

@@ -128,7 +128,7 @@ func TestOpenAI_RoundTripPreservesNativeItems(t *testing.T) {
 	}
 
 	// v0 §6.1: the preview is the request, not a description of it.
-	want, err := PreviewRequest(cfg, "find the marker")
+	want, err := PreviewRequest(cfg, "find the marker", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestOpenAI_BatchedCallsRoundTripSequentially(t *testing.T) {
 	if len(sent) != 2 {
 		t.Fatalf("got %d requests, want 2", len(sent))
 	}
-	preview, err := PreviewRequest(cfg, "find the marker")
+	preview, err := PreviewRequest(cfg, "find the marker", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

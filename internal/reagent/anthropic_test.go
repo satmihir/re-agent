@@ -121,6 +121,28 @@ func TestEncodeAnthropic_HistoryExpansion(t *testing.T) {
 	}
 }
 
+func TestEncodeAnthropic_WorkspaceStateIsSecondTextPart(t *testing.T) {
+	state := json.RawMessage(`{"kind":"workspace_state","date":"2026-09-27"}`)
+	_, got := encodeAnthropic(t, ModelRequest{History: []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task", Workspace: state}}}})
+	if len(got.Messages) != 1 || len(got.Messages[0].Content) != 2 {
+		t.Fatalf("messages: %+v", got.Messages)
+	}
+	var first, second messagesTextBlock
+	if err := json.Unmarshal(got.Messages[0].Content[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got.Messages[0].Content[1], &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.Text != "task" || second.Text != workspacePreamble+string(state) || second.CacheControl == nil {
+		t.Fatalf("parts: %+v %+v", first, second)
+	}
+	_, plain := encodeAnthropic(t, ModelRequest{History: []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}}})
+	if len(plain.Messages[0].Content) != 1 {
+		t.Fatalf("plain user changed: %+v", plain.Messages)
+	}
+}
+
 func TestEncodeAnthropic_EffortIsOptional(t *testing.T) {
 	_, with := encodeAnthropic(t, ModelRequest{ReasoningEffort: "low"})
 	if with.OutputConfig == nil || with.OutputConfig.Effort != "low" {

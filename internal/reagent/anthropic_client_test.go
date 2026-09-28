@@ -66,7 +66,7 @@ func TestAnthropic_RoundTripPreservesNativeBlocks(t *testing.T) {
 		t.Fatalf("got %d requests, want 2", len(sent))
 	}
 
-	want, err := PreviewRequest(cfg, "find the marker")
+	want, err := PreviewRequest(cfg, "find the marker", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestAnthropic_BatchedCallsRoundTripSequentially(t *testing.T) {
 	if len(sent) != 2 {
 		t.Fatalf("got %d requests, want 2", len(sent))
 	}
-	preview, err := PreviewRequest(cfg, "find the marker")
+	preview, err := PreviewRequest(cfg, "find the marker", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

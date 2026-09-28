@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -99,6 +100,41 @@ func TestLoop_CallThenObservationThenReply(t *testing.T) {
 	}
 	if got := results(run)[0]; got.CallID != "call_1" || !got.Outcome.OK {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestLoop_SnapshotIsRecordedWithTheUserEntry(t *testing.T) {
+	dir := t.TempDir()
+	session := NewSession(testConfig(t), NewScriptedModel(turn(textBlock("first")), turn(textBlock("second"))), NewTrace(io.Discard), io.Discard)
+	snapshots := []json.RawMessage{json.RawMessage(`{"kind":"workspace_state","date":"2026-09-26"}`), json.RawMessage(`{"kind":"workspace_state","date":"2026-09-27"}`)}
+	session.snapshot = func(context.Context) json.RawMessage { next := snapshots[0]; snapshots = snapshots[1:]; return next }
+	for i, prompt := range []string{"first question", "second question"} {
+		path := filepath.Join(dir, fmt.Sprintf("%d.jsonl", i))
+		if _, err := session.Turn(context.Background(), prompt, fmt.Sprintf("run%d", i), path); err != nil {
+			t.Fatal(err)
+		}
+		events := readEvents(t, path)
+		var request ModelRequest
+		data, _ := json.Marshal(events[1].Data)
+		if err := json.Unmarshal(data, &request); err != nil {
+			t.Fatal(err)
+		}
+		user := request.History[len(request.History)-1].User
+		if user == nil || user.Text != prompt || !strings.Contains(string(user.Workspace), `"date":"2026-09-2`+fmt.Sprint(6+i)+`"`) {
+			t.Fatalf("request history: %+v, user %+v", request.History, user)
+		}
+		if i == 1 {
+			started, _ := json.Marshal(events[0].Data)
+			var initial struct {
+				Initial []Entry `json:"initial_history"`
+			}
+			if err := json.Unmarshal(started, &initial); err != nil {
+				t.Fatal(err)
+			}
+			if len(initial.Initial) != 2 || !strings.Contains(string(initial.Initial[0].User.Workspace), `"date":"2026-09-26"`) {
+				t.Fatalf("initial history: %+v", initial.Initial)
+			}
+		}
 	}
 }
 
