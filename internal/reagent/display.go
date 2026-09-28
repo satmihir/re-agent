@@ -315,6 +315,12 @@ func modelPresentation(cfg Config) (model, provider, effort string) {
 // header names the model, authority, and workspace. endpoint is non-empty only
 // when a proxy stands in for the provider, which the person should always see.
 func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
+	if chat && d.styled {
+		if columns := terminalColumns(d.w); columns >= welcomeColumns {
+			d.welcome(cfg, workspace, endpoint, columns)
+			return
+		}
+	}
 	mode := cfg.Registry.Mode().String()
 	model, provider, effort := modelPresentation(cfg)
 	details := ""

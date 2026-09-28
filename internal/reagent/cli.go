@@ -402,6 +402,20 @@ func writeVersion(w io.Writer) {
 	if info.Main.Version != "" {
 		parts = append(parts, info.Main.Version)
 	}
+	if revision := buildRevision(); revision != "" {
+		parts = append(parts, revision)
+	}
+	parts = append(parts, runtime.Version(), runtime.GOOS+"/"+runtime.GOARCH)
+	fmt.Fprintln(w, strings.Join(parts, " "))
+}
+
+// buildRevision is the commit this binary was built from, marked +dirty when
+// the tree had changes, or empty when the build recorded none.
+func buildRevision() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
 	var revision string
 	var modified bool
 	for _, setting := range info.Settings {
@@ -415,14 +429,10 @@ func writeVersion(w io.Writer) {
 	if len(revision) > 7 {
 		revision = revision[:7]
 	}
-	if modified {
+	if modified && revision != "" {
 		revision += "+dirty"
 	}
-	if revision != "" {
-		parts = append(parts, revision)
-	}
-	parts = append(parts, runtime.Version(), runtime.GOOS+"/"+runtime.GOARCH)
-	fmt.Fprintln(w, strings.Join(parts, " "))
+	return revision
 }
 
 func usage(stderr io.Writer, command, message string) int {
