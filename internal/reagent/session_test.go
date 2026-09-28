@@ -71,8 +71,12 @@ func TestSession_ProjectInstructionsAreFrozenAtLaunch(t *testing.T) {
 	if err := os.WriteFile(path, []byte("original project rule"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := testConfig(t)
-	cfg.ProjectInstructions = loadProjectInstructions(root, false, io.Discard)
+	cfg.ProjectInstructions = loadProjectInstructions(ws, false, io.Discard)
 	session := NewSession(cfg, NewScriptedModel(turn(textBlock("first")), turn(textBlock("second"))), NewTrace(io.Discard), io.Discard)
 	traceDir := t.TempDir()
 	if _, err := session.Turn(context.Background(), "one", "run1", filepath.Join(traceDir, "1.jsonl")); err != nil {

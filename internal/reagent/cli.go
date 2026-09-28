@@ -134,7 +134,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	cfg := Config{
 		Provider: provider, Model: model, ReasoningEffort: resolveEffort(options.reasoning, provider, model),
 		Registry: registry, WorkspacePath: ws.Root(),
-		ProjectInstructions: loadProjectInstructions(ws.Root(), options.noProjectInstructions, stderr),
+		ProjectInstructions: loadProjectInstructions(ws, options.noProjectInstructions, stderr),
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
 	}
 	if options.script != "" {
@@ -463,33 +463,65 @@ func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.
 
 // v0 §6 U5: the root file is copied at launch, never consulted during a turn.
 // An empty but present file is distinct from a missing or skipped one.
-func loadProjectInstructions(root string, disabled bool, stderr io.Writer) *string {
+func loadProjectInstructions(ws *Workspace, disabled bool, stderr io.Writer) *string {
 	if disabled {
 		return nil
 	}
-	file, err := os.Open(filepath.Join(root, "AGENTS.md"))
+	skip := func(reason string) *string {
+		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: "+reason)
+		return nil
+	}
+	path := filepath.Join(ws.Root(), "AGENTS.md")
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: cannot read file")
-		return nil
+		return skip("cannot read file")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		// v0 §6 U5 review: resolve aliases before applying workspace name rules.
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return skip("cannot resolve symlink")
+		}
+		root, err := filepath.EvalSymlinks(ws.Root())
+		if err != nil {
+			return skip("cannot resolve workspace")
+		}
+		rel, err := filepath.Rel(root, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return skip("symlink points outside the workspace")
+		}
+		if _, bad := ws.resolve(rel); bad != nil {
+			return skip("symlink target is withheld")
+		}
+		path = target
+		info, err = os.Lstat(path)
+		if err != nil {
+			return skip("cannot read file")
+		}
+	}
+	// Opening a pipe before checking its type would block startup.
+	if !info.Mode().IsRegular() {
+		return skip("not a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return skip("cannot read file")
 	}
 	defer file.Close()
 
 	const maxBytes = 32 << 10
 	raw, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
-		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: cannot read file")
-		return nil
+		return skip("cannot read file")
 	}
 	if len(raw) > maxBytes {
-		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: larger than 32 KiB")
-		return nil
+		return skip("larger than 32 KiB")
 	}
 	if !utf8.Valid(raw) {
-		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: not UTF-8")
-		return nil
+		return skip("not UTF-8")
 	}
 	text := string(raw)
 	return &text

@@ -358,7 +358,7 @@ func TestMain_ProjectInstructionsAtLaunch(t *testing.T) {
 		{name: "empty is present", create: true},
 		{name: "exactly 32 KiB", create: true, content: bytes.Repeat([]byte("x"), 32<<10)},
 		{name: "too large", create: true, content: bytes.Repeat([]byte("x"), (32<<10)+1), warning: "larger than 32 KiB"},
-		{name: "directory", directory: true, warning: "cannot read file"},
+		{name: "directory", directory: true, warning: "not a regular file"},
 		{name: "invalid UTF-8", create: true, content: []byte{0xff}, warning: "not UTF-8"},
 		{name: "disabled", create: true, content: []byte("project-only\n"), skip: true},
 		{name: "disabled invalid file", create: true, content: []byte{0xff}, skip: true},
