@@ -153,10 +153,12 @@ func encodeHistory(history []Entry) ([]any, error) {
 	for _, entry := range history {
 		switch entry.Kind {
 		case EntryUser:
-			input = append(input, responsesMessage{
-				Role:    "user",
-				Content: []responsesContent{{Type: "input_text", Text: entry.User.Text}},
-			})
+			// v0 §6 amendment (2026-09-27): a dated snapshot follows the text.
+			parts := []responsesContent{{Type: "input_text", Text: entry.User.Text}}
+			if len(entry.User.Workspace) > 0 {
+				parts = append(parts, responsesContent{Type: "input_text", Text: workspacePreamble + string(entry.User.Workspace)})
+			}
+			input = append(input, responsesMessage{Role: "user", Content: parts})
 		case EntryShell:
 			text, err := shellCommandText(*entry.Shell)
 			if err != nil {

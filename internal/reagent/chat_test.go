@@ -3,6 +3,8 @@ package reagent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -78,6 +80,23 @@ func TestChat_SingleInterruptKeepsTheConversation(t *testing.T) {
 	}
 	if !strings.Contains(errs.String(), "Ctrl-C again") {
 		t.Fatalf("stderr: %q", errs.String())
+	}
+}
+
+func TestChat_SnapshotOnEveryTurn(t *testing.T) {
+	var errs, out bytes.Buffer
+	session := NewSession(testConfig(t), NewScriptedModel(turn(textBlock("one")), turn(textBlock("two"))), NewTrace(io.Discard), &errs)
+	n := 0
+	session.snapshot = func(context.Context) json.RawMessage {
+		n++
+		return json.RawMessage(fmt.Sprintf(`{"kind":"workspace_state","date":"day-%d"}`, n))
+	}
+	c := &conversation{session: session, cfg: session.cfg, scripted: session.model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader("one\ntwo\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if n != 2 || string(session.history[0].User.Workspace) != `{"kind":"workspace_state","date":"day-1"}` || string(session.history[2].User.Workspace) != `{"kind":"workspace_state","date":"day-2"}` {
+		t.Fatalf("snapshots: %+v", session.history)
 	}
 }
 

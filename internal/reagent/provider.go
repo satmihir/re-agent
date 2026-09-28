@@ -1,6 +1,7 @@
 package reagent
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -147,9 +148,10 @@ func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, 
 // PreviewRequest builds the first request of a run exactly as the loop's first
 // step would, for whichever provider the run targets. Sharing this with
 // --show-context is what keeps a preview from drifting into a separate,
-// plausible-looking assembly path (v0 §6.1).
-func PreviewRequest(cfg Config, prompt string) ([]byte, error) {
-	history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: prompt}}}
+// plausible-looking assembly path (v0 §6.1). The workspace snapshot is
+// collected by the caller before encoding (v0 §6 amendment, 2026-09-27).
+func PreviewRequest(cfg Config, prompt string, workspace json.RawMessage) ([]byte, error) {
+	history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace}}}
 	return encodeRequest(cfg, BuildContext(cfg, RequestScope{Step: 1}, history))
 }
 

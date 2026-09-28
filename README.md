@@ -56,7 +56,10 @@ To see exactly what re:agent would send a model, with no key and no network:
 
 OpenAI and Anthropic are both supported. A `claude-` model name selects
 Anthropic, and `--provider` makes it explicit. `./reagent help` lists commands
-and flags.
+and flags. Each submitted prompt in `run` or `chat` includes a dated workspace snapshot:
+local date and time zone, and, when available, Git branch, upstream, divergence
+from `origin/main` (or `origin/HEAD`), last fetch, and change counts. It is a
+local observation; re:agent never fetches automatically. The preview includes it.
 
 ## In chat
 
@@ -64,7 +67,7 @@ and flags.
 |---|---|
 | `/model`, `/effort` | Pick a model or reasoning effort with the arrow keys. |
 | `!command` | Run a shell command yourself; its output joins the conversation. |
-| `/context` | What the next request is made of, byte by byte. |
+| `/context` | What the next request is made of, including past workspace snapshots, byte by byte. |
 | `/status`, `/trace` | Model, workspace, token totals, and the last run's trace. |
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |

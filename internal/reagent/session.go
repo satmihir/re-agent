@@ -2,6 +2,7 @@ package reagent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 )
@@ -16,6 +17,8 @@ type Session struct {
 	model   Model
 	trace   *Trace
 	display *Display
+	// v0 §6 amendment (2026-09-27): inject collection before each run.
+	snapshot func(context.Context) json.RawMessage
 
 	history   []Entry
 	seenCalls map[string]bool
@@ -46,7 +49,11 @@ func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunR
 	s.trace.Open(s.ID, runID, tracePath)
 	defer s.trace.Close()
 
-	result := newRun(s, runID).Execute(ctx, text)
+	var workspace json.RawMessage
+	if s.snapshot != nil {
+		workspace = s.snapshot(ctx)
+	}
+	result := newRun(s, runID).Execute(ctx, text, workspace)
 	s.lastTrace = result.TracePath
 	if !continuable(result.Status) && !result.Resumable {
 		s.blocked = string(result.Status)

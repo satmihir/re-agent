@@ -29,7 +29,8 @@ type Entry struct {
 
 // UserTurn is one accepted user submission. v0 has no exhibits (v1 §8.3).
 type UserTurn struct {
-	Text string `json:"text"`
+	Text      string          `json:"text"`
+	Workspace json.RawMessage `json:"workspace,omitempty"`
 }
 
 // ShellCommand is a command the user ran with ! in chat, and what it printed
