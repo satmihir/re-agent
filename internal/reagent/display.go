@@ -338,6 +338,9 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 			d.headerLine(via)
 		}
 		d.headerLine(fmt.Sprintf("workspace %s · %s · %d steps, %d tool calls per turn", workspace, mode, cfg.MaxSteps, cfg.MaxToolCalls))
+		if loaded := projectInstructionsLabel(cfg); loaded != "" {
+			d.headerLine(loaded)
+		}
 		if !cfg.Registry.Mode().ReadOnly {
 			d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
 		}
@@ -351,6 +354,14 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 	if !cfg.Registry.Mode().ReadOnly {
 		d.headerLine("! exec mode: commands run as you, in " + workspace + ", and can read, write, and use the network")
 	}
+}
+
+// projectInstructionsLabel reports the bytes frozen at launch, not the file's current size.
+func projectInstructionsLabel(cfg Config) string {
+	if cfg.ProjectInstructions == nil {
+		return ""
+	}
+	return fmt.Sprintf("AGENTS.md loaded (%.1f KB)", float64(len(*cfg.ProjectInstructions))/1000)
 }
 
 // headerTitle emphasizes the selected model without brightening the metadata.

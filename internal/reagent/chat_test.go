@@ -219,6 +219,21 @@ func newConversation(t *testing.T, model, effort string, turns int) *conversatio
 	return c
 }
 
+func TestChat_ProjectInstructionsSurviveSwitchAndReset(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "low", 1)
+	project := "launch-time instructions\n"
+	c.cfg.ProjectInstructions = &project
+	c.session.cfg.ProjectInstructions = &project
+	c.session.Reset()
+	if got := instructions(c.session.cfg); !strings.HasSuffix(got, "# Project instructions (AGENTS.md)\n\n"+project) {
+		t.Fatalf("reset lost project instructions: %q", got)
+	}
+	c.switchTo(modelCatalog[1])
+	if got := instructions(c.session.cfg); !strings.HasSuffix(got, "# Project instructions (AGENTS.md)\n\n"+project) {
+		t.Fatalf("model switch lost project instructions: %q", got)
+	}
+}
+
 func TestChat_ModelPickerSwitches(t *testing.T) {
 	c := newConversation(t, "gpt-6-luna", "low", 1)
 	before := c.session

@@ -90,6 +90,10 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 	if endpoint != "" {
 		via = dim("requests go to " + sanitize(endpoint) + " (" + proxyURLVariable + ")")
 	}
+	loaded := ""
+	if label := projectInstructionsLabel(cfg); label != "" {
+		loaded = dim(label)
+	}
 	details := [len(flaskArt)]string{
 		"",
 		title,
@@ -100,7 +104,7 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 		via,
 		"/help" + ansiDim + " commands · " + ansiReset + "!cmd" + ansiDim + " shell · " + ansiReset +
 			"Ctrl-D" + ansiDim + " exit" + ansiReset,
-		"",
+		loaded,
 	}
 	var b strings.Builder
 	for i, row := range flaskArt {

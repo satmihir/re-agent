@@ -61,13 +61,20 @@ local date and time zone, and, when available, Git branch, upstream, divergence
 from `origin/main` (or `origin/HEAD`), last fetch, and change counts. It is a
 local observation; re:agent never fetches automatically. The preview includes it.
 
+At launch, re:agent also loads the workspace root's `AGENTS.md` into its
+instructions, if it is valid UTF-8 and at most 32 KiB. The text stays fixed
+throughout a chat, including after `/reset` or `/model`. An invalid or oversized
+file is skipped with a warning. Use `--no-project-instructions` on `run` or
+`chat` to leave it out, for example when comparing requests. Project text
+cannot grant tools beyond the chosen mode.
+
 ## In chat
 
 | | |
 |---|---|
 | `/model`, `/effort` | Pick a model or reasoning effort with the arrow keys. |
 | `!command` | Run a shell command yourself; its output joins the conversation. |
-| `/context` | What the next request is made of, including past workspace snapshots, byte by byte. |
+| `/context` | What the next request is made of, including project instructions and past workspace snapshots, byte by byte. |
 | `/status`, `/trace` | Model, workspace, token totals, and the last run's trace. |
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |
@@ -142,6 +149,7 @@ cite them by section, for example `// v0 §6.2`.
 | `--model`, `--provider` | Model to use. Falls back to `REAGENT_MODEL`, then the provider's default. |
 | `--reasoning-effort` | Effort from the model's own vocabulary; `auto` for the provider's default. |
 | `--read-only` | Withhold writing and execution. |
+| `--no-project-instructions` | Do not load the workspace root's `AGENTS.md`. |
 | `--max-steps`, `--max-tool-calls` | Budget per run or chat turn. Defaults 200 and 400. |
 | `--scripted FILE` | Replay recorded model responses instead of calling a provider. |
 

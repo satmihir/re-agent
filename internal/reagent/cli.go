@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Process exit codes (v0 §10). A failing run is 1; a bad invocation is 2.
@@ -132,7 +134,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	cfg := Config{
 		Provider: provider, Model: model, ReasoningEffort: resolveEffort(options.reasoning, provider, model),
 		Registry: registry, WorkspacePath: ws.Root(),
-		MaxSteps: options.maxSteps, MaxToolCalls: options.maxToolCalls,
+		ProjectInstructions: loadProjectInstructions(ws.Root(), options.noProjectInstructions, stderr),
+		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
 	}
 	if options.script != "" {
 		cfg.Provider, cfg.Model = "scripted", "scripted"
@@ -238,7 +241,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
-	showContext, readOnly, recap                                                   bool
+	showContext, readOnly, recap, noProjectInstructions                            bool
 	maxSteps, maxToolCalls                                                         int
 }
 
@@ -251,6 +254,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.StringVar(&o.script, "scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	fs.BoolVar(&o.showContext, "show-context", false, "print the request the first step would send, then exit")
 	fs.BoolVar(&o.readOnly, "read-only", false, "withhold write and exec tools; only allow reading")
+	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
@@ -268,7 +272,7 @@ type flagGroup struct {
 var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
 	{"Authority", []string{"workspace", "read-only"}},
-	{"Input", []string{"prompt-file"}},
+	{"Input", []string{"prompt-file", "no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-file"}},
@@ -278,6 +282,7 @@ var runFlagGroups = []flagGroup{
 var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
 	{"Authority", []string{"workspace", "read-only"}},
+	{"Input", []string{"no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir"}},
@@ -454,6 +459,40 @@ func startupError(stderr io.Writer, message string) int {
 func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, recap, showTrace bool) {
 	d.reply(stdout, result.Reply)
 	d.summary(result, elapsed, showTrace, recap || result.Status != StatusCompleted)
+}
+
+// v0 §6 U5: the root file is copied at launch, never consulted during a turn.
+// An empty but present file is distinct from a missing or skipped one.
+func loadProjectInstructions(root string, disabled bool, stderr io.Writer) *string {
+	if disabled {
+		return nil
+	}
+	file, err := os.Open(filepath.Join(root, "AGENTS.md"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: cannot read file")
+		return nil
+	}
+	defer file.Close()
+
+	const maxBytes = 32 << 10
+	raw, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: cannot read file")
+		return nil
+	}
+	if len(raw) > maxBytes {
+		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: larger than 32 KiB")
+		return nil
+	}
+	if !utf8.Valid(raw) {
+		fmt.Fprintln(stderr, "warning: AGENTS.md skipped: not UTF-8")
+		return nil
+	}
+	text := string(raw)
+	return &text
 }
 
 // readPrompt loads a run's prompt from a file, or from stdin when the path is
