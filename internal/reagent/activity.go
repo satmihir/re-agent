@@ -96,6 +96,17 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 		old, new := changedLines(args.OldText, args.NewText)
 		a.result = fmt.Sprintf("+%d -%d", len(new), len(old))
 		a.preview = previewLines(old, new)
+	case "write_file":
+		var result writeFileResult
+		if json.Unmarshal(outcome.Data, &result) != nil {
+			return a
+		}
+		switch result.Operation {
+		case "create":
+			a.target += " (created, " + formatActivitySize(result.SizeBytes) + ")"
+		case "overwrite":
+			a.target += " (replaced)"
+		}
 	case "exec":
 		var args execArgs
 		var result execResult
@@ -208,6 +219,13 @@ func callTarget(call ToolCall) string {
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
 			return sanitize(args.Path)
 		}
+	case "write_file", "delete_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return sanitize(args.Path)
+		}
 	case "exec":
 		var args execArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
@@ -232,13 +250,37 @@ func searchTextTarget(args searchTextArgs) string {
 }
 
 func recapLine(call ToolCall, outcome ToolOutcome) string {
-	if call.Name == "edit_file" && outcome.Effect != EffectNone {
-		return "changed " + callTarget(call)
+	if outcome.Effect == EffectNone {
+		return ""
 	}
-	if call.Name == "exec" && outcome.Effect != EffectNone {
+	switch call.Name {
+	case "edit_file":
+		return "changed " + callTarget(call)
+	case "write_file":
+		var result writeFileResult
+		if json.Unmarshal(outcome.Data, &result) != nil {
+			return ""
+		}
+		if result.Operation == "create" {
+			return "created " + callTarget(call)
+		}
+		return "replaced " + callTarget(call)
+	case "delete_file":
+		return "deleted " + callTarget(call)
+	case "exec":
 		return "ran " + callTarget(call)
 	}
 	return ""
+}
+
+func formatActivitySize(n int) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprintf("%d B", n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%.1f KB", float64(n)/1000)
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/1_000_000)
 }
 func plural(n int, singular, pluralForm string) string {
 	if n == 1 {

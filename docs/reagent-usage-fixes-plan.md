@@ -1,6 +1,6 @@
 # re:agent — Roadmap From Real Use
 
-Status: nothing started. B2 from `docs/reagent-bench-fixes-plan.md` comes first (§4, Phase 0).
+Status: U1 merged in #28 and U2 in #29. B2 from `docs/reagent-bench-fixes-plan.md` and U3–U11 not started.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §5 is addressed to the implementing agent. The notes in `docs/reagent-bench-fixes-plan.md` §6 and `docs/reagent-cli-plan.md` §7 still apply wherever this plan does not replace them.
 
@@ -23,8 +23,9 @@ The milestones, in four phases:
 | 3 | **U8** | `/compact` replaces the conversation with a summary the model writes. |
 | 3 | **U9** | Switching model carries the conversation over as a summary. |
 | 3 | **U10** | Compaction happens on its own near the window's limit. Only if §7 decision 4 says so. |
+| 4 | **U11** | A friction-report mode: the model reports the harness's rough edges while it works, and `/friction` asks for them afterwards. |
 
-Phases 1 and 2 are independent of each other. Phase 3 is in order: U8 needs U7, and U9 and U10 need U8.
+Phases 1 and 2 are independent of each other. Phase 3 is in order: U8 needs U7, and U9 and U10 need U8. U11 depends on nothing and can be done at any point; doing it early means the later milestones' test sessions produce reports.
 
 ## 2. What real use showed
 
@@ -411,6 +412,106 @@ Do not rerun a check whose inputs have not changed since it passed.
 
 **Request check.** Byte-identical below the threshold.
 
+### U11. Friction reports
+
+**Why.** Section 2 came from reading 1.7 GB of traces by hand, after the fact. The model knew about most of those problems when it hit them, and said nothing:
+
+- the digest it mistyped, whose `stale_file` message sent it to `python3`
+- the files it wrote with `cat >` because `write_file` did not exist
+- the plan it could not find on the wrong branch
+
+A mode in which the model reports such rough edges as it meets them turns every test session into input for this roadmap.
+
+**Behavior.**
+
+- The launch flag `--report-friction` (off by default, for both `run` and `chat`) registers one more tool, `report_friction`, and appends one paragraph to the instructions.
+- Without the flag, requests are byte-identical to today. The benchmark never sets it (§6).
+- **The tool's arguments:**
+  - `category`: one of `misleading_error`, `missing_capability`, `unclear_description`, `harness_bug`, or `other`
+  - `summary`: one line, at most 300 characters
+  - `details`: optional, at most 4,000 characters
+  - `related_call_ids`: optional, the calls the report is about
+- **Validation** is the usual `invalid_arguments`: an unknown category, an empty or multi-line summary, text over its limit, or more than 20 call ids. The tool does not check that the cited calls exist. Tools are built at launch, before any session, and chat replaces its session on `/reset` and `/model`. Instead the log script marks a cited call it cannot find in the same trace.
+- **The result** is `{"recorded": true}`, with effect `none`. The tool reads and writes nothing, so its effect class is `read` and it is offered in `--read-only` mode too.
+- **A cap per process.** After 10 reports the tool answers `invalid_arguments` with the message `report limit reached; carry on with the task`. It holds that counter itself, behind a mutex.
+- **Nothing is written anywhere else.** A report is a tool call, so the trace already holds it with its session, run, step, and time. v1 §16 rules out a separate mutable record: "A reader can derive summaries from events." The friction log is therefore derived (below), not kept.
+- **The build goes into the trace.** `run.started` gains `build`, the same revision string `reagent version` prints (for example `c140972+dirty`), so a report can be tied to the code it was made against. Move the revision logic out of `writeVersion` into a `buildRevision()` both use. This changes the trace only, not requests.
+
+**The instructions paragraph**, appended after the runtime section only when the flag is on:
+
+```text
+# Friction reports
+
+This session is testing re:agent itself. When the harness gets in your way,
+call report_friction once, briefly, and carry on with the task: a tool error
+whose message misled you, a capability you had to work around, a tool
+description or instruction that was unclear, or harness behavior that looks
+wrong. Cite the calls involved. Do not report your own mistakes unless the
+harness made them likely, and do not stop the task to report.
+```
+
+**Model-facing text.**
+
+- The tool description: "Report a rough edge in the re:agent harness itself: a misleading tool error, a missing capability you worked around, an unclear description or instruction, or a harness bug. Reports are for re:agent's developers; they do not change anything in this session. Use it briefly and continue your task."
+- Schema: `category` as an enum, `related_call_ids` as an array of strings, `additionalProperties: false`, and `["category", "summary"]` required.
+
+**`/friction` in chat.** This works with or without the flag.
+
+- It sends one ordinary turn whose prompt is the embedded `friction.txt`, and prints the reply like any other.
+- The prompt's first line is the marker `re:agent friction review`, which is how the log script finds it:
+
+  ```text
+  re:agent friction review
+  Looking back over this whole session, list the places where the re:agent
+  harness got in your way: misleading tool errors, capabilities you worked
+  around, unclear tool descriptions or instructions, and harness behavior that
+  looked wrong. For each, give a category (misleading_error,
+  missing_capability, unclear_description, harness_bug, other), one line
+  saying what happened, and the call ids involved. Leave out your own mistakes
+  unless the harness made them likely. If there were none, say so.
+  ```
+
+- It is a turn like any other: it counts toward `Turns()` and is traced as a run. A blocked session refuses it the way it refuses any input.
+- Its reply stays in the conversation. Run it at the end of a session.
+
+**Display.** A report's activity line reads `✓ report_friction misleading_error: <summary, cut to the row>`, and the recap leaves it out (effect `none`). `/help` lists `/friction`.
+
+**Reading the reports** (Python, in `bench/`): `bench/friction.py [--since DATE] [TRACE_DIR]` reads every `events.jsonl` under the trace directory. That is `~/Library/Caches/reagent/runs/` by default, plus any directories given.
+
+- It prints each `report_friction` call, grouped by category, oldest first, with:
+  - time, run id, model, and build
+  - the summary and details
+  - each related call's tool name and outcome code, looked up in the same trace, or `not in this trace` for a call the model cited that does not exist
+- It prints each `/friction` reply (a run whose prompt starts with the marker line) as its own group.
+- `--json` prints the same records as JSON lines, for the next usage review.
+- Standard library only.
+- Summaries in traces written before U11 have no `build` field; show `unknown`.
+
+**Touches.**
+
+- New `internal/reagent/tool_report_friction.go` with its test, and new `internal/reagent/friction.txt`.
+- `internal/reagent/cli.go`: the flag, registering the tool, `buildRevision`, and help groups.
+- `context.go` (the instructions paragraph, through `Config`), `loop.go` (`build` in `run.started`), `chat.go` (`/friction`), `activity.go`, and their tests.
+- New `bench/friction.py`.
+- `README.md` (the flag, `/friction`, reading reports) and `docs/reagent-v0-design.md` (a §10 amendment).
+
+**Tests.** Write these first.
+
+- `TestReportFriction_ValidatesArguments`: a table with each category, an unknown category, an empty summary, a multi-line summary, a summary over 300 characters, details over 4,000 characters, and 21 call ids.
+- `TestReportFriction_HasNoEffectAndWorksReadOnly`: the outcome's effect is `none`, and the tool is offered under `Mode{ReadOnly: true}`.
+- `TestReportFriction_StopsAfterTheCap`: the 11th report is refused with the carry-on message.
+- `TestContext_FrictionInstructionsOnlyWithTheFlag`: without the flag, `instructions()` is unchanged. With it, the paragraph follows the runtime section.
+- `TestLoop_RunStartedRecordsTheBuild`.
+- `TestChat_FrictionSendsTheReviewPrompt`: with a scripted model, the request's user text starts with `re:agent friction review`.
+- For the script:
+  - write a fixture trace under `testdata/` with one report citing one real and one invented call, and one `/friction` run
+  - `python3 bench/friction.py testdata/friction` prints both, with the real call's tool and code, and `not in this trace` for the invented one
+  - `--json` gives one line per report
+
+**Request check.** Without the flag, byte-identical (§5.2). With it, `tools` gains `report_friction` and `instructions` gains the paragraph. Show both in the report.
+
+**Manual check for the human.** Start the next milestone's session with `--report-friction`. Run `/friction` at its end, then `python3 bench/friction.py --since <today>`, and read what the model reported against the trace.
+
 ## 5. Notes for the implementing agent
 
 ### 5.1 Before you start
@@ -426,7 +527,7 @@ Do not rerun a check whose inputs have not changed since it passed.
 
 ### 5.2 Request comparisons
 
-**Byte-identical** (U1, U3, U7, U8, U9, U10; and U2, U4, U5, and U6 outside what they name):
+**Byte-identical** (U1, U3, U7, U8, U9, U10, and U11 without its flag; and U2, U4, U5, and U6 outside what they name):
 
 ```json
 {"argv": ["bash", "-c", "set -e; for p in openai anthropic; do go run ./cmd/reagent run --workspace . --provider $p --show-context baseline | cmp - /tmp/reagent-context-$p.json && echo \"$p: identical\"; done"], "cwd": ".", "timeout_ms": 300000}
@@ -485,6 +586,7 @@ Not done or uncertain: <anything the human should look at>
   - no file writes through `exec`
   - no bare-number sessions
   - long sessions that continue past compaction
+- **Test with `--report-friction` once U11 is in.** Start milestone sessions with it, and end each with `/friction`. `bench/friction.py` then gives the next review its starting list, with each report tied to its trace. Never pass the flag to `bench/run.py`: it changes the tools and the instructions, and the benchmark compares requests that must stay alike.
 
 ## 7. Decisions to confirm before starting
 
@@ -493,11 +595,13 @@ Not done or uncertain: <anything the human should look at>
 3. **Compaction replaces everything with one summary** (U8). The alternative, keeping the most recent turns word for word (as Codex and Cline do), fails on the newest Anthropic models unless their thinking is stripped from the kept turns, and it is more code. A single summary is what Anthropic recommends for client-side compaction.
 4. **Automatic compaction** (U10). Recommended yes, at 80%, between turns only, and only after U8 has been used by hand for a while. It is the larger reversal of v1's non-goal, so it is its own decision.
 5. **`write_file` does not create directories** (U2). No use seen needed one, and `mkdir` stays an `exec` effect. The alternative is creating missing parents inside the workspace.
+6. **Friction reports live only in the trace** (U11). The script derives the log, following v1 §16. The alternative is a separate `friction.jsonl` appended by the tool: easier to `tail`, but a second record that can disagree with the trace, and a tool that writes outside the workspace. Also: a cap of 10 reports per process, and `/friction` working without the flag.
 
 ## 8. Out of scope
 
 | Idea | Why not here |
 |---|---|
+| Friction reports in benchmark runs | They change the tools and instructions, so benchmark requests would stop being comparable. U11 is for test sessions. |
 | Replacing stale reads in history (Cline) | Rewrites history, which breaks P1, the prompt cache, and the newest Anthropic models. Compaction covers the same growth. |
 | Pull-request state from `gh` in the snapshot | Needs the network and credentials at every turn. `ahead_of_default: 0` catches the merged-branch case locally. It misses squash merges, which this repository does not use. |
 | A read-only view of the Go module cache | Seen about 8 times, through `exec` with `sed` and `grep`. It works, and a path outside the workspace is a boundary change that needs its own design. |

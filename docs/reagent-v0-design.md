@@ -222,6 +222,14 @@ Read one snapshot under `MaxFileBytes`; use that snapshot for both digest compar
 
 Missing target, stale digest, and ambiguous/missing old text return the corresponding v1 §13.5 observations without an intended edit. Successful rename reports an applied update. No-op behavior follows v1 §13.3. Do not add create, delete, directory creation, fuzzy matching, or a diff parser.
 
+**Amendment (2026-09-27, U2).** Add separate `write_file(path, content, expected_sha256?)` and `delete_file(path, expected_sha256)` tools, drawing only their create, overwrite, and delete semantics from v1 §§13.2–13.4. This supersedes the create/delete prohibition above; the `edit_file` interface itself does not change. Both tools have write authority and are withheld in read-only mode. They use the existing lexical workspace path rules and reject symlink leaf targets; directories are invalid targets. No directory creation, ordered patch format, or rooted publication is added.
+
+For `write_file`, omission of `expected_sha256` requires a missing target and an existing parent directory; creation uses a sibling staged file linked exclusively into place with mode 0644 so a concurrent arrival cannot be replaced. An existing regular file requires its current SHA-256 digest from `read_file`. Validate UTF-8 text, NUL absence, and the `MaxFileBytes` limit; overwrite via the existing `publish` rename, preserving permission bits. A missing file with a supplied digest is `not_found`; an existing file without one is `invalid_arguments`. A mismatched digest is `stale_file`. Return `{operation: "create" | "overwrite", path, before_sha256, after_sha256, size_bytes}`, with null before digest for create, and `effect: applied` after publication.
+
+For `delete_file`, require an existing regular file and its matching digest, then remove just that file. Return `{operation: "delete", path, before_sha256}` and `effect: applied`. Errors before publication have `effect: none`. The snapshot and digest comparison are shared with `edit_file`; no digest provenance tracking or recheck immediately before publication is added (U3 and v1 §13.4, respectively). File-effect summaries omit the `content` argument, and both activity and recap call an overwrite "replaced".
+
+**Amendment (2026-09-27, U3).** The three file writers now distinguish a mistyped digest from a changed file. `expected_sha256` must be exactly 64 lowercase hex characters; otherwise return `invalid_arguments` with `expected_sha256 must be the 64-character digest read_file returned`. The workspace remembers digests returned for each resolved path by successful `read_file`, `edit_file`, and `write_file` results solely to classify mismatches, not to authorize writes. A digest that matches the current snapshot is accepted whether or not a tool returned it; this also lets a model retry with the current digest reported in a `stale_file` error after an external write such as `gofmt`. On a mismatch, a digest previously returned for that path is `stale_file`; one not returned is `unknown_digest` with `this is not a digest read_file returned for this file; its current digest is <digest>`. Checks and rejections do not change a file. An `edit_file` call whose `old_text` equals `new_text` is now `invalid_arguments` with `old_text and new_text are the same, so the edit changes nothing`, superseding the no-op behavior above. The request and tool definitions are unchanged. This addresses four mistyped digests observed in real use; two were incorrectly reported as `stale_file` and one led to an unguarded edit.
+
 ## 9. `exec`: execution with an honest timeout
 
 Adopt the explicit-argv interface and working-directory semantics from **v1 §14.1**, the environment allowlist and empty stdin from **v1 §14.2**, and the common outcome/result fields from **v1 §§5.3 and 14.5**. Use the operating-mode rules already selected in §2.
@@ -402,7 +410,7 @@ A small manual live run follows **v1 §20.8** without creating the evaluation su
 | Exit codes beyond 0, 1, and 2 | §18.4 |
 | Strict-schema required-nullable convention | §10.1 |
 | Trace inspection command | §16.6 |
-| Create/delete and multi-edit patch surface | §§13.2–13.4 |
+| Unified create/update/delete and multi-edit patch surface | §§13.2–13.4 |
 | Rooted filesystem protection and FIFO handling | §11.1 |
 | Process groups and signal escalation | §14.3 |
 | Durable trace barriers and trace-failure stop policy | §16.5 |

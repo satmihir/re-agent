@@ -112,7 +112,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// which of them the model is told about (v1 §10.3).
 	tools := []Tool{
 		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws),
-		NewEditFileTool(ws), NewExecTool(ws),
+		NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws),
 	}
 	if options.script != "" {
 		// The fake tool rides along with a script so orchestration can be

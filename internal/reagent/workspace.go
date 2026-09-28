@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -19,7 +20,9 @@ import (
 // are not a sandbox and do not defend against filesystem aliases; v1 §11.1
 // restores rooted access.
 type Workspace struct {
-	root string
+	root    string
+	mu      sync.Mutex
+	digests map[string]map[string]bool
 }
 
 // OpenWorkspace resolves the directory once, at startup.
@@ -35,11 +38,28 @@ func OpenWorkspace(path string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace %s is not a directory", root)
 	}
-	return &Workspace{root: root}, nil
+	return &Workspace{root: root, digests: make(map[string]map[string]bool)}, nil
 }
 
 // Root is the absolute directory, shown to the model as runtime context.
 func (w *Workspace) Root() string { return w.root }
+
+// v0 §8 amendment (2026-09-27, U3): returned digests distinguish stale
+// mismatches from unknown ones for each path. Tools share the workspace.
+func (w *Workspace) remember(path, digest string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.digests[path] == nil {
+		w.digests[path] = make(map[string]bool)
+	}
+	w.digests[path][digest] = true
+}
+
+func (w *Workspace) returned(path, digest string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.digests[path][digest]
+}
 
 // resolve turns a model-supplied path into an absolute one, or into the
 // observation explaining why it will not.
@@ -168,25 +188,46 @@ func osOutcome(err error) *ToolOutcome {
 // v0 stops there: it does not sync, re-check the digest immediately before the
 // rename, or reconcile an interrupted publication (v1 §13.4 restores those).
 func publish(abs string, content []byte, mode os.FileMode) error {
-	temp, err := os.CreateTemp(filepath.Dir(abs), ".reagent-*")
+	name, err := stageFile(abs, content, mode)
 	if err != nil {
 		return err
 	}
-	name := temp.Name()
 	// Harmless once the rename has consumed the temporary file.
 	defer os.Remove(name)
+	return os.Rename(name, abs)
+}
 
+// v0 §8 amendment (2026-09-27): linking a staged file makes create exclusive;
+// rename would overwrite an unguarded file that appeared during this call.
+func publishNew(abs string, content []byte) error {
+	name, err := stageFile(abs, content, 0o644)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(name)
+	return os.Link(name, abs)
+}
+
+func stageFile(abs string, content []byte, mode os.FileMode) (string, error) {
+	temp, err := os.CreateTemp(filepath.Dir(abs), ".reagent-*")
+	if err != nil {
+		return "", err
+	}
+	name := temp.Name()
 	if _, err := temp.Write(content); err != nil {
 		temp.Close()
-		return err
+		os.Remove(name)
+		return "", err
 	}
 	if err := temp.Close(); err != nil {
-		return err
+		os.Remove(name)
+		return "", err
 	}
 	if err := os.Chmod(name, mode); err != nil {
-		return err
+		os.Remove(name)
+		return "", err
 	}
-	return os.Rename(name, abs)
+	return name, nil
 }
 
 // digestOf is the same SHA-256 a snapshot reports, for bytes about to be

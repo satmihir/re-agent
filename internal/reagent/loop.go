@@ -308,9 +308,9 @@ func toolCalls(resp ModelResponse) []*ToolCall {
 	return calls
 }
 
-// argumentSummary names what a call acted on, keeping only its short scalar
-// arguments. It knows nothing about particular tools: a path or an argv shows
-// up, while replacement text and digests are too long to include.
+// argumentSummary names what a call acted on, keeping short scalar arguments.
+// It skips content even when short to avoid copying file contents into effect
+// summaries (v0 §8 amendment, 2026-09-27).
 func argumentSummary(arguments string) string {
 	var fields map[string]any
 	if err := json.Unmarshal([]byte(arguments), &fields); err != nil {
@@ -324,6 +324,9 @@ func argumentSummary(arguments string) string {
 
 	var parts []string
 	for _, key := range keys {
+		if key == "content" {
+			continue
+		}
 		if value := fmt.Sprint(fields[key]); len(value) <= 60 {
 			parts = append(parts, key+"="+value)
 		}

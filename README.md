@@ -125,7 +125,7 @@ a different answer from a tool that does not exist.
 
 | Mode | Flags | Tools |
 |---|---|---|
-| Default | none | `list_files`, `read_file`, `search_text`, `edit_file`, `exec` |
+| Default | none | `list_files`, `read_file`, `search_text`, `edit_file`, `write_file`, `delete_file`, `exec` |
 | Read only | `--read-only` | `list_files`, `read_file`, `search_text` |
 
 Read-only mode withholds both editing and execution, since commands can write.
@@ -140,9 +140,11 @@ sandbox and the tool description says so.
   "Find why the timeout test fails, fix it, and rerun the test."
 ```
 
-Editing is one exact replacement per call, guarded by the SHA-256 digest that
-`read_file` returned. An edit written against a stale view is refused rather
-than applied to something else.
+`edit_file` makes one exact replacement per call. `write_file` creates a text
+file if it does not exist, or replaces its whole content if given the SHA-256
+digest from `read_file`; it does not create parent directories. `delete_file`
+removes one regular file with a matching digest. A stale digest is refused
+rather than applied to something else.
 
 ## Reading a run
 
@@ -292,8 +294,9 @@ harness's exit code.
 There is no streaming, no conversational session, no subagents, no compaction,
 no retrieval, and no sandbox. Search is literal by default; opt-in regular
 expressions use Go RE2.
-Editing cannot create or delete files. The workspace path checks stop obvious
-escapes but are not a security boundary.
+`edit_file` cannot create or delete files; use `write_file` and `delete_file`
+for those operations. The workspace path checks stop obvious escapes but are
+not a security boundary.
 
 A completed run means the model returned a final reply. It does not mean the
 task was done correctly.

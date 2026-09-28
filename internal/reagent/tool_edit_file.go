@@ -10,9 +10,8 @@ import (
 
 // editFileTool replaces one exact, uniquely matching piece of text in one file.
 //
-// The digest the model supplies is the whole safety mechanism: it proves the
-// model read the bytes it is editing, so an edit written against a stale view
-// is refused rather than applied to something else (v1 §13.3).
+// The digest precondition prevents edits against stale bytes, whether the
+// digest came from read_file or another source (v1 §13.3; v0 §8 U3).
 type editFileTool struct{ ws *Workspace }
 
 // NewEditFileTool returns the file editing tool. It is registered only in write
@@ -65,9 +64,11 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	}
 	switch {
 	case !digestPattern.MatchString(a.ExpectedSHA256):
-		return failOutcome("invalid_arguments", "expected_sha256 must be 64 lowercase hex characters"), nil
+		return failOutcome("invalid_arguments", invalidExpectedDigest), nil
 	case a.OldText == "":
 		return failOutcome("invalid_arguments", "old_text must not be empty"), nil
+	case a.OldText == a.NewText:
+		return failOutcome("invalid_arguments", "old_text and new_text are the same, so the edit changes nothing"), nil
 	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {
@@ -83,14 +84,10 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	}
 
 	// One snapshot answers both the digest check and the replacement, so the
-	// bytes compared are exactly the bytes edited.
-	snap, bad := readSnapshot(abs)
+	// bytes compared are exactly the bytes edited (v0 §8 amendment, 2026-09-27).
+	snap, bad := t.ws.checkFileDigest(abs, a.ExpectedSHA256)
 	if bad != nil {
 		return *bad, nil
-	}
-	if snap.sha256 != a.ExpectedSHA256 {
-		return failOutcome("stale_file",
-			"the file has changed since it was read; its current digest is "+snap.sha256), nil
 	}
 
 	before := string(snap.content)
@@ -113,26 +110,21 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	}
 
 	path := t.ws.relative(abs)
-	// Replacing a file with its own contents is reported, not performed.
-	if after == before {
-		return okOutcome(editFileResult{
-			Operation: "update", Path: path, Changed: false,
-			BeforeSHA256: snap.sha256, AfterSHA256: snap.sha256, SizeBytes: len(snap.content),
-		})
-	}
 	if err := publish(abs, []byte(after), info.Mode().Perm()); err != nil {
 		// A failed rename leaves the original in place, so nothing was applied.
 		return *osOutcome(err), nil
 	}
 
-	outcome, err := okOutcome(editFileResult{
+	result := editFileResult{
 		Operation: "update", Path: path, Changed: true,
 		BeforeSHA256: snap.sha256, AfterSHA256: digestOf(after), SizeBytes: len(after),
-	})
+	}
+	outcome, err := okOutcome(result)
 	if err != nil {
 		return ToolOutcome{}, err
 	}
 	outcome.Effect = EffectApplied
+	t.ws.remember(abs, result.AfterSHA256)
 	return outcome, nil
 }
 
