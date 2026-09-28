@@ -527,22 +527,23 @@ harness made them likely, and do not stop the task to report.
 
 ### 5.2 Request comparisons
 
-**Byte-identical** (U1, U3, U7, U8, U9, U10, and U11 without its flag; and U2, U4, U5, and U6 outside what they name):
+**Byte-identical apart from U4's changing workspace snapshot** (U1, U3, U7, U8, U9, U10, and U11 without its flag; and U2, U4, U5, and U6 outside what they name). Compare canonicalized requests with only the snapshot text part removed:
 
 ```json
-{"argv": ["bash", "-c", "set -e; for p in openai anthropic; do go run ./cmd/reagent run --workspace . --provider $p --show-context baseline | cmp - /tmp/reagent-context-$p.json && echo \"$p: identical\"; done"], "cwd": ".", "timeout_ms": 300000}
+{"argv": ["bash", "-c", "set -euo pipefail; for p in openai anthropic; do go run ./cmd/reagent run --workspace . --provider $p --show-context baseline | jq -S 'del(.. | objects | select((.text? // \"\") | startswith(\"Workspace state when this message was sent\")))' | cmp - <(jq -S 'del(.. | objects | select((.text? // \"\") | startswith(\"Workspace state when this message was sent\")))' /tmp/reagent-context-$p.json) && echo \"$p: identical apart from workspace snapshots\"; done"], "cwd": ".", "timeout_ms": 300000}
 ```
 
 **Only named parts change** (U2: `tools`; U5 and U6: `instructions`). Compare everything else, then print what changed:
 
 ```json
-{"argv": ["bash", "-c", "set -e; for p in openai anthropic; do go run ./cmd/reagent run --workspace . --provider $p --show-context baseline > /tmp/reagent-after-$p.json; diff <(jq -S 'del(.tools, .instructions, .system)' /tmp/reagent-context-$p.json) <(jq -S 'del(.tools, .instructions, .system)' /tmp/reagent-after-$p.json) && echo \"$p: only tools or instructions changed\"; done"], "cwd": ".", "timeout_ms": 300000}
+{"argv": ["bash", "-c", "set -euo pipefail; for p in openai anthropic; do go run ./cmd/reagent run --workspace . --provider $p --show-context baseline > /tmp/reagent-after-$p.json; diff <(jq -S 'del(.tools, .instructions, .system) | del(.. | objects | select((.text? // \"\") | startswith(\"Workspace state when this message was sent\")))' /tmp/reagent-context-$p.json) <(jq -S 'del(.tools, .instructions, .system) | del(.. | objects | select((.text? // \"\") | startswith(\"Workspace state when this message was sent\")))' /tmp/reagent-after-$p.json) && echo \"$p: only tools or instructions changed (apart from workspace snapshots)\"; done"], "cwd": ".", "timeout_ms": 300000}
 ```
 
 For U5, run this from a directory without `AGENTS.md` as well, where the result must be identical. U4's `--show-context` gains the snapshot, so for U4 report the user message rather than a diff.
 
 ### 5.3 Things that will trip you
 
+- After U4, the snapshot varies with the tree and the local date even when the code and prompt do not. The §5.2 recipes remove only its user-message text part from both requests before comparing them; inspect the snapshot itself separately when testing U4.
 - The shell in `exec` is whatever you name. `/bin/sh` has no `<(...)`, so use `bash -c` for the recipes above.
 - `gofmt -w` through `exec` changes the file's digest. Read the file again before the next `edit_file` of it.
 - Tests must not reach the network. U4's tests build their own repository, with a fake `origin` ref made by `git update-ref refs/remotes/origin/main HEAD`.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,6 +106,28 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	}
 	if got.Git.Branch != "(detached)" || got.Git.DefaultBranch != "origin/feat/x" || got.Git.LastFetch != fetched.Format(time.RFC3339) {
 		t.Fatalf("detached and fetched: %s", state)
+	}
+}
+
+func TestSnapshot_NoRemoteOmitsTheDefaultBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitTest(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, dir, "add", "tracked")
+	gitTest(t, dir, "commit", "-qm", "first")
+
+	state := collectSnapshot(context.Background(), dir)
+	var got workspaceState
+	if err := json.Unmarshal(state, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Git == nil || got.Git.Branch != "main" || got.Git.DefaultBranch != "" || got.Git.AheadOfDefault != nil || got.Git.BehindDefault != nil || strings.Contains(string(state), `"default_branch"`) {
+		t.Fatalf("no remote should mean no default ref: %s", state)
 	}
 }
 

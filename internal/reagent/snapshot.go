@@ -44,13 +44,17 @@ func collectSnapshot(ctx context.Context, root string) json.RawMessage {
 	state := workspaceState{Kind: "workspace_state", Date: now.Format("2006-01-02"), TimeZone: zone}
 	if status, ok := snapshotGit(ctx, root, "status", "--porcelain=v2", "--branch"); ok {
 		git := parseGitStatus(status)
+		// v0 §6 U4 review: a fallback ref is a candidate, not an observation.
+		defaultBranch := "origin/main"
 		if name, ok := snapshotGit(ctx, root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); ok && strings.TrimSpace(name) != "" {
-			git.DefaultBranch = strings.TrimSpace(name)
-		} else {
-			git.DefaultBranch = "origin/main"
+			defaultBranch = strings.TrimSpace(name)
 		}
-		if counts, ok := snapshotGit(ctx, root, "rev-list", "--left-right", "--count", "HEAD..."+git.DefaultBranch); ok {
-			git.AheadOfDefault, git.BehindDefault = parseCounts(counts)
+		if counts, ok := snapshotGit(ctx, root, "rev-list", "--left-right", "--count", "HEAD..."+defaultBranch); ok {
+			ahead, behind := parseCounts(counts)
+			if ahead != nil && behind != nil {
+				git.DefaultBranch = defaultBranch
+				git.AheadOfDefault, git.BehindDefault = ahead, behind
+			}
 		}
 		if path, ok := snapshotGit(ctx, root, "rev-parse", "--git-path", "FETCH_HEAD"); ok {
 			fetch := strings.TrimSpace(path)
