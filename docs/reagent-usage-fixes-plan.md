@@ -1,6 +1,6 @@
 # re:agent — Roadmap From Real Use
 
-Status: U1 merged in #28 and U2 in #29. B2 from `docs/reagent-bench-fixes-plan.md` and U3–U11 not started.
+Status: B2 merged in #30, U1 in #28, U2 in #29, U3 in #32, U4 in #36, and U5 in #37. U6–U11 not started. Plan mode, a feature rather than a fix, has its own plan in `docs/reagent-plan-mode.md`.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §5 is addressed to the implementing agent. The notes in `docs/reagent-bench-fixes-plan.md` §6 and `docs/reagent-cli-plan.md` §7 still apply wherever this plan does not replace them.
 
@@ -310,6 +310,8 @@ Keep unrelated uncommitted changes out of a commit, and say they exist.
 Do not rerun a check whose inputs have not changed since it passed.
 ```
 
+Plan mode (`docs/reagent-plan-mode.md`) is the enforced form of the first sentence, for when the user turns it on. The sentence stays, for plan requests made outside it.
+
 **Touches.** `internal/reagent/instructions.txt`, and any test that pins its text, plus `docs/reagent-v0-design.md` (§6 amendment).
 
 **Request check.** Only `instructions` changes. Show the diff.
@@ -608,5 +610,5 @@ Not done or uncertain: <anything the human should look at>
 | A read-only view of the Go module cache | Seen about 8 times, through `exec` with `sed` and `grep`. It works, and a path outside the workspace is a boundary change that needs its own design. |
 | Head-and-tail `exec` output | Real use trimmed output itself with `\| tail -80` about 20 times without trouble, and the cap was hit in 2 of 313 benchmark calls. |
 | `/resume` of a session after the process exits | Compaction and U9 cover the restarts seen. A persisted session is a larger design (v1 §6). |
-| Changing the mode inside chat | Seen once. The mode is fixed at launch by design (v1 §10.3). |
+| Changing the mode inside chat | Seen once. The launch mode stays fixed (v1 §10.3). Plan mode, which only narrows it, is specified separately in `docs/reagent-plan-mode.md`. |
 | Search in files over 1 MiB | Seen once, on a trace file, and `jq` handled it. |
