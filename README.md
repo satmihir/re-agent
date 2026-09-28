@@ -5,322 +5,162 @@
   </picture>
 </h1>
 
-An AI agent harness written from first principles, in Go, to understand how one
-works. It builds a request, reads what the model asked for, runs the tools it
-authorized, feeds the observations back, and repeats.
+<p align="center"><b>A coding agent built from first principles, and largely built by itself.</b></p>
 
-The point is that you can read it. About 4,200 lines of non-test Go in one
-package, with a single dependency: `golang.org/x/term`, for line editing at the
-chat prompt. Everything the agent itself does is standard library. Every
-decision the harness makes is visible in the code, and every request it sends
-is recoverable from disk.
+re:agent is a coding agent harness in Go. It builds each model request, reads
+what the model asks for, runs only the tools you granted, feeds the results
+back, and repeats. The whole agent is one package of about 7,000 lines, with
+one dependency (`golang.org/x/term`). Every request it sends and every reply
+it gets is recorded on disk, so you can see exactly what happened and why.
 
-It is a working repository assistant, not a rival to a mature coding agent. See
-[what it does not do](#what-it-deliberately-does-not-do).
+## Built with itself
+
+re:agent is developed mostly by re:agent. **21 of its first 33 merged pull
+requests were opened by re:agent, working on its own code.** They include most
+of the chat interface, all seven benchmark fixes, the file tools, and the
+model picker.
+
+The loop:
+
+1. A milestone is written as a plan in [`docs/`](docs/).
+2. re:agent implements it, runs the checks, and opens the PR.
+3. The PR is reviewed, usually by another agent, and the findings are posted
+   as comments.
+4. re:agent reads the comments, fixes them, and pushes.
+5. A human merges.
+
+Its own session traces feed back into the plan. The current roadmap,
+[`docs/reagent-usage-fixes-plan.md`](docs/reagent-usage-fixes-plan.md), came
+from reading 41 real sessions for the places the harness got in the model's
+way.
 
 ## Quick start
 
 ```bash
 make build
+export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY=sk-ant-...
+./reagent chat --workspace ./your-repo
 ```
 
-`./reagent help` lists commands, and `./reagent help run` lists `run` flags.
+For a single task instead of a conversation:
 
-The fastest way to understand the harness is to look at what it would send a
-model. This needs no API key and contacts nothing.
+```bash
+./reagent run --workspace ./your-repo "Find why the timeout test fails and fix it."
+```
+
+To see exactly what re:agent would send a model, with no key and no network:
 
 ```bash
 ./reagent run --workspace . --show-context "Where is the result budget defined?" | jq .
 ```
 
-That prints the exact request bytes for step one: the instructions, the tool
-declarations, and your prompt. The live path builds its request with the same
-function, so this is the request rather than a description of one.
+OpenAI and Anthropic are both supported. A `claude-` model name selects
+Anthropic, and `--provider` makes it explicit. `./reagent help` lists commands
+and flags.
 
-To watch the loop run without a provider, replay a recorded script of model
-responses:
+## In chat
 
-```bash
-./reagent run --workspace . --scripted testdata/scripts/search_then_read.json \
-  "Where is the result budget defined?"
-```
+| | |
+|---|---|
+| `/model`, `/effort` | Pick a model or reasoning effort with the arrow keys. |
+| `!command` | Run a shell command yourself; its output joins the conversation. |
+| `/context` | What the next request is made of, byte by byte. |
+| `/status`, `/trace` | Model, workspace, token totals, and the last run's trace. |
+| `/edit` | Write the next message in `$EDITOR`. |
+| `/reset`, `/exit` | Start over, or leave. |
 
-To run for real, set a key and drop the flags:
+Ctrl-C cancels a running turn without ending the chat. If a model request
+fails, for example on a provider overload, the conversation is kept and your
+next message picks up where it stopped.
 
-```bash
-export OPENAI_API_KEY=sk-...
-./reagent run --workspace ./some-repo "Trace how a request reaches the worker."
-```
+## Tools and trust
 
-Two providers are supported, and a run keeps one from start to finish. A model
-name starting with `claude-` selects Anthropic; anything else selects OpenAI.
-`--provider` makes it explicit and picks that provider's default model.
+You grant tools at launch, and nothing the model says can widen that grant.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-./reagent run --workspace ./some-repo --provider anthropic "Trace how a request reaches the worker."
-```
+| Mode | Tools |
+|---|---|
+| Default | `list_files`, `read_file`, `search_text`, `edit_file`, `write_file`, `delete_file`, `exec` |
+| `--read-only` | `list_files`, `read_file`, `search_text` |
 
-Both providers write the same trace format, so a run on one can be compared
-with a run on the other line for line. A model may propose several tool calls
-in one response; the harness checks the entire batch against the per-run call
-budget, then executes the tools one at a time in model order. This can save
-model requests when the calls do not depend on each other's results; it does
-not execute tools concurrently.
+- **Edits are guarded.** Every change to an existing file must carry that
+  file's current SHA-256 digest, as `read_file` reports it. An edit written
+  against a stale view is refused instead of applied to the wrong bytes.
+- **Secrets stay out.** File tools refuse `.git`, `.env`, and `.env.*`.
+  Commands get an allowlisted environment, so the API key never reaches a
+  command, the model, or a trace.
+- **Commands are not sandboxed.** `exec` runs as you, with your filesystem and
+  network. Use `--read-only` when that is too much.
+- **Uncertainty stops the run.** A command that timed out may have changed
+  anything, so re:agent says so and stops, rather than guessing.
 
-For a conversation rather than a single task, use `chat`. Each line you type
-is one turn, and the model sees every turn before it, including the files it
-already read.
+## Every run is on disk
 
-```bash
-./reagent chat --workspace ./some-repo
-```
-
-On a terminal, `/model` opens an arrow-key picker for available models: ↑/↓
-(or `k`/`j`) move, Enter or a row number chooses, and Esc, `q`, Ctrl-C, or
-Ctrl-D cancels. `/model 2` or `/model claude-sonnet-5` still switches directly.
-A model change starts a fresh session, since a conversation cannot continue on
-a different model. `/effort` opens the same picker for the current model's
-reasoning efforts; changing effort keeps the conversation. With piped input,
-these commands list the choices instead; use explicit arguments to select.
-
-`/status` reports the current model, authority, workspace, session totals, and
-last trace. `/trace` prints the last turn's trace, `/reset` starts over, and
-`/exit` or Ctrl-D leaves. `/edit` opens an empty message in `$VISUAL`, then
-`$EDITOR`, then `vi`; saving a non-empty message sends it as one turn, and it
-needs an interactive terminal. `/help` lists every command and key binding,
-including the picker keys.
-
-A line starting with `!` runs the rest of it yourself, without a model turn:
-`!go test ./...`, then "fix that". The command runs through `/bin/sh` in the
-workspace, with the same environment allowlist as `exec`, so it cannot print
-your API key into the conversation. Its output streams to the terminal, and the
-command, its exit status, and up to 32 KiB of output join the conversation, so
-the model sees them with your next message. It needs no tool mode, since you
-are the one running it, and Ctrl-C stops the command rather than the chat.
-
-`/context` shows what the next request is made of: its size against the 10 MiB
-per-request sanity limit, the tokens the last request reported, and how many
-bytes the instructions, tool definitions, your messages, the model's reasoning
-and tool calls, and each tool's results take up. File reads are also counted
-where a later edit changed the file, or where an earlier read returned the same
-bytes, since both are context the model no longer needs.
-
-The prompt has the usual line editing: the up and down arrows walk the
-turns you have typed this session, and left, right, and backspace work as you
-would expect. It uses the terminal's width, and sent messages appear on a grey
-band when terminal styling is enabled. Ctrl-C clears a partially typed prompt;
-press it again within two seconds to leave. Paste terminal text of any length
-and press Enter to send it as one message, or end a line with a single `\` to
-continue on the next line.
-Tab completes slash commands, model names after `/model`, and effort names
-after `/effort`. Piped input is still read one line at a time, so scripting
-`chat` is unaffected. A turn that ends badly, for instance by running out of
-steps, blocks the session until `/reset`, so a conversation is never silently
-continued from a state the harness could not account for. The exception is a
-model request that failed or was cancelled before any reply was accepted, such
-as a provider overload: nothing was appended, so your next message simply
-continues from the last completed step.
-
-## What it can do
-
-Tools are granted at launch, by you, and nothing the model sends can widen that
-grant. A call for a tool your mode withheld is refused as not enabled, which is
-a different answer from a tool that does not exist.
-
-| Mode | Flags | Tools |
-|---|---|---|
-| Default | none | `list_files`, `read_file`, `search_text`, `edit_file`, `write_file`, `delete_file`, `exec` |
-| Read only | `--read-only` | `list_files`, `read_file`, `search_text` |
-
-Read-only mode withholds both editing and execution, since commands can write.
-Commands run as you, with your filesystem and your network. That is not a
-sandbox and the tool description says so.
+Each run writes an append-only JSONL trace with the exact bytes of every
+request and response, alongside what the harness made of them. It is saved
+under `~/Library/Caches/reagent/runs/` on macOS and `~/.cache/reagent/runs/`
+on Linux. `jq` is the viewer:
 
 ```bash
-./reagent run --workspace ./repo \
-  "Set the default timeout to 30 seconds and explain the edit."
+# What the model was given at step two.
+jq 'select(.type=="model.requested" and .step==2) | .data' events.jsonl
 
-./reagent run --workspace ./repo \
-  "Find why the timeout test fails, fix it, and rerun the test."
+# What each tool returned.
+jq -c 'select(.type=="tool.finished") | {name: .data.name, outcome: .data.outcome.code}' events.jsonl
 ```
 
-`edit_file` makes one exact replacement per call. `write_file` creates a text
-file if it does not exist, or replaces its whole content if given the SHA-256
-digest from `read_file`; it does not create parent directories. `delete_file`
-removes one regular file with a matching digest. A stale digest is refused
-rather than applied to something else.
+Traces hold file contents and command output, so treat them like the
+workspace they came from.
 
-## Reading a run
-
-Every run writes an append-only JSONL trace. The path is printed on stderr when
-the run ends: `~/Library/Caches/reagent/runs/<run-id>/` on macOS,
-`~/.cache/reagent/runs/<run-id>/` on Linux, or wherever `--trace-file` says.
-There is no viewer. It is JSON, and `jq` is the viewer.
-
-```bash
-./reagent run --workspace . --trace-file /tmp/run.jsonl --scripted \
-  testdata/scripts/search_then_read.json "Where is the result budget defined?"
-
-jq -r '"\(.seq) \(.type)"' /tmp/run.jsonl
-```
-
-The trace holds the exact bytes of every request and response, alongside the
-harness's own interpretation of them, so you can tell a bad request apart from
-a bad reading of a good one.
-
-```bash
-# What the model was actually given at step two.
-jq 'select(.type=="model.requested" and .step==2) | .data' /tmp/run.jsonl
-
-# What each tool actually returned.
-jq -c 'select(.type=="tool.finished") | {name: .data.name, outcome: .data.outcome.code}' /tmp/run.jsonl
-
-# On a live run only: the literal HTTP body of every attempt.
-jq -r 'select(.type=="api.attempt.started") | .data.request_body' /tmp/run.jsonl
-```
-
-The API key never appears in a trace. Everything else does, including file
-contents and command output, so treat a trace as seriously as the workspace it
-came from. The file tools refuse `.git`, `.env`, and `.env.*`, so a key kept in
-the workspace's dotenv file is not sent to the provider. `exec` is not bound by
-that: a command can read any file you can.
-
-## Reading the code
+## How it works
 
 Start at `Execute` in [`internal/reagent/loop.go`](internal/reagent/loop.go).
-It is the whole agent loop in one function: check the budget, build a context,
-get one response, validate it, run the tools it asked for, append the results,
-repeat. Everything else is in service of it.
+It is the whole agent loop in one function: build the request, get one
+response, validate it, run the tools it asked for, append the results, repeat.
+A few rules shape the rest:
 
-| File | What it owns |
-|---|---|
-| `loop.go` | The loop, response validation, tool dispatch, budgets |
-| `types.go` | The domain vocabulary: entries, blocks, calls, outcomes, modes |
-| `context.go` | `BuildContext`, a pure function with no I/O and no clock |
-| `provider.go` | Everywhere the choice of provider matters, in one place |
-| `transport.go` | HTTP, the two-attempt retry rule, attempt tracing; shared by both adapters |
-| `openai.go`, `anthropic.go` | Each provider's request bytes, shared by preview and live |
-| `openai_response.go`, `anthropic_response.go` | Turning a reply into blocks plus retained provider items |
-| `openai_client.go`, `anthropic_client.go` | Each adapter's headers and endpoint around the transport |
-| `tools.go` | The registry, mode filtering, argument decoding |
-| `tool_*.go` | One file per tool, each about a hundred lines |
-| `workspace.go` | Path checks, the single file snapshot, publication |
-| `limits.go` | Two byte constants and the one result-trimming helper |
-| `trace.go` | The JSONL recorder |
+- **The model never runs anything.** It proposes calls; the loop decides what
+  executes.
+- **Requests are built by a pure function.** There are no clocks or file reads
+  inside it. Two requests differ only where the conversation does, which also
+  keeps the prompt cache warm.
+- **Provider state goes back verbatim.** Reasoning and thinking items return
+  exactly as received, and one provider's items are never sent to the other.
+- **History is append-only.** Nothing already sent is rewritten.
 
-A few properties are worth knowing before you read, because they explain shapes
-that would otherwise look odd:
-
-- **The model never runs a tool.** The adapter returns a response; the loop
-  decides what to execute. That boundary is the reason `Model` is an interface.
-- **Provider items come back verbatim.** An assistant turn carries the
-  provider's own output items, including opaque reasoning or thinking, and
-  they are sent back unchanged. The harness never rebuilds continuation state
-  from visible prose, refuses to send a turn that has none, and refuses to
-  send one provider's items to the other.
-- **Context construction is pure.** No file reads, no timestamps, no random
-  values. Two requests differ only where the conversation differs, which is
-  what makes comparing them worth anything.
-- **Results are trimmed at element boundaries, in one place.** `fitElements`
-  is the only thing that shortens a tool result, and it never cuts serialized
-  JSON in half.
-- **Uncertainty stops the run.** A command that timed out may have changed
-  anything. It reports that and the run ends, rather than retrying or claiming
-  the workspace is clean.
-
-## Tests
-
-```bash
-make check
-```
-
-That runs gofmt, vet, and the whole suite. Everything runs offline with no
-credentials. A test that reaches the public
-internet is a bug. The live adapter is tested against a local fake server;
-process tests use `/bin/sh` rather than any language toolchain.
-
-Two tests contact the real APIs, and only when you ask them to. Copy
-`.env.example` to `.env`, fill in the keys, and run:
-
-```bash
-make live
-```
-
-They spend tokens. Each checks that the deployed API accepts the request this
-harness encodes and completes one tool round trip. A provider whose key is
-missing is skipped; no key at all is an error. They say nothing about model
-quality.
+Two design documents govern the code: [v0](docs/reagent-v0-design.md) is what
+is built, and [v1](docs/reagent-v1-design.md) is the fuller target. Comments
+cite them by section, for example `// v0 §6.2`.
 
 ## Configuration
 
 | Flag | Meaning |
 |---|---|
 | `--workspace` | Directory the tools may see. Defaults to the current one. |
-| `--provider` | `openai` or `anthropic`. Inferred from the model name when omitted. |
-| `--model` | Model to request. Falls back to `REAGENT_MODEL`, then the provider's default. |
-| `--reasoning-effort` | `auto` picks the provider's default; empty omits the parameter. |
-| `--read-only` | Withhold editing and execution tools (off by default). |
-| `--show-context` | Print the first request and exit. No key needed. |
-| `--scripted FILE` | Replay recorded responses instead of calling a provider. |
-| `--recap` | Show the operation recap for completed runs. Non-completed runs always show it. |
-| `--prompt-file PATH` | `run`: read the prompt from a file, or `-` for stdin. |
-| `--trace-file PATH` | `run`: where to write the trace. |
-| `--trace-dir DIR` | `chat`: where each turn's trace goes. |
-| `--max-steps`, `--max-tool-calls` | Per-run budgets (per turn in chat). Default 200 and 400. |
+| `--model`, `--provider` | Model to use. Falls back to `REAGENT_MODEL`, then the provider's default. |
+| `--reasoning-effort` | Effort from the model's own vocabulary; `auto` for the provider's default. |
+| `--read-only` | Withhold writing and execution. |
+| `--max-steps`, `--max-tool-calls` | Budget per run or chat turn. Defaults 200 and 400. |
+| `--scripted FILE` | Replay recorded model responses instead of calling a provider. |
 
-`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is required only for a live run on
-that provider.
+To route OpenAI requests through a proxy that speaks the Responses API, set
+`API_PROXY_URL` to its full endpoint and `API_PROXY_PROVIDER=openai`. Exit
+codes are 0 for a completed run, 1 for one that did not complete, and 2 for a
+bad invocation.
 
-To send OpenAI requests through a proxy that speaks the Responses API, such as
-a gateway that resells it, set both of these:
+## Development
 
 ```bash
-export API_PROXY_URL=http://localhost:8080/v1/responses
-export API_PROXY_PROVIDER=openai
+make check    # gofmt, vet, and the full test suite, offline, with no keys
+make live     # two real API round trips; reads keys from .env and spends tokens
 ```
 
-The URL is the full endpoint and is used exactly as given; `http` and `https`
-are both accepted. Proxied requests ask for a stream and leave out
-`truncation`, which some proxies require; the stream is read to the end and
-used exactly like an ordinary reply, and `--show-context` shows this form. The proxy is sent no `Authorization` header, even when
-`OPENAI_API_KEY` is set, and OpenAI runs no longer need a key. Anthropic runs
-are unaffected, and `openai` is the only provider a proxy can serve for now.
-The header, `/status`, and `/model` say when requests are going to the proxy,
-and the trace records its URL with any password masked.
+A test that reaches the internet is a bug. [`AGENTS.md`](AGENTS.md) holds the
+house rules for any agent working here, re:agent included.
 
-Exit codes are 0 for a
-completed reply or a successful preview, 1 for a run that did not complete, and
-2 for a bad invocation. A failing command inside a run does not become the
-harness's exit code.
-
-## What it deliberately does not do
-
-There is no streaming, no conversational session, no subagents, no compaction,
-no retrieval, and no sandbox. Search is literal by default; opt-in regular
-expressions use Go RE2.
-`edit_file` cannot create or delete files; use `write_file` and `delete_file`
-for those operations. The workspace path checks stop obvious escapes but are
-not a security boundary.
-
-A completed run means the model returned a final reply. It does not mean the
-task was done correctly.
-
-## Design
-
-Two documents, and the shorter one wins:
-
-- [`docs/reagent-v0-design.md`](docs/reagent-v0-design.md) governs what is built
-  here. Every simplification it makes cites the v1 section that would restore
-  the fuller behavior.
-- [`docs/reagent-v1-design.md`](docs/reagent-v1-design.md) is the reference
-  target: the harness this would become with its bounds, guarantees, and
-  recovery paths filled in.
-
-Comments in the code cite these by section, so `// v0 §6.2` next to the retry
-rule points at the paragraph that decided it.
+**Not yet:** subagents, compaction (on the roadmap), retrieval, and a sandbox.
+A completed run means the model gave a final answer, not that the task was
+done right.
 
 ## License
 
-re:agent is open-source software released under the [MIT License](LICENSE).
-See the [LICENSE file](LICENSE) for the complete license text and copyright notice.
+[MIT](LICENSE).
