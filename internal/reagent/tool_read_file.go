@@ -100,6 +100,9 @@ func (t readFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 		return ToolOutcome{}, err
 	}
 	outcome.Truncated = start-1+shown < total
+	// v0 §8 amendment (2026-09-27, U3): only returned digests can
+	// identify a later mismatch as a stale read.
+	t.ws.remember(abs, snap.sha256)
 	return outcome, nil
 }
 

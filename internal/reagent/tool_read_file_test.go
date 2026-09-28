@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,22 @@ func TestReadFile_RangeCarriesDigestAndContinuation(t *testing.T) {
 	}
 	if got.NextLine == nil || *got.NextLine != 4 || got.EOF || !outcome.Truncated {
 		t.Fatalf("continuation is wrong: %+v truncated=%v", got, outcome.Truncated)
+	}
+}
+
+func TestReadFile_RemembersOnlyReturnedDigests(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": fiveLines})
+	abs := filepath.Join(ws.Root(), "a.txt")
+	digest := digestOf(fiveLines)
+	if outcome := runTool(t, NewReadFileTool(ws), `{"path":"a.txt","start_line":6}`); outcome.Code != "line_out_of_range" {
+		t.Fatalf("got %+v", outcome)
+	}
+	if ws.returned(abs, digest) {
+		t.Fatal("failed read made its digest usable")
+	}
+	readDigest(t, ws, "a.txt")
+	if !ws.returned(abs, digest) {
+		t.Fatal("successful read did not remember its digest")
 	}
 }
 
