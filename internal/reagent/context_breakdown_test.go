@@ -108,6 +108,23 @@ func TestContextBreakdown_PartsAddUpToTheEncodedRequest(t *testing.T) {
 	}
 }
 
+func TestContextBreakdown_PlanMarkers(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Provider = provider
+			history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task", Plan: "on"}}}
+			got, err := measureContext(cfg, history)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if part(t, got, "plan mode markers") != encodedSize(planMarker) || got.counted() != got.total || !strings.Contains(got.render(), "plan mode markers") {
+				t.Fatalf("breakdown: %+v", got)
+			}
+		})
+	}
+}
+
 func TestContextBreakdown_WorkspaceSnapshots(t *testing.T) {
 	for _, provider := range []string{openaiName, anthropicName} {
 		t.Run(provider, func(t *testing.T) {

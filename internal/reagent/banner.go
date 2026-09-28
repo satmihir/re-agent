@@ -86,6 +86,10 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 	if len(line) > len(name) && strings.HasPrefix(line, name) {
 		modelLine = ansiBold + name + ansiReset + ansiDim + line[len(name):] + ansiReset
 	}
+	mode := cfg.Registry.Mode().String()
+	if cfg.PlanMode {
+		mode += " · plan mode"
+	}
 	via := ""
 	if endpoint != "" {
 		via = dim("requests go to " + sanitize(endpoint) + " (" + proxyURLVariable + ")")
@@ -100,7 +104,7 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 		modelLine,
 		truncateWidth(sanitize(shortPath(workspace)), room),
 		dim(fmt.Sprintf("%s · %d steps, %d tool calls a turn",
-			cfg.Registry.Mode().String(), cfg.MaxSteps, cfg.MaxToolCalls)),
+			mode, cfg.MaxSteps, cfg.MaxToolCalls)),
 		via,
 		"/help" + ansiDim + " commands · " + ansiReset + "!cmd" + ansiDim + " shell · " + ansiReset +
 			"Ctrl-D" + ansiDim + " exit" + ansiReset,

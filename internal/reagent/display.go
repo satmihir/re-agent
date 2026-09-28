@@ -148,7 +148,7 @@ func (d *Display) toolFinished(call ToolCall, outcome ToolOutcome) {
 		d.recap = append(d.recap, recap)
 	}
 }
-func (d *Display) reply(stdout io.Writer, text string) {
+func (d *Display) reply(stdout io.Writer, text string, showPlan bool) {
 	if text == "" {
 		return
 	}
@@ -161,7 +161,19 @@ func (d *Display) reply(stdout io.Writer, text string) {
 	// Measured on stdout rather than d.w: the reply is written there, and the
 	// two differ when only stderr is redirected.
 	columns := min(terminalColumns(stdout), maxReplyColumns)
-	fmt.Fprintln(stdout, display(text, styledOutput(stdout), columns))
+	styled := styledOutput(stdout)
+	if showPlan {
+		if start, end, found := findPlan(text); found {
+			label := "plan"
+			if styled {
+				label = ansiDim + label + ansiReset
+			}
+			fmt.Fprintln(stdout, display(text[:start], styled, columns)+label+"\n"+
+				display(planContent(text[start:end]), styled, columns)+display(text[end:], styled, columns))
+			return
+		}
+	}
+	fmt.Fprintln(stdout, display(text, styled, columns))
 }
 func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, showRecap bool) {
 	d.mu.Lock()
@@ -322,6 +334,9 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 		}
 	}
 	mode := cfg.Registry.Mode().String()
+	if chat && cfg.PlanMode {
+		mode += " · plan mode"
+	}
 	model, provider, effort := modelPresentation(cfg)
 	details := ""
 	if provider != "" {

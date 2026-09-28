@@ -9,8 +9,8 @@ import (
 
 // Session is what outlives one run: the fixed configuration, the accepted
 // transcript, and every call id ever accepted (I04). It keeps one provider,
-// one model, and one mode from its first run to its last; /reset makes a new
-// one rather than changing any of them (v1 §6.1).
+// one model, and one launch mode from its first run to its last; /reset makes
+// a new one rather than changing any of them (v1 §6.1). Plan mode only narrows.
 type Session struct {
 	ID      string
 	cfg     Config
@@ -22,6 +22,7 @@ type Session struct {
 
 	history   []Entry
 	seenCalls map[string]bool
+	planMode  bool
 
 	// blocked explains why ordinary input is refused until Reset. A run whose
 	// outcome cannot be continued from sets it; the transcript is never rolled
@@ -34,7 +35,7 @@ type Session struct {
 func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Session {
 	return &Session{
 		ID: NewID(), cfg: cfg, model: model, trace: trace, display: NewDisplay(progress),
-		seenCalls: make(map[string]bool),
+		seenCalls: make(map[string]bool), planMode: cfg.PlanMode,
 	}
 }
 
@@ -53,7 +54,7 @@ func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunR
 	if s.snapshot != nil {
 		workspace = s.snapshot(ctx)
 	}
-	result := newRun(s, runID).Execute(ctx, text, workspace)
+	result := newRun(s, runID).Execute(ctx, text, workspace, planMarkerFor(s.history, s.planMode))
 	s.lastTrace = result.TracePath
 	if !continuable(result.Status) && !result.Resumable {
 		s.blocked = string(result.Status)

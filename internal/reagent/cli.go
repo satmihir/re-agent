@@ -136,6 +136,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		Registry: registry, WorkspacePath: ws.Root(),
 		ProjectInstructions: loadProjectInstructions(ws, options.noProjectInstructions, stderr),
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
+		PlanMode: options.plan,
 	}
 	if options.script != "" {
 		cfg.Provider, cfg.Model = "scripted", "scripted"
@@ -232,7 +233,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return exitRunFail
 	}
-	printResult(session.display, result, time.Since(started), stdout, options.recap, true)
+	printResult(session.display, result, time.Since(started), stdout, options.recap, true, false)
 	if result.Status == StatusCompleted {
 		return exitOK
 	}
@@ -241,7 +242,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
-	showContext, readOnly, recap, noProjectInstructions                            bool
+	showContext, readOnly, recap, noProjectInstructions, plan                      bool
 	maxSteps, maxToolCalls                                                         int
 }
 
@@ -254,6 +255,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.StringVar(&o.script, "scripted", "", "replay model responses from a JSON script instead of calling a provider")
 	fs.BoolVar(&o.showContext, "show-context", false, "print the request the first step would send, then exit")
 	fs.BoolVar(&o.readOnly, "read-only", false, "withhold write and exec tools; only allow reading")
+	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
@@ -271,7 +273,7 @@ type flagGroup struct {
 
 var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
-	{"Authority", []string{"workspace", "read-only"}},
+	{"Authority", []string{"workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
@@ -281,7 +283,7 @@ var runFlagGroups = []flagGroup{
 
 var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
-	{"Authority", []string{"workspace", "read-only"}},
+	{"Authority", []string{"workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
@@ -456,8 +458,8 @@ func startupError(stderr io.Writer, message string) int {
 // printResult prints the reply, then a summary that never dresses a failure up
 // as an answer. A completed run means the model replied, not that it was right
 // (I17).
-func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, recap, showTrace bool) {
-	d.reply(stdout, result.Reply)
+func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, recap, showTrace, showPlan bool) {
+	d.reply(stdout, result.Reply, showPlan)
 	d.summary(result, elapsed, showTrace, recap || result.Status != StatusCompleted)
 }
 
