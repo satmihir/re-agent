@@ -11,6 +11,11 @@ const planMarker = `re:agent plan mode is on for this message. Explore and plan;
 
 const planEndedMarker = "re:agent plan mode ended before this message. Tools are available again as the launch mode allows."
 
+const planPickerTitle = "Plan ready"
+
+// v0 §10 amendment (2026-09-28): a fresh session must not imply the workspace stayed unchanged.
+const planHandoffPrompt = "Implement this plan. It was made in an earlier re:agent session, and the workspace may have changed since; check what you rely on."
+
 // planMarkerFor derives "ended" from the last user entry, so an unused toggle leaves no mark.
 func planMarkerFor(history []Entry, on bool) string {
 	if on {

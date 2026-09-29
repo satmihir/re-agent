@@ -119,6 +119,31 @@ func TestTerminalReader_ChooseCancelKeepsPasteWorking(t *testing.T) {
 	}
 }
 
+func TestTerminalReader_PlanPickerShowsKeepPlanningHint(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\r"))
+	index, err := reader.Choose("Plan ready", []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}, 2)
+	if err != nil || index != 2 {
+		t.Fatalf("choice %d, err %v", index, err)
+	}
+	output := reader.out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Plan ready   ↑↓ move · enter choose · esc keep planning") || !strings.Contains(output, "❯ 3  Keep planning") || !strings.HasSuffix(output, "\x1b[J\x1b[?25h") {
+		t.Fatalf("picker: %q", output)
+	}
+}
+
+func TestTerminalReader_PlanPickerNarrowHeaderKeepsSafeChoice(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\r"))
+	reader.size = func() (int, int, error) { return 30, 24, nil }
+	if index, err := reader.Choose("Plan ready", []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}, 2); err != nil || index != 2 {
+		t.Fatalf("choice %d, err %v", index, err)
+	}
+	header := strings.SplitN(reader.out.(*bytes.Buffer).String(), "\r\n", 2)[0]
+	header = strings.TrimPrefix(header, "\x1b[?25l\x1b[2K")
+	if !strings.Contains(header, "esc keep planning") || displayWidth(header) > 29 {
+		t.Fatalf("narrow header %q", header)
+	}
+}
+
 func TestTerminalReader_ChooseNarrowHeaderKeepsCancelHint(t *testing.T) {
 	reader := terminalInput(strings.NewReader("\r"))
 	reader.size = func() (int, int, error) { return 30, 24, nil }

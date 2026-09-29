@@ -266,8 +266,15 @@ func (r *terminalReader) Choose(title string, options []choice, current int) (in
 	}
 	p := pickerState{options: options, cursor: cursor}
 	header := sanitize(title) + "  ↑↓ move · enter · esc"
+	// v0 §10 amendment (2026-09-28): Esc must not look like implementation.
+	if title == planPickerTitle {
+		header = planPickerTitle + "   ↑↓ move · enter choose · esc keep planning"
+	}
 	if displayWidth(header) > width-1 {
 		header = "↑↓ move · enter · esc  " + sanitize(title)
+		if title == planPickerTitle {
+			header = "esc keep planning  " + planPickerTitle
+		}
 	}
 	header = truncateWidth(header, width-1)
 	rows := len(options) + 1

@@ -137,7 +137,7 @@ Plan ready   ↑↓ move · enter choose · esc keep planning
 ```
 
 - **Implement here** turns plan mode off, prints `plan mode off`, and sends `Implement the plan.` as the next message, drawn as if typed. That message carries the `"ended"` marker. The plan is already in the history.
-- **Implement fresh** turns plan mode off, resets the session as `/reset` does, and sends one message: the fixed text below, then the plan block's content without its tags.
+- **Implement fresh** turns plan mode off, resets the session as `/reset` does, and sends one message: the fixed text below, then one blank line, then the plan block's content without its tags.
 
   ```text
   Implement this plan. It was made in an earlier re:agent session, and the workspace may have changed since; check what you rely on.
