@@ -194,3 +194,23 @@ func TestEncodeRequest_ReasoningEffort(t *testing.T) {
 		t.Fatalf("an unset effort still sent a parameter: %s", body)
 	}
 }
+
+func TestEncodeOpenAI_SummaryAndNextTurnAreTwoUserItems(t *testing.T) {
+	_, got := encode(t, ModelRequest{History: []Entry{
+		{Kind: EntrySummary, Summary: &Summary{Text: "handoff", ReplacedEntries: 3, Model: "old"}},
+		{Kind: EntryUser, User: &UserTurn{Text: "next"}},
+	}})
+	if len(got.Input) != 2 {
+		t.Fatalf("items: %s", got.Input)
+	}
+	var first, second responsesMessage
+	if err := json.Unmarshal(got.Input[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got.Input[1], &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.Role != "user" || second.Role != "user" || len(first.Content) != 1 || first.Content[0].Text != summaryPreamble+"\nhandoff" || second.Content[0].Text != "next" {
+		t.Fatalf("items: %+v %+v", first, second)
+	}
+}

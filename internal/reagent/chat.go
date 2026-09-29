@@ -22,7 +22,8 @@ var chatCommands = []chatCommand{
 	{"/effort", "[number or name]", "choose reasoning effort (picker on a terminal)"},
 	{"/status", "", "model, mode, workspace, turns, and tokens so far"},
 	{"/context", "", "what the next request is made of, by size"},
-	{"/trace", "", "path of the last turn's trace"},
+	{"/compact", "[-v] [focus]", "summarize and replace the conversation (-v prints it)"},
+	{"/trace", "", "path of the last turn or compaction trace"},
 	{"/reset", "", "discard the conversation and start a fresh session"},
 	{"/edit", "", "write the next message in $VISUAL or $EDITOR"},
 	{"/help", "", "this text"},
@@ -251,7 +252,9 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 		fmt.Fprintf(stderr, "last trace %s\n", sanitize(tracePath))
 	}
 	if c.session.blocked != "" {
-		fmt.Fprintf(stderr, "state      blocked by %s; /reset to continue\n", sanitize(c.session.blocked))
+		fmt.Fprintf(stderr, "state      blocked by %s; /compact or /reset to continue\n", sanitize(c.session.blocked))
+	} else if len(c.session.history) > 0 && c.scripted == nil {
+		fmt.Fprintln(stderr, "history    /compact summarizes; /reset starts over")
 	}
 }
 
@@ -270,6 +273,45 @@ func (c *conversation) commandContext(stderr io.Writer) {
 	breakdown.lastUsage = c.session.lastRequest
 	breakdown.window = contextWindow(c.cfg.Model)
 	fmt.Fprintln(stderr, breakdown.render())
+}
+
+// commandCompact spends one model request but never submits a chat turn.
+func (c *conversation) commandCompact(ctx context.Context, argument string, stdout, stderr io.Writer) {
+	if c.scripted != nil {
+		fmt.Fprintln(stderr, "/compact is unavailable in a --scripted chat")
+		return
+	}
+	if len(c.session.history) == 0 {
+		fmt.Fprintln(stderr, "nothing to compact; send a message first")
+		return
+	}
+	verbose := false
+	if fields := strings.Fields(argument); len(fields) > 0 && fields[0] == "-v" {
+		verbose = true
+		argument = strings.TrimSpace(strings.TrimPrefix(argument, "-v"))
+	}
+	runID := NewID()
+	path, err := tracePathFor(c.traceDir, runID)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
+		return
+	}
+	compactCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+	result, replacedBytes, err := c.session.Compact(compactCtx, argument, runID, path)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
+		return
+	}
+	c.usage.Add(result.Usage)
+	if result.Status != StatusCompleted {
+		fmt.Fprintf(stderr, "compaction failed: %s\n", sanitize(result.Reason))
+		return
+	}
+	fmt.Fprintf(stderr, "compacted: %s summary replaces %s of history JSON\n", formatBytes(len(result.Reply)), formatBytes(replacedBytes))
+	if verbose {
+		c.session.display.reply(stdout, result.Reply, false)
+	}
 }
 
 // commandSuggestion returns the sole prefix or close spelling correction.
@@ -455,7 +497,7 @@ func previewEditorMessage(stderr io.Writer, text string) {
 }
 
 // chat runs a conversation: one submission per line, each its own run of one
-// session (v1 §18.2). Slash commands are handled locally and spend no tokens.
+// session (v1 §18.2). Slash commands are local controls; /compact alone calls the model.
 // A terminal submission may contain a bracketed paste or continued lines.
 func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
 	var interrupted time.Time
@@ -522,6 +564,8 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			c.commandStatus(stderr)
 		case command == "/context":
 			c.commandContext(stderr)
+		case command == "/compact":
+			c.commandCompact(ctx, argument, stdout, stderr)
 		case command == "/trace":
 			if path := c.session.LastTrace(); path != "" {
 				fmt.Fprintln(stderr, sanitize(path))

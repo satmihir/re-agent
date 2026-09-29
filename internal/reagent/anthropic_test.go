@@ -255,3 +255,33 @@ func TestEncodeAnthropic_TextAfterToolResultsJoinsThem(t *testing.T) {
 		t.Fatalf("second block %+v %v", text, err)
 	}
 }
+
+func TestEncodeAnthropic_SummaryMergesWithNextUser(t *testing.T) {
+	for _, workspace := range []json.RawMessage{nil, json.RawMessage(`{"date":"today"}`)} {
+		_, got := encodeAnthropic(t, ModelRequest{History: []Entry{
+			{Kind: EntrySummary, Summary: &Summary{Text: "handoff"}},
+			{Kind: EntryUser, User: &UserTurn{Text: "next", Workspace: workspace}},
+		}})
+		want := 2
+		if len(workspace) > 0 {
+			want++
+		}
+		if len(got.Messages) != 1 || got.Messages[0].Role != "user" || len(got.Messages[0].Content) != want {
+			t.Fatalf("messages: %+v", got.Messages)
+		}
+		var blocks []messagesTextBlock
+		for _, item := range got.Messages[0].Content {
+			var block messagesTextBlock
+			if err := json.Unmarshal(item, &block); err != nil {
+				t.Fatal(err)
+			}
+			blocks = append(blocks, block)
+		}
+		if blocks[0].Text != summaryPreamble+"\nhandoff" || blocks[1].Text != "next" || blocks[want-1].CacheControl == nil || blocks[0].CacheControl != nil {
+			t.Fatalf("blocks: %+v", blocks)
+		}
+		if len(workspace) > 0 && blocks[2].Text != workspacePreamble+string(workspace) {
+			t.Fatalf("snapshot: %+v", blocks)
+		}
+	}
+}

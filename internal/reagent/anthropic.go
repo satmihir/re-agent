@@ -172,6 +172,9 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 
 	for _, entry := range history {
 		switch entry.Kind {
+		case EntrySummary:
+			// v0 §10 U8: adjacent user text joins without changing the summary.
+			appendUserText(summaryPreamble + "\n" + entry.Summary.Text)
 		case EntryUser:
 			appendUserText(entry.User.Text)
 			// v0 §6 amendment (2026-09-27): keep both parts in one user message.

@@ -248,6 +248,24 @@ func TestSession_CancelledRequestIsResumable(t *testing.T) {
 }
 
 // A request over the size limit only grows if resent, so it still blocks.
+func TestSession_CompactKeepsSeenCallIDs(t *testing.T) {
+	s := NewSession(testConfig(t), NewScriptedModel(
+		turn(textBlock("handoff")), turn(callBlock("used", "echo", `{"text":"again"}`))), NewTrace(io.Discard), io.Discard)
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "old task"}}}
+	s.seenCalls["used"] = true
+	if result, _, err := s.Compact(context.Background(), "", "compact", filepath.Join(t.TempDir(), "compact.jsonl")); err != nil || result.Status != StatusCompleted {
+		t.Fatalf("compact: %+v %v", result, err)
+	}
+	result, err := s.Turn(context.Background(), "again", "next", filepath.Join(t.TempDir(), "next.jsonl"))
+	if err != nil || result.Status != StatusProtocolError || !strings.Contains(result.Reason, "duplicate call_id used") {
+		t.Fatalf("next: %+v %v", result, err)
+	}
+	s.Reset()
+	if s.compactedPlan != "" || s.seenCalls["used"] {
+		t.Fatal("reset retained compacted state")
+	}
+}
+
 func TestSession_OversizeRequestStillBlocks(t *testing.T) {
 	model := &failingThen{
 		err:  &ModelError{Status: StatusLimitExceeded, Message: "request is over the limit"},
