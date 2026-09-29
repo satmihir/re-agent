@@ -326,7 +326,7 @@ func TestChat_PlanInASentenceTurnsItOn(t *testing.T) {
 	input := &fakeLineReader{reads: []struct {
 		line string
 		err  error
-	}{{line: "can we /plan the retry change?"}}}
+	}{{line: "   can we /plan the retry change?   "}}}
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
@@ -454,7 +454,8 @@ func TestChat_ShellLineWithPlanDoesNothing(t *testing.T) {
 func TestChat_PlanSentenceEncodesLikeExplicitMode(t *testing.T) {
 	text := "can we /plan the retry change?"
 	var bodies [2][2][]byte
-	for i, inputText := range []string{text + "\n", "/plan\n" + text + "\n"} {
+	padded := "   " + text + "   "
+	for i, inputText := range []string{padded + "\n", "/plan\n" + padded + "\n"} {
 		var out, errs bytes.Buffer
 		model := NewScriptedModel(turn(textBlock("planning")))
 		session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)

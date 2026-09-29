@@ -86,8 +86,9 @@ cannot grant tools beyond the chosen mode.
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |
 
-Writing `/plan` in a chat sentence also starts plan mode and sends the sentence
-unchanged. On a styled terminal, the plan prompt and sent-message prefix are teal.
+Writing `/plan` in a chat sentence also starts plan mode and keeps `/plan` in
+the sent message. Like other chat messages, surrounding whitespace is trimmed.
+On a styled terminal, the plan prompt and sent-message prefix are teal.
 
 When a planning reply contains a complete `<plan>` block, an interactive picker
 can implement it in this conversation, start fresh with only that plan, or keep

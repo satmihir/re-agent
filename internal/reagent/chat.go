@@ -612,11 +612,10 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			}
 			fmt.Fprintf(stderr, "%s /help lists commands.\n", message)
 		default:
-			text := line
-			if !strings.HasPrefix(line, "!") && c.planForMessage(typed, stderr) {
-				text = typed
+			if !strings.HasPrefix(line, "!") {
+				c.planForMessage(line, stderr)
 			}
-			c.runTurn(ctx, text, input, stdout, stderr)
+			c.runTurn(ctx, line, input, stdout, stderr)
 		}
 	}
 }

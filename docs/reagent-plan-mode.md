@@ -1,6 +1,6 @@
 # re:agent — Plan Mode
 
-Status: PM1 merged in #40 and PM2 in #41. PM3 not started.
+Status: PM1 merged in #40 and PM2 in #41. PM3 in review in #45.
 
 Plan mode is a chat mode in which re:agent explores and plans but changes nothing, until the user says to go ahead. This document specifies it in three milestones, for re:agent to implement one per session with a human reviewing each. The notes for the implementing agent in `docs/reagent-usage-fixes-plan.md` §5 apply here unchanged: its baselines, request comparisons, and report template.
 
@@ -174,7 +174,7 @@ Plan ready   ↑↓ move · enter choose · esc keep planning
 **`/plan` inside a message.**
 
 - When the user submits a message, typed, pasted, or composed with `/edit`, and plan mode is off, chat checks it with `planRequested(text) bool`, a new function in `plan.go`. If it returns true, plan mode turns on, the "plan mode on" line is printed, and the message is sent in plan mode, carrying the `"on"` marker.
-- The message is sent exactly as typed, `/plan` included. The marker already tells the model what plan mode means.
+- The message keeps `/plan`. Typed and pasted submissions follow chat's existing outer-whitespace trim before matching and sending; `/edit` keeps the saved text. The marker already tells the model what plan mode means.
 - Only a message turns plan mode on this way. Nothing in a message turns it off; that stays with `/plan` on its own line and the PM2 picker.
 - With plan mode already on, a message containing `/plan` changes nothing and prints nothing.
 - Not checked:
