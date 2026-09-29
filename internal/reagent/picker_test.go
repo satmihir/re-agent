@@ -34,7 +34,7 @@ func TestDecodeKeys_BundledInput(t *testing.T) {
 		{"?\x1b", []key{keyCancel}},
 		{"\x1b", []key{keyCancel}},
 	} {
-		got := decodeKeys([]byte(tc.input))
+		got := decodeKeys([]byte(tc.input), true)
 		if len(got) != len(tc.want) {
 			t.Errorf("decodeKeys(%q) = %v, want %v", tc.input, got, tc.want)
 			continue

@@ -35,13 +35,14 @@ type fakeLineReader struct {
 	chooseCalls   int
 	choiceCurrent int
 	choiceTitle   string
+	choiceConfig  pickerConfig
 	choices       []choice
 }
 
-func (r *fakeLineReader) Choose(title string, options []choice, current int) (int, error) {
+func (r *fakeLineReader) Choose(config pickerConfig, options []choice, current int) (int, error) {
 	r.chooseCalls++
 	r.choiceCurrent = current
-	r.choiceTitle, r.choices = title, options
+	r.choiceTitle, r.choices, r.choiceConfig = config.title, options, config
 	return r.chosen, r.chooseErr
 }
 
@@ -172,7 +173,7 @@ func TestChat_PlanPickerImplementsHere(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.chooseCalls != 1 || input.choiceTitle != "Plan ready" || input.choiceCurrent != 2 || len(input.choices) != 3 || input.choices[2].label != "Keep planning" {
+	if input.chooseCalls != 1 || input.choiceTitle != "Plan ready" || input.choiceCurrent != 2 || input.choiceConfig.shortcuts || input.choiceConfig.cancelLabel != "keep planning" || len(input.choices) != 3 || input.choices[2].label != "Keep planning" {
 		t.Fatalf("picker: %+v", input)
 	}
 	if session.planMode || model.next != 2 || session.Turns() != 2 || len(session.history) != 4 ||
@@ -235,6 +236,25 @@ func TestChat_PlanPickerKeepsPlanning(t *testing.T) {
 				t.Fatalf("mode %t, calls %d, history %+v, stderr %q", session.planMode, model.next, session.history, errs.String())
 			}
 		})
+	}
+}
+
+func TestChat_PlanPickerTypedFeedbackCannotImplement(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("<plan>\n- Change step 2\n</plan>")), turn(textBlock("IMPLEMENTATION TURN RAN")))
+	cfg := testConfig(t)
+	cfg.PlanMode = true
+	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	input := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("plan it\r"), []byte("ok but change step 2\r"), []byte("/exit\r")}})
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if !session.planMode || session.Turns() != 1 || model.next != 1 || strings.Contains(out.String(), "IMPLEMENTATION TURN RAN") {
+		t.Fatalf("mode %t, turns %d, calls %d, output %q", session.planMode, session.Turns(), model.next, out.String())
+	}
+	if !strings.Contains(errs.String(), "kept planning") {
+		t.Fatalf("stderr: %q", errs.String())
 	}
 }
 
@@ -468,7 +488,7 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.chooseCalls != 1 || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
+	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.cfg.Model, out.String())
 	}
 	if !strings.Contains(errs.String(), "switched to gpt-6-sol") {

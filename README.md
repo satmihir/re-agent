@@ -87,7 +87,9 @@ cannot grant tools beyond the chosen mode.
 
 When a planning reply contains a complete `<plan>` block, an interactive picker
 can implement it in this conversation, start fresh with only that plan, or keep
-planning. Without a terminal, `/plan` and an implementation request do the handoff.
+planning. Only arrow keys and Enter can choose a handoff; typing a reply closes
+this picker without implementing anything. Without a terminal, `/plan` and an
+implementation request do the handoff.
 
 Ctrl-C cancels a running turn without ending the chat. If a model request
 fails, for example on a provider overload, the conversation is kept and your

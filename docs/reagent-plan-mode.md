@@ -127,13 +127,13 @@ The tools stay declared, so a switch does not change the tools array (Q2).
 
 ## 5. PM2. Handing off a plan
 
-**When the picker opens.** After a chat turn that completed in plan mode, on a terminal, whose final reply contains a complete `<plan>` block, the U1 picker opens below the reply:
+**When the picker opens.** After a chat turn that completed in plan mode, on a terminal, whose final reply contains a complete `<plan>` block, the U1 picker drawing opens below the reply, but without its shortcuts:
 
 ```text
 Plan ready   ↑↓ move · enter choose · esc keep planning
-❯ 1  Implement here          leaves plan mode and asks the model to implement it
+  1  Implement here          leaves plan mode and asks the model to implement it
   2  Implement fresh         starts a new session holding only the plan
-  3  Keep planning
+❯ 3  Keep planning
 ```
 
 - **Implement here** turns plan mode off, prints `plan mode off`, and sends `Implement the plan.` as the next message, drawn as if typed. That message carries the `"ended"` marker. The plan is already in the history.
@@ -144,7 +144,7 @@ Plan ready   ↑↓ move · enter choose · esc keep planning
   ```
 
   This is what the human already does by hand with a plan in `docs/`, and it leaves the planning conversation's tokens behind. The old session's trace keeps the planning conversation.
-- **Keep planning**, Esc, `q`, Ctrl-C, and Ctrl-D close the picker and leave plan mode on. The cursor starts here, so an accidental Enter changes nothing.
+- **Keep planning**, Esc, Ctrl-C, and Ctrl-D close the picker and leave plan mode on. Only ↑/↓ move and Enter selects; digits, `j`, `k`, `q`, and any other key close it as Keep planning. An unsupported key is dropped, not replayed at the next prompt. The cursor starts on Keep planning, so an accidental Enter changes nothing and no single typed character can start an implementation.
 - The picker is erased when it closes, as U1's is, leaving one result line.
 
 **Which plan.** The last `<plan>` block in the final reply: a line that is exactly `<plan>`, then lines up to one that is exactly `</plan>`. An unclosed block is not a plan, and no picker opens. The same finder serves PM1's display.

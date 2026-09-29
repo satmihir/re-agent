@@ -99,7 +99,7 @@ func (c *conversation) commandModel(argument string, input lineReader, stderr io
 				break
 			}
 		}
-		index, err := input.Choose("Select a model", modelChoices(c.cfg.Model, c.available()), current)
+		index, err := input.Choose(pickerConfig{title: "Select a model", shortcuts: true}, modelChoices(c.cfg.Model, c.available()), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
 			fmt.Fprintln(stderr, renderModels(c.cfg.Model, c.available()))
@@ -184,7 +184,7 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 				break
 			}
 		}
-		index, err := input.Choose("Select reasoning effort", effortChoices(info, c.cfg.ReasoningEffort), current)
+		index, err := input.Choose(pickerConfig{title: "Select reasoning effort", shortcuts: true}, effortChoices(info, c.cfg.ReasoningEffort), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
 			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
@@ -632,7 +632,7 @@ func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan str
 		{label: "Implement fresh", detail: "starts a new session holding only the plan"},
 		{label: "Keep planning"},
 	}
-	index, err := input.Choose(planPickerTitle, options, 2)
+	index, err := input.Choose(pickerConfig{title: planPickerTitle, cancelLabel: "keep planning"}, options, 2)
 	switch {
 	case errors.Is(err, errNotInteractive):
 		hint := "/plan turns plan mode off; then ask for the implementation"
@@ -653,7 +653,15 @@ func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan str
 	case 0:
 		c.session.planMode = false
 		fmt.Fprintln(stderr, "plan mode off")
-		fmt.Fprintln(stderr, "> Implement the plan.")
+		if styledOutput(stderr) {
+			width := terminalColumns(stderr)
+			if width < 2 {
+				width = 80
+			}
+			writeUserBand(stderr, "Implement the plan.", width)
+		} else {
+			fmt.Fprintln(stderr, "> Implement the plan.")
+		}
 		c.runTurn(ctx, "Implement the plan.", input, stdout, stderr)
 	case 1:
 		c.session.planMode = false

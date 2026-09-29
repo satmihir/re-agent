@@ -38,7 +38,7 @@ func (r *pickerKeys) Read(p []byte) (int, error) {
 
 func TestTerminalReader_ChooseWithArrows(t *testing.T) {
 	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\x1b[B"), []byte("\x1bOB"), []byte("\r")}})
-	index, err := reader.Choose("Select a model", []choice{{label: "one"}, {label: "two"}, {label: "three"}}, 0)
+	index, err := reader.Choose(pickerConfig{title: "Select a model", shortcuts: true}, []choice{{label: "one"}, {label: "two"}, {label: "three"}}, 0)
 	if err != nil || index != 2 {
 		t.Fatalf("index %d, err %v", index, err)
 	}
@@ -48,9 +48,25 @@ func TestTerminalReader_ChooseWithArrows(t *testing.T) {
 	}
 }
 
+func TestTerminalReader_GenericPickerKeepsShortcuts(t *testing.T) {
+	for _, test := range []struct {
+		name, input string
+		start, want int
+		err         error
+	}{{"digit", "2", 0, 1, nil}, {"k moves up", "k\r", 1, 0, nil}, {"q cancels", "q", 0, 0, errCancelled}} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := terminalInput(strings.NewReader(test.input))
+			index, err := reader.Choose(pickerConfig{title: "Select a model", shortcuts: true}, []choice{{label: "one"}, {label: "two"}}, test.start)
+			if index != test.want || err != test.err {
+				t.Fatalf("input %q: choice %d, err %v", test.input, index, err)
+			}
+		})
+	}
+}
+
 func TestTerminalReader_ChooseWithBundledKeys(t *testing.T) {
 	reader := terminalInput(strings.NewReader("\x1b[B\x1b[B\r"))
-	index, err := reader.Choose("Select a model", []choice{{label: "one"}, {label: "two"}, {label: "three"}}, 0)
+	index, err := reader.Choose(pickerConfig{title: "Select a model", shortcuts: true}, []choice{{label: "one"}, {label: "two"}, {label: "three"}}, 0)
 	if err != nil || index != 2 {
 		t.Fatalf("bundled keys chose %d, err %v", index, err)
 	}
@@ -59,11 +75,11 @@ func TestTerminalReader_ChooseWithBundledKeys(t *testing.T) {
 func TestTerminalReader_ChooseStopsAtFirstDecision(t *testing.T) {
 	options := []choice{{label: "one"}, {label: "two"}}
 	reader := terminalInput(strings.NewReader("\x1b[B\r\x1b"))
-	if index, err := reader.Choose("Select", options, 0); err != nil || index != 1 {
+	if index, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, options, 0); err != nil || index != 1 {
 		t.Fatalf("selection before cancel: %d, %v", index, err)
 	}
 	reader = terminalInput(strings.NewReader("\x1b\r"))
-	if _, err := reader.Choose("Select", options, 0); err != errCancelled {
+	if _, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, options, 0); err != errCancelled {
 		t.Fatalf("cancel before selection: %v", err)
 	}
 }
@@ -71,7 +87,7 @@ func TestTerminalReader_ChooseStopsAtFirstDecision(t *testing.T) {
 func TestTerminalReader_ChooseIgnoresUnknownEscape(t *testing.T) {
 	reader := terminalInput(strings.NewReader("\x1b[5~\x1b[B\r"))
 	options := []choice{{label: "one"}, {label: "two"}, {label: "three"}, {label: "four"}, {label: "five"}}
-	index, err := reader.Choose("Select", options, 0)
+	index, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, options, 0)
 	if err != nil || index != 1 {
 		t.Fatalf("unknown escape chose %d, err %v", index, err)
 	}
@@ -79,7 +95,7 @@ func TestTerminalReader_ChooseIgnoresUnknownEscape(t *testing.T) {
 
 func TestTerminalReader_EscapeCancels(t *testing.T) {
 	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\x1b")}})
-	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != errCancelled {
+	if _, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, []choice{{label: "one"}}, 0); err != errCancelled {
 		t.Fatalf("got %v, want errCancelled", err)
 	}
 	if !strings.HasSuffix(reader.out.(*bytes.Buffer).String(), "\x1b[J\x1b[?25h") {
@@ -91,7 +107,7 @@ func TestTerminalReader_ChooseReadErrorRestoresTerminal(t *testing.T) {
 	reader := terminalInput(&pickerKeys{})
 	restored := false
 	reader.enterRaw = func() (func(), error) { return func() { restored = true }, nil }
-	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != io.EOF {
+	if _, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, []choice{{label: "one"}}, 0); err != io.EOF {
 		t.Fatalf("got %v", err)
 	}
 	if !restored || !strings.HasSuffix(reader.out.(*bytes.Buffer).String(), "\x1b[J\x1b[?25h") {
@@ -101,7 +117,7 @@ func TestTerminalReader_ChooseReadErrorRestoresTerminal(t *testing.T) {
 
 func TestTerminalReader_ChooseLeavesTheNextPromptWorking(t *testing.T) {
 	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\r"), []byte("hello\r")}})
-	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != nil {
+	if _, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, []choice{{label: "one"}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if line, err := reader.ReadLine(); err != nil || line != "hello" {
@@ -111,7 +127,7 @@ func TestTerminalReader_ChooseLeavesTheNextPromptWorking(t *testing.T) {
 
 func TestTerminalReader_ChooseCancelKeepsPasteWorking(t *testing.T) {
 	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("\x03"), []byte("\x1b[200~a\rb\x1b[201~\r")}})
-	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != errCancelled {
+	if _, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, []choice{{label: "one"}}, 0); err != errCancelled {
 		t.Fatalf("picker: %v", err)
 	}
 	if line, err := reader.ReadLine(); err != nil || line != "a\nb" {
@@ -121,7 +137,7 @@ func TestTerminalReader_ChooseCancelKeepsPasteWorking(t *testing.T) {
 
 func TestTerminalReader_PlanPickerShowsKeepPlanningHint(t *testing.T) {
 	reader := terminalInput(strings.NewReader("\r"))
-	index, err := reader.Choose("Plan ready", []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}, 2)
+	index, err := reader.Choose(pickerConfig{title: "Plan ready", cancelLabel: "keep planning"}, []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}, 2)
 	if err != nil || index != 2 {
 		t.Fatalf("choice %d, err %v", index, err)
 	}
@@ -131,10 +147,40 @@ func TestTerminalReader_PlanPickerShowsKeepPlanningHint(t *testing.T) {
 	}
 }
 
+func TestTerminalReader_PlanPickerTypingCannotChoose(t *testing.T) {
+	options := []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}
+	for _, input := range []string{"ok but change step 2\r", "1", "2", "k\r", "j\r", "q\r", "\x1b[5~2\r"} {
+		t.Run(strings.ReplaceAll(input, "\r", "<enter>"), func(t *testing.T) {
+			reader := terminalInput(strings.NewReader(input))
+			if index, err := reader.Choose(pickerConfig{title: "Plan ready", cancelLabel: "keep planning"}, options, 2); err != errCancelled || index != 0 {
+				t.Fatalf("typing %q chose %d, err %v", input, index, err)
+			}
+			if !strings.HasSuffix(reader.out.(*bytes.Buffer).String(), "\x1b[J\x1b[?25h") {
+				t.Fatal("picker was not erased on typed input")
+			}
+		})
+	}
+}
+
+func TestTerminalReader_PlanPickerArrowsAndEnterChoose(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  int
+	}{{"\x1b[A\x1b[A\r", 0}, {"\x1b[A\r", 1}} {
+		t.Run(test.input, func(t *testing.T) {
+			reader := terminalInput(strings.NewReader(test.input))
+			index, err := reader.Choose(pickerConfig{title: "Plan ready", cancelLabel: "keep planning"}, []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}, 2)
+			if index != test.want || err != nil {
+				t.Fatalf("arrows %q: choice %d, err %v", test.input, index, err)
+			}
+		})
+	}
+}
+
 func TestTerminalReader_PlanPickerNarrowHeaderKeepsSafeChoice(t *testing.T) {
 	reader := terminalInput(strings.NewReader("\r"))
 	reader.size = func() (int, int, error) { return 30, 24, nil }
-	if index, err := reader.Choose("Plan ready", []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}, 2); err != nil || index != 2 {
+	if index, err := reader.Choose(pickerConfig{title: "Plan ready", cancelLabel: "keep planning"}, []choice{{label: "Implement here"}, {label: "Implement fresh"}, {label: "Keep planning"}}, 2); err != nil || index != 2 {
 		t.Fatalf("choice %d, err %v", index, err)
 	}
 	header := strings.SplitN(reader.out.(*bytes.Buffer).String(), "\r\n", 2)[0]
@@ -147,7 +193,7 @@ func TestTerminalReader_PlanPickerNarrowHeaderKeepsSafeChoice(t *testing.T) {
 func TestTerminalReader_ChooseNarrowHeaderKeepsCancelHint(t *testing.T) {
 	reader := terminalInput(strings.NewReader("\r"))
 	reader.size = func() (int, int, error) { return 30, 24, nil }
-	if _, err := reader.Choose("Select reasoning effort", []choice{{label: "low"}}, 0); err != nil {
+	if _, err := reader.Choose(pickerConfig{title: "Select reasoning effort", shortcuts: true}, []choice{{label: "low"}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	header := strings.SplitN(reader.out.(*bytes.Buffer).String(), "\r\n", 2)[0]
@@ -160,7 +206,7 @@ func TestTerminalReader_ChooseNarrowHeaderKeepsCancelHint(t *testing.T) {
 func TestTerminalReader_ChooseShortTerminalFallsBack(t *testing.T) {
 	reader := terminalInput(strings.NewReader(""))
 	reader.size = func() (int, int, error) { return 40, 2, nil }
-	if _, err := reader.Choose("Select", []choice{{label: "one"}, {label: "two"}}, 0); err != errNotInteractive {
+	if _, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, []choice{{label: "one"}, {label: "two"}}, 0); err != errNotInteractive {
 		t.Fatalf("got %v", err)
 	}
 	if reader.out.(*bytes.Buffer).Len() != 0 {
@@ -170,7 +216,7 @@ func TestTerminalReader_ChooseShortTerminalFallsBack(t *testing.T) {
 
 func TestScannerReader_ChooseIsNotInteractive(t *testing.T) {
 	reader := newLineReader(strings.NewReader("hi\n"), io.Discard, nil)
-	if _, err := reader.Choose("Select", []choice{{label: "one"}}, 0); err != errNotInteractive {
+	if _, err := reader.Choose(pickerConfig{title: "Select", shortcuts: true}, []choice{{label: "one"}}, 0); err != errNotInteractive {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -392,6 +438,15 @@ func TestTerminalReader_BandSanitizesMessage(t *testing.T) {
 	band := strings.Split(reader.out.(*bytes.Buffer).String(), "\x1b[J")[1]
 	if strings.Contains(band, "\x1b[31m") || !strings.Contains(band, `hi \x1b[31m`) {
 		t.Fatalf("band did not escape input: %q", band)
+	}
+}
+
+func TestWriteUserBand_HandoffMatchesTypedSubmission(t *testing.T) {
+	var out bytes.Buffer
+	writeUserBand(&out, "Implement the plan.", 80)
+	want := ansiUserBand + "> Implement the plan.\x1b[K" + ansiReset + "\r\n"
+	if out.String() != want {
+		t.Fatalf("handoff band: %q, want %q", out.String(), want)
 	}
 }
 
