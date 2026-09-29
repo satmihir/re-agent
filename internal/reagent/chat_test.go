@@ -55,6 +55,7 @@ func (r *fakeLineReader) ReadLine() (string, error) {
 	return read.line, read.err
 }
 func (r *fakeLineReader) SetPrompt(prompt string) { r.prompts = append(r.prompts, prompt) }
+func (r *fakeLineReader) SetBandPrefix(string)    {}
 
 func TestChat_SecondInterruptExits(t *testing.T) {
 	input := &fakeLineReader{reads: []struct {
@@ -314,6 +315,213 @@ func TestChat_PlanWithoutATerminalPrintsTheHint(t *testing.T) {
 	}
 	if !strings.Contains(errs.String(), "/plan turns plan mode off; then ask for the implementation\n") || !session.planMode || model.next != 1 {
 		t.Fatalf("mode %t, calls %d, stderr %q", session.planMode, model.next, errs.String())
+	}
+}
+
+func TestChat_PlanInASentenceTurnsItOn(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("still planning")))
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{line: "   can we /plan the retry change?   "}}}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if session.Turns() != 1 || !session.planMode || model.next != 1 || session.history[0].User.Text != "can we /plan the retry change?" || session.history[0].User.Plan != "on" {
+		t.Fatalf("history: %+v; mode %t, calls %d", session.history, session.planMode, model.next)
+	}
+	if strings.Count(errs.String(), "plan mode on: edits and commands are refused until /plan again") != 1 || len(input.prompts) != 2 || input.prompts[0] != "> " || input.prompts[1] != "plan> " {
+		t.Fatalf("stderr %q; prompts %q", errs.String(), input.prompts)
+	}
+}
+
+func TestChat_PlanSentenceBandKeepsOriginalPrompt(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	terminal, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	text := "can we /plan the retry change?"
+	input := terminalInput(strings.NewReader(text + "\r/exit\r"))
+	input.styled = true
+	var out bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("planning")))
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), terminal)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: terminal}
+	if code := chat(context.Background(), c, input, &out, terminal); code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	band := input.out.(*bytes.Buffer).String()
+	if !strings.Contains(band, ansiUserBand+"> "+text+"\x1b[K") || !strings.Contains(band, ansiUserBand+ansiPromptTeal+"plan\x1b[22;39m> /exit\x1b[K") {
+		t.Fatalf("the first message should show the old prompt, then the plan prompt: %q", band)
+	}
+	if !session.planMode || session.history[0].User.Plan != "on" {
+		t.Fatalf("mode %t, history %+v", session.planMode, session.history)
+	}
+}
+
+func TestChat_PlanInPastedMessage(t *testing.T) {
+	text := "can we plan this?\nlet's /plan it"
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{line: text}}}
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("planning")))
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK || !session.planMode || session.history[0].User.Text != text || session.history[0].User.Plan != "on" {
+		t.Fatalf("exit %d; history %+v; stderr %q", code, session.history, errs.String())
+	}
+}
+
+func TestChat_PlanInASentenceWhenAlreadyOn(t *testing.T) {
+	model := NewScriptedModel(turn(textBlock("one")), turn(textBlock("two")))
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	input := newLineReader(strings.NewReader("can we /plan this?\ncan we /plan more?\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if strings.Count(errs.String(), "plan mode on:") != 1 || model.next != 2 || session.history[2].User.Plan != "on" || session.history[2].User.Text != "can we /plan more?" {
+		t.Fatalf("stderr %q; history %+v", errs.String(), session.history)
+	}
+}
+
+func TestChat_PlanInCodeOrPathDoesNothing(t *testing.T) {
+	model := NewScriptedModel(turn(textBlock("one")), turn(textBlock("two")))
+	var out, errs bytes.Buffer
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	input := newLineReader(strings.NewReader("see docs/plan.md\nthe `/plan` command\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if session.planMode || model.next != 2 || session.history[0].User.Plan != "" || session.history[2].User.Plan != "" || strings.Contains(errs.String(), "plan mode on:") {
+		t.Fatalf("stderr %q; history %+v", errs.String(), session.history)
+	}
+}
+
+func TestChat_PlanInEditedMessage(t *testing.T) {
+	editor := filepath.Join(t.TempDir(), "editor")
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'can we /plan this from the editor?\\n' > \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISUAL", editor)
+	stdin, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	terminal, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("plan")))
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, stdin: stdin, stdout: terminal, stderr: terminal}
+	input := newLineReader(strings.NewReader("/edit\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if !session.planMode || model.next != 1 || session.history[0].User.Plan != "on" || session.history[0].User.Text != "can we /plan this from the editor?\n" {
+		t.Fatalf("history %+v; mode %t", session.history, session.planMode)
+	}
+}
+
+func TestChat_ShellLineWithPlanDoesNothing(t *testing.T) {
+	var out, errs bytes.Buffer
+	cfg := testConfig(t)
+	cfg.WorkspacePath = t.TempDir()
+	session := NewSession(cfg, NewScriptedModel(), NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: cfg, traceDir: t.TempDir(), progress: &errs}
+	input := newLineReader(strings.NewReader("!printf '/plan\\n'\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if session.planMode || session.Turns() != 0 || len(session.history) != 1 || session.history[0].Kind != EntryShell || strings.Contains(errs.String(), "plan mode on:") {
+		t.Fatalf("stderr %q; history %+v", errs.String(), session.history)
+	}
+}
+
+func TestChat_PlanSentenceEncodesLikeExplicitMode(t *testing.T) {
+	text := "can we /plan the retry change?"
+	var bodies [2][2][]byte
+	padded := "   " + text + "   "
+	for i, inputText := range []string{padded + "\n", "/plan\n" + padded + "\n"} {
+		var out, errs bytes.Buffer
+		model := NewScriptedModel(turn(textBlock("planning")))
+		session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+		session.snapshot = func(context.Context) json.RawMessage { return json.RawMessage(`{"kind":"workspace_state"}`) }
+		c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+		if code := chat(context.Background(), c, newLineReader(strings.NewReader(inputText), &errs, nil), &out, &errs); code != exitOK {
+			t.Fatalf("exit %d: %s", code, errs.String())
+		}
+		if session.history[0].User.Plan != "on" || session.history[0].User.Text != text {
+			t.Fatalf("user entry: %+v", session.history[0])
+		}
+		for p, encode := range []func(ModelRequest) ([]byte, error){EncodeOpenAIRequest, EncodeAnthropicRequest} {
+			body, err := encode(BuildContext(session.cfg, RequestScope{}, session.history[:1]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			bodies[i][p] = body
+		}
+	}
+	for p := range bodies[0] {
+		if !bytes.Equal(bodies[0][p], bodies[1][p]) {
+			t.Fatalf("provider %d: sentence and explicit mode encoded differently", p)
+		}
+	}
+}
+
+func TestChat_PlanSwitchLinesAndStatusColour(t *testing.T) {
+	on := "plan mode on: edits and commands are refused until /plan again"
+	if got := planSwitchLine(true, true); got != ansiPromptTeal+on+ansiReset {
+		t.Fatalf("styled on line %q", got)
+	}
+	if got := planSwitchLine(false, true); got != ansiDim+"plan mode off"+ansiReset {
+		t.Fatalf("styled off line %q", got)
+	}
+	if planSwitchLine(true, false) != on || planSwitchLine(false, false) != "plan mode off" || planModeLabel(false) != "plan mode" || planModeLabel(true) != ansiPromptTeal+"plan mode"+ansiReset {
+		t.Fatal("plain or styled plan mode changed")
+	}
+}
+
+func TestChat_PlanPromptIsTeal(t *testing.T) {
+	terminal, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	for _, test := range []struct {
+		name, noColor, blocked, want string
+	}{
+		{"styled", "", "", ansiPromptTeal + "plan" + ansiReset + "> "},
+		{"blocked", "", "protocol_error", "(blocked) " + ansiPromptTeal + "plan" + ansiReset + "> "},
+		{"NO_COLOR", "1", "", "plan> "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("NO_COLOR", test.noColor)
+			var out bytes.Buffer
+			session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), terminal)
+			session.blocked = test.blocked
+			c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: terminal}
+			input := &fakeLineReader{reads: []struct {
+				line string
+				err  error
+			}{{line: "/plan"}}}
+			if code := chat(context.Background(), c, input, &out, terminal); code != exitOK || len(input.prompts) != 2 || input.prompts[1] != test.want {
+				t.Fatalf("exit %d; prompts %q, want %q", code, input.prompts, test.want)
+			}
+		})
 	}
 }
 

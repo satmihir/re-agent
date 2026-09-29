@@ -10,6 +10,44 @@ import (
 	"testing"
 )
 
+func TestPlanRequested(t *testing.T) {
+	for _, test := range []struct {
+		text string
+		want bool
+	}{
+		{"/plan this", true},
+		{"can we /plan it?", true},
+		{"let's plan (/plan) first", true},
+		{"ok, /plan.", true},
+		{"/plan", true},
+		{"\"/plan\"", true},
+		{"yes\t/plan; more", true},
+		{"yes\u2003/plan! more", true},
+		{"the `/plan` command is broken", false},
+		{"read `/plan` then /plan this", true},
+		{"read ``/plan`` then /plan this", true},
+		{"read `/plan then later", false},
+		{"before\n```go\n/plan now\n```\nafter", false},
+		{"```go\n/plan now\n```\ncan we /plan after?", true},
+		{"docs/plan.md", false},
+		{"/planner", false},
+		{"/plan/x", false},
+		{"https://example.com/plan", false},
+		{"the /plan.md file", false},
+		{"/Plan it", false},
+		{"/PLAN it", false},
+		{"hello /plan?later", false},
+		{"hello /plan,more", false},
+		{"hello [/plan]", false},
+	} {
+		t.Run(test.text, func(t *testing.T) {
+			if got := planRequested(test.text); got != test.want {
+				t.Fatalf("planRequested(%q) = %t, want %t", test.text, got, test.want)
+			}
+		})
+	}
+}
+
 func TestPlanMarkerFor(t *testing.T) {
 	on := []Entry{{Kind: EntryUser, User: &UserTurn{Text: "plan", Plan: "on"}}, {Kind: EntryAssistant, Assistant: &ModelResponse{}}, {Kind: EntryShell, Shell: &ShellCommand{}}}
 	if got := planMarkerFor(nil, true); got != "on" {
