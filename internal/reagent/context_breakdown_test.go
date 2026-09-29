@@ -205,9 +205,42 @@ func TestContextBreakdown_OverTheLimitIsStillMeasured(t *testing.T) {
 	}
 }
 
+func TestContextBreakdown_WindowMeter(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		usage  Usage
+		window int64
+		want   string
+		not    string
+	}{
+		{"known", Usage{Known: true, InputTokens: 152_300, CachedInputTokens: 90_000}, 1_050_000,
+			"last request  152.3k tokens · 15% of the 1.05M window", "tokens in"},
+		{"haiku", Usage{Known: true, InputTokens: 100_000}, 200_000,
+			"last request  100.0k tokens · 50% of the 200k window", "tokens in"},
+		{"unknown window", Usage{Known: true, InputTokens: 2400, CachedInputTokens: 2000}, 0,
+			"last request  2.4k tokens in (2.0k cached)", "window"},
+		{"unknown usage", Usage{}, 1_050_000, "next request", "last request"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Provider = openaiName
+			b, err := measureContext(cfg, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b.lastUsage, b.window = test.usage, test.window
+			got := b.render()
+			if !strings.Contains(got, test.want) || strings.Contains(got, test.not) {
+				t.Fatalf("rendered:\n%s", got)
+			}
+		})
+	}
+}
+
 func TestChat_ContextReportsTheNextRequest(t *testing.T) {
 	c := newConversation(t, "gpt-5.6-luna", "low", 0)
 	c.session.history = editedHistory(t, openaiProvider, `{"type":"reasoning"}`, `{"type":"function_call"}`, `{"type":"message"}`)
+	c.session.lastRequest = Usage{Known: true, InputTokens: 2400, CachedInputTokens: 2000}
 	var stderr bytes.Buffer
 	c.commandContext(&stderr)
 	for _, want := range []string{

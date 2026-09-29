@@ -239,6 +239,11 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 	} else {
 		fmt.Fprintf(stderr, "session    %s · tokens unknown\n", plural(c.session.Turns(), "turn", "turns"))
 	}
+	if window := contextWindow(c.cfg.Model); window > 0 {
+		if line := lastRequestLine(c.session.lastRequest, window); line != "" {
+			fmt.Fprintln(stderr, line)
+		}
+	}
 	if tracePath := c.session.LastTrace(); tracePath != "" {
 		if styledOutput(stderr) {
 			tracePath = shortPath(tracePath)
@@ -262,6 +267,8 @@ func (c *conversation) commandContext(stderr io.Writer) {
 		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
 		return
 	}
+	breakdown.lastUsage = c.session.lastRequest
+	breakdown.window = contextWindow(c.cfg.Model)
 	fmt.Fprintln(stderr, breakdown.render())
 }
 
@@ -610,6 +617,9 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 		if result.Resumable {
 			c.session.display.resumable()
 		}
+	}
+	if result.Steps > 0 {
+		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model))
 	}
 	c.session.display.spacer()
 	if result.Status != StatusCompleted || !c.session.planMode {

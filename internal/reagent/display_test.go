@@ -44,6 +44,29 @@ func TestDisplay_SummaryLine(t *testing.T) {
 	}
 }
 
+func TestDisplay_ContextWarningAtSixtyPercent(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		usage  Usage
+		window int64
+		want   string
+	}{
+		{"below", Usage{Known: true, InputTokens: 599_999}, 1_000_000, ""},
+		{"at", Usage{Known: true, InputTokens: 600_000}, 1_000_000, "  context 60% of the window; /reset starts over\n"},
+		{"above", Usage{Known: true, InputTokens: 630_000}, 1_000_000, "  context 63% of the window; /reset starts over\n"},
+		{"unknown window", Usage{Known: true, InputTokens: 900_000}, 0, ""},
+		{"unknown usage", Usage{}, 1_000_000, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var b bytes.Buffer
+			NewDisplay(&b).contextWarning(test.usage, test.window)
+			if got := b.String(); got != test.want {
+				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestDisplay_HidesRecapWhenNotRequested(t *testing.T) {
 	var b bytes.Buffer
 	d := NewDisplay(&b)

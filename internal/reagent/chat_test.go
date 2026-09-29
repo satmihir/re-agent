@@ -692,6 +692,61 @@ func TestChat_StatusReportsSessionState(t *testing.T) {
 	}
 }
 
+func TestChat_WindowMeterInStatusAndContext(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c.session.lastRequest = Usage{Known: true, InputTokens: 152_300, CachedInputTokens: 90_000}
+	var status, context bytes.Buffer
+	c.commandStatus(&status)
+	c.commandContext(&context)
+	want := "last request  152.3k tokens · 15% of the 1.05M window"
+	if !strings.Contains(status.String(), want) || !strings.Contains(context.String(), want) {
+		t.Fatalf("status: %s\ncontext: %s", status.String(), context.String())
+	}
+	c.session.Reset()
+	status.Reset()
+	c.commandStatus(&status)
+	if strings.Contains(status.String(), "last request") {
+		t.Fatalf("reset left a meter: %s", status.String())
+	}
+	c.session.lastRequest = Usage{Known: true, InputTokens: 152_300}
+	info, _ := findModel("claude-haiku-4-5")
+	c.switchTo(info)
+	status.Reset()
+	c.commandStatus(&status)
+	if strings.Contains(status.String(), "last request") {
+		t.Fatalf("model switch left a meter: %s", status.String())
+	}
+}
+
+func TestChat_WarnsFromLastRequestNotTurnTotal(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		last  int64
+		warns bool
+	}{
+		{"below", 119_999, false},
+		{"at", 120_000, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newConversation(t, "claude-haiku-4-5", "", 0)
+			first := turn(callBlock("call_1", "echo", `{"text":"hi"}`))
+			first.Usage = Usage{Known: true, InputTokens: 190_000}
+			second := turn(textBlock("done"))
+			second.Usage = Usage{Known: true, InputTokens: test.last}
+			c.session.model = NewScriptedModel(first, second)
+			var stdout, stderr bytes.Buffer
+			c.session.display = NewDisplay(&stderr)
+			c.runTurn(context.Background(), "task", nil, &stdout, &stderr)
+			if got := strings.Contains(stderr.String(), "/reset starts over"); got != test.warns {
+				t.Fatalf("warning %t, want %t: %s", got, test.warns, stderr.String())
+			}
+			if c.session.lastRequest.InputTokens != test.last || c.usage.InputTokens != 190_000+test.last {
+				t.Fatalf("last %+v, total %+v", c.session.lastRequest, c.usage)
+			}
+		})
+	}
+}
+
 func TestChat_StatusFormatsModel(t *testing.T) {
 	c := newConversation(t, "claude-haiku-4-5", "", 0)
 	var stderr bytes.Buffer

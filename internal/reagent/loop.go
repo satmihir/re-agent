@@ -94,12 +94,15 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		r.trace.Write("model.requested", r.steps, req)
 
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)
+		// v0 §10 amendment (2026-09-28): meter the last request, not the turn.
+		s.lastRequest = Usage{}
 		resp, err := r.model.Generate(ctx, req)
 		s.display.modelFinished()
 		if err != nil {
 			// A failed request can still have cost tokens, so account what the
 			// provider reported before stopping.
 			status, usage := classifyModelError(err)
+			s.lastRequest = usage
 			r.usage.Add(usage)
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": err.Error()})
 			// Nothing was appended, so the transcript still ends where this
@@ -108,6 +111,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			r.resumable = status == StatusProviderError || status == StatusCancelled
 			return r.finish(status, err.Error(), "")
 		}
+		s.lastRequest = resp.Usage
 		if reason := r.validateResponse(resp); reason != "" {
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": reason, "response": resp})
 			return r.finish(StatusProtocolError, reason, "")
