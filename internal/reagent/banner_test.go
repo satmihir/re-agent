@@ -86,6 +86,26 @@ func TestWelcome_FitsTheTerminal(t *testing.T) {
 	}
 }
 
+func TestWelcome_PlanModeIsTealWithoutWideningRow(t *testing.T) {
+	cfg := welcomeConfig(t)
+	cfg.PlanMode = true
+	var out bytes.Buffer
+	(&Display{w: &out, styled: true}).welcome(cfg, "/work/repo", "", welcomeColumns)
+	if !strings.Contains(out.String(), ansiDim+"read, write, and execute · "+ansiPromptTeal+"plan mode"+"\x1b[22;39m"+ansiDim) {
+		t.Fatalf("plan mode is not teal within the dim details: %q", out.String())
+	}
+	for _, row := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+		if displayWidth(row) >= welcomeColumns {
+			t.Fatalf("welcome wrapped: %q", row)
+		}
+	}
+	var plain bytes.Buffer
+	(&Display{w: &plain}).header(cfg, "/work/repo", "", true)
+	if strings.Contains(plain.String(), "\x1b[") || !strings.Contains(plain.String(), "· plan mode") {
+		t.Fatalf("plain header: %q", plain.String())
+	}
+}
+
 func TestHeader_RunPlanModeReplacesExecNotice(t *testing.T) {
 	cfg := welcomeConfig(t)
 	cfg.PlanMode = true

@@ -21,6 +21,7 @@ type lineReader interface {
 	ReadLine() (string, error)
 	Choose(config pickerConfig, options []choice, current int) (int, error)
 	SetPrompt(string)
+	SetBandPrefix(string)
 }
 
 // newLineReader picks terminal editing only for an interactive file.
@@ -166,16 +167,17 @@ func (h *promptHistory) At(i int) string {
 // transformed input and prompt remembers the prompt to restore after a
 // continuation read.
 type terminalReader struct {
-	fd       int
-	terminal *term.Terminal
-	keys     *keyReader
-	enterRaw func() (func(), error)
-	out      io.Writer
-	styled   bool
-	size     func() (width, height int, err error)
-	width    int // x/term starts at 80; keep the last successful size for redraws.
-	prompt   string
-	history  promptHistory
+	fd         int
+	terminal   *term.Terminal
+	keys       *keyReader
+	enterRaw   func() (func(), error)
+	out        io.Writer
+	styled     bool
+	size       func() (width, height int, err error)
+	width      int // x/term starts at 80; keep the last successful size for redraws.
+	prompt     string
+	bandPrefix string
+	history    promptHistory
 }
 
 // SetPrompt changes the prompt restored after a continuation read.
@@ -183,6 +185,9 @@ func (r *terminalReader) SetPrompt(p string) {
 	r.prompt = p
 	r.terminal.SetPrompt(p)
 }
+
+// SetBandPrefix records the prompt a submission was typed at, even when that message changes modes.
+func (r *terminalReader) SetBandPrefix(prefix string) { r.bandPrefix = prefix }
 
 // v0 §10 amendment (2026-09-26): the prompt and picker share raw-mode entry.
 func (r *terminalReader) rawMode() (func(), error) {
@@ -340,13 +345,16 @@ func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
 // saved cursor position, which would be invalid after the input scrolls.
 func (r *terminalReader) drawUserBand(message string, rows int) {
 	fmt.Fprintf(r.out, "\x1b[%dA\r\x1b[J", rows)
-	writeUserBand(r.out, message, r.width)
+	first := r.bandPrefix
+	if first == "" {
+		first = "> "
+	}
+	writeUserBand(r.out, message, r.width, first)
 }
 
 // writeUserBand gives a handoff the same presentation as a typed submission,
 // without erasing an echoed line that was never typed.
-func writeUserBand(w io.Writer, message string, width int) {
-	first := "> "
+func writeUserBand(w io.Writer, message string, width int, first string) {
 	for _, line := range strings.Split(sanitize(message), "\n") {
 		for _, row := range wrapStyled(first, "  ", line, width-1) {
 			fmt.Fprint(w, ansiUserBand, row, "\x1b[K", ansiReset, "\r\n")
@@ -357,7 +365,8 @@ func writeUserBand(w io.Writer, message string, width int) {
 
 type scannerReader struct{ scanner *bufio.Scanner }
 
-func (r *scannerReader) SetPrompt(string) {}
+func (r *scannerReader) SetPrompt(string)     {}
+func (r *scannerReader) SetBandPrefix(string) {}
 func (r *scannerReader) Choose(pickerConfig, []choice, int) (int, error) {
 	return 0, errNotInteractive
 }

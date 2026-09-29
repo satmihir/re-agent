@@ -229,11 +229,11 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 		fmt.Fprintf(stderr, "endpoint   %s (%s)\n", sanitize(c.proxy.shown()), proxyURLVariable)
 	}
 	fmt.Fprintf(stderr, "workspace  %s\n", sanitize(workspace))
-	mode := c.cfg.Registry.Mode().String()
+	mode := sanitize(c.cfg.Registry.Mode().String())
 	if c.session.planMode {
-		mode += " · plan mode"
+		mode += " · " + planModeLabel(styledOutput(stderr))
 	}
-	fmt.Fprintf(stderr, "mode       %s\n", sanitize(mode))
+	fmt.Fprintf(stderr, "mode       %s\n", mode)
 	fmt.Fprintf(stderr, "budget     %d steps, %d tool calls per turn\n", c.cfg.MaxSteps, c.cfg.MaxToolCalls)
 	if c.usage.Known {
 		fmt.Fprintf(stderr, "session    %s · %s in (%s cached) · %s out\n", plural(c.session.Turns(), "turn", "turns"), formatCount(c.usage.InputTokens), formatCount(c.usage.CachedInputTokens), formatCount(c.usage.OutputTokens))
@@ -380,6 +380,7 @@ func (c *conversation) commandEdit(ctx context.Context, input lineReader, stdout
 		return
 	}
 	previewEditorMessage(stderr, text)
+	c.planForMessage(text, stderr)
 	c.runTurn(ctx, text, input, stdout, stderr)
 }
 
@@ -496,20 +497,49 @@ func previewEditorMessage(stderr io.Writer, text string) {
 	}
 }
 
+// v0 §10 amendment (2026-09-28): only user-authored messages can switch to plan mode.
+func (c *conversation) planForMessage(text string, stderr io.Writer) bool {
+	if c.session.planMode || !planRequested(text) {
+		return false
+	}
+	c.session.planMode = true
+	fmt.Fprintln(stderr, planSwitchLine(true, styledOutput(stderr)))
+	return true
+}
+
+func planSwitchLine(on, styled bool) string {
+	text := "plan mode off"
+	if on {
+		text = "plan mode on: edits and commands are refused until /plan again"
+	}
+	if !styled {
+		return text
+	}
+	if on {
+		return ansiPromptTeal + text + ansiReset
+	}
+	return ansiDim + text + ansiReset
+}
+
 // chat runs a conversation: one submission per line, each its own run of one
 // session (v1 §18.2). Slash commands are local controls; /compact alone calls the model.
 // A terminal submission may contain a bracketed paste or continued lines.
 func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
 	var interrupted time.Time
 	for {
-		prompt := "> "
+		prompt, bandPrefix := "> ", "> "
 		if c.session.planMode {
-			prompt = "plan> "
+			prompt, bandPrefix = "plan> ", "plan> "
+			if styledOutput(stderr) {
+				prompt = ansiPromptTeal + "plan" + ansiReset + "> "
+				bandPrefix = ansiPromptTeal + "plan" + "\x1b[22;39m> "
+			}
 		}
 		if c.session.blocked != "" {
 			prompt = "(blocked) " + prompt
 		}
 		input.SetPrompt(prompt)
+		input.SetBandPrefix(bandPrefix)
 		typed, err := input.ReadLine()
 		if errors.Is(err, errInterrupted) {
 			if !interrupted.IsZero() && time.Since(interrupted) < 2*time.Second {
@@ -548,11 +578,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			} else {
 				c.session.planMode = true
 			}
-			if c.session.planMode {
-				fmt.Fprintln(stderr, "plan mode on: edits and commands are refused until /plan again")
-			} else {
-				fmt.Fprintln(stderr, "plan mode off")
-			}
+			fmt.Fprintln(stderr, planSwitchLine(c.session.planMode, styledOutput(stderr)))
 			if argument != "" {
 				c.runTurn(ctx, argument, input, stdout, stderr)
 			}
@@ -586,7 +612,11 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			}
 			fmt.Fprintf(stderr, "%s /help lists commands.\n", message)
 		default:
-			c.runTurn(ctx, line, input, stdout, stderr)
+			text := line
+			if !strings.HasPrefix(line, "!") && c.planForMessage(typed, stderr) {
+				text = typed
+			}
+			c.runTurn(ctx, text, input, stdout, stderr)
 		}
 	}
 }
@@ -706,19 +736,20 @@ func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan str
 	switch index {
 	case 0:
 		c.session.planMode = false
-		fmt.Fprintln(stderr, "plan mode off")
+		fmt.Fprintln(stderr, planSwitchLine(false, styledOutput(stderr)))
 		if styledOutput(stderr) {
 			width := terminalColumns(stderr)
 			if width < 2 {
 				width = 80
 			}
-			writeUserBand(stderr, "Implement the plan.", width)
+			writeUserBand(stderr, "Implement the plan.", width, "> ")
 		} else {
 			fmt.Fprintln(stderr, "> Implement the plan.")
 		}
 		c.runTurn(ctx, "Implement the plan.", input, stdout, stderr)
 	case 1:
 		c.session.planMode = false
+		fmt.Fprintln(stderr, planSwitchLine(false, styledOutput(stderr)))
 		c.reset()
 		fmt.Fprintln(stderr, "fresh session; implementing plan")
 		c.runTurn(ctx, planHandoffPrompt+"\n\n"+plan, input, stdout, stderr)

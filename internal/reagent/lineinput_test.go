@@ -441,9 +441,42 @@ func TestTerminalReader_BandSanitizesMessage(t *testing.T) {
 	}
 }
 
+func TestWriteUserBand_PlanPrefix(t *testing.T) {
+	var out bytes.Buffer
+	prefix := ansiPromptTeal + "plan" + "\x1b[22;39m> "
+	writeUserBand(&out, "one two three four five", 16, prefix)
+	rows := strings.Split(strings.TrimSuffix(out.String(), "\r\n"), "\r\n")
+	if len(rows) < 2 || !strings.HasPrefix(rows[0], ansiUserBand+prefix) || !strings.HasPrefix(rows[1], ansiUserBand+"  ") {
+		t.Fatalf("plan band: %q", out.String())
+	}
+	for _, row := range rows {
+		if strings.Contains(strings.Split(row, "\x1b[K")[0], ansiReset) || displayWidth(row) > 15 {
+			t.Fatalf("plan band lost its background or wrapped: %q", row)
+		}
+	}
+}
+
+func TestTerminalReader_PlanPromptKeepsTypingAligned(t *testing.T) {
+	reader := terminalInput(strings.NewReader("one two three four\r\x1b[A\r"))
+	reader.styled = true
+	reader.size = func() (int, int, error) { return 16, 24, nil }
+	reader.SetPrompt(ansiPromptTeal + "plan" + ansiReset + "> ")
+	reader.SetBandPrefix(ansiPromptTeal + "plan" + "\x1b[22;39m> ")
+	for i := 0; i < 2; i++ {
+		line, err := reader.ReadLine()
+		if err != nil || line != "one two three four" {
+			t.Fatalf("read %d: %q, %v", i, line, err)
+		}
+	}
+	got := reader.out.(*bytes.Buffer).String()
+	if !strings.Contains(got, "\x1b[2A\r\x1b[J"+ansiUserBand+ansiPromptTeal+"plan\x1b[22;39m> ") {
+		t.Fatalf("plan echo not aligned or coloured: %q", got)
+	}
+}
+
 func TestWriteUserBand_HandoffMatchesTypedSubmission(t *testing.T) {
 	var out bytes.Buffer
-	writeUserBand(&out, "Implement the plan.", 80)
+	writeUserBand(&out, "Implement the plan.", 80, "> ")
 	want := ansiUserBand + "> Implement the plan.\x1b[K" + ansiReset + "\r\n"
 	if out.String() != want {
 		t.Fatalf("handoff band: %q, want %q", out.String(), want)

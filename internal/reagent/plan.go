@@ -1,6 +1,10 @@
 package reagent
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // v0 §10 amendment (2026-09-28): turn markers leave the cached prefix intact.
 const planMarker = `re:agent plan mode is on for this message. Explore and plan; change nothing.
@@ -15,6 +19,68 @@ const planPickerTitle = "Plan ready"
 
 // v0 §10 amendment (2026-09-28): a fresh session must not imply the workspace stayed unchanged.
 const planHandoffPrompt = "Implement this plan. It was made in an earlier re:agent session, and the workspace may have changed since; check what you rely on."
+
+// v0 §10 amendment (2026-09-28): only a user's unquoted /plan in a message starts planning.
+func planRequested(text string) bool {
+	fenced := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "```") {
+			fenced = !fenced
+			continue
+		}
+		if fenced {
+			continue
+		}
+		codeTicks := 0
+		for i := 0; i < len(line); {
+			if line[i] == '`' {
+				end := i + 1
+				for end < len(line) && line[end] == '`' {
+					end++
+				}
+				ticks := end - i
+				if codeTicks == 0 {
+					codeTicks = ticks
+				} else if ticks == codeTicks {
+					codeTicks = 0
+				}
+				i = end
+				continue
+			}
+			if codeTicks == 0 && strings.HasPrefix(line[i:], "/plan") && planWordAt(line, i) {
+				return true
+			}
+			i++
+		}
+	}
+	return false
+}
+
+func planWordAt(line string, i int) bool {
+	if i > 0 {
+		before, _ := utf8.DecodeLastRuneInString(line[:i])
+		if !unicode.IsSpace(before) && !strings.ContainsRune("(\"'", before) {
+			return false
+		}
+	}
+	after := line[i+len("/plan"):]
+	if after == "" {
+		return true
+	}
+	r, size := utf8.DecodeRuneInString(after)
+	if unicode.IsSpace(r) || strings.ContainsRune(")\"'", r) {
+		return true
+	}
+	if strings.ContainsRune(".,!?:;", r) {
+		after = after[size:]
+		if after == "" {
+			return true
+		}
+		next, _ := utf8.DecodeRuneInString(after)
+		return unicode.IsSpace(next)
+	}
+	return false
+}
 
 // planMarkerFor derives "ended" from the last user entry, so an unused toggle leaves no mark.
 func planMarkerFor(history []Entry, on bool) string {

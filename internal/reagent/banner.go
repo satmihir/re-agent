@@ -38,6 +38,14 @@ const (
 	ansiPromptTeal = "\x1b[1;38;5;86m"
 )
 
+// planModeLabel keeps the launch mode plain while emphasizing the plan setting.
+func planModeLabel(styled bool) string {
+	if styled {
+		return ansiPromptTeal + "plan mode" + ansiReset
+	}
+	return "plan mode"
+}
+
 // liquidShades is the liquid's background by column, navy to violet like the
 // logo's gradient. Zero marks a column the liquid never reaches.
 var liquidShades = [flaskWidth]int{0, 0, 17, 18, 19, 20, 56, 57, 57, 93, 93, 0, 0}
@@ -90,6 +98,12 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 	if cfg.PlanMode {
 		mode += " · plan mode"
 	}
+	modeLine := truncateWidth(fmt.Sprintf("%s · %d steps, %d tool calls a turn",
+		mode, cfg.MaxSteps, cfg.MaxToolCalls), room)
+	if cfg.PlanMode {
+		modeLine = strings.Replace(modeLine, "plan mode", ansiPromptTeal+"plan mode"+"\x1b[22;39m"+ansiDim, 1)
+	}
+	modeLine = ansiDim + modeLine + ansiReset
 	via := ""
 	if endpoint != "" {
 		via = dim("requests go to " + sanitize(endpoint) + " (" + proxyURLVariable + ")")
@@ -103,8 +117,7 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 		title,
 		modelLine,
 		truncateWidth(sanitize(shortPath(workspace)), room),
-		dim(fmt.Sprintf("%s · %d steps, %d tool calls a turn",
-			mode, cfg.MaxSteps, cfg.MaxToolCalls)),
+		modeLine,
 		via,
 		"/help" + ansiDim + " commands · " + ansiReset + "!cmd" + ansiDim + " shell · " + ansiReset +
 			"Ctrl-D" + ansiDim + " exit" + ansiReset,
