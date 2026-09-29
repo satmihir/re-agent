@@ -155,6 +155,16 @@ func waitBeforeRetry(ctx context.Context) error {
 	}
 }
 
+// v0 §10 amendment (2026-09-28): retain bounded provider detail for an overflow.
+func contextWindowError(detail string, usage Usage) *ModelError {
+	message := "the conversation no longer fits the model's context window"
+	detail = truncateUTF8(strings.TrimSpace(detail), 500)
+	if detail != "" {
+		message += " (" + detail + ")"
+	}
+	return &ModelError{Status: StatusLimitExceeded, Message: message, Usage: usage}
+}
+
 // providerError explains a non-2xx reply using the provider's own message when
 // there is one, bounded so a large error page cannot fill the transcript. Both
 // providers put that message at error.message.
@@ -171,11 +181,11 @@ func providerError(status int, raw []byte) error {
 		if body.Error.Message != "" {
 			detail = truncateUTF8(body.Error.Message, 500)
 		}
-		// v0 §10 U7: overflow is a window limit, not a generic provider fault.
+		// v0 §10 amendment (2026-09-28): overflow is a window limit, not a provider fault.
 		if status == http.StatusBadRequest && (body.Error.Code == "context_length_exceeded" ||
 			body.Error.Type == "context_length_exceeded" || strings.Contains(body.Error.Message, "context_length_exceeded") ||
 			strings.Contains(strings.ToLower(body.Error.Message), "prompt is too long")) {
-			return &ModelError{Status: StatusLimitExceeded, Message: "the conversation no longer fits the model's context window"}
+			return contextWindowError(body.Error.Message, Usage{})
 		}
 	}
 	return &ModelError{

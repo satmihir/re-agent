@@ -29,6 +29,7 @@ const (
 	streamSecondCall = `{"type":"function_call","id":"fc_2","status":"completed","call_id":"call_2","name":"echo","arguments":"{\"text\":\"second\"}"}`
 	streamText       = `{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The marker is marker."}]}`
 	streamUsage      = `{"input_tokens":864,"input_tokens_details":{"cached_tokens":800},"output_tokens":29,"output_tokens_details":{"reasoning_tokens":7}}`
+	streamOverflow   = `{"type":"response.failed","sequence_number":3,"response":{"id":"resp_x","object":"response","status":"failed","error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."},"usage":null}}`
 )
 
 func itemDone(index int, item string) string {
@@ -134,6 +135,28 @@ func TestOpenAIProxy_BatchedCallsRoundTrip(t *testing.T) {
 	assertSequentialBatchTrace(t, path, "call_1", "call_2")
 }
 
+func TestOpenAIProxy_ContextOverflowBlocksSession(t *testing.T) {
+	api := newFakeAPI(t, okReply(sse(streamOverflow)))
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model, cfg.Proxied = openaiName, DefaultOpenAIModel, true
+	trace := NewTrace(io.Discard)
+	model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	session, result := oneTurn(t, context.Background(), cfg, model, trace, path, "task")
+	if result.Status != StatusLimitExceeded || result.Resumable || session.blocked != string(StatusLimitExceeded) {
+		t.Fatalf("result %+v, blocked %q", result, session.blocked)
+	}
+	if !strings.Contains(result.Reason, "the conversation no longer fits the model's context window") {
+		t.Fatalf("reason %q", result.Reason)
+	}
+	if _, err := session.Turn(context.Background(), "another question", "run2", path+"-2"); err == nil || !strings.Contains(err.Error(), "/reset") {
+		t.Fatalf("blocked session accepted another turn: %v", err)
+	}
+	if len(api.received()) != 1 {
+		t.Fatalf("blocked session sent %d requests", len(api.received()))
+	}
+}
+
 // OpenAI's own stream repeats the output in its final event; that is used.
 func TestOpenAIStream_FinalOutputIsUsedWhenPresent(t *testing.T) {
 	got := assembled(t, sse(itemDone(0, streamCall), completed(`[`+streamText+`]`)))
@@ -166,6 +189,18 @@ func TestOpenAIStream_Failures(t *testing.T) {
 			sse(`{"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"message":"model overloaded"},"usage":` + streamUsage + `}}`),
 			StatusProviderError, "model overloaded",
 		},
+		"context overflow failed response": {
+			sse(streamOverflow),
+			StatusLimitExceeded, "the conversation no longer fits the model's context window (Your input exceeds the context window of this model. Please adjust your input and try again.)",
+		},
+		"context overflow error event": {
+			sse(`{"type":"error","code":"context_length_exceeded","message":"prompt is too long"}`),
+			StatusLimitExceeded, "the conversation no longer fits the model's context window (prompt is too long)",
+		},
+		"context overflow nested error event": {
+			sse(`{"type":"error","error":{"code":"context_length_exceeded","message":"input too large"}}`),
+			StatusLimitExceeded, "the conversation no longer fits the model's context window (input too large)",
+		},
 		"error event": {
 			sse(`{"type":"error","message":"rate limited"}`), StatusProviderError, "rate limited",
 		},
@@ -197,13 +232,25 @@ func TestOpenAIStream_Failures(t *testing.T) {
 			if !errors.As(err, &modelErr) || modelErr.Status != c.status || !strings.Contains(modelErr.Message, c.message) {
 				t.Fatalf("got %v, want %s containing %q", err, c.status, c.message)
 			}
+			if c.status == StatusLimitExceeded && (modelErr.Message != c.message || modelErr.Usage.Known) {
+				t.Fatalf("overflow message/usage: %+v", modelErr)
+			}
 		})
 	}
 	// A failed response still reports what it cost.
 	_, err := assembleOpenAIStream([]byte(cases["failed response"].stream))
 	var modelErr *ModelError
-	if errors.As(err, &modelErr) && modelErr.Usage.InputTokens != 864 {
-		t.Fatalf("usage lost: %+v", modelErr.Usage)
+	if !errors.As(err, &modelErr) || modelErr.Usage.InputTokens != 864 {
+		t.Fatalf("usage lost: %v", err)
+	}
+}
+
+func TestOpenAIStream_OverflowRetainsReportedUsage(t *testing.T) {
+	stream := sse(`{"type":"response.failed","response":{"status":"failed","error":{"code":"context_length_exceeded","message":"too many tokens"},"usage":` + streamUsage + `}}`)
+	_, err := assembleOpenAIStream([]byte(stream))
+	var modelErr *ModelError
+	if !errors.As(err, &modelErr) || modelErr.Status != StatusLimitExceeded || !modelErr.Usage.Known || modelErr.Usage.InputTokens != 864 {
+		t.Fatalf("overflow usage: %v", err)
 	}
 }
 

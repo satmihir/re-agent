@@ -94,7 +94,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		r.trace.Write("model.requested", r.steps, req)
 
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)
-		// v0 §10 U7: the meter describes the most recent request, not a turn's total.
+		// v0 §10 amendment (2026-09-28): meter the last request, not the turn.
 		s.lastRequest = Usage{}
 		resp, err := r.model.Generate(ctx, req)
 		s.display.modelFinished()

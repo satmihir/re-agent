@@ -207,7 +207,7 @@ func (b contextBreakdown) render() string {
 	return out.String()
 }
 
-// v0 §10 U7: cached input is already part of input, not a second share.
+// v0 §10 amendment (2026-09-28): cached input is already part of input.
 func lastRequestLine(usage Usage, window int64) string {
 	if !usage.Known {
 		return ""

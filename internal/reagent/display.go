@@ -223,7 +223,7 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 	}
 }
 
-// v0 §10 U7: warn after a turn only when reported usage crosses the window threshold.
+// v0 §10 amendment (2026-09-28): warn at 60% of a known window.
 func (d *Display) contextWarning(usage Usage, window int64) {
 	if !usage.Known || window == 0 || float64(usage.InputTokens) < 0.6*float64(window) {
 		return

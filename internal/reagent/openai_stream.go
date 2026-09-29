@@ -50,7 +50,7 @@ func assembleOpenAIStream(raw []byte) ([]byte, error) {
 		case "response.failed":
 			return nil, streamFailure(event.Response)
 		case "error":
-			return nil, &ModelError{Status: StatusProviderError, Message: streamErrorMessage(event)}
+			return nil, streamEventFailure(event)
 		case "response.completed", "response.incomplete":
 			// An incomplete response is normalized like a non-streamed one,
 			// which is what reports it and its reason.
@@ -115,18 +115,21 @@ func streamData(raw []byte) []string {
 	return events
 }
 
-// streamErrorMessage reads an error event in either shape. A proxied request
-// was seen ending with the nested one, whose message the top-level field
-// missed (v0 §10 amendment of 2026-09-26).
-func streamErrorMessage(event streamEvent) string {
+// streamEventFailure accepts both top-level and nested error events; a nested
+// overload first exposed this distinction (v0 §10 amendment of 2026-09-26).
+func streamEventFailure(event streamEvent) error {
 	code, message := event.Code, event.Message
 	if event.Error != nil {
 		code, message = event.Error.Code, event.Error.Message
 	}
-	if code != "" {
-		return fmt.Sprintf("provider reported a stream error (%s): %s", code, message)
+	// v0 §10 amendment (2026-09-28): proxy overflow must block, like HTTP 400.
+	if code == "context_length_exceeded" {
+		return contextWindowError(message, Usage{})
 	}
-	return "provider reported a stream error: " + message
+	if code != "" {
+		return &ModelError{Status: StatusProviderError, Message: fmt.Sprintf("provider reported a stream error (%s): %s", code, message)}
+	}
+	return &ModelError{Status: StatusProviderError, Message: "provider reported a stream error: " + message}
 }
 
 // streamFailure reports a failed response with the provider's own reason and
@@ -134,6 +137,10 @@ func streamErrorMessage(event streamEvent) string {
 func streamFailure(response json.RawMessage) error {
 	var body responsesBody
 	_ = json.Unmarshal(response, &body)
+	// v0 §10 amendment (2026-09-28): a failed streamed response can overflow.
+	if body.Error != nil && body.Error.Code == "context_length_exceeded" {
+		return contextWindowError(body.Error.Message, body.Usage.normalized())
+	}
 	message := "provider reported a failed response"
 	if body.Error != nil && body.Error.Message != "" {
 		message += ": " + body.Error.Message

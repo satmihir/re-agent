@@ -263,10 +263,20 @@ func TestAnthropic_PromptTooLongIsALimit(t *testing.T) {
 			if result.Status != test.want || len(api.received()) != 1 {
 				t.Fatalf("status %s, attempts %d: %s", result.Status, len(api.received()), result.Reason)
 			}
-			if test.want == StatusLimitExceeded && result.Reason != "the conversation no longer fits the model's context window" {
+			if test.want == StatusLimitExceeded && result.Reason != "the conversation no longer fits the model's context window (prompt is too long: 210000 tokens > 200000 maximum)" {
 				t.Fatalf("reason %q", result.Reason)
 			}
 		})
+	}
+}
+
+func TestAnthropic_OverflowDetailIsBounded(t *testing.T) {
+	api := newFakeAPI(t, apiReply{status: 400,
+		body: `{"error":{"message":"prompt is too long: ` + strings.Repeat("x", 600) + `"}}`})
+	_, _, result := runAnthropic(t, api)
+	prefix := "the conversation no longer fits the model's context window"
+	if result.Status != StatusLimitExceeded || !strings.HasPrefix(result.Reason, prefix+" (prompt is too long: ") || len(result.Reason) != len(prefix)+3+500 {
+		t.Fatalf("overflow: %s, reason %q", result.Status, result.Reason)
 	}
 }
 
