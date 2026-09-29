@@ -19,6 +19,8 @@ beats completeness. When in doubt, write less.
   easy or "obviously needed".
 - If the design is wrong or ambiguous, say so and propose the smallest
   amendment to the doc. Never code around it silently.
+- Cite an amendment in code as `// v0 §N amendment (YYYY-MM-DD)`, the section
+  and date it was recorded under, not a milestone name.
 
 ## Code economy
 

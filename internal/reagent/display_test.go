@@ -67,11 +67,19 @@ func TestDisplay_ContextWarningAtSixtyPercent(t *testing.T) {
 	}
 }
 
-func TestDisplay_BlockedSuggestsCompact(t *testing.T) {
-	var b bytes.Buffer
-	NewDisplay(&b).blocked("trace.jsonl")
-	if !strings.Contains(b.String(), "/compact or /reset") || !strings.Contains(b.String(), "trace.jsonl") {
-		t.Fatal(b.String())
+func TestDisplay_BlockedGuidanceDependsOnStatus(t *testing.T) {
+	for _, test := range []struct {
+		status RunStatus
+		want   string
+	}{
+		{StatusLimitExceeded, "session blocked: /reset to continue; /compact works before the window fills (watch the 60% warning)"},
+		{StatusProtocolError, "session blocked: /compact or /reset to continue"},
+	} {
+		var b bytes.Buffer
+		NewDisplay(&b).blocked(test.status, "trace.jsonl")
+		if !strings.Contains(b.String(), test.want) || !strings.Contains(b.String(), "trace.jsonl") {
+			t.Fatalf("%s: %q", test.status, b.String())
+		}
 	}
 }
 

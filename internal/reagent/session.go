@@ -26,7 +26,7 @@ type Session struct {
 	// The last user's plan marker survives replacement until the next turn.
 	compactedPlan string
 
-	// blocked explains why ordinary input is refused until /compact or /reset. A run whose
+	// blocked explains why ordinary input is refused until recovery or /reset. A run whose
 	// outcome cannot be continued from sets it; the transcript is never rolled
 	// back to hide that outcome (v1 §7.5).
 	blocked     string
@@ -47,8 +47,8 @@ func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Sess
 // earlier one read or did.
 func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunResult, error) {
 	if s.blocked != "" {
-		return RunResult{}, fmt.Errorf("the last run ended with %s; inspect %s and use /compact or /reset to continue",
-			s.blocked, s.describeLastTrace())
+		return RunResult{}, fmt.Errorf("the last run ended with %s; inspect %s and use %s",
+			s.blocked, s.describeLastTrace(), blockedAdvice(s.blocked))
 	}
 	s.trace.Open(s.ID, runID, tracePath)
 	defer s.trace.Close()
@@ -69,8 +69,16 @@ func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunR
 	return result, nil
 }
 
+// v0 §10 amendment (2026-09-28): the overflowing history cannot fit with an added handoff prompt.
+func blockedAdvice(status string) string {
+	if status == string(StatusLimitExceeded) {
+		return "/reset to continue; /compact works before the window fills (watch the 60% warning)"
+	}
+	return "/compact or /reset to continue"
+}
+
 // Compact replaces the whole history with one handoff, without starting a turn.
-// v0 §10 U8: a failed attempt leaves the conversation and its block untouched.
+// v0 §10 amendment (2026-09-28): a failed attempt leaves the conversation and its block untouched.
 func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (RunResult, int, error) {
 	if len(s.history) == 0 {
 		return RunResult{}, 0, fmt.Errorf("nothing to compact; send a message first")

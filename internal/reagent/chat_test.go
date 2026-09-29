@@ -692,6 +692,27 @@ func TestChat_StatusReportsSessionState(t *testing.T) {
 	}
 }
 
+func TestChat_OverflowOnlyOffersReset(t *testing.T) {
+	var out, errs bytes.Buffer
+	cfg := testConfig(t)
+	cfg.Model = "gpt-6-luna"
+	model := &failingThen{
+		err:  &ModelError{Status: StatusLimitExceeded, Message: "the conversation no longer fits the model's context window", Usage: Usage{Known: true, InputTokens: 700_000}},
+		next: NewScriptedModel(),
+	}
+	s := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: s, cfg: cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+	input := newLineReader(strings.NewReader("first\n/status\nnext\n/exit\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatal(code)
+	}
+	text := errs.String()
+	if strings.Count(text, "/reset to continue; /compact works before the window fills (watch the 60% warning)") != 3 ||
+		strings.Contains(text, "/compact or /reset") || strings.Contains(text, "context 67% of the window; /compact") || s.blocked != string(StatusLimitExceeded) {
+		t.Fatalf("overflow guidance: %s", text)
+	}
+}
+
 func TestChat_WindowMeterInStatusAndContext(t *testing.T) {
 	c := newConversation(t, "gpt-6-luna", "low", 0)
 	c.session.lastRequest = Usage{Known: true, InputTokens: 152_300, CachedInputTokens: 90_000}

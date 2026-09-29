@@ -252,7 +252,7 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 		fmt.Fprintf(stderr, "last trace %s\n", sanitize(tracePath))
 	}
 	if c.session.blocked != "" {
-		fmt.Fprintf(stderr, "state      blocked by %s; /compact or /reset to continue\n", sanitize(c.session.blocked))
+		fmt.Fprintf(stderr, "state      blocked by %s; %s\n", sanitize(c.session.blocked), blockedAdvice(c.session.blocked))
 	} else if len(c.session.history) > 0 && c.scripted == nil {
 		fmt.Fprintln(stderr, "history    /compact summarizes; /reset starts over")
 	}
@@ -655,14 +655,14 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 	showTrace := result.Status != StatusCompleted
 	if c.session.blocked != "" {
 		printResult(c.session.display, result, time.Since(started), stdout, c.recap, false, true)
-		c.session.display.blocked(result.TracePath)
+		c.session.display.blocked(result.Status, result.TracePath)
 	} else {
 		printResult(c.session.display, result, time.Since(started), stdout, c.recap, showTrace, true)
 		if result.Resumable {
 			c.session.display.resumable()
 		}
 	}
-	if result.Steps > 0 {
+	if result.Steps > 0 && c.session.blocked != string(StatusLimitExceeded) {
 		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model))
 	}
 	c.session.display.spacer()

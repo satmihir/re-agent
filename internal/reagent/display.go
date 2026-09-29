@@ -249,11 +249,11 @@ func (d *Display) resumable() {
 	fmt.Fprintln(d.w, text)
 }
 
-func (d *Display) blocked(tracePath string) {
+func (d *Display) blocked(status RunStatus, tracePath string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.eraseStatusLocked()
-	text := "  session blocked: /compact or /reset to continue"
+	text := "  session blocked: " + blockedAdvice(string(status))
 	if d.styled {
 		text = ansiDim + text + ansiReset
 	}

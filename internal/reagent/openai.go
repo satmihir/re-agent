@@ -153,7 +153,7 @@ func encodeHistory(history []Entry) ([]any, error) {
 	for _, entry := range history {
 		switch entry.Kind {
 		case EntrySummary:
-			// v0 §10 U8: a handoff is portable user text, not provider output.
+			// v0 §10 amendment (2026-09-28): a handoff is portable user text, not provider output.
 			input = append(input, responsesMessage{Role: "user", Content: []responsesContent{{Type: "input_text", Text: summaryPreamble + "\n" + entry.Summary.Text}}})
 		case EntryUser:
 			// v0 §6 amendment (2026-09-27): a dated snapshot follows the text.
