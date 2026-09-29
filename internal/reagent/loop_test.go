@@ -78,6 +78,36 @@ func results(run *Session) []ToolResult {
 	return out
 }
 
+func TestLoop_LastRequestUsageIsNotTheTurnTotal(t *testing.T) {
+	first := turn(callBlock("call_1", "echo", `{"text":"hello"}`))
+	first.Usage = Usage{Known: true, InputTokens: 800_000}
+	second := turn(textBlock("done"))
+	second.Usage = Usage{Known: true, InputTokens: 152_300, CachedInputTokens: 90_000}
+	session, result := runScript(t, testConfig(t), first, second)
+	if result.Status != StatusCompleted || result.Usage.InputTokens != 952_300 || session.lastRequest != second.Usage {
+		t.Fatalf("result %+v, last request %+v", result, session.lastRequest)
+	}
+	session.Reset()
+	if session.lastRequest.Known {
+		t.Fatalf("reset retained last request %+v", session.lastRequest)
+	}
+}
+
+func TestLoop_FailedRequestDoesNotReuseOlderUsage(t *testing.T) {
+	first := turn(textBlock("done"))
+	first.Usage = Usage{Known: true, InputTokens: 630_000}
+	model := NewScriptedModel(first)
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), io.Discard)
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if _, err := session.Turn(context.Background(), "first", "run1", path); err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Turn(context.Background(), "second", "run2", path+"-2")
+	if err != nil || result.Status != StatusProtocolError || session.lastRequest.Known {
+		t.Fatalf("result %+v, last request %+v, err %v", result, session.lastRequest, err)
+	}
+}
+
 func TestLoop_CallThenObservationThenReply(t *testing.T) {
 	run, result := runScript(t, testConfig(t),
 		turn(callBlock("call_1", "echo", `{"text":"hello"}`)),

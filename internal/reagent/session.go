@@ -27,8 +27,9 @@ type Session struct {
 	// blocked explains why ordinary input is refused until Reset. A run whose
 	// outcome cannot be continued from sets it; the transcript is never rolled
 	// back to hide that outcome (v1 §7.5).
-	blocked   string
-	lastTrace string
+	blocked     string
+	lastTrace   string
+	lastRequest Usage
 }
 
 // NewSession starts a session with an empty transcript.
@@ -71,6 +72,7 @@ func (s *Session) Reset() {
 	s.seenCalls = make(map[string]bool)
 	s.blocked = ""
 	s.lastTrace = ""
+	s.lastRequest = Usage{}
 }
 
 // recordShell appends a command the user ran with !. It is not a turn: no run

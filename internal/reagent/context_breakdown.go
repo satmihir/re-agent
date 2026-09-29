@@ -22,6 +22,7 @@ type contextBreakdown struct {
 	total     int
 	overLimit bool
 	lastUsage Usage
+	window    int64
 }
 
 // measureContext sizes each part of the request the session would send next,
@@ -146,12 +147,6 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 		b.parts = append(b.parts, contextPart{label: "JSON structure", bytes: b.total - b.counted()})
 	}
 
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Kind == EntryAssistant {
-			b.lastUsage = history[i].Assistant.Usage
-			break
-		}
-	}
 	return b, nil
 }
 
@@ -198,9 +193,8 @@ func (b contextBreakdown) render() string {
 		fmt.Fprintf(&out, "next request  %s, %.0f%% of the %s limit\n",
 			formatBytes(b.total), 100*float64(b.total)/MaxRequestBytes, formatBytes(MaxRequestBytes))
 	}
-	if b.lastUsage.Known {
-		fmt.Fprintf(&out, "last request  %s tokens in (%s cached)\n",
-			formatCount(b.lastUsage.InputTokens), formatCount(b.lastUsage.CachedInputTokens))
+	if line := lastRequestLine(b.lastUsage, b.window); line != "" {
+		out.WriteString(line + "\n")
 	}
 	for _, part := range b.parts {
 		label := "  " + part.label
@@ -211,6 +205,26 @@ func (b contextBreakdown) render() string {
 	}
 	out.WriteString("shares are of request bytes, not tokens")
 	return out.String()
+}
+
+// v0 §10 U7: cached input is already part of input, not a second share.
+func lastRequestLine(usage Usage, window int64) string {
+	if !usage.Known {
+		return ""
+	}
+	if window == 0 {
+		return fmt.Sprintf("last request  %s tokens in (%s cached)",
+			formatCount(usage.InputTokens), formatCount(usage.CachedInputTokens))
+	}
+	return fmt.Sprintf("last request  %s tokens · %.0f%% of the %s window",
+		formatCount(usage.InputTokens), 100*float64(usage.InputTokens)/float64(window), formatWindow(window))
+}
+
+func formatWindow(window int64) string {
+	if window < 1_000_000 {
+		return strings.Replace(formatCount(window), ".0k", "k", 1)
+	}
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", float64(window)/1_000_000), "0"), ".") + "M"
 }
 
 // formatBytes uses binary units, matching how MaxRequestBytes is defined.

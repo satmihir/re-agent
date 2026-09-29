@@ -223,6 +223,18 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 	}
 }
 
+// v0 §10 U7: warn after a turn only when reported usage crosses the window threshold.
+func (d *Display) contextWarning(usage Usage, window int64) {
+	if !usage.Known || window == 0 || float64(usage.InputTokens) < 0.6*float64(window) {
+		return
+	}
+	text := fmt.Sprintf("  context %.0f%% of the window; /reset starts over", 100*float64(usage.InputTokens)/float64(window))
+	if d.styled {
+		text = ansiDim + text + ansiReset
+	}
+	d.write(text + "\n")
+}
+
 // blocked makes a non-continuable turn actionable before showing its trace.
 // resumable says that a failed turn left nothing to undo, so the user knows the
 // next message simply carries on (v0 §10 amendment of 2026-09-26).

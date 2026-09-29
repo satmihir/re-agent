@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestModelCatalog_ContextWindows(t *testing.T) {
+	for _, test := range []struct {
+		id     string
+		window int64
+	}{
+		{"gpt-6-luna", 1_050_000},
+		{"gpt-6-sol", 0},
+		{"gpt-5.6-luna", 0},
+		{"gpt-5.6-terra", 0},
+		{"claude-haiku-4-5", 200_000},
+		{"claude-sonnet-5", 1_000_000},
+	} {
+		info, found := findModel(test.id)
+		if !found || info.ContextWindow != test.window {
+			t.Fatalf("%s window = %d (found %t), want %d", test.id, info.ContextWindow, found, test.window)
+		}
+	}
+}
+
 func TestModelChoices_AgreeWithTheCatalogAndAvailability(t *testing.T) {
 	choices := modelChoices("gpt-6-luna", map[string]bool{openaiName: true})
 	if len(choices) != len(modelCatalog) {

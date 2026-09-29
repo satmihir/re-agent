@@ -460,6 +460,32 @@ func TestOpenAI_RefusalIsReported(t *testing.T) {
 	}
 }
 
+func TestOpenAI_ContextOverflowIsALimit(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		want   RunStatus
+	}{
+		{"code", 400, `{"error":{"message":"too many tokens","code":"context_length_exceeded"}}`, StatusLimitExceeded},
+		{"type", 400, `{"error":{"message":"too many tokens","type":"context_length_exceeded"}}`, StatusLimitExceeded},
+		{"message", 400, `{"error":{"message":"context_length_exceeded: too many tokens"}}`, StatusLimitExceeded},
+		{"other 400", 400, `{"error":{"message":"bad parameter","code":"invalid_value"}}`, StatusProviderError},
+		{"other status", 401, `{"error":{"code":"context_length_exceeded"}}`, StatusProviderError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			api := newFakeAPI(t, apiReply{status: test.status, body: test.body})
+			_, _, result := runAgainst(t, api, NewHTTPClient())
+			if result.Status != test.want || len(api.received()) != 1 {
+				t.Fatalf("status %s, attempts %d: %s", result.Status, len(api.received()), result.Reason)
+			}
+			if test.want == StatusLimitExceeded && result.Reason != "the conversation no longer fits the model's context window" {
+				t.Fatalf("reason %q", result.Reason)
+			}
+		})
+	}
+}
+
 func TestOpenAI_NonObjectOutputItemIsAProtocolFailure(t *testing.T) {
 	api := newFakeAPI(t, okReply(`{"id":"r","status":"completed","output":["not an object"]}`))
 	_, _, result := runAgainst(t, api, NewHTTPClient())

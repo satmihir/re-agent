@@ -163,10 +163,20 @@ func providerError(status int, raw []byte) error {
 	var body struct {
 		Error *struct {
 			Message string `json:"message"`
+			Code    string `json:"code"`
+			Type    string `json:"type"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &body); err == nil && body.Error != nil && body.Error.Message != "" {
-		detail = truncateUTF8(body.Error.Message, 500)
+	if err := json.Unmarshal(raw, &body); err == nil && body.Error != nil {
+		if body.Error.Message != "" {
+			detail = truncateUTF8(body.Error.Message, 500)
+		}
+		// v0 §10 U7: overflow is a window limit, not a generic provider fault.
+		if status == http.StatusBadRequest && (body.Error.Code == "context_length_exceeded" ||
+			body.Error.Type == "context_length_exceeded" || strings.Contains(body.Error.Message, "context_length_exceeded") ||
+			strings.Contains(strings.ToLower(body.Error.Message), "prompt is too long")) {
+			return &ModelError{Status: StatusLimitExceeded, Message: "the conversation no longer fits the model's context window"}
+		}
 	}
 	return &ModelError{
 		Status:  StatusProviderError,
