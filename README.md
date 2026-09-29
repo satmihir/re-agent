@@ -85,6 +85,12 @@ cannot grant tools beyond the chosen mode.
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |
 
+When a planning reply contains a complete `<plan>` block, an interactive picker
+can implement it in this conversation, start fresh with only that plan, or keep
+planning. Only arrow keys and Enter can choose a handoff; typing a reply closes
+this picker without implementing anything. Without a terminal, `/plan` and an
+implementation request do the handoff.
+
 Ctrl-C cancels a running turn without ending the chat. If a model request
 fails, for example on a provider overload, the conversation is kept and your
 next message picks up where it stopped.

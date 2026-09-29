@@ -19,7 +19,7 @@ var errNotInteractive = errors.New("not interactive")
 // editing; piped input remains one line per turn.
 type lineReader interface {
 	ReadLine() (string, error)
-	Choose(title string, options []choice, current int) (int, error)
+	Choose(config pickerConfig, options []choice, current int) (int, error)
 	SetPrompt(string)
 }
 
@@ -243,7 +243,7 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 
 // v0 §10 amendment (2026-09-26): the picker reads raw terminal chunks rather
 // than the paste reader, which would hold a lone Esc until another key arrives.
-func (r *terminalReader) Choose(title string, options []choice, current int) (int, error) {
+func (r *terminalReader) Choose(config pickerConfig, options []choice, current int) (int, error) {
 	width, height, err := r.size()
 	if err != nil || width < 2 || height < len(options)+2 || len(options) == 0 {
 		return 0, errNotInteractive
@@ -265,9 +265,15 @@ func (r *terminalReader) Choose(title string, options []choice, current int) (in
 		}
 	}
 	p := pickerState{options: options, cursor: cursor}
-	header := sanitize(title) + "  ↑↓ move · enter · esc"
+	header := sanitize(config.title) + "  ↑↓ move · enter · esc"
+	if config.cancelLabel != "" {
+		header = sanitize(config.title) + "   ↑↓ move · enter choose · esc " + sanitize(config.cancelLabel)
+	}
 	if displayWidth(header) > width-1 {
-		header = "↑↓ move · enter · esc  " + sanitize(title)
+		header = "↑↓ move · enter · esc  " + sanitize(config.title)
+		if config.cancelLabel != "" {
+			header = "esc " + sanitize(config.cancelLabel) + "  " + sanitize(config.title)
+		}
 	}
 	header = truncateWidth(header, width-1)
 	rows := len(options) + 1
@@ -288,7 +294,11 @@ func (r *terminalReader) Choose(title string, options []choice, current int) (in
 	for {
 		var chunk [256]byte
 		n, readErr := r.keys.inner.Read(chunk[:])
-		for _, k := range decodeKeys(chunk[:n]) {
+		for _, k := range decodeKeys(chunk[:n], config.shortcuts) {
+			// v0 §10 amendment (2026-09-28): only a highlighted Enter approves a handoff.
+			if !config.shortcuts && k == keyUnknown {
+				return 0, errCancelled
+			}
 			if k == keyUp || k == keyDown {
 				if k == keyUp {
 					p.move(-1)
@@ -330,10 +340,16 @@ func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
 // saved cursor position, which would be invalid after the input scrolls.
 func (r *terminalReader) drawUserBand(message string, rows int) {
 	fmt.Fprintf(r.out, "\x1b[%dA\r\x1b[J", rows)
+	writeUserBand(r.out, message, r.width)
+}
+
+// writeUserBand gives a handoff the same presentation as a typed submission,
+// without erasing an echoed line that was never typed.
+func writeUserBand(w io.Writer, message string, width int) {
 	first := "> "
 	for _, line := range strings.Split(sanitize(message), "\n") {
-		for _, row := range wrapStyled(first, "  ", line, r.width-1) {
-			fmt.Fprint(r.out, ansiUserBand, row, "\x1b[K", ansiReset, "\r\n")
+		for _, row := range wrapStyled(first, "  ", line, width-1) {
+			fmt.Fprint(w, ansiUserBand, row, "\x1b[K", ansiReset, "\r\n")
 		}
 		first = "  "
 	}
@@ -342,7 +358,7 @@ func (r *terminalReader) drawUserBand(message string, rows int) {
 type scannerReader struct{ scanner *bufio.Scanner }
 
 func (r *scannerReader) SetPrompt(string) {}
-func (r *scannerReader) Choose(string, []choice, int) (int, error) {
+func (r *scannerReader) Choose(pickerConfig, []choice, int) (int, error) {
 	return 0, errNotInteractive
 }
 func (r *scannerReader) ReadLine() (string, error) {

@@ -11,6 +11,12 @@ type choice struct {
 	disabled            bool
 }
 
+// v0 §10 amendment (2026-09-28): plan handoffs reject typing shortcuts.
+type pickerConfig struct {
+	title, cancelLabel string
+	shortcuts          bool
+}
+
 type key int
 
 const (
@@ -50,7 +56,8 @@ func decodeKey(chunk []byte) key {
 
 // v0 §10 amendment (2026-09-26): a terminal read may contain several keys.
 // Consume unknown escape sequences as a unit so their digits cannot select a row.
-func decodeKeys(chunk []byte) []key {
+// Without shortcuts, unknown keys are returned so typed feedback cancels the picker.
+func decodeKeys(chunk []byte, shortcuts bool) []key {
 	var keys []key
 	for i := 0; i < len(chunk); {
 		if chunk[i] == '\x1b' && i+1 < len(chunk) && (chunk[i+1] == '[' || chunk[i+1] == 'O') {
@@ -69,9 +76,14 @@ func decodeKeys(chunk []byte) []key {
 					break
 				}
 			}
+			if !shortcuts {
+				keys = append(keys, keyUnknown)
+			}
 			continue
 		}
-		if k := decodeKey(chunk[i : i+1]); k != keyUnknown {
+		if !shortcuts && (chunk[i] == 'j' || chunk[i] == 'k' || chunk[i] == 'q' || (chunk[i] >= '1' && chunk[i] <= '9')) {
+			keys = append(keys, keyUnknown)
+		} else if k := decodeKey(chunk[i : i+1]); k != keyUnknown || !shortcuts {
 			keys = append(keys, k)
 		}
 		i++

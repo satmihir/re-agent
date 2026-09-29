@@ -99,7 +99,7 @@ func (c *conversation) commandModel(argument string, input lineReader, stderr io
 				break
 			}
 		}
-		index, err := input.Choose("Select a model", modelChoices(c.cfg.Model, c.available()), current)
+		index, err := input.Choose(pickerConfig{title: "Select a model", shortcuts: true}, modelChoices(c.cfg.Model, c.available()), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
 			fmt.Fprintln(stderr, renderModels(c.cfg.Model, c.available()))
@@ -184,7 +184,7 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 				break
 			}
 		}
-		index, err := input.Choose("Select reasoning effort", effortChoices(info, c.cfg.ReasoningEffort), current)
+		index, err := input.Choose(pickerConfig{title: "Select reasoning effort", shortcuts: true}, effortChoices(info, c.cfg.ReasoningEffort), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
 			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
@@ -316,7 +316,7 @@ func levenshtein(a, b string) int {
 }
 
 // commandEdit composes and sends one turn only from an interactive terminal.
-func (c *conversation) commandEdit(ctx context.Context, stdout, stderr io.Writer) {
+func (c *conversation) commandEdit(ctx context.Context, input lineReader, stdout, stderr io.Writer) {
 	if c.stdin == nil || c.stdout == nil || c.stderr == nil {
 		fmt.Fprintln(stderr, "/edit needs a terminal")
 		return
@@ -331,7 +331,7 @@ func (c *conversation) commandEdit(ctx context.Context, stdout, stderr io.Writer
 		return
 	}
 	previewEditorMessage(stderr, text)
-	c.runTurn(ctx, text, stdout, stderr)
+	c.runTurn(ctx, text, input, stdout, stderr)
 }
 
 // commandShell runs one ! command and adds it to the conversation without
@@ -505,7 +505,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 				fmt.Fprintln(stderr, "plan mode off")
 			}
 			if argument != "" {
-				c.runTurn(ctx, argument, stdout, stderr)
+				c.runTurn(ctx, argument, input, stdout, stderr)
 			}
 		case command == "/model":
 			c.commandModel(argument, input, stderr)
@@ -522,11 +522,10 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 				fmt.Fprintln(stderr, "no run has been recorded yet")
 			}
 		case command == "/reset":
-			c.session.Reset()
-			c.usage = Usage{Known: true}
+			c.reset()
 			fmt.Fprintln(stderr, "fresh session; the conversation so far is no longer sent")
 		case command == "/edit":
-			c.commandEdit(ctx, stdout, stderr)
+			c.commandEdit(ctx, input, stdout, stderr)
 		case strings.HasPrefix(line, "!") && !strings.Contains(line, "\n"):
 			c.commandShell(ctx, strings.TrimSpace(line[1:]), stdout, stderr)
 		case strings.HasPrefix(line, "/"):
@@ -536,7 +535,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			}
 			fmt.Fprintf(stderr, "%s /help lists commands.\n", message)
 		default:
-			c.runTurn(ctx, line, stdout, stderr)
+			c.runTurn(ctx, line, input, stdout, stderr)
 		}
 	}
 }
@@ -576,9 +575,15 @@ func commandTakesArgument(name string) bool {
 	return false
 }
 
+// reset starts a fresh session for both /reset and an approved fresh handoff.
+func (c *conversation) reset() {
+	c.session.Reset()
+	c.usage = Usage{Known: true}
+}
+
 // runTurn runs one turn under its own interrupt handler, so the first Ctrl-C
 // cancels this turn and leaves the session usable (v1 §15.3).
-func (c *conversation) runTurn(ctx context.Context, text string, stdout, stderr io.Writer) {
+func (c *conversation) runTurn(ctx context.Context, text string, input lineReader, stdout, stderr io.Writer) {
 	turnCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
@@ -607,6 +612,65 @@ func (c *conversation) runTurn(ctx context.Context, text string, stdout, stderr 
 		}
 	}
 	c.session.display.spacer()
+	if result.Status != StatusCompleted || !c.session.planMode {
+		return
+	}
+	start, end, found := findPlan(result.Reply)
+	if !found {
+		return
+	}
+	// The completed turn no longer needs its interrupt handler while the
+	// picker reads raw keys; a chosen handoff starts its own turn.
+	stop()
+	c.offerPlan(ctx, input, planContent(result.Reply[start:end]), stdout, stderr)
+}
+
+// offerPlan asks before turning a completed plan into implementation.
+func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan string, stdout, stderr io.Writer) {
+	options := []choice{
+		{label: "Implement here", detail: "leaves plan mode and asks the model to implement it"},
+		{label: "Implement fresh", detail: "starts a new session holding only the plan"},
+		{label: "Keep planning"},
+	}
+	index, err := input.Choose(pickerConfig{title: planPickerTitle, cancelLabel: "keep planning"}, options, 2)
+	switch {
+	case errors.Is(err, errNotInteractive):
+		hint := "/plan turns plan mode off; then ask for the implementation"
+		if styledOutput(stderr) {
+			hint = ansiDim + hint + ansiReset
+		}
+		fmt.Fprintln(stderr, hint)
+		return
+	case errors.Is(err, errCancelled):
+		fmt.Fprintln(stderr, "kept planning")
+		return
+	case err != nil:
+		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
+		return
+	}
+
+	switch index {
+	case 0:
+		c.session.planMode = false
+		fmt.Fprintln(stderr, "plan mode off")
+		if styledOutput(stderr) {
+			width := terminalColumns(stderr)
+			if width < 2 {
+				width = 80
+			}
+			writeUserBand(stderr, "Implement the plan.", width)
+		} else {
+			fmt.Fprintln(stderr, "> Implement the plan.")
+		}
+		c.runTurn(ctx, "Implement the plan.", input, stdout, stderr)
+	case 1:
+		c.session.planMode = false
+		c.reset()
+		fmt.Fprintln(stderr, "fresh session; implementing plan")
+		c.runTurn(ctx, planHandoffPrompt+"\n\n"+plan, input, stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, "kept planning")
+	}
 }
 
 // tracePathFor places a run's trace under dir, or under the default cache

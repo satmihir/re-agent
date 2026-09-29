@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -33,11 +34,15 @@ type fakeLineReader struct {
 	chooseErr     error
 	chooseCalls   int
 	choiceCurrent int
+	choiceTitle   string
+	choiceConfig  pickerConfig
+	choices       []choice
 }
 
-func (r *fakeLineReader) Choose(_ string, _ []choice, current int) (int, error) {
+func (r *fakeLineReader) Choose(config pickerConfig, options []choice, current int) (int, error) {
 	r.chooseCalls++
 	r.choiceCurrent = current
+	r.choiceTitle, r.choices, r.choiceConfig = config.title, options, config
 	return r.chosen, r.chooseErr
 }
 
@@ -151,6 +156,164 @@ func TestChat_BlockedSessionExplainsAndResetRecovers(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "fresh session") {
 		t.Fatalf("stderr: %q", stderr)
+	}
+}
+
+func TestChat_PlanPickerImplementsHere(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("<plan>\n- Change the parser\n</plan>")), turn(textBlock("implemented")))
+	cfg := testConfig(t)
+	cfg.PlanMode = true
+	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{line: "plan it"}, {line: "/exit"}}}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if input.chooseCalls != 1 || input.choiceTitle != "Plan ready" || input.choiceCurrent != 2 || input.choiceConfig.shortcuts || input.choiceConfig.cancelLabel != "keep planning" || len(input.choices) != 3 || input.choices[2].label != "Keep planning" {
+		t.Fatalf("picker: %+v", input)
+	}
+	if session.planMode || model.next != 2 || session.Turns() != 2 || len(session.history) != 4 ||
+		session.history[0].User.Plan != "on" || session.history[2].User.Plan != "ended" || session.history[2].User.Text != "Implement the plan." {
+		t.Fatalf("mode %t, calls %d, history %+v", session.planMode, model.next, session.history)
+	}
+	if session.history[1].Assistant.Blocks[0].Text != "<plan>\n- Change the parser\n</plan>" || !strings.Contains(errs.String(), "plan mode off\n> Implement the plan.\n") {
+		t.Fatalf("history %+v; stderr %q", session.history, errs.String())
+	}
+}
+
+func TestChat_PlanPickerImplementsFresh(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("<plan>\nold\n</plan>\n<plan>\n- Change the parser\n</plan>")), turn(textBlock("implemented")))
+	cfg := testConfig(t)
+	cfg.PlanMode = true
+	traceDir := t.TempDir()
+	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	before := session.ID
+	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: traceDir, progress: &errs, usage: Usage{Known: true}}
+	input := &fakeLineReader{chosen: 1, reads: []struct {
+		line string
+		err  error
+	}{{line: "plan it"}, {line: "/exit"}}}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	want := "Implement this plan. It was made in an earlier re:agent session, and the workspace may have changed since; check what you rely on.\n\n- Change the parser"
+	if c.session != session || session.ID == before || session.planMode || session.Turns() != 1 || model.next != 2 ||
+		len(session.history) != 2 || session.history[0].User.Text != want || session.history[0].User.Plan != "" {
+		t.Fatalf("id %q (was %q), mode %t, calls %d, history %+v", session.ID, before, session.planMode, model.next, session.history)
+	}
+	paths, err := filepath.Glob(filepath.Join(traceDir, "*", "events.jsonl"))
+	if err != nil || len(paths) != 2 {
+		t.Fatalf("old and fresh traces: %q, %v", paths, err)
+	}
+}
+
+func TestChat_PlanPickerKeepsPlanning(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		index int
+		err   error
+	}{{"cancelled", 0, errCancelled}, {"keep planning", 2, nil}} {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errs bytes.Buffer
+			model := NewScriptedModel(turn(textBlock("<plan>\n- Change it\n</plan>")))
+			cfg := testConfig(t)
+			cfg.PlanMode = true
+			session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+			c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+			input := &fakeLineReader{chosen: test.index, chooseErr: test.err, reads: []struct {
+				line string
+				err  error
+			}{{line: "plan it"}}}
+			if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+				t.Fatalf("exit %d: %s", code, errs.String())
+			}
+			if input.chooseCalls != 1 || !session.planMode || session.Turns() != 1 || len(session.history) != 2 || model.next != 1 || !strings.Contains(errs.String(), "kept planning\n") {
+				t.Fatalf("mode %t, calls %d, history %+v, stderr %q", session.planMode, model.next, session.history, errs.String())
+			}
+		})
+	}
+}
+
+func TestChat_PlanPickerTypedFeedbackCannotImplement(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("<plan>\n- Change step 2\n</plan>")), turn(textBlock("IMPLEMENTATION TURN RAN")))
+	cfg := testConfig(t)
+	cfg.PlanMode = true
+	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	input := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("plan it\r"), []byte("ok but change step 2\r"), []byte("/exit\r")}})
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if !session.planMode || session.Turns() != 1 || model.next != 1 || strings.Contains(out.String(), "IMPLEMENTATION TURN RAN") {
+		t.Fatalf("mode %t, turns %d, calls %d, output %q", session.planMode, session.Turns(), model.next, out.String())
+	}
+	if !strings.Contains(errs.String(), "kept planning") {
+		t.Fatalf("stderr: %q", errs.String())
+	}
+}
+
+func TestChat_NoPickerWithoutAPlan(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response ModelResponse
+	}{{"no block", turn(textBlock("not yet"))}, {"unclosed", turn(textBlock("<plan>\nstill drafting"))}, {"refused", turn(refusalBlock("<plan>\nno\n</plan>"))}} {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errs bytes.Buffer
+			model := NewScriptedModel(test.response)
+			cfg := testConfig(t)
+			cfg.PlanMode = true
+			session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+			c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+			input := &fakeLineReader{reads: []struct {
+				line string
+				err  error
+			}{{line: "plan it"}}}
+			if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+				t.Fatalf("exit %d: %s", code, errs.String())
+			}
+			if input.chooseCalls != 0 || !session.planMode || model.next != 1 || strings.Contains(errs.String(), "/plan turns plan mode off") {
+				t.Fatalf("picker %d, mode %t, calls %d, stderr %q", input.chooseCalls, session.planMode, model.next, errs.String())
+			}
+		})
+	}
+}
+
+func TestChat_PlanBlockDoesNotOpenPickerOutsidePlanMode(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("<plan>\n- Change it\n</plan>")))
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	input := &fakeLineReader{reads: []struct {
+		line string
+		err  error
+	}{{line: "question"}}}
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if input.chooseCalls != 0 || session.planMode || model.next != 1 || session.Turns() != 1 {
+		t.Fatalf("picker %d, mode %t, calls %d, history %+v", input.chooseCalls, session.planMode, model.next, session.history)
+	}
+}
+
+func TestChat_PlanWithoutATerminalPrintsTheHint(t *testing.T) {
+	var out, errs bytes.Buffer
+	model := NewScriptedModel(turn(textBlock("<plan>\n- Change it\n</plan>")))
+	cfg := testConfig(t)
+	cfg.PlanMode = true
+	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	input := newLineReader(strings.NewReader("plan it\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if !strings.Contains(errs.String(), "/plan turns plan mode off; then ask for the implementation\n") || !session.planMode || model.next != 1 {
+		t.Fatalf("mode %t, calls %d, stderr %q", session.planMode, model.next, errs.String())
 	}
 }
 
@@ -325,7 +488,7 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.chooseCalls != 1 || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
+	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.cfg.Model, out.String())
 	}
 	if !strings.Contains(errs.String(), "switched to gpt-6-sol") {
