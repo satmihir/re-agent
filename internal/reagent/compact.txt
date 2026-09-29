@@ -1,0 +1,10 @@
+Write a handoff summary of this conversation for a colleague who will continue
+it with no other record. Do not call tools. Include, under these headings:
+Goal: what the user wants, in their words where it matters.
+Decisions and constraints: what was agreed, rejected, or required, including
+the user's preferences about how to work.
+State: the repository and branch, commits made, pull requests and their state,
+files changed, and what was verified and how.
+Open items: what remains, in order, and anything the user is waiting on.
+Facts to keep: exact paths, commands, identifiers, and numbers the work needs.
+Be complete and concrete; leave out narration of how you got here.

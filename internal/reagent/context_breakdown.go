@@ -53,7 +53,7 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 	// The conversation's own parts come first in a fixed order, then each
 	// tool's results in the order the tools were first used.
 	sizes := map[string]int{}
-	order := []string{"your messages", "workspace snapshots", "plan mode markers", "your commands", "model reasoning", "model tool calls", "model text"}
+	order := []string{"conversation summary", "your messages", "workspace snapshots", "plan mode markers", "your commands", "model reasoning", "model tool calls", "model text"}
 	add := func(label string, n int) {
 		if _, seen := sizes[label]; !seen && strings.HasSuffix(label, " results") {
 			order = append(order, label)
@@ -75,6 +75,8 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 
 	for i, entry := range history {
 		switch entry.Kind {
+		case EntrySummary:
+			add("conversation summary", encodedSize(summaryPreamble+"\n"+entry.Summary.Text))
 		case EntryUser:
 			add("your messages", encodedSize(entry.User.Text))
 			// v0 §6 amendment (2026-09-27): each snapshot is its own text part.

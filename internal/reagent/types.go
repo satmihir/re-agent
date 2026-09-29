@@ -16,6 +16,7 @@ const (
 	EntryAssistant EntryKind = "assistant"
 	EntryTool      EntryKind = "tool"
 	EntryShell     EntryKind = "shell"
+	EntrySummary   EntryKind = "summary"
 )
 
 // Entry is one accepted item of the transcript. Exactly one pointer is set.
@@ -25,6 +26,14 @@ type Entry struct {
 	Assistant *ModelResponse `json:"assistant,omitempty"`
 	Tool      *ToolResult    `json:"tool,omitempty"`
 	Shell     *ShellCommand  `json:"shell,omitempty"`
+	Summary   *Summary       `json:"summary,omitempty"`
+}
+
+// Summary is the handoff that replaces an entire conversation on /compact.
+type Summary struct {
+	Text            string `json:"text"`
+	ReplacedEntries int    `json:"replaced_entries"`
+	Model           string `json:"model"`
 }
 
 // UserTurn is one accepted user submission. v0 has no exhibits (v1 §8.3).

@@ -81,6 +81,7 @@ cannot grant tools beyond the chosen mode.
 | `/model`, `/effort` | Pick a model or reasoning effort with the arrow keys. |
 | `!command` | Run a shell command yourself; its output joins the conversation. |
 | `/context` | What the next request is made of, including project instructions and past workspace snapshots, byte by byte. |
+| `/compact [-v] [what to keep]` | Ask the current model for a handoff summary and replace the conversation with it. `-v` prints the summary; extra text gives the model a focus. Works in plan mode or when blocked, but not with `--scripted`. |
 | `/status`, `/trace` | Model, workspace, token totals, and the last run's trace. |
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |
@@ -153,7 +154,7 @@ A few rules shape the rest:
   keeps the prompt cache warm.
 - **Provider state goes back verbatim.** Reasoning and thinking items return
   exactly as received, and one provider's items are never sent to the other.
-- **History is append-only.** Nothing already sent is rewritten.
+- **History is append-only except for `/reset` and `/compact`.** Compaction replaces the entire history at once with one model-written summary; it does not edit earlier entries in place. Failed attempts keep the history.
 
 Two design documents govern the code: [v0](docs/reagent-v0-design.md) is what
 is built, and [v1](docs/reagent-v1-design.md) is the fuller target. Comments
@@ -193,7 +194,7 @@ to appear.
 A test that reaches the internet is a bug. [`AGENTS.md`](AGENTS.md) holds the
 house rules for any agent working here, re:agent included.
 
-**Not yet:** subagents, compaction (on the roadmap), retrieval, and a sandbox.
+**Not yet:** subagents, automatic compaction, retrieval, and a sandbox.
 A completed run means the model gave a final answer, not that the task was
 done right.
 

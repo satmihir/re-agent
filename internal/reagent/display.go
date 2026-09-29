@@ -228,7 +228,7 @@ func (d *Display) contextWarning(usage Usage, window int64) {
 	if !usage.Known || window == 0 || float64(usage.InputTokens) < 0.6*float64(window) {
 		return
 	}
-	text := fmt.Sprintf("  context %.0f%% of the window; /reset starts over", 100*float64(usage.InputTokens)/float64(window))
+	text := fmt.Sprintf("  context %.0f%% of the window; /compact summarizes or /reset starts over", 100*float64(usage.InputTokens)/float64(window))
 	if d.styled {
 		text = ansiDim + text + ansiReset
 	}
@@ -249,11 +249,11 @@ func (d *Display) resumable() {
 	fmt.Fprintln(d.w, text)
 }
 
-func (d *Display) blocked(tracePath string) {
+func (d *Display) blocked(status RunStatus, tracePath string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.eraseStatusLocked()
-	text := "  session blocked: /reset to continue"
+	text := "  session blocked: " + blockedAdvice(string(status))
 	if d.styled {
 		text = ansiDim + text + ansiReset
 	}

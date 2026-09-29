@@ -258,3 +258,18 @@ func TestChat_ContextReportsTheNextRequest(t *testing.T) {
 		t.Fatalf("scripted /context: %s", scripted)
 	}
 }
+
+func TestContextBreakdown_SummaryOnly(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		cfg := testConfig(t)
+		cfg.Provider = provider
+		history := []Entry{{Kind: EntrySummary, Summary: &Summary{Text: "handoff"}}}
+		got, err := measureContext(cfg, history)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if part(t, got, "conversation summary") != encodedSize(summaryPreamble+"\nhandoff") || got.counted() != got.total || strings.Contains(got.render(), "your messages") {
+			t.Fatalf("%s: %+v", provider, got)
+		}
+	}
+}

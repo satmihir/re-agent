@@ -151,7 +151,7 @@ func TestChat_BlockedSessionExplainsAndResetRecovers(t *testing.T) {
 	if stdout != "after reset\n" {
 		t.Fatalf("stdout: %q", stdout)
 	}
-	if !strings.Contains(stderr, "protocol_error") || !strings.Contains(stderr, "use /reset") {
+	if !strings.Contains(stderr, "protocol_error") || !strings.Contains(stderr, "use /compact or /reset") {
 		t.Fatalf("stderr: %q", stderr)
 	}
 	if !strings.Contains(stderr, "fresh session") {
@@ -687,8 +687,29 @@ func TestChat_StatusReportsSessionState(t *testing.T) {
 	_, blocked := chatSession(t, NewScriptedModel(
 		turn(callBlock("call_1", "echo", `{"text":"hi"}`), callBlock("call_1", "echo", `{"text":"hi"}`))),
 		"question\n/status\n/exit\n")
-	if !strings.Contains(blocked, "blocked by protocol_error; /reset to continue") {
+	if !strings.Contains(blocked, "blocked by protocol_error; /compact or /reset to continue") {
 		t.Fatalf("blocked status: %s", blocked)
+	}
+}
+
+func TestChat_OverflowOnlyOffersReset(t *testing.T) {
+	var out, errs bytes.Buffer
+	cfg := testConfig(t)
+	cfg.Model = "gpt-6-luna"
+	model := &failingThen{
+		err:  &ModelError{Status: StatusLimitExceeded, Message: "the conversation no longer fits the model's context window", Usage: Usage{Known: true, InputTokens: 700_000}},
+		next: NewScriptedModel(),
+	}
+	s := NewSession(cfg, model, NewTrace(io.Discard), &errs)
+	c := &conversation{session: s, cfg: cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+	input := newLineReader(strings.NewReader("first\n/status\nnext\n/exit\n"), &errs, nil)
+	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
+		t.Fatal(code)
+	}
+	text := errs.String()
+	if strings.Count(text, "/reset to continue; /compact works before the window fills (watch the 60% warning)") != 3 ||
+		strings.Contains(text, "/compact or /reset") || strings.Contains(text, "context 67% of the window; /compact") || s.blocked != string(StatusLimitExceeded) {
+		t.Fatalf("overflow guidance: %s", text)
 	}
 }
 
@@ -968,5 +989,95 @@ func TestChat_ProviderErrorDoesNotBlock(t *testing.T) {
 		if prompt != "> " {
 			t.Fatalf("prompts: %#v", input.prompts)
 		}
+	}
+}
+
+func TestCompact_ScriptedAndEmptySessionsRefuse(t *testing.T) {
+	for _, scripted := range []bool{true, false} {
+		model := &compactModel{replies: []ModelResponse{turn(textBlock("unused"))}}
+		var out, errs bytes.Buffer
+		s := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+		if scripted {
+			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "hi"}}}
+		}
+		dir := t.TempDir()
+		c := &conversation{session: s, cfg: s.cfg, traceDir: dir, usage: Usage{Known: true}}
+		if scripted {
+			c.scripted = model
+		}
+		if code := chat(context.Background(), c, newLineReader(strings.NewReader("/compact\n/trace\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
+			t.Fatal(code)
+		}
+		want := "nothing to compact"
+		if scripted {
+			want = "--scripted"
+		}
+		files, _ := os.ReadDir(dir)
+		if !strings.Contains(errs.String(), want) || !strings.Contains(errs.String(), "no run has been recorded") || len(files) != 0 || len(model.requests) != 0 || out.Len() != 0 {
+			t.Fatalf("out %q err %q files %v", out.String(), errs.String(), files)
+		}
+	}
+}
+
+func TestChat_CompactVerboseFocusAndTrace(t *testing.T) {
+	for _, test := range []struct {
+		argument, focus string
+		verbose         bool
+	}{
+		{"-v   keep tests", "keep tests", true},
+		{"keep -v verbatim", "keep -v verbatim", false},
+	} {
+		t.Run(test.argument, func(t *testing.T) {
+			response := turn(textBlock("  Summary \x1b[31mtest  "))
+			response.Usage = Usage{Known: true, InputTokens: 123, OutputTokens: 5}
+			model := &compactModel{replies: []ModelResponse{response}}
+			var out, errs bytes.Buffer
+			s := compactSession(t, model)
+			s.display = NewDisplay(&errs)
+			s.cfg.Provider = openaiName
+			c := &conversation{session: s, cfg: s.cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+			input := "/compact " + test.argument + "\n/status\n/context\n/trace\n/exit\n"
+			if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
+				t.Fatal(code)
+			}
+			if !strings.HasSuffix(model.requests[0].History[2].User.Text, "\n\nFocus: "+test.focus) || c.usage.InputTokens != 123 || s.lastRequest.InputTokens != 123 || !strings.Contains(errs.String(), "history JSON") || !strings.Contains(errs.String(), "conversation summary") || !strings.Contains(errs.String(), s.LastTrace()) || !strings.Contains(errs.String(), "history    /compact") {
+				t.Fatalf("out %q err %q", out.String(), errs.String())
+			}
+			if test.verbose && (out.String() != "Summary \\x1b[31mtest\n" || strings.Contains(out.String(), "\x1b")) {
+				t.Fatalf("stdout %q", out.String())
+			}
+			if !test.verbose && out.Len() != 0 {
+				t.Fatalf("stdout %q", out.String())
+			}
+		})
+	}
+}
+
+func TestChat_CompactThenPlanOffCarriesEndedMarker(t *testing.T) {
+	model := &compactModel{replies: []ModelResponse{turn(textBlock("handoff")), turn(textBlock("done"))}}
+	var out, errs bytes.Buffer
+	s := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
+	s.planMode = true
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "plan", Plan: "on"}}}
+	c := &conversation{session: s, cfg: s.cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/compact\n/plan\nimplement\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
+		t.Fatal(code)
+	}
+	if len(model.requests) != 2 || len(model.requests[1].History) != 2 || model.requests[1].History[1].User.Plan != "ended" || s.planMode {
+		t.Fatalf("requests: %+v, stderr: %s", model.requests, errs.String())
+	}
+}
+
+func TestChat_FailedCompactDoesNotClaimSuccess(t *testing.T) {
+	model := &compactModel{err: fmt.Errorf("provider down")}
+	var out, errs bytes.Buffer
+	s := compactSession(t, model)
+	s.blocked = "protocol_error"
+	c := &conversation{session: s, cfg: s.cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/status\n/compact\n/status\n/trace\nnext\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
+		t.Fatal(code)
+	}
+	if !strings.Contains(errs.String(), "compaction failed: provider down") || strings.Contains(errs.String(), "compacted:") || !strings.Contains(errs.String(), "blocked by protocol_error; /compact or /reset") || !strings.Contains(errs.String(), s.LastTrace()) || s.blocked != "protocol_error" || len(model.requests) != 1 {
+		t.Fatalf("stderr: %q", errs.String())
 	}
 }
