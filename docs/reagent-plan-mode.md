@@ -1,15 +1,16 @@
 # re:agent — Plan Mode
 
-Status: not started.
+Status: PM1 merged in #40 and PM2 in #41. PM3 not started.
 
-Plan mode is a chat mode in which re:agent explores and plans but changes nothing, until the user says to go ahead. This document specifies it in two milestones, for re:agent to implement one per session with a human reviewing each. The notes for the implementing agent in `docs/reagent-usage-fixes-plan.md` §5 apply here unchanged: its baselines, request comparisons, and report template.
+Plan mode is a chat mode in which re:agent explores and plans but changes nothing, until the user says to go ahead. This document specifies it in three milestones, for re:agent to implement one per session with a human reviewing each. The notes for the implementing agent in `docs/reagent-usage-fixes-plan.md` §5 apply here unchanged: its baselines, request comparisons, and report template.
 
 | Milestone | One line |
 |---|---|
 | **PM1** | `/plan` turns plan mode on and off. While it is on, the harness refuses every tool that could change anything, and each user message says so. |
 | **PM2** | When a plan is finished, a picker offers to implement it here, implement it in a fresh session, or keep planning. |
+| **PM3** | `/plan` inside a sentence turns plan mode on, and plan mode is shown in the logo's teal. |
 
-PM2 needs PM1. Neither depends on the usage roadmap's open milestones.
+PM2 and PM3 need PM1; PM3 does not need PM2. None depends on the usage roadmap's open milestones.
 
 ## 1. Why
 
@@ -166,12 +167,72 @@ Plan ready   ↑↓ move · enter choose · esc keep planning
 
 **Manual checks for the human.** Both handoffs from a real planning session, then Esc from the picker, then a second plan in the same session.
 
+## 5a. PM3. `/plan` in a sentence, and plan mode in colour
+
+**Why.** People write "Can we /plan the retry change?" rather than a command on its own line, as Claude Code allows. Today that sentence goes to the model in whatever mode chat is in, which is usually not plan mode. And plan mode shows only as the word `plan` in the prompt, easy to miss.
+
+**`/plan` inside a message.**
+
+- When the user submits a message, typed, pasted, or composed with `/edit`, and plan mode is off, chat checks it with `planRequested(text) bool`, a new function in `plan.go`. If it returns true, plan mode turns on, the "plan mode on" line is printed, and the message is sent in plan mode, carrying the `"on"` marker.
+- The message is sent exactly as typed, `/plan` included. The marker already tells the model what plan mode means.
+- Only a message turns plan mode on this way. Nothing in a message turns it off; that stays with `/plan` on its own line and the PM2 picker.
+- With plan mode already on, a message containing `/plan` changes nothing and prints nothing.
+- Not checked:
+  - lines that start with `/`, which are commands; `/plan <text>` keeps its PM1 behavior
+  - `!` lines
+  - messages chat sends itself, such as the PM2 handoffs
+  - `run` prompts, which have `--plan`
+
+**What counts as `/plan`.** `planRequested` looks for the five characters `/plan` as a word of its own:
+
+- The character before it is the start of the text, whitespace, or one of `(`, `"`, `'`.
+- The character after it is the end of the text, whitespace, or one of `)`, `"`, `'`; or one of `.`, `,`, `!`, `?`, `:`, `;` that is itself followed by the end or whitespace.
+- It is lowercase. `/Plan` and `/PLAN` do not count.
+- It is not inside backticks: neither an inline code span nor a fenced block (lines between two lines that start with three backticks). "The `/plan` command is broken" is about the command, not a request for it.
+
+So these count: `/plan this`, `can we /plan it?`, `let's plan (/plan) first`, `ok, /plan.`. These do not: `docs/plan.md`, `/planner`, `/plan/x`, `https://example.com/plan`, `the /plan.md file`, `` `/plan` ``.
+
+A pasted log line with " /plan " in it would count. That is rare, and the cost of a false match is one message in plan mode, where edits are refused. Pastes are not treated differently.
+
+**Plan mode in colour.** On a styled terminal, plan mode uses the logo's bold teal, `ansiPromptTeal` from `banner.go`, which is also the colour Claude Code uses for plan mode. With `NO_COLOR` or unstyled output, everything below is the plain text it is today.
+
+- **The prompt.** `plan` is drawn in teal, then `> ` in the terminal's colour: `ansiPromptTeal + "plan" + ansiReset + "> "`. `x/term` skips escape sequences when it measures a prompt, and so does `displayWidth`, so wrapping and cursor placement are unaffected. The blocked prompt stays `(blocked) ` followed by the same prompt.
+- **Sent messages.** A message typed at the plan prompt is drawn in the grey band as `plan> …` instead of `> …`, with `plan` in teal on the grey. End the teal with `\x1b[22;39m`, which resets only bold and the foreground, not with `ansiReset`, which would end the band's background too. The band shows the prompt the message was typed at, so a message that turns plan mode on from a sentence keeps `> `, and the teal "plan mode on" line directly under it shows the switch. Scrolling back then shows which messages were written in plan mode. The reader needs to know which prefix to draw. Choose the smaller change: `SetPrompt` taking the band prefix as well, or a second setter.
+- **The switch lines.** `plan mode on: edits and commands are refused until /plan again` is teal, whether it comes from `/plan`, `/plan <text>`, or a sentence. `plan mode off` is dim, from `/plan` and from the PM2 handoffs.
+- **The welcome and `/status`.** The `plan mode` after the launch mode is teal. The rest of the welcome's line stays dim.
+
+**Touches.** `plan.go` (`planRequested`), `chat.go` (the check before a turn, the prompt, the switch lines, `/status`), `lineinput.go` (the band prefix), `banner.go` (the welcome's mode line), their tests, `README.md` (one sentence in the chat section), and `docs/reagent-v0-design.md` (a §10 amendment).
+
+**Tests.** Write these first.
+
+- `TestPlanRequested`: a table covering every example above, both lists, plus a `/plan` inside a fenced block, one right after a closed inline code span (counts), and `/plan` alone as the whole text (true: the function knows nothing of commands; chat's command branch handles that line before asking it).
+- `TestChat_PlanInASentenceTurnsItOn`: `can we /plan the retry change?` prints the on line, and the history's user entry has that text unchanged and `Plan: "on"`. The next prompt is the plan prompt.
+- `TestChat_PlanInASentenceWhenAlreadyOn`: no second on line, and the message is sent once.
+- `TestChat_PlanInCodeOrPathDoesNothing`: `see docs/plan.md` and ``the `/plan` command`` are sent with plan mode still off.
+- `TestChat_PlanInEditedMessage`: an `/edit` message containing `/plan` turns plan mode on.
+- `TestChat_ShellLineWithPlanDoesNothing`: `!grep /plan README.md` runs as a shell command, and plan mode stays off.
+- `TestChat_PlanPromptIsTeal`: with styled output, the prompt set on the reader contains `ansiPromptTeal` and `plan`; with `NO_COLOR`, it is exactly `plan> `.
+- `TestWriteUserBand_PlanPrefix`: the plan band's rows start with the grey background, contain the teal `plan`, then `\x1b[22;39m> `, and contain no `ansiReset` before the end of the row.
+- `TestTerminalReader_PlanPromptKeepsTypingAligned`: through `terminalInput`, a line typed at the coloured prompt is read back exactly.
+
+**Request check.** Byte-identical with plan mode unused. A message that turns plan mode on from a sentence encodes exactly as the same text sent after `/plan`.
+
+**Manual checks for the human.** In a real terminal:
+
+- "can we /plan the retry change?" turns plan mode on, and the model plans.
+- The prompt's `plan` is teal. A long line typed at it wraps correctly, and the history arrows still work.
+- Sent plan-mode messages show `plan>` in the band, and the grey band reaches the edge of the terminal.
+- `NO_COLOR=1` shows plain text throughout.
+- Pasting a path like `docs/plan.md` does not switch modes.
+
 ## 6. Decisions to confirm before starting
 
 1. **`exec` is refused in plan mode, entirely.** A planning model cannot run tests, `git log`, or `go doc`; the workspace snapshot gives it the git state, and the user can run anything with `!`. The alternatives: allow `exec` and rely on the marker's wording, as Codex does, which keeps planning fully informed but lets a write through; or a blocklist, as Cline does, which this document rejects in §2.
 2. **The rules travel on each plan-mode message** rather than in `instructions.txt`. The benefit is Q2. The cost is repeating about 140 words on each plan-mode message, served from cache after the first.
 3. **The picker's cursor starts on "Keep planning."** The alternative is starting on "Implement here", as Codex does, which is one keystroke faster and one keystroke from an accidental implementation.
 4. **`/reset` and `/model` keep plan mode on.** It is a setting the user chose and the prompt shows. The alternative is that a fresh session always starts with plan mode off.
+5. **A `/plan` in a sentence stays in the message** (PM3). The model sees what the user wrote, and the marker says what it means. The alternative is removing it, which rewrites what the user typed.
+6. **A `/plan` in a sentence only turns plan mode on** (PM3). A stray `/plan` should never end plan mode and hand the model its tools back.
 
 ## 7. Out of scope
 
@@ -195,4 +256,4 @@ Implement milestone PM1 exactly as specified, on a new branch from origin/main.
 Stop when PM1 is done and report using the template in the usage plan's section 5.5.
 ```
 
-Replace `PM1` with `PM2` for the second session. Commit, push, and open the PR only when the human asks.
+Replace `PM1` with `PM2` or `PM3` for the later sessions. Commit, push, and open the PR only when the human asks.
