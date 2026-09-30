@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type compactModel struct {
@@ -277,5 +278,33 @@ func TestCompact_PlanMarkerSurvivesRepeatedCompaction(t *testing.T) {
 	}
 	if marker := s.history[1].User.Plan; marker != "ended" {
 		t.Fatalf("plan marker: %q", marker)
+	}
+}
+
+// slowSummary answers after a pause, long enough for the status line to draw.
+type slowSummary struct{ compactModel }
+
+func (m *slowSummary) Generate(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+	time.Sleep(20 * time.Millisecond)
+	return m.compactModel.Generate(ctx, req)
+}
+
+// A summary can take minutes, so compaction shows the same live status line a
+// turn's model request does, and erases it when the reply arrives.
+func TestCompact_ShowsProgressWhileSummarizing(t *testing.T) {
+	var progress bytes.Buffer
+	model := &slowSummary{compactModel{replies: []ModelResponse{turn(textBlock("summary"))}}}
+	s := compactSession(t, model)
+	s.display = NewDisplay(&progress)
+	s.display.live = true // A buffer is not a terminal; enable the live path explicitly.
+	s.display.tick = time.Millisecond
+
+	result, _, err := s.Compact(context.Background(), "", "compact-run", filepath.Join(t.TempDir(), "compact.jsonl"))
+	if err != nil || result.Status != StatusCompleted {
+		t.Fatalf("result %+v, err %v", result, err)
+	}
+	got := progress.String()
+	if !strings.Contains(got, "summarizing the conversation with "+s.cfg.Model) || !strings.HasSuffix(got, "\r\x1b[2K") {
+		t.Fatalf("progress: %q", got)
 	}
 }
