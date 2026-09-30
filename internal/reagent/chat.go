@@ -2,6 +2,7 @@ package reagent
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,9 @@ import (
 	"time"
 )
 
+//go:embed friction.txt
+var frictionPrompt string
+
 // chatCommand is one locally handled chat command.
 type chatCommand struct{ name, argument, help string }
 
@@ -23,6 +27,7 @@ var chatCommands = []chatCommand{
 	{"/status", "", "model, mode, workspace, turns, and tokens so far"},
 	{"/context", "", "what the next request is made of, by size"},
 	{"/compact", "[-v] [focus]", "summarize and replace the conversation (-v prints it)"},
+	{"/friction", "", "ask the model to review harness friction in this conversation"},
 	{"/trace", "", "path of the last turn or compaction trace"},
 	{"/reset", "", "discard the conversation and start a fresh session"},
 	{"/edit", "", "write the next message in $VISUAL or $EDITOR"},
@@ -696,6 +701,13 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			c.commandContext(stderr)
 		case command == "/compact":
 			c.commandCompact(ctx, argument, stdout, stderr)
+		case command == "/friction":
+			// v0 §10 amendment (2026-09-30): review is an ordinary turn, even without the flag.
+			if argument != "" {
+				fmt.Fprintln(stderr, "usage: /friction")
+				continue
+			}
+			c.runTurn(ctx, frictionPrompt, input, stdout, stderr)
 		case command == "/trace":
 			if path := c.session.LastTrace(); path != "" {
 				fmt.Fprintln(stderr, sanitize(path))

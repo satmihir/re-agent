@@ -1,0 +1,3 @@
+{"schema_version":1,"seq":1,"session_id":"session2","run_id":"review-run","time":"2026-09-30T11:00:00Z","type":"run.started","step":0,"data":{"model":"claude-test","prompt":"re:agent friction review\nLooking back over this whole session, list the places where the harness got in your way.","initial_history":[]}}
+{"schema_version":1,"seq":2,"session_id":"session2","run_id":"review-run","time":"2026-09-30T11:00:01Z","type":"model.accepted","step":1,"data":{"blocks":[{"kind":"text","text":"No other friction."}]}}
+{"schema_version":1,"seq":3,"session_id":"session2","run_id":"review-run","time":"2026-09-30T11:00:02Z","type":"run.finished","step":1,"data":{"status":"completed","reply":"No other friction."}}

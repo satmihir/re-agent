@@ -82,6 +82,7 @@ cannot grant tools beyond the chosen mode.
 | `!command` | Run a shell command yourself; its output joins the conversation. |
 | `/context` | What the next request is made of, including project instructions and past workspace snapshots, byte by byte. |
 | `/compact [-v] [what to keep]` | Ask the current model for a handoff summary and replace the conversation with it. `-v` prints the summary; extra text gives the model a focus. Works in plan mode or when blocked, but not with `--scripted`. |
+| `/friction` | Ask the model to review rough edges in the harness. An ordinary turn, with or without `--report-friction`; run it at the end. |
 | `/status`, `/trace` | Model, workspace, token totals, and the last run's trace. |
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |
@@ -152,7 +153,46 @@ jq -c 'select(.type=="tool.finished") | {name: .data.name, outcome: .data.outcom
 ```
 
 Traces hold file contents and command output, so treat them like the
-workspace they came from.
+workspace they came from. Every ordinary run records the build revision used
+by `reagent version`; unavailable build metadata is shown as `unknown` by readers.
+
+### Reporting harness friction
+
+For sessions testing re:agent itself, opt in at launch:
+
+```bash
+reagent chat --workspace . --report-friction
+# At the end of the conversation, enter /friction.
+python3 bench/friction.py --since 2026-09-30
+python3 bench/friction.py --json --since 2026-09-30 /path/to/extra-traces
+```
+
+The flag works on `run` too. It adds `report_friction`, a read-class tool
+available in read-only and plan modes, and instructions to report harness rough
+edges briefly while continuing the task. It changes requests: **never enable
+it in benchmark runs**. Without it, ordinary requests are unchanged.
+
+Reports live only in traces, not in a separate log. Ten validated reports are
+allowed per process, including across `/reset`, `/model`, and compaction;
+invalid submissions do not consume the cap. A report has a category, a nonblank
+one-line summary of up to 300 Unicode characters, optional details of up to
+4,000 characters, and up to 20 related call IDs. IDs need not exist. Activity
+shows only category and summary; reports have no operation recap.
+
+`/friction` takes no arguments and works without the flag, independently of the
+cap. It spends an ordinary turn, keeps its reply in history, and follows normal
+blocking, cancellation, and automatic compaction. It reviews only the history
+still available to the model, including summaries; it does not reload old traces.
+
+The Python reader searches the normal cache plus supplied directories, without
+counting overlapping paths twice. `--since` is inclusive from midnight UTC.
+Text output groups reports by category, oldest first, with review replies in a
+separate group. JSON Lines contain one record per report or review. Related
+calls are resolved only in the same trace, including its initial history;
+missing IDs say `not in this trace`. Rejected reports and missing outcomes are
+labelled, never treated as successes. Bad input warns and exits nonzero while
+preserving readable records. Reports may contain sensitive task content;
+treat their output like the traces themselves.
 
 ## How it works
 
@@ -184,6 +224,7 @@ cite them by section, for example `// v0 §6.2`.
 | `--read-only` | Withhold writing and execution. |
 | `--plan` | Start `run` or `chat` in plan mode; the model may only use read tools. |
 | `--no-project-instructions` | Do not load the workspace root's `AGENTS.md`. |
+| `--report-friction` | Opt in to trace-only harness reports on `run` or `chat`; off by default. |
 | `--max-steps`, `--max-tool-calls` | Budget per run or chat turn. Defaults 200 and 400. |
 | `--scripted FILE` | Replay recorded model responses instead of calling a provider. |
 

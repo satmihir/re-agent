@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestActivity_ReportFriction(t *testing.T) {
+	call := ToolCall{Name: "report_friction", Arguments: `{"category":"misleading_error","summary":"The error misled me","details":"not displayed","related_call_ids":["private"]}`}
+	out := ToolOutcome{OK: true, Code: "ok", Data: []byte(`{"recorded":true}`), Effect: EffectNone}
+	got := describeActivity(call, out).render(false, 0)
+	if got != "  ✓ report_friction misleading_error: The error misled me\n" || recapLine(call, out) != "" {
+		t.Fatalf("activity %q, recap %q", got, recapLine(call, out))
+	}
+	short := describeActivity(call, out).render(false, 45)
+	if displayWidth(strings.TrimSuffix(short, "\n")) > 45 || !strings.Contains(short, "…") {
+		t.Fatalf("narrow activity %q", short)
+	}
+	failed := describeActivity(call, failOutcome("invalid_arguments", "report limit reached; carry on with the task")).render(false, 0)
+	if !strings.Contains(failed, "✗ report_friction misleading_error:") || !strings.Contains(failed, "invalid_arguments: report limit reached") {
+		t.Fatalf("failure %q", failed)
+	}
+	call.Arguments = `{"category":"other","summary":"escape \u001b[2J"}`
+	if got := describeActivity(call, out).render(false, 0); strings.Contains(got, "\x1b") || !strings.Contains(got, `\x1b[2J`) {
+		t.Fatalf("unsanitized activity %q", got)
+	}
+}
+
 func TestActivity_FailedCallsUseToolTargets(t *testing.T) {
 	tests := []struct {
 		call    ToolCall

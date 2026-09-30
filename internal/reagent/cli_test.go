@@ -12,6 +12,112 @@ import (
 	"testing"
 )
 
+func TestRun_ReportFrictionPreview(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		for _, readOnly := range []bool{false, true} {
+			name := provider + "/default"
+			if readOnly {
+				name = provider + "/read_only"
+			}
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				var plain map[string]any
+				for _, enabled := range []bool{false, true} {
+					args := []string{"run", "--workspace", root, "--provider", provider, "--show-context"}
+					if readOnly {
+						args = append(args, "--read-only")
+					}
+					if enabled {
+						args = append(args, "--report-friction")
+					}
+					args = append(args, "baseline")
+					var out, errs bytes.Buffer
+					if code := Main(context.Background(), args, strings.NewReader(""), &out, &errs); code != exitOK {
+						t.Fatalf("exit %d: %s", code, errs.String())
+					}
+					var body map[string]any
+					if err := json.Unmarshal(out.Bytes(), &body); err != nil {
+						t.Fatal(err)
+					}
+					if !enabled {
+						plain = body
+						continue
+					}
+					var tools []any
+					found := 0
+					for _, tool := range body["tools"].([]any) {
+						if tool.(map[string]any)["name"] == "report_friction" {
+							found++
+							continue
+						}
+						tools = append(tools, tool)
+					}
+					if found != 1 {
+						t.Fatalf("report tool count %d", found)
+					}
+					body["tools"] = tools
+					if provider == openaiName {
+						text := body["instructions"].(string)
+						if strings.Count(text, frictionInstructions) != 1 {
+							t.Fatal("missing or repeated friction instructions")
+						}
+						body["instructions"] = strings.Replace(text, frictionInstructions, "", 1)
+					} else {
+						part := body["system"].([]any)[0].(map[string]any)
+						text := part["text"].(string)
+						if strings.Count(text, frictionInstructions) != 1 {
+							t.Fatal("missing or repeated friction instructions")
+						}
+						part["text"] = strings.Replace(text, frictionInstructions, "", 1)
+					}
+					got, _ := json.Marshal(body)
+					want, _ := json.Marshal(plain)
+					if !bytes.Equal(got, want) {
+						t.Fatalf("preview changed beyond the report tool/instructions:\n%s\n%s", got, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestMain_ReportFrictionLaunchAndHelp(t *testing.T) {
+	responses, err := json.Marshal([]ModelResponse{
+		turn(callBlock("report", "report_friction", `{"category":"other","summary":"rough edge"}`)),
+		turn(textBlock("done")), turn(textBlock("review")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "responses.json")
+	if err := os.WriteFile(script, responses, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"run", "chat"} {
+		var out, errs bytes.Buffer
+		if code := Main(context.Background(), []string{"help", command}, strings.NewReader(""), &out, &errs); code != exitOK || !strings.Contains(out.String(), "--report-friction") {
+			t.Fatalf("help: %s, %s", out.String(), errs.String())
+		}
+		out.Reset()
+		errs.Reset()
+		dir := t.TempDir()
+		args := []string{command, "--workspace", t.TempDir(), "--read-only", "--report-friction", "--scripted", script}
+		input := ""
+		if command == "run" {
+			args = append(args, "--trace-file", filepath.Join(dir, "events.jsonl"), "task")
+		} else {
+			args = append(args, "--trace-dir", dir)
+			input = "task\n/friction\n/exit\n"
+		}
+		if code := Main(context.Background(), args, strings.NewReader(input), &out, &errs); code != exitOK || !strings.Contains(errs.String(), "✓ report_friction other: rough edge") {
+			t.Fatalf("exit %d: %s", code, errs.String())
+		}
+		if command == "chat" && out.String() != "done\nreview\n" {
+			t.Fatalf("chat replies %q", out.String())
+		}
+	}
+}
+
 func TestRun_PlanFlag(t *testing.T) {
 	for _, provider := range []string{openaiName, anthropicName} {
 		t.Run(provider, func(t *testing.T) {

@@ -57,6 +57,90 @@ func (r *fakeLineReader) ReadLine() (string, error) {
 func (r *fakeLineReader) SetPrompt(prompt string) { r.prompts = append(r.prompts, prompt) }
 func (r *fakeLineReader) SetBandPrefix(string)    {}
 
+func TestChat_FrictionSendsTheReviewPrompt(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			reply := turn(textBlock("No friction."))
+			reply.Usage = Usage{Known: true, InputTokens: 12, OutputTokens: 3}
+			model := &compactModel{replies: []ModelResponse{reply}}
+			cfg := testConfig(t)
+			cfg.ReportFriction, cfg.PlanMode = enabled, true
+			var stdout, stderr bytes.Buffer
+			s := NewSession(cfg, model, NewTrace(io.Discard), &stderr)
+			s.snapshot = func(context.Context) json.RawMessage {
+				return json.RawMessage(`{"kind":"workspace_state","date":"2026-09-30"}`)
+			}
+			c := &conversation{cfg: cfg, session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
+			code := chat(context.Background(), c, newLineReader(strings.NewReader("/friction\n/exit\n"), &stderr, nil), &stdout, &stderr)
+			if code != exitOK || len(model.requests) != 1 || stdout.String() != "No friction.\n" || s.Turns() != 1 || c.usage.InputTokens != 12 || !s.planMode {
+				t.Fatalf("exit %d, requests %d, reply %q, turns %d, usage %+v", code, len(model.requests), stdout.String(), s.Turns(), c.usage)
+			}
+			user := model.requests[0].History[0].User
+			if user.Text != frictionPrompt || !strings.HasPrefix(user.Text, "re:agent friction review\n") || len(user.Workspace) == 0 || user.Plan != "on" {
+				t.Fatalf("review user %+v", user)
+			}
+			if s.history[1].Assistant.Blocks[0].Text != "No friction." || readEvents(t, s.LastTrace())[0].Data.(map[string]any)["prompt"] != frictionPrompt {
+				t.Fatal("review prompt or reply not retained/traced")
+			}
+		})
+	}
+}
+
+func TestChat_FrictionBlockedAndExtraArgumentsSpendNothing(t *testing.T) {
+	for _, blocked := range []string{"", string(StatusProtocolError)} {
+		model := &compactModel{}
+		c := newConversation(t, "gpt-6-luna", "low", 0)
+		c.session.model, c.session.blocked = model, blocked
+		input := "/friction extra\n/exit\n"
+		want := "usage: /friction"
+		if blocked != "" {
+			input, want = "/friction\n/exit\n", "the last run ended with protocol_error"
+		}
+		var stdout, stderr bytes.Buffer
+		if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &stderr, nil), &stdout, &stderr); code != exitOK || len(model.requests) != 0 || c.session.Turns() != 0 || !strings.Contains(stderr.String(), want) {
+			t.Fatalf("exit %d, requests %d, stderr %s", code, len(model.requests), stderr.String())
+		}
+	}
+}
+
+func TestChat_FrictionAutoCompactsBeforeReview(t *testing.T) {
+	model := &compactModel{replies: []ModelResponse{turn(textBlock("handoff")), turn(textBlock("No friction."))}}
+	c := autoCompactConversation(t, model, 840_000)
+	var stdout, stderr bytes.Buffer
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/friction\n/exit\n"), &stderr, nil), &stdout, &stderr); code != exitOK || len(model.requests) != 2 {
+		t.Fatalf("exit %d, requests %d, stderr %s", code, len(model.requests), stderr.String())
+	}
+	history := model.requests[1].History
+	if len(history) != 2 || history[0].Kind != EntrySummary || history[1].User.Text != frictionPrompt {
+		t.Fatalf("review history %+v", history)
+	}
+}
+
+func TestChat_ReportFrictionCapSurvivesResetAndModel(t *testing.T) {
+	tool := NewReportFrictionTool()
+	c := newConversation(t, "gpt-6-luna", "low", 0)
+	cfg := testConfig(t, tool)
+	cfg.ReportFriction = true
+	c.cfg.Registry, c.cfg.ReportFriction = cfg.Registry, true
+	c.session.cfg = c.cfg
+	for i := 0; i < 10; i++ {
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{"category":"other","summary":"rough edge"}`))
+		if err != nil || !out.OK {
+			t.Fatalf("report %d: %+v, %v", i, out, err)
+		}
+	}
+	c.reset()
+	c.switchTo(modelCatalog[1])
+	kept, ok := c.session.cfg.Registry.Lookup("report_friction")
+	if !ok || kept != tool || !c.session.cfg.ReportFriction || !strings.Contains(instructions(c.session.cfg), "# Friction reports") {
+		t.Fatal("launch configuration or tool instance lost")
+	}
+	out, err := kept.Execute(context.Background(), json.RawMessage(`{"category":"other","summary":"rough edge"}`))
+	if err != nil || out.OK || out.Message != "report limit reached; carry on with the task" {
+		t.Fatalf("cap after replacement: %+v, %v", out, err)
+	}
+}
+
 func TestChat_SecondInterruptExits(t *testing.T) {
 	input := &fakeLineReader{reads: []struct {
 		line string

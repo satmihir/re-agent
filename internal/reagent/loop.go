@@ -27,6 +27,8 @@ type Config struct {
 	Proxied bool
 	// PlanMode is the initial plan setting; a chat can toggle it between turns.
 	PlanMode bool
+	// ReportFriction adds the fixed testing instructions at launch.
+	ReportFriction bool
 }
 
 // Run executes one user submission to a terminal outcome. It appends to its
@@ -71,9 +73,11 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 	// The history a run starts from is embedded so its trace can be read on
 	// its own, without the traces of the turns before it (v1 §6.2).
 	r.trace.Write("run.started", 0, map[string]any{
-		"model":           r.model.Name(),
-		"provider":        r.cfg.Provider,
-		"configured":      r.cfg.Model,
+		"model":      r.model.Name(),
+		"provider":   r.cfg.Provider,
+		"configured": r.cfg.Model,
+		// v0 §10 amendment (2026-09-30): build metadata belongs only in the trace.
+		"build":           buildRevision(),
 		"max_steps":       r.cfg.MaxSteps,
 		"max_tool_calls":  r.cfg.MaxToolCalls,
 		"prompt":          prompt,

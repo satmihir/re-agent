@@ -117,6 +117,10 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws),
 		NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws),
 	}
+	// v0 §10 amendment (2026-09-30): one instance keeps its cap across chat sessions.
+	if options.reportFriction {
+		tools = append(tools, NewReportFrictionTool())
+	}
 	if options.script != "" {
 		// The fake tool rides along with a script so orchestration can be
 		// exercised without touching the workspace (v0 §10).
@@ -136,7 +140,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		Registry: registry, WorkspacePath: ws.Root(),
 		ProjectInstructions: loadProjectInstructions(ws, options.noProjectInstructions, stderr),
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
-		PlanMode: options.plan,
+		PlanMode: options.plan, ReportFriction: options.reportFriction,
 	}
 	if options.script != "" {
 		cfg.Provider, cfg.Model = "scripted", "scripted"
@@ -242,7 +246,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
-	showContext, readOnly, recap, noProjectInstructions, plan                      bool
+	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction      bool
 	maxSteps, maxToolCalls                                                         int
 }
 
@@ -258,6 +262,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
+	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
 	fs.StringVar(&o.traceDir, "trace-dir", "", "write each turn's trace under this directory")
@@ -277,7 +282,7 @@ var runFlagGroups = []flagGroup{
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
-	{"Tracing", []string{"trace-file"}},
+	{"Tracing", []string{"trace-file", "report-friction"}},
 	{"Offline", []string{"show-context", "scripted"}},
 }
 
@@ -287,7 +292,7 @@ var chatFlagGroups = []flagGroup{
 	{"Input", []string{"no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
-	{"Tracing", []string{"trace-dir"}},
+	{"Tracing", []string{"trace-dir", "report-friction"}},
 	{"Offline", []string{"scripted"}},
 }
 

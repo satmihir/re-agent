@@ -231,6 +231,12 @@ func callTarget(call ToolCall) string {
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
 			return commandText(args)
 		}
+	case "report_friction":
+		// v0 §10 amendment (2026-09-30): details stay in the trace, not the activity row.
+		var args reportFrictionArgs
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return sanitize(args.Category + ": " + args.Summary)
+		}
 	case "echo":
 		var args echoArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {

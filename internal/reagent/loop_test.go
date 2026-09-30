@@ -78,6 +78,33 @@ func results(run *Session) []ToolResult {
 	return out
 }
 
+func TestLoop_RunStartedRecordsTheBuild(t *testing.T) {
+	_, result := runScript(t, testConfig(t), turn(textBlock("done")))
+	events := readEvents(t, result.TracePath)
+	started := events[0].Data.(map[string]any)
+	if events[0].Type != "run.started" || started["build"] != buildRevision() {
+		t.Fatalf("run.started: %+v", events[0])
+	}
+}
+
+func TestLoop_ReportFrictionInPlanModeIsTracedWithoutEffects(t *testing.T) {
+	cfg := testConfig(t, NewReportFrictionTool())
+	cfg.PlanMode, cfg.ReportFriction = true, true
+	s, result := runScript(t, cfg,
+		turn(callBlock("report", "report_friction", `{"category":"other","summary":"rough edge"}`)),
+		turn(textBlock("done")))
+	if result.Status != StatusCompleted || len(result.Effects) != 0 || !results(s)[0].Outcome.OK {
+		t.Fatalf("result %+v, observations %+v", result, results(s))
+	}
+	var kinds []string
+	for _, event := range readEvents(t, result.TracePath) {
+		kinds = append(kinds, event.Type)
+	}
+	if got := strings.Join(kinds, " "); got != "run.started model.requested model.accepted tool.started tool.finished model.requested model.accepted run.finished" {
+		t.Fatalf("events: %s", got)
+	}
+}
+
 func TestLoop_LastRequestUsageIsNotTheTurnTotal(t *testing.T) {
 	first := turn(callBlock("call_1", "echo", `{"text":"hello"}`))
 	first.Usage = Usage{Known: true, InputTokens: 800_000}
