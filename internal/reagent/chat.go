@@ -18,7 +18,7 @@ type chatCommand struct{ name, argument, help string }
 
 var chatCommands = []chatCommand{
 	{"/plan", "[text]", "toggle planning; optional text starts a planning turn"},
-	{"/model", "[number or name]", "choose a model (picker on a terminal; switch starts fresh)"},
+	{"/model", "[model] [fresh]", "choose a model; carry a summary, or discard with fresh"},
 	{"/effort", "[number or name]", "choose reasoning effort (picker on a terminal)"},
 	{"/status", "", "model, mode, workspace, turns, and tokens so far"},
 	{"/context", "", "what the next request is made of, by size"},
@@ -82,17 +82,23 @@ func (c *conversation) available() map[string]bool {
 }
 
 // commandModel lists the catalog, or switches to one of its entries.
-//
-// A switch always starts a fresh session. The transcript holds provider-native
-// items bound to the model that produced them, so no existing conversation can
-// be continued on a different one; v1 §6.1 forbids mid-session model changes
-// for the same reason.
-func (c *conversation) commandModel(argument string, input lineReader, stderr io.Writer) {
+// v0 §10 amendment (2026-09-29): only a text summary crosses model boundaries.
+func (c *conversation) commandModel(ctx context.Context, argument string, input lineReader, stderr io.Writer) {
 	if c.scripted != nil {
 		fmt.Fprintln(stderr, "a scripted run replays recorded responses, so it has no model to choose")
 		return
 	}
-	if argument == "" {
+	fresh := false
+	fields := strings.Fields(argument)
+	if len(fields) > 2 || (len(fields) == 2 && fields[1] != "fresh") {
+		fmt.Fprintln(stderr, "usage: /model <number or name> [fresh]")
+		return
+	}
+	if len(fields) > 0 {
+		argument = fields[0]
+		fresh = len(fields) == 2
+	}
+	if len(fields) == 0 {
 		current := -1
 		for i, info := range modelCatalog {
 			if info.ID == c.cfg.Model {
@@ -128,18 +134,42 @@ func (c *conversation) commandModel(argument string, input lineReader, stderr io
 		return
 	}
 
-	discarded := c.session.Turns()
+	hadHistory := len(c.session.history) > 0
+	var summary *Summary
+	var plan, tracePath, failure string
+	if hadHistory && !fresh {
+		result, _, err := c.compact(ctx, "")
+		tracePath = result.TracePath
+		if err != nil {
+			failure = err.Error()
+		} else if result.Status != StatusCompleted {
+			failure = result.Reason
+		} else {
+			value := *c.session.history[0].Summary
+			summary = &value
+			plan = c.session.compactedPlan
+		}
+	}
 	c.switchTo(info)
+	c.session.lastTrace = tracePath
+	if summary != nil {
+		c.session.history = []Entry{{Kind: EntrySummary, Summary: summary}}
+		c.session.compactedPlan = plan
+	}
 	route := info.Provider
 	if c.proxy.serves(info.Provider) {
 		route += " via " + proxyURLVariable
 	}
-	if discarded > 0 {
-		fmt.Fprintf(stderr, "switched to %s (%s); fresh session, %d turns discarded\n",
-			info.ID, route, discarded)
-		return
+	switch {
+	case summary != nil:
+		fmt.Fprintf(stderr, "switched to %s (%s); carried the conversation over as a %s summary\n", info.ID, route, formatBytes(len(summary.Text)))
+	case failure != "":
+		fmt.Fprintf(stderr, "switched to %s (%s); fresh session, conversation not carried over: %s\n", info.ID, route, sanitize(failure))
+	case hadHistory:
+		fmt.Fprintf(stderr, "switched to %s (%s); fresh session, conversation discarded\n", info.ID, route)
+	default:
+		fmt.Fprintf(stderr, "switched to %s (%s)\n", info.ID, route)
 	}
-	fmt.Fprintf(stderr, "switched to %s (%s)\n", info.ID, route)
 }
 
 // switchTo replaces the session with one built for a different model. Effort
@@ -290,20 +320,11 @@ func (c *conversation) commandCompact(ctx context.Context, argument string, stdo
 		verbose = true
 		argument = strings.TrimSpace(strings.TrimPrefix(argument, "-v"))
 	}
-	runID := NewID()
-	path, err := tracePathFor(c.traceDir, runID)
+	result, replacedBytes, err := c.compact(ctx, argument)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
 		return
 	}
-	compactCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
-	result, replacedBytes, err := c.session.Compact(compactCtx, argument, runID, path)
-	if err != nil {
-		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
-		return
-	}
-	c.usage.Add(result.Usage)
 	if result.Status != StatusCompleted {
 		fmt.Fprintf(stderr, "compaction failed: %s\n", sanitize(result.Reason))
 		return
@@ -312,6 +333,22 @@ func (c *conversation) commandCompact(ctx context.Context, argument string, stdo
 	if verbose {
 		c.session.display.reply(stdout, result.Reply, false)
 	}
+}
+
+// compact shares tracing and interrupt handling between /compact and /model.
+func (c *conversation) compact(ctx context.Context, focus string) (RunResult, int, error) {
+	runID := NewID()
+	path, err := tracePathFor(c.traceDir, runID)
+	if err != nil {
+		return RunResult{}, 0, err
+	}
+	compactCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+	result, replacedBytes, err := c.session.Compact(compactCtx, focus, runID, path)
+	if err == nil {
+		c.usage.Add(result.Usage)
+	}
+	return result, replacedBytes, err
 }
 
 // commandSuggestion returns the sole prefix or close spelling correction.
@@ -522,7 +559,7 @@ func planSwitchLine(on, styled bool) string {
 }
 
 // chat runs a conversation: one submission per line, each its own run of one
-// session (v1 §18.2). Slash commands are local controls; /compact alone calls the model.
+// session (v1 §18.2). Slash commands are local controls; /compact and model handoffs call the model.
 // A terminal submission may contain a bracketed paste or continued lines.
 func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
 	var interrupted time.Time
@@ -583,7 +620,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 				c.runTurn(ctx, argument, input, stdout, stderr)
 			}
 		case command == "/model":
-			c.commandModel(argument, input, stderr)
+			c.commandModel(ctx, argument, input, stderr)
 		case command == "/effort":
 			c.commandEffort(argument, input, stderr)
 		case command == "/status":

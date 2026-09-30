@@ -661,10 +661,16 @@ func newConversation(t *testing.T, model, effort string, turns int) *conversatio
 		progress: io.Discard,
 	}
 	c.session = NewSession(cfg, NewScriptedModel(turn(textBlock("x"))), c.trace, io.Discard)
+	native := openaiProvider
+	item := json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`)
+	if cfg.Provider == anthropicName {
+		native = anthropicProvider
+		item = json.RawMessage(`{"type":"text","text":"answer"}`)
+	}
 	for i := 0; i < turns; i++ {
 		c.session.history = append(c.session.history,
 			Entry{Kind: EntryUser, User: &UserTurn{Text: "q"}},
-			Entry{Kind: EntryAssistant, Assistant: &ModelResponse{}})
+			Entry{Kind: EntryAssistant, Assistant: &ModelResponse{Native: NativeOutput{Provider: native, Items: []json.RawMessage{item}}}})
 	}
 	return c
 }
@@ -699,7 +705,7 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.cfg.Model, out.String())
 	}
-	if !strings.Contains(errs.String(), "switched to gpt-6.1-sol") {
+	if len(c.session.history) != 1 || c.session.history[0].Summary.Text != "x" || !strings.Contains(errs.String(), "switched to gpt-6.1-sol") || !strings.Contains(errs.String(), "carried the conversation over") {
 		t.Fatalf("stderr: %s", errs.String())
 	}
 }
@@ -769,14 +775,13 @@ func TestChat_EffortPickerCancelWithUnsetEffort(t *testing.T) {
 	}
 }
 
-// A model change cannot continue an existing conversation, because the
-// transcript holds items bound to the model that produced them.
+// An explicit fresh switch never sends the old history to the new model.
 func TestConversation_SwitchingModelStartsAFreshSession(t *testing.T) {
 	c := newConversation(t, "gpt-5.6-luna", "xhigh", 3)
 	before := c.session
 
 	var stderr bytes.Buffer
-	c.commandModel("claude-haiku-4-5", nil, &stderr)
+	c.commandModel(context.Background(), "claude-haiku-4-5 fresh", nil, &stderr)
 
 	if c.session == before || c.session.ID == before.ID {
 		t.Fatal("the session was reused across a model change")
@@ -792,7 +797,7 @@ func TestConversation_SwitchingModelStartsAFreshSession(t *testing.T) {
 	if c.cfg.ReasoningEffort != "" || c.session.cfg.ReasoningEffort != "" {
 		t.Fatalf("effort survived the switch: %q", c.cfg.ReasoningEffort)
 	}
-	if !strings.Contains(stderr.String(), "3 turns discarded") {
+	if !strings.Contains(stderr.String(), "conversation discarded") {
 		t.Fatalf("the switch did not say what it discarded: %q", stderr.String())
 	}
 }
@@ -822,7 +827,7 @@ func TestConversation_ModelSelectionRefusals(t *testing.T) {
 			before := conv.session
 
 			var stderr bytes.Buffer
-			conv.commandModel(c.choice, nil, &stderr)
+			conv.commandModel(context.Background(), c.choice, nil, &stderr)
 
 			if !strings.Contains(stderr.String(), c.want) {
 				t.Fatalf("got %q, want it to mention %q", stderr.String(), c.want)
@@ -868,7 +873,7 @@ func TestChat_ModelAndEffortDoNotApplyToAScriptedRun(t *testing.T) {
 	for _, want := range []string{
 		"no model to choose",
 		"reasoning effort has no effect",
-		"/model    [number or name]   choose a model (picker on a terminal",
+		"/model    [model] [fresh]    choose a model; carry a summary, or discard with fresh",
 		"/effort   [number or name]   choose reasoning effort (picker on a terminal)",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -1287,5 +1292,189 @@ func TestChat_FailedCompactDoesNotClaimSuccess(t *testing.T) {
 	}
 	if !strings.Contains(errs.String(), "compaction failed: provider down") || strings.Contains(errs.String(), "compacted:") || !strings.Contains(errs.String(), "blocked by protocol_error; /compact or /reset") || !strings.Contains(errs.String(), s.LastTrace()) || s.blocked != "protocol_error" || len(model.requests) != 1 {
 		t.Fatalf("stderr: %q", errs.String())
+	}
+}
+
+func TestConversation_ModelSwitchCarriesOnlySummary(t *testing.T) {
+	for _, destination := range []string{"gpt-6.1-sol", "claude-haiku-4-5"} {
+		t.Run(destination, func(t *testing.T) {
+			c := newConversation(t, "gpt-6-luna", "low", 1)
+			old := c.session
+			old.history[0].User.Plan = "on"
+			old.history[1].Assistant.Native = NativeOutput{Provider: openaiProvider, Items: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old native text"}]}`)}}
+			old.blocked, old.planMode = "protocol_error", true
+			old.seenCalls["old-call"] = true
+			old.lastRequest = Usage{Known: true, InputTokens: 99}
+			old.snapshot = func(context.Context) json.RawMessage { return json.RawMessage(`{"kind":"workspace_state"}`) }
+			project := "keep launch instructions"
+			c.cfg.ProjectInstructions, old.cfg.ProjectInstructions = &project, &project
+			model := &compactModel{replies: []ModelResponse{turn(textBlock("handoff"))}}
+			old.model = model
+			c.usage = Usage{Known: true, InputTokens: 100}
+			var stderr bytes.Buffer
+			c.commandModel(context.Background(), destination, nil, &stderr)
+			if len(model.requests) != 1 || model.requests[0].Model != "gpt-6-luna" || model.requests[0].ReasoningEffort != "low" || len(model.requests[0].History) != 3 || model.requests[0].History[2].User.Text != compactPrompt || len(model.requests[0].History[2].User.Workspace) != 0 {
+				t.Fatalf("compaction requests: %+v", model.requests)
+			}
+			s := c.session
+			if s.ID == old.ID || len(s.history) != 1 || s.history[0].Kind != EntrySummary || *s.history[0].Summary != (Summary{Text: "handoff", ReplacedEntries: 2, Model: "gpt-6-luna"}) || s.Turns() != 0 || len(s.seenCalls) != 0 || s.blocked != "" || s.lastRequest != (Usage{}) || c.usage != (Usage{Known: true}) || !s.planMode || s.compactedPlan != "on" || s.snapshot == nil || s.cfg.ProjectInstructions != &project {
+				t.Fatalf("replacement: %+v, usage %+v", s, c.usage)
+			}
+			if !strings.Contains(stderr.String(), "carried the conversation over as a 7 B summary") || strings.Contains(stderr.String(), "compacted:") || s.LastTrace() == "" || s.LastTrace() != old.LastTrace() {
+				t.Fatalf("switch: %s", stderr.String())
+			}
+			events := readEvents(t, s.LastTrace())
+			if events[0].Type != "compaction.requested" || events[1].Type != "compaction.finished" {
+				t.Fatalf("events: %+v", events)
+			}
+			// Both encoders must accept the portable handoff without old native items.
+			next := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("done")))}
+			s.model, s.planMode = next, false
+			if _, err := s.Turn(context.Background(), "continue", NewID(), filepath.Join(t.TempDir(), "next.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+			req := next.requests[0]
+			if len(req.History) != 2 || req.History[0].Summary.Text != "handoff" || req.History[1].User.Plan != "ended" {
+				t.Fatalf("next request: %+v", req)
+			}
+			for _, encode := range []func(ModelRequest) ([]byte, error){EncodeOpenAIRequest, EncodeAnthropicRequest} {
+				body, err := encode(req)
+				if err != nil || !bytes.Contains(body, []byte(summaryPreamble)) || bytes.Contains(body, []byte("old native text")) {
+					t.Fatalf("body %s, error %v", body, err)
+				}
+			}
+			t.Logf("compaction final message: %s", model.requests[0].History[2].User.Text)
+			t.Logf("next request history: %s", mustJSON(t, req.History))
+		})
+	}
+}
+
+func TestConversation_ModelSwitchNonTurnHistory(t *testing.T) {
+	for _, entry := range []Entry{
+		{Kind: EntrySummary, Summary: &Summary{Text: "previous handoff", Model: "gpt-6-luna"}},
+		{Kind: EntryShell, Shell: &ShellCommand{Command: "pwd", Output: "workspace"}},
+	} {
+		t.Run(string(entry.Kind), func(t *testing.T) {
+			c := newConversation(t, "gpt-6-luna", "low", 0)
+			c.session.history = []Entry{entry}
+			model := &compactModel{replies: []ModelResponse{turn(textBlock("handoff"))}}
+			c.session.model = model
+			c.commandModel(context.Background(), "2", nil, io.Discard)
+			if len(model.requests) != 1 || len(c.session.history) != 1 || c.session.history[0].Summary.Text != "handoff" {
+				t.Fatalf("requests %+v, history %+v", model.requests, c.session.history)
+			}
+		})
+	}
+}
+
+func TestConversation_ModelSwitchFreshAndEmptySkipCompaction(t *testing.T) {
+	for _, turns := range []int{0, 1} {
+		c := newConversation(t, "gpt-6-luna", "low", turns)
+		model := &compactModel{}
+		c.session.model = model
+		c.session.compactedPlan = "on"
+		argument := "2"
+		if turns > 0 {
+			argument += " fresh"
+		}
+		c.commandModel(context.Background(), argument, nil, io.Discard)
+		if len(model.requests) != 0 || len(c.session.history) != 0 || c.session.compactedPlan != "" || c.session.LastTrace() != "" {
+			t.Fatalf("session %+v", c.session)
+		}
+	}
+}
+
+func TestConversation_ModelSwitchFailureStillSwitches(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		reply  ModelResponse
+		err    error
+		reason string
+	}{
+		{"provider", ModelResponse{}, fmt.Errorf("provider down\x1b"), "provider down\\x1b"},
+		{"cancelled", ModelResponse{}, context.Canceled, "context canceled"},
+		{"empty", turn(textBlock("  ")), nil, "empty"},
+		{"tool", turn(callBlock("new", "counter", `{}`)), nil, "tool call"},
+		{"limit", ModelResponse{}, nil, "use /reset"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newConversation(t, "gpt-6-luna", "low", 1)
+			old := c.session
+			old.compactedPlan, old.blocked = "on", "protocol_error"
+			model := &compactModel{replies: []ModelResponse{test.reply}, err: test.err}
+			runs := 0
+			cfg := testConfig(t, countingTool{runs: &runs})
+			c.cfg.Registry, old.cfg.Registry = cfg.Registry, cfg.Registry
+			old.model = model
+			if test.name == "limit" {
+				old.history[0].User.Text = strings.Repeat("x", MaxRequestBytes)
+			}
+			var stderr bytes.Buffer
+			c.commandModel(context.Background(), "2", nil, &stderr)
+			if c.session.ID == old.ID || c.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.session.compactedPlan != "" || c.session.blocked != "" || runs != 0 || c.session.LastTrace() == "" || c.session.LastTrace() != old.LastTrace() {
+				t.Fatalf("session %+v, runs %d", c.session, runs)
+			}
+			if !strings.Contains(stderr.String(), "fresh session, conversation not carried over:") || !strings.Contains(stderr.String(), test.reason) || strings.Contains(stderr.String(), "\x1b") {
+				t.Fatalf("stderr: %s", stderr.String())
+			}
+			data, err := os.ReadFile(c.session.LastTrace())
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+			var finished event
+			if len(lines) != 2 || json.Unmarshal(lines[1], &finished) != nil || finished.Type != "compaction.failed" {
+				t.Fatal("missing compaction failure event")
+			}
+		})
+	}
+}
+
+func TestConversation_ModelSwitchArgumentValidation(t *testing.T) {
+	for _, argument := range []string{"2 wrong", "2 fresh extra", "gpt-6-luna fresh", "fresh"} {
+		c := newConversation(t, "gpt-6-luna", "low", 1)
+		before := c.session
+		model := &compactModel{}
+		before.model = model
+		var stderr bytes.Buffer
+		c.commandModel(context.Background(), argument, nil, &stderr)
+		if c.session != before || len(model.requests) != 0 || stderr.Len() == 0 {
+			t.Fatalf("argument %q: %s", argument, stderr.String())
+		}
+	}
+}
+
+func TestConversation_ModelSwitchFirstAdapterRequestHasSummary(t *testing.T) {
+	for _, source := range []string{"gpt-6-luna", "claude-haiku-4-5"} {
+		t.Run(source, func(t *testing.T) {
+			api := newFakeAPI(t, okReply(streamedTextReply()))
+			c := newConversation(t, source, "", 1)
+			c.proxy = apiProxy{provider: openaiName, endpoint: api.server.URL}
+			oldModel := &compactModel{replies: []ModelResponse{turn(textBlock("portable handoff"))}}
+			c.session.model = oldModel
+			c.commandModel(context.Background(), "gpt-6.1-sol", nil, io.Discard)
+			result, err := c.session.Turn(context.Background(), "continue", NewID(), filepath.Join(t.TempDir(), "next.jsonl"))
+			if err != nil || result.Status != StatusCompleted {
+				t.Fatalf("result %+v, error %v", result, err)
+			}
+			bodies := api.received()
+			if len(bodies) != 1 {
+				t.Fatalf("requests: %d", len(bodies))
+			}
+			var body struct {
+				Input []struct {
+					Role    string `json:"role"`
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"input"`
+			}
+			if err := json.Unmarshal(bodies[0], &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body.Input) != 2 || body.Input[0].Role != "user" || len(body.Input[0].Content) != 1 || body.Input[0].Content[0].Text != summaryPreamble+"\nportable handoff" || body.Input[1].Content[0].Text != "continue" || bytes.Contains(bodies[0], []byte("answer")) {
+				t.Fatalf("body: %s", bodies[0])
+			}
+		})
 	}
 }
