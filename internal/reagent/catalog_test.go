@@ -11,11 +11,12 @@ func TestModelCatalog_ContextWindows(t *testing.T) {
 		window int64
 	}{
 		{"gpt-6-luna", 1_050_000},
-		{"gpt-6-sol", 0},
+		{"gpt-6.1-sol", 1_050_000},
 		{"gpt-5.6-luna", 0},
 		{"gpt-5.6-terra", 0},
 		{"claude-haiku-4-5", 200_000},
-		{"claude-sonnet-5", 1_000_000},
+		{"claude-sonnet-5-5", 1_000_000},
+		{"claude-opus-5-5", 1_000_000},
 	} {
 		info, found := findModel(test.id)
 		if !found || info.ContextWindow != test.window {
@@ -46,7 +47,7 @@ func TestModelChoices_AgreeWithTheCatalogAndAvailability(t *testing.T) {
 }
 
 func TestEffortChoices_AgreeWithVocabulary(t *testing.T) {
-	info, _ := findModel("claude-sonnet-5")
+	info, _ := findModel("claude-sonnet-5-5")
 	choices := effortChoices(info, "high")
 	if len(choices) != len(info.Efforts) {
 		t.Fatalf("choices: %+v", choices)
@@ -66,7 +67,7 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 	if err != nil || first.ID != modelCatalog[0].ID {
 		t.Fatalf("got %+v %v", first, err)
 	}
-	byName, err := selectModel("claude-sonnet-5")
+	byName, err := selectModel("claude-sonnet-5-5")
 	if err != nil || byName.Provider != anthropicName {
 		t.Fatalf("got %+v %v", byName, err)
 	}
@@ -74,7 +75,7 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 	if err != nil || byPosition.ID != "gpt-6-luna" {
 		t.Fatalf("position 1 got %+v %v", byPosition, err)
 	}
-	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6-sol" {
+	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6.1-sol" {
 		t.Fatalf("position 2 got %+v %v", sol, err)
 	}
 	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", ""} {
@@ -85,7 +86,7 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 }
 
 func TestSelectEffort_AgainstTheModelsOwnVocabulary(t *testing.T) {
-	sonnet, _ := findModel("claude-sonnet-5")
+	sonnet, _ := findModel("claude-sonnet-5-5")
 	haiku, _ := findModel("claude-haiku-4-5")
 	luna, _ := findModel("gpt-5.6-luna")
 
@@ -117,9 +118,10 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 
 	for _, want := range []string{
 		"1  gpt-6-luna        openai",
-		"2  gpt-6-sol         openai",
+		"2  gpt-6.1-sol       openai",
 		"3  gpt-5.6-luna      openai     current",
 		"5  claude-haiku-4-5  anthropic  no key",
+		"7  claude-opus-5-5   anthropic  no key",
 		"models marked no key need ANTHROPIC_API_KEY",
 		"a model change starts a fresh session",
 	} {
@@ -141,7 +143,7 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 }
 
 func TestRenderEfforts_ListsOrExplainsAbsence(t *testing.T) {
-	sonnet, _ := findModel("claude-sonnet-5")
+	sonnet, _ := findModel("claude-sonnet-5-5")
 	if got := renderEfforts(sonnet, "high"); !strings.Contains(got, "3  high  [current]") {
 		t.Fatalf("got:\n%s", got)
 	}
@@ -161,9 +163,10 @@ func TestModelCatalog_EffortSupport(t *testing.T) {
 		{"gpt-5.6-luna", "none,low,medium,high,xhigh,max"},
 		{"gpt-5.6-terra", "none,low,medium,high,xhigh,max"},
 		{"gpt-6-luna", "none,low,medium,high,xhigh,max"},
-		{"gpt-6-sol", "none,low,medium,high,xhigh,max"},
+		{"gpt-6.1-sol", "low,medium,high,xhigh,max"},
 		{"claude-haiku-4-5", ""},
-		{"claude-sonnet-5", "low,medium,high,xhigh,max"},
+		{"claude-sonnet-5-5", "low,medium,high,xhigh,max"},
+		{"claude-opus-5-5", "low,medium,high,xhigh,max"},
 	} {
 		info, found := findModel(c.id)
 		if !found {

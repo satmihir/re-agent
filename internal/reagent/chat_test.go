@@ -699,7 +699,7 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.cfg.Model, out.String())
 	}
-	if !strings.Contains(errs.String(), "switched to gpt-6-sol") {
+	if !strings.Contains(errs.String(), "switched to gpt-6.1-sol") {
 		t.Fatalf("stderr: %s", errs.String())
 	}
 }
@@ -804,7 +804,7 @@ func TestConversation_ModelSelectionRefusals(t *testing.T) {
 	}{
 		"missing key": {
 			map[string]string{openaiName: "sk-openai"},
-			"claude-sonnet-5", "needs ANTHROPIC_API_KEY",
+			"claude-sonnet-5-5", "needs ANTHROPIC_API_KEY",
 		},
 		"already current": {
 			map[string]string{openaiName: "sk-openai"},
@@ -837,7 +837,7 @@ func TestConversation_ModelSelectionRefusals(t *testing.T) {
 // Effort is a request parameter, not part of the transcript, so setting it
 // keeps the conversation.
 func TestConversation_EffortChangeKeepsTheConversation(t *testing.T) {
-	c := newConversation(t, "claude-sonnet-5", "low", 2)
+	c := newConversation(t, "claude-sonnet-5-5", "low", 2)
 	before := c.session
 
 	var stderr bytes.Buffer

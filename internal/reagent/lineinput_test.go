@@ -546,7 +546,7 @@ func TestCompleteLine(t *testing.T) {
 	arguments := func(command string) []string {
 		switch command {
 		case "/model":
-			return []string{"claude-haiku-4-5", "claude-sonnet-5"}
+			return []string{"claude-haiku-4-5", "claude-sonnet-5-5"}
 		case "/effort":
 			return []string{"low", "medium"}
 		}
