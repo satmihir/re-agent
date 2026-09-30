@@ -387,9 +387,10 @@ Plan mode (`docs/reagent-plan-mode.md`) is the enforced form of the first senten
 
 **Behavior.**
 
-- `/model N` in a session with at least one turn first compacts with the current model (U8), then starts the new model's session from that summary. The message is: `switched to gpt-6-luna (openai); carried the conversation over as a 3.1 KB summary`.
+- `/model N` in a session with any nonempty history first compacts with the current model (U8), then starts the new model's session from that summary. This includes summary-only and shell-only history, even when the turn count is zero (clarified 2026-09-29). The message is: `switched to gpt-6-luna (openai); carried the conversation over as a 3.1 KB summary`.
 - `/model N fresh` starts empty, as today.
-- If compaction fails, the switch still happens, starting empty, and says why.
+- If compaction is cancelled, abort the switch, keep the old model, history, plan mode, blocked state, and totals, and print `kept <model>; switch cancelled`. Other failures still switch empty and say why (review correction 2026-09-29).
+- The new session's token totals start with the handoff request's reported usage, including on a non-cancellation failure; earlier totals are dropped (review correction 2026-09-29).
 - A blocked session's summary carries over too.
 
 **Touches.** `internal/reagent/chat.go`, `chat_test.go`, `README.md`, and `docs/reagent-v0-design.md` (§10 amendment, citing v1 §6.1 and v0 §12's amendment).

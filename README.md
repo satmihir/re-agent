@@ -86,6 +86,16 @@ cannot grant tools beyond the chosen mode.
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |
 
+Switching with `/model` or `/model <number or name>` asks the current model
+for a handoff summary of any nonempty conversation, then carries only that
+summary into a new session. This spends a model request and may lose detail;
+it also works after `/compact` or when blocked. `/model <number or name> fresh`
+skips the request and discards the conversation. Ctrl-C during the handoff
+cancels the switch and keeps the old model and conversation. Other failures
+still switch with an empty conversation and an explanation. The new session's
+token totals start with the handoff request's usage; earlier totals are dropped.
+`/trace` shows the handoff attempt until the next run.
+
 Writing `/plan` in a chat sentence also starts plan mode and keeps `/plan` in
 the sent message. Like other chat messages, surrounding whitespace is trimmed.
 On a styled terminal, the plan prompt and sent-message prefix are teal.
