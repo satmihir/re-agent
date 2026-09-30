@@ -16,9 +16,13 @@ import (
 )
 
 const (
-	// HTTPTimeout bounds one attempt, so a stalled connection ends that attempt
-	// instead of hanging the run until Ctrl-C (v0 §6).
-	HTTPTimeout = 120 * time.Second
+	// v0 §6 amendment (2026-09-29): an attempt ends when the provider goes
+	// quiet, not when it has taken a fixed total time. A non-streamed reply's
+	// headers arrive only once the whole reply is written, so waiting for them
+	// gets the longer bound; once a reply is arriving, each read must bring
+	// something within the idle bound. Codex uses the same idle default.
+	ResponseHeaderTimeout = 10 * time.Minute
+	ResponseIdleTimeout   = 5 * time.Minute
 
 	// The whole v0 retry rule: at most two attempts, one fixed delay (v0 §6.2).
 	maxAttempts = 2
@@ -28,12 +32,67 @@ const (
 // NewHTTPClient builds the client the live adapters use. Redirects are refused
 // because following one would forward the credential header (v1 §9.1).
 func NewHTTPClient() *http.Client {
+	return newHTTPClient(ResponseHeaderTimeout, ResponseIdleTimeout)
+}
+
+func newHTTPClient(headerTimeout, idleTimeout time.Duration) *http.Client {
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.ResponseHeaderTimeout = headerTimeout
 	return &http.Client{
-		Timeout: HTTPTimeout,
+		Transport: idleTransport{base: base, idle: idleTimeout},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+// idleTransport ends an attempt whose reply stops arriving: after the headers,
+// every read must bring data within idle, however long the reply takes overall.
+type idleTransport struct {
+	base http.RoundTripper
+	idle time.Duration
+}
+
+func (t idleTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancelCause(request.Context())
+	response, err := t.base.RoundTrip(request.WithContext(ctx))
+	if err != nil {
+		cancel(nil)
+		return nil, err
+	}
+	stalled := fmt.Errorf("the provider sent nothing for %s", t.idle)
+	body := &idleBody{inner: response.Body, ctx: ctx, cancel: cancel, stalled: stalled}
+	body.timer = time.AfterFunc(t.idle, func() { cancel(stalled) })
+	body.idle = t.idle
+	response.Body = body
+	return response, nil
+}
+
+// idleBody restarts the idle timer on every read that brings data.
+type idleBody struct {
+	inner   io.ReadCloser
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	stalled error
+	timer   *time.Timer
+	idle    time.Duration
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	n, err := b.inner.Read(p)
+	if n > 0 {
+		b.timer.Reset(b.idle)
+	}
+	if err != nil && err != io.EOF && context.Cause(b.ctx) == b.stalled {
+		return n, b.stalled
+	}
+	return n, err
+}
+
+func (b *idleBody) Close() error {
+	b.timer.Stop()
+	b.cancel(nil)
+	return b.inner.Close()
 }
 
 // transport sends one prepared body to one endpoint and records the exact

@@ -312,8 +312,7 @@ func TestOpenAI_DoesNotRetryARefusedRequest(t *testing.T) {
 // Only a reply the server actually sent is retried; a stalled attempt is not.
 func TestOpenAI_TimeoutIsNotRetried(t *testing.T) {
 	api := newFakeAPI(t, apiReply{status: 200, body: textReply, delay: 300 * time.Millisecond})
-	client := NewHTTPClient()
-	client.Timeout = 30 * time.Millisecond
+	client := newHTTPClient(30*time.Millisecond, time.Minute)
 
 	_, _, result := runAgainst(t, api, client)
 	if result.Status != StatusProviderError {
