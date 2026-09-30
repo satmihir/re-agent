@@ -104,7 +104,11 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 		}
 		return fail(status, reason)
 	}
+	// v0 §10 amendment (2026-09-29): a summary can take minutes, so show that
+	// it is under way, as a turn's model request does.
+	s.display.startStatus("summarizing the conversation with " + sanitize(s.cfg.Model))
 	resp, err := s.model.Generate(ctx, req)
+	s.display.stopStatus()
 	if err != nil {
 		status, usage := classifyModelError(err)
 		result.Usage, s.lastRequest = usage, usage

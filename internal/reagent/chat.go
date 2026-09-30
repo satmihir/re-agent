@@ -110,7 +110,12 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 				break
 			}
 		}
-		index, err := input.Choose(pickerConfig{title: "Select a model", shortcuts: true}, modelChoices(c.cfg.Model, c.available()), current)
+		title := "Select a model"
+		if len(c.session.history) > 0 {
+			// v0 §10 amendment (2026-09-29): a switch now costs a request.
+			title += " · carries a summary; /model N fresh skips"
+		}
+		index, err := input.Choose(pickerConfig{title: title, shortcuts: true}, modelChoices(c.cfg.Model, c.available()), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
 			fmt.Fprintln(stderr, renderModels(c.cfg.Model, c.available()))
@@ -143,6 +148,7 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 	var plan, tracePath, failure string
 	handoffUsage := Usage{Known: true}
 	if hadHistory && !fresh {
+		fmt.Fprintf(stderr, "summarizing the conversation for %s; Ctrl-C keeps %s\n", info.ID, c.cfg.Model)
 		previousUsage := c.usage
 		result, _, err := c.compact(ctx, "")
 		if result.Status == StatusCancelled {

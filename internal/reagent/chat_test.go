@@ -727,6 +727,25 @@ func TestChat_ModelPickerCancelKeepsTheModel(t *testing.T) {
 	}
 }
 
+// A switch after a conversation spends a model request, so the picker says so
+// before anything is chosen; with nothing to carry it stays plain.
+func TestChat_ModelPickerTitleMentionsTheSummary(t *testing.T) {
+	for _, test := range []struct {
+		turns int
+		title string
+	}{
+		{0, "Select a model"},
+		{2, "Select a model · carries a summary; /model N fresh skips"},
+	} {
+		c := newConversation(t, "gpt-6-luna", "low", test.turns)
+		input := &fakeLineReader{chooseErr: errCancelled}
+		c.commandModel(context.Background(), "", input, io.Discard)
+		if input.choiceTitle != test.title {
+			t.Fatalf("%d turns: title %q, want %q", test.turns, input.choiceTitle, test.title)
+		}
+	}
+}
+
 func TestChat_ModelWithoutATerminalPrintsTheList(t *testing.T) {
 	model := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("reply")))}
 	c := newConversation(t, "gpt-6-luna", "low", 0)
@@ -1497,7 +1516,7 @@ func TestConversation_CancelledModelSwitchKeepsConversation(t *testing.T) {
 			if c.cfg.Model != cfg.Model || c.cfg.Provider != cfg.Provider || c.cfg.ReasoningEffort != cfg.ReasoningEffort || c.session != s || string(mustJSON(t, s.history)) != history || !s.planMode || s.blocked != blocked || s.compactedPlan != "on" || !s.seenCalls["old-call"] || c.usage != usage {
 				t.Fatalf("cancelled switch changed conversation: %+v, usage %+v", c.session, c.usage)
 			}
-			if stderr.String() != "kept gpt-6-luna; switch cancelled\n" {
+			if stderr.String() != "summarizing the conversation for gpt-6.1-sol; Ctrl-C keeps gpt-6-luna\nkept gpt-6-luna; switch cancelled\n" {
 				t.Fatalf("stderr: %s", stderr.String())
 			}
 			if s.LastTrace() == "" {
