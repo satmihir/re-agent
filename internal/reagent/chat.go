@@ -68,9 +68,13 @@ type conversation struct {
 	workspace string
 	recap     bool
 	usage     Usage
-	stdin     *os.File
-	stdout    *os.File
-	stderr    *os.File
+	// autoCompactOff is set by a failed automatic compaction so a persistent
+	// failure is not retried before every message; /compact, /reset, and a
+	// model switch clear it.
+	autoCompactOff bool
+	stdin          *os.File
+	stdout         *os.File
+	stderr         *os.File
 }
 
 // available reports which providers this process holds a credential for.
@@ -194,6 +198,7 @@ func (c *conversation) switchTo(info modelInfo) {
 	c.session = NewSession(c.cfg, model, c.trace, c.progress)
 	c.session.snapshot, c.session.planMode = snapshot, planMode
 	c.usage = Usage{Known: true}
+	c.autoCompactOff = false
 }
 
 // commandEffort lists or sets the reasoning effort for the current model. The
@@ -340,6 +345,7 @@ func (c *conversation) commandCompact(ctx context.Context, argument string, stdo
 		fmt.Fprintf(stderr, "compaction failed: %s\n", sanitize(result.Reason))
 		return
 	}
+	c.autoCompactOff = false
 	printCompacted(stderr, result, replacedBytes)
 	if verbose {
 		c.session.display.reply(stdout, result.Reply, false)
@@ -357,7 +363,7 @@ const autoCompactPercent = 80
 func (c *conversation) shouldAutoCompact() bool {
 	window := contextWindow(c.cfg.Model)
 	last := c.session.lastRequest
-	return c.scripted == nil && c.session.blocked == "" && len(c.session.history) > 0 &&
+	return c.scripted == nil && !c.autoCompactOff && c.session.blocked == "" && len(c.session.history) > 0 &&
 		window > 0 && last.Known && last.InputTokens*100 >= autoCompactPercent*window
 }
 
@@ -371,18 +377,23 @@ func (c *conversation) autoCompact(ctx context.Context, stderr io.Writer) bool {
 	}
 	fmt.Fprintln(stderr, line)
 	result, replacedBytes, err := c.compact(ctx, "")
+	failure := ""
 	switch {
 	case err != nil:
-		fmt.Fprintf(stderr, "auto-compaction failed: %s; sending the message anyway\n", sanitize(err.Error()))
+		failure = err.Error()
 	case result.Status == StatusCancelled:
 		fmt.Fprintln(stderr, "compaction cancelled; message not sent")
 		return false
 	case result.Status != StatusCompleted:
-		fmt.Fprintf(stderr, "auto-compaction failed: %s; sending the message anyway\n", sanitize(result.Reason))
+		failure = result.Reason
 	default:
 		// The compaction request's usage would otherwise trigger another one.
 		c.session.lastRequest = Usage{}
 		printCompacted(stderr, result, replacedBytes)
+	}
+	if failure != "" {
+		c.autoCompactOff = true
+		fmt.Fprintf(stderr, "auto-compaction failed: %s; sending the message anyway (/compact to retry)\n", sanitize(failure))
 	}
 	return true
 }
@@ -748,6 +759,7 @@ func commandTakesArgument(name string) bool {
 func (c *conversation) reset() {
 	c.session.Reset()
 	c.usage = Usage{Known: true}
+	c.autoCompactOff = false
 }
 
 // runTurn runs one turn under its own interrupt handler, so the first Ctrl-C
@@ -784,7 +796,7 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 		}
 	}
 	if result.Steps > 0 && c.session.blocked != string(StatusLimitExceeded) {
-		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model))
+		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model), c.shouldAutoCompact())
 	}
 	c.session.display.spacer()
 	if result.Status != StatusCompleted || !c.session.planMode {

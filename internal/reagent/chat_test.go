@@ -1624,3 +1624,52 @@ func TestChat_AutoCompactDoesNotRepeat(t *testing.T) {
 		t.Fatalf("requests %d, stderr %s", len(model.requests), stderr.String())
 	}
 }
+
+func TestChat_AutoCompactFailureDisarmsUntilCompactResetOrSwitch(t *testing.T) {
+	model := &compactModel{err: fmt.Errorf("provider down")}
+	c := autoCompactConversation(t, model, 900_000)
+	var stdout, stderr bytes.Buffer
+	c.session.display = NewDisplay(&stderr)
+	if !c.autoCompact(context.Background(), &stderr) || !c.autoCompactOff || !strings.Contains(stderr.String(), "(/compact to retry)") {
+		t.Fatalf("off %t, stderr %s", c.autoCompactOff, stderr.String())
+	}
+	c.session.lastRequest = Usage{Known: true, InputTokens: 900_000}
+	if c.shouldAutoCompact() {
+		t.Fatal("auto-compaction retried after a failure")
+	}
+	c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model), c.shouldAutoCompact())
+	if !strings.Contains(stderr.String(), "/compact summarizes or /reset starts over") {
+		t.Fatalf("stderr %s", stderr.String())
+	}
+
+	model.err, model.replies = nil, []ModelResponse{turn(textBlock("handoff"))}
+	c.commandCompact(context.Background(), "", &stdout, &stderr)
+	if c.autoCompactOff {
+		t.Fatal("a successful /compact did not re-arm")
+	}
+
+	for name, clear := range map[string]func(){
+		"reset":  c.reset,
+		"switch": func() { c.switchTo(modelCatalog[1]) },
+	} {
+		c.autoCompactOff = true
+		clear()
+		if c.autoCompactOff {
+			t.Fatalf("%s did not re-arm", name)
+		}
+	}
+}
+
+func TestChat_AutoCompactFailureMakesNoSecondAttempt(t *testing.T) {
+	model := &compactModel{err: fmt.Errorf("provider down")}
+	c := autoCompactConversation(t, model, 900_000)
+	var stdout, stderr bytes.Buffer
+	c.session.display = NewDisplay(&stderr)
+	c.runTurn(context.Background(), "a", nil, &stdout, &stderr)
+	before := len(model.requests)
+	c.session.lastRequest = Usage{Known: true, InputTokens: 900_000}
+	c.runTurn(context.Background(), "b", nil, &stdout, &stderr)
+	if strings.Count(stderr.String(), "compacting before") != 1 || len(model.requests) != before+1 {
+		t.Fatalf("requests %d then %d, stderr %s", before, len(model.requests), stderr.String())
+	}
+}
