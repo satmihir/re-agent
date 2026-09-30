@@ -137,8 +137,18 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 	hadHistory := len(c.session.history) > 0
 	var summary *Summary
 	var plan, tracePath, failure string
+	handoffUsage := Usage{Known: true}
 	if hadHistory && !fresh {
+		previousUsage := c.usage
 		result, _, err := c.compact(ctx, "")
+		if result.Status == StatusCancelled {
+			c.usage = previousUsage
+			fmt.Fprintf(stderr, "kept %s; switch cancelled\n", c.cfg.Model)
+			return
+		}
+		if err == nil {
+			handoffUsage = result.Usage
+		}
 		tracePath = result.TracePath
 		if err != nil {
 			failure = err.Error()
@@ -151,6 +161,7 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 		}
 	}
 	c.switchTo(info)
+	c.usage = handoffUsage
 	c.session.lastTrace = tracePath
 	if summary != nil {
 		c.session.history = []Entry{{Kind: EntrySummary, Summary: summary}}

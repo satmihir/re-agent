@@ -1308,7 +1308,9 @@ func TestConversation_ModelSwitchCarriesOnlySummary(t *testing.T) {
 			old.snapshot = func(context.Context) json.RawMessage { return json.RawMessage(`{"kind":"workspace_state"}`) }
 			project := "keep launch instructions"
 			c.cfg.ProjectInstructions, old.cfg.ProjectInstructions = &project, &project
-			model := &compactModel{replies: []ModelResponse{turn(textBlock("handoff"))}}
+			reply := turn(textBlock("handoff"))
+			reply.Usage = Usage{Known: true, InputTokens: 123, CachedInputTokens: 80, OutputTokens: 7}
+			model := &compactModel{replies: []ModelResponse{reply}}
 			old.model = model
 			c.usage = Usage{Known: true, InputTokens: 100}
 			var stderr bytes.Buffer
@@ -1317,7 +1319,7 @@ func TestConversation_ModelSwitchCarriesOnlySummary(t *testing.T) {
 				t.Fatalf("compaction requests: %+v", model.requests)
 			}
 			s := c.session
-			if s.ID == old.ID || len(s.history) != 1 || s.history[0].Kind != EntrySummary || *s.history[0].Summary != (Summary{Text: "handoff", ReplacedEntries: 2, Model: "gpt-6-luna"}) || s.Turns() != 0 || len(s.seenCalls) != 0 || s.blocked != "" || s.lastRequest != (Usage{}) || c.usage != (Usage{Known: true}) || !s.planMode || s.compactedPlan != "on" || s.snapshot == nil || s.cfg.ProjectInstructions != &project {
+			if s.ID == old.ID || len(s.history) != 1 || s.history[0].Kind != EntrySummary || *s.history[0].Summary != (Summary{Text: "handoff", ReplacedEntries: 2, Model: "gpt-6-luna"}) || s.Turns() != 0 || len(s.seenCalls) != 0 || s.blocked != "" || s.lastRequest != (Usage{}) || c.usage != reply.Usage || !s.planMode || s.compactedPlan != "on" || s.snapshot == nil || s.cfg.ProjectInstructions != &project {
 				t.Fatalf("replacement: %+v, usage %+v", s, c.usage)
 			}
 			if !strings.Contains(stderr.String(), "carried the conversation over as a 7 B summary") || strings.Contains(stderr.String(), "compacted:") || s.LastTrace() == "" || s.LastTrace() != old.LastTrace() {
@@ -1392,7 +1394,7 @@ func TestConversation_ModelSwitchFailureStillSwitches(t *testing.T) {
 		reason string
 	}{
 		{"provider", ModelResponse{}, fmt.Errorf("provider down\x1b"), "provider down\\x1b"},
-		{"cancelled", ModelResponse{}, context.Canceled, "context canceled"},
+
 		{"empty", turn(textBlock("  ")), nil, "empty"},
 		{"tool", turn(callBlock("new", "counter", `{}`)), nil, "tool call"},
 		{"limit", ModelResponse{}, nil, "use /reset"},
@@ -1476,5 +1478,51 @@ func TestConversation_ModelSwitchFirstAdapterRequestHasSummary(t *testing.T) {
 				t.Fatalf("body: %s", bodies[0])
 			}
 		})
+	}
+}
+
+func TestConversation_CancelledModelSwitchKeepsConversation(t *testing.T) {
+	for _, blocked := range []string{"", "protocol_error"} {
+		t.Run("blocked="+blocked, func(t *testing.T) {
+			c := newConversation(t, "gpt-6-luna", "low", 1)
+			s := c.session
+			s.planMode, s.blocked, s.compactedPlan = true, blocked, "on"
+			s.seenCalls["old-call"] = true
+			cfg, history := c.cfg, string(mustJSON(t, s.history))
+			usage := Usage{Known: true, InputTokens: 100, CachedInputTokens: 50, OutputTokens: 9}
+			c.usage = usage
+			s.model = &compactModel{err: &ModelError{Status: StatusCancelled, Message: "cancelled during a model request", Usage: Usage{Known: true, InputTokens: 12}}}
+			var stderr bytes.Buffer
+			c.commandModel(context.Background(), "2", nil, &stderr)
+			if c.cfg.Model != cfg.Model || c.cfg.Provider != cfg.Provider || c.cfg.ReasoningEffort != cfg.ReasoningEffort || c.session != s || string(mustJSON(t, s.history)) != history || !s.planMode || s.blocked != blocked || s.compactedPlan != "on" || !s.seenCalls["old-call"] || c.usage != usage {
+				t.Fatalf("cancelled switch changed conversation: %+v, usage %+v", c.session, c.usage)
+			}
+			if stderr.String() != "kept gpt-6-luna; switch cancelled\n" {
+				t.Fatalf("stderr: %s", stderr.String())
+			}
+			if s.LastTrace() == "" {
+				t.Fatal("missing cancellation trace")
+			}
+			events := readEvents(t, s.LastTrace())
+			if len(events) != 2 || events[1].Type != "compaction.failed" {
+				t.Fatalf("events: %+v", events)
+			}
+		})
+	}
+}
+
+func TestConversation_FailedModelSwitchRetainsHandoffUsage(t *testing.T) {
+	c := newConversation(t, "gpt-6-luna", "low", 1)
+	usage := Usage{Known: true, InputTokens: 123, CachedInputTokens: 80, OutputTokens: 7}
+	c.usage = Usage{Known: true, InputTokens: 1000}
+	c.session.model = &compactModel{err: &ModelError{Status: StatusProviderError, Message: "provider down", Usage: usage}}
+	c.commandModel(context.Background(), "2", nil, io.Discard)
+	if c.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.usage != usage {
+		t.Fatalf("session %+v, usage %+v", c.session, c.usage)
+	}
+	var stderr bytes.Buffer
+	c.commandStatus(&stderr)
+	if !strings.Contains(stderr.String(), "123 in (80 cached) · 7 out") {
+		t.Fatalf("status: %s", stderr.String())
 	}
 }
