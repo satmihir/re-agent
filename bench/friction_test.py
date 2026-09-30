@@ -95,6 +95,56 @@ class FrictionTest(unittest.TestCase):
         result = self.cli("--json", "--since", "2026-09-30", self.root)
         self.assertEqual([json.loads(line)["summary"] for line in result.stdout.splitlines()], ["early", "late"])
 
+    def test_since_skips_old_traces_before_opening(self):
+        path = self.write_trace("old", fixture("report"))
+        cutoff = friction.since_date("2026-09-30").timestamp()
+        os.utime(path, (cutoff - 1, cutoff - 1))
+        out = io.StringIO()
+        with patch.object(friction, "default_trace_dir", return_value=self.root), \
+                patch("builtins.open", side_effect=AssertionError("old trace was opened")), \
+                patch("sys.stdout", out):
+            code = friction.main(["--since", "2026-09-30", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "")
+        # With no date filter, even a trace with an old mtime is read.
+        result = self.cli("--json", self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(result.stdout.splitlines()), 1)
+
+    def test_since_keeps_cutoff_mtime_and_still_filters_event_times(self):
+        cutoff = friction.since_date("2026-09-30").timestamp()
+        path = self.write_trace("boundary", fixture("report"))
+        os.utime(path, (cutoff, cutoff))
+        events = fixture("report")
+        events[3]["time"] = "2026-09-29T23:59:59Z"
+        path = self.write_trace("recent_write_old_event", events)
+        os.utime(path, (cutoff + 1, cutoff + 1))
+        result = self.cli("--since", "2026-09-30", "--json", self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(records), 1)
+        self.assertIn("boundary", records[0]["trace"])
+
+    def test_since_stat_failure_warns_and_continues(self):
+        path = self.write_trace("unreadable", fixture("report")).resolve()
+        self.write_trace("readable", fixture("report"))
+        stat = Path.stat
+
+        def fail_one_stat(target, *args, **kwargs):
+            if target == path:
+                raise PermissionError("cannot stat trace")
+            return stat(target, *args, **kwargs)
+
+        out, errs = io.StringIO(), io.StringIO()
+        with patch.object(friction, "default_trace_dir", return_value=self.root), \
+                patch.object(Path, "stat", fail_one_stat), \
+                patch("sys.stdout", out), patch("sys.stderr", errs):
+            code = friction.main(["--since", "2026-09-30", "--json"])
+        self.assertEqual(code, 1)
+        self.assertIn(str(path), errs.getvalue())
+        self.assertIn("cannot stat trace", errs.getvalue())
+        self.assertEqual(len(out.getvalue().splitlines()), 1)
+
     def test_rejected_and_incomplete_reports_are_not_successes(self):
         events = fixture("report")
         events[5]["data"]["outcome"] = {"ok": False, "code": "invalid_arguments",

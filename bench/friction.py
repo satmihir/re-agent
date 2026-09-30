@@ -198,6 +198,15 @@ def main(argv=None):
             if "events.jsonl" in files:
                 paths.add((Path(directory) / "events.jsonl").resolve())
     for path in sorted(paths):
+        if args.since is not None:
+            # v0 §10 amendment (2026-09-30): last-write time bounds an append-only trace.
+            try:
+                if path.stat().st_mtime < args.since.timestamp():
+                    continue
+            except OSError as error:
+                print(f"warning: {path}: {error}", file=sys.stderr)
+                incomplete = True
+                continue
         found, failed = read_trace(path)
         incomplete |= failed
         for record in found:

@@ -1,6 +1,6 @@
 # re:agent — Roadmap From Real Use
 
-Status: B2 merged in #30, U1 in #28, U2 in #29, U3 in #32, U4 in #36, and U5 in #37. U11 implemented offline on 2026-09-30; live check pending. See v0 amendments for U6–U10 progress. Plan mode, a feature rather than a fix, has its own plan in `docs/reagent-plan-mode.md`.
+Status: B2 merged in #30, U1 in #28, U2 in #29, U3 in #32, U4 in #36, U5 in #37, U7 in #42, U8 in #44, U9 in #57, and U10 in #60. U6 not started. U11 implemented offline in open PR #62; live check pending. Plan mode, a feature rather than a fix, has its own plan in `docs/reagent-plan-mode.md`.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §5 is addressed to the implementing agent. The notes in `docs/reagent-bench-fixes-plan.md` §6 and `docs/reagent-cli-plan.md` §7 still apply wherever this plan does not replace them.
 
