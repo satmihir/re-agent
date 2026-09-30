@@ -224,11 +224,17 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 }
 
 // v0 §10 amendment (2026-09-28): warn at 60% of a known window.
-func (d *Display) contextWarning(usage Usage, window int64) {
+// autoCompacts says the next message will compact first, so the line says that
+// instead of offering commands (v0 §10 amendment, 2026-09-29, U10).
+func (d *Display) contextWarning(usage Usage, window int64, autoCompacts bool) {
 	if !usage.Known || window == 0 || float64(usage.InputTokens) < 0.6*float64(window) {
 		return
 	}
-	text := fmt.Sprintf("  context %.0f%% of the window; /compact summarizes or /reset starts over", 100*float64(usage.InputTokens)/float64(window))
+	advice := "/compact summarizes or /reset starts over"
+	if autoCompacts {
+		advice = "compacts before your next message"
+	}
+	text := fmt.Sprintf("  context %.0f%% of the window; %s", 100*float64(usage.InputTokens)/float64(window), advice)
 	if d.styled {
 		text = ansiDim + text + ansiReset
 	}

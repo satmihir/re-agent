@@ -49,17 +49,20 @@ func TestDisplay_ContextWarningAtSixtyPercent(t *testing.T) {
 		name   string
 		usage  Usage
 		window int64
+		auto   bool
 		want   string
 	}{
-		{"below", Usage{Known: true, InputTokens: 599_999}, 1_000_000, ""},
-		{"at", Usage{Known: true, InputTokens: 600_000}, 1_000_000, "  context 60% of the window; /compact summarizes or /reset starts over\n"},
-		{"above", Usage{Known: true, InputTokens: 630_000}, 1_000_000, "  context 63% of the window; /compact summarizes or /reset starts over\n"},
-		{"unknown window", Usage{Known: true, InputTokens: 900_000}, 0, ""},
-		{"unknown usage", Usage{}, 1_000_000, ""},
+		{"below", Usage{Known: true, InputTokens: 599_999}, 1_000_000, false, ""},
+		{"at", Usage{Known: true, InputTokens: 600_000}, 1_000_000, false, "  context 60% of the window; /compact summarizes or /reset starts over\n"},
+		{"above", Usage{Known: true, InputTokens: 630_000}, 1_000_000, false, "  context 63% of the window; /compact summarizes or /reset starts over\n"},
+		{"auto compacts next", Usage{Known: true, InputTokens: 860_000}, 1_000_000, true, "  context 86% of the window; compacts before your next message\n"},
+		{"disarmed above eighty", Usage{Known: true, InputTokens: 860_000}, 1_000_000, false, "  context 86% of the window; /compact summarizes or /reset starts over\n"},
+		{"unknown window", Usage{Known: true, InputTokens: 900_000}, 0, false, ""},
+		{"unknown usage", Usage{}, 1_000_000, false, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var b bytes.Buffer
-			NewDisplay(&b).contextWarning(test.usage, test.window)
+			NewDisplay(&b).contextWarning(test.usage, test.window, test.auto)
 			if got := b.String(); got != test.want {
 				t.Fatalf("got %q, want %q", got, test.want)
 			}

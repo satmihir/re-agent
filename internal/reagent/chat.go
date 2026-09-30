@@ -68,9 +68,13 @@ type conversation struct {
 	workspace string
 	recap     bool
 	usage     Usage
-	stdin     *os.File
-	stdout    *os.File
-	stderr    *os.File
+	// autoCompactOff is set by a failed automatic compaction so a persistent
+	// failure is not retried before every message; /compact, /reset, and a
+	// model switch clear it.
+	autoCompactOff bool
+	stdin          *os.File
+	stdout         *os.File
+	stderr         *os.File
 }
 
 // available reports which providers this process holds a credential for.
@@ -194,6 +198,7 @@ func (c *conversation) switchTo(info modelInfo) {
 	c.session = NewSession(c.cfg, model, c.trace, c.progress)
 	c.session.snapshot, c.session.planMode = snapshot, planMode
 	c.usage = Usage{Known: true}
+	c.autoCompactOff = false
 }
 
 // commandEffort lists or sets the reasoning effort for the current model. The
@@ -340,10 +345,55 @@ func (c *conversation) commandCompact(ctx context.Context, argument string, stdo
 		fmt.Fprintf(stderr, "compaction failed: %s\n", sanitize(result.Reason))
 		return
 	}
-	fmt.Fprintf(stderr, "compacted: %s summary replaces %s of history JSON\n", formatBytes(len(result.Reply)), formatBytes(replacedBytes))
+	c.autoCompactOff = false
+	printCompacted(stderr, result, replacedBytes)
 	if verbose {
 		c.session.display.reply(stdout, result.Reply, false)
 	}
+}
+
+func printCompacted(stderr io.Writer, result RunResult, replacedBytes int) {
+	fmt.Fprintf(stderr, "compacted: %s summary replaces %s of history JSON\n", formatBytes(len(result.Reply)), formatBytes(replacedBytes))
+}
+
+// autoCompactPercent is the share of a known context window at which the next
+// turn is preceded by a compaction. v0 §10 amendment (2026-09-29, U10).
+const autoCompactPercent = 80
+
+func (c *conversation) shouldAutoCompact() bool {
+	window := contextWindow(c.cfg.Model)
+	last := c.session.lastRequest
+	return c.scripted == nil && !c.autoCompactOff && c.session.blocked == "" && len(c.session.history) > 0 &&
+		window > 0 && last.Known && last.InputTokens*100 >= autoCompactPercent*window
+}
+
+// autoCompact compacts before a turn and reports whether the turn should go on.
+// Only a cancellation stops it: a failed compaction leaves the session as it was.
+func (c *conversation) autoCompact(ctx context.Context, stderr io.Writer) bool {
+	percent := 100 * float64(c.session.lastRequest.InputTokens) / float64(contextWindow(c.cfg.Model))
+	line := fmt.Sprintf("context %.0f%% of the window; compacting before this turn", percent)
+	if styledOutput(stderr) {
+		line = ansiDim + line + ansiReset
+	}
+	fmt.Fprintln(stderr, line)
+	result, replacedBytes, err := c.compact(ctx, "")
+	failure := ""
+	switch {
+	case err != nil:
+		failure = err.Error()
+	case result.Status == StatusCancelled:
+		fmt.Fprintln(stderr, "compaction cancelled; message not sent")
+		return false
+	case result.Status != StatusCompleted:
+		failure = result.Reason
+	default:
+		printCompacted(stderr, result, replacedBytes)
+	}
+	if failure != "" {
+		c.autoCompactOff = true
+		fmt.Fprintf(stderr, "auto-compaction failed: %s; sending the message anyway (/compact to retry)\n", sanitize(failure))
+	}
+	return true
 }
 
 // compact shares tracing and interrupt handling between /compact and /model.
@@ -707,6 +757,7 @@ func commandTakesArgument(name string) bool {
 func (c *conversation) reset() {
 	c.session.Reset()
 	c.usage = Usage{Known: true}
+	c.autoCompactOff = false
 }
 
 // runTurn runs one turn under its own interrupt handler, so the first Ctrl-C
@@ -715,6 +766,9 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 	turnCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
+	if c.shouldAutoCompact() && !c.autoCompact(ctx, stderr) {
+		return
+	}
 	runID := NewID()
 	path, err := tracePathFor(c.traceDir, runID)
 	if err != nil {
@@ -740,7 +794,7 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 		}
 	}
 	if result.Steps > 0 && c.session.blocked != string(StatusLimitExceeded) {
-		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model))
+		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model), c.shouldAutoCompact())
 	}
 	c.session.display.spacer()
 	if result.Status != StatusCompleted || !c.session.planMode {

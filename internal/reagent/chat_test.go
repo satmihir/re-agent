@@ -1253,7 +1253,7 @@ func TestChat_CompactVerboseFocusAndTrace(t *testing.T) {
 			if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
 				t.Fatal(code)
 			}
-			if !strings.HasSuffix(model.requests[0].History[2].User.Text, "\n\nFocus: "+test.focus) || c.usage.InputTokens != 123 || s.lastRequest.InputTokens != 123 || !strings.Contains(errs.String(), "history JSON") || !strings.Contains(errs.String(), "conversation summary") || !strings.Contains(errs.String(), s.LastTrace()) || !strings.Contains(errs.String(), "history    /compact") {
+			if !strings.HasSuffix(model.requests[0].History[2].User.Text, "\n\nFocus: "+test.focus) || c.usage.InputTokens != 123 || s.lastRequest.Known || !strings.Contains(errs.String(), "history JSON") || !strings.Contains(errs.String(), "conversation summary") || !strings.Contains(errs.String(), s.LastTrace()) || !strings.Contains(errs.String(), "history    /compact") {
 				t.Fatalf("out %q err %q", out.String(), errs.String())
 			}
 			if test.verbose && (out.String() != "Summary \\x1b[31mtest\n" || strings.Contains(out.String(), "\x1b")) {
@@ -1524,5 +1524,171 @@ func TestConversation_FailedModelSwitchRetainsHandoffUsage(t *testing.T) {
 	c.commandStatus(&stderr)
 	if !strings.Contains(stderr.String(), "123 in (80 cached) · 7 out") {
 		t.Fatalf("status: %s", stderr.String())
+	}
+}
+
+func autoCompactConversation(t *testing.T, model Model, lastInput int64) *conversation {
+	t.Helper()
+	c := newConversation(t, "gpt-6-luna", "low", 1)
+	c.session.model = model
+	c.session.lastRequest = Usage{Known: true, InputTokens: lastInput}
+	c.usage = Usage{Known: true}
+	return c
+}
+
+func TestChat_AutoCompactAtThreshold(t *testing.T) {
+	model := &compactModel{replies: []ModelResponse{turn(textBlock("handoff")), turn(textBlock("done"))}}
+	c := autoCompactConversation(t, model, 840_000)
+	var stdout, stderr bytes.Buffer
+	c.session.display = NewDisplay(&stderr)
+	c.runTurn(context.Background(), "next", nil, &stdout, &stderr)
+	if len(model.requests) != 2 || model.requests[0].History[len(model.requests[0].History)-1].User.Text != compactPrompt {
+		t.Fatalf("requests: %+v", model.requests)
+	}
+	after := model.requests[1].History
+	if len(after) != 2 || after[0].Kind != EntrySummary || after[1].User.Text != "next" {
+		t.Fatalf("history after compaction: %+v", after)
+	}
+	if !strings.Contains(stderr.String(), "context 80% of the window; compacting before this turn") || !strings.Contains(stderr.String(), "compacted:") {
+		t.Fatalf("stderr: %s", stderr.String())
+	}
+}
+
+func TestChat_AutoCompactSkipsWhenItShould(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		last   int64
+		mutate func(*conversation)
+	}{
+		{"below threshold", 839_999, func(*conversation) {}},
+		{"unknown window", 900_000, func(c *conversation) { c.cfg.Model = "custom-model" }},
+		{"blocked", 900_000, func(c *conversation) { c.session.blocked = string(StatusProtocolError) }},
+		{"empty history", 900_000, func(c *conversation) { c.session.history = nil }},
+		{"usage unknown", 0, func(c *conversation) { c.session.lastRequest = Usage{} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := autoCompactConversation(t, &compactModel{}, test.last)
+			test.mutate(c)
+			if c.shouldAutoCompact() {
+				t.Fatal("auto-compaction would run")
+			}
+		})
+	}
+}
+
+func TestChat_AutoCompactBelowThresholdSendsOneRequest(t *testing.T) {
+	model := &compactModel{replies: []ModelResponse{turn(textBlock("done"))}}
+	c := autoCompactConversation(t, model, 839_999)
+	var stdout, stderr bytes.Buffer
+	c.session.display = NewDisplay(&stderr)
+	c.runTurn(context.Background(), "next", nil, &stdout, &stderr)
+	if len(model.requests) != 1 || strings.Contains(stderr.String(), "compacting") {
+		t.Fatalf("requests %d, stderr %s", len(model.requests), stderr.String())
+	}
+}
+
+func TestChat_AutoCompactFailureStillSendsTurn(t *testing.T) {
+	model := &compactModel{err: fmt.Errorf("provider down")}
+	c := autoCompactConversation(t, model, 900_000)
+	old := len(c.session.history)
+	var stderr bytes.Buffer
+	if !c.autoCompact(context.Background(), &stderr) {
+		t.Fatal("a failed compaction stopped the turn")
+	}
+	if len(c.session.history) != old || c.session.history[0].Kind == EntrySummary || !strings.Contains(stderr.String(), "auto-compaction failed: provider down; sending the message anyway") {
+		t.Fatalf("history %+v, stderr %s", c.session.history, stderr.String())
+	}
+}
+
+func TestChat_AutoCompactCancelledDropsTurn(t *testing.T) {
+	model := &compactModel{err: &ModelError{Status: StatusCancelled, Message: "cancelled"}}
+	c := autoCompactConversation(t, model, 900_000)
+	old := len(c.session.history)
+	var stdout, stderr bytes.Buffer
+	c.runTurn(context.Background(), "next", nil, &stdout, &stderr)
+	if len(model.requests) != 1 || len(c.session.history) != old || !strings.Contains(stderr.String(), "message not sent") {
+		t.Fatalf("requests %d, history %+v, stderr %s", len(model.requests), c.session.history, stderr.String())
+	}
+}
+
+func TestChat_AutoCompactDoesNotRepeat(t *testing.T) {
+	summary := turn(textBlock("handoff"))
+	summary.Usage = Usage{Known: true, InputTokens: 900_000}
+	model := &compactModel{replies: []ModelResponse{summary, turn(textBlock("one")), turn(textBlock("two"))}}
+	c := autoCompactConversation(t, model, 900_000)
+	var stdout, stderr bytes.Buffer
+	c.session.display = NewDisplay(&stderr)
+	c.runTurn(context.Background(), "a", nil, &stdout, &stderr)
+	c.runTurn(context.Background(), "b", nil, &stdout, &stderr)
+	if len(model.requests) != 3 || strings.Count(stderr.String(), "compacting before") != 1 {
+		t.Fatalf("requests %d, stderr %s", len(model.requests), stderr.String())
+	}
+}
+
+func TestChat_AutoCompactFailureDisarmsUntilCompactResetOrSwitch(t *testing.T) {
+	model := &compactModel{err: fmt.Errorf("provider down")}
+	c := autoCompactConversation(t, model, 900_000)
+	var stdout, stderr bytes.Buffer
+	c.session.display = NewDisplay(&stderr)
+	if !c.autoCompact(context.Background(), &stderr) || !c.autoCompactOff || !strings.Contains(stderr.String(), "(/compact to retry)") {
+		t.Fatalf("off %t, stderr %s", c.autoCompactOff, stderr.String())
+	}
+	c.session.lastRequest = Usage{Known: true, InputTokens: 900_000}
+	if c.shouldAutoCompact() {
+		t.Fatal("auto-compaction retried after a failure")
+	}
+	c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model), c.shouldAutoCompact())
+	if !strings.Contains(stderr.String(), "/compact summarizes or /reset starts over") {
+		t.Fatalf("stderr %s", stderr.String())
+	}
+
+	model.err, model.replies = nil, []ModelResponse{turn(textBlock("handoff"))}
+	c.commandCompact(context.Background(), "", &stdout, &stderr)
+	if c.autoCompactOff {
+		t.Fatal("a successful /compact did not re-arm")
+	}
+
+	for name, clear := range map[string]func(){
+		"reset":  c.reset,
+		"switch": func() { c.switchTo(modelCatalog[1]) },
+	} {
+		c.autoCompactOff = true
+		clear()
+		if c.autoCompactOff {
+			t.Fatalf("%s did not re-arm", name)
+		}
+	}
+}
+
+func TestChat_AutoCompactFailureMakesNoSecondAttempt(t *testing.T) {
+	model := &compactModel{err: fmt.Errorf("provider down")}
+	c := autoCompactConversation(t, model, 900_000)
+	var stdout, stderr bytes.Buffer
+	c.session.display = NewDisplay(&stderr)
+	c.runTurn(context.Background(), "a", nil, &stdout, &stderr)
+	before := len(model.requests)
+	c.session.lastRequest = Usage{Known: true, InputTokens: 900_000}
+	c.runTurn(context.Background(), "b", nil, &stdout, &stderr)
+	if strings.Count(stderr.String(), "compacting before") != 1 || len(model.requests) != before+1 {
+		t.Fatalf("requests %d then %d, stderr %s", before, len(model.requests), stderr.String())
+	}
+}
+
+func TestChat_ManualCompactThenMessageCompactsOnce(t *testing.T) {
+	summary := turn(textBlock("handoff"))
+	summary.Usage = Usage{Known: true, InputTokens: 900_000}
+	model := &compactModel{replies: []ModelResponse{summary, turn(textBlock("done"))}}
+	c := autoCompactConversation(t, model, 100)
+	var out, errs bytes.Buffer
+	c.session.display = NewDisplay(&errs)
+	input := "/compact\n/status\nsecond\n/exit\n"
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
+		t.Fatal(code)
+	}
+	if len(model.requests) != 2 || strings.Contains(errs.String(), "compacting before") || strings.Contains(errs.String(), "last request") {
+		t.Fatalf("requests %d, stderr %s", len(model.requests), errs.String())
+	}
+	if h := model.requests[1].History; len(h) != 2 || h[0].Kind != EntrySummary {
+		t.Fatalf("history %+v", h)
 	}
 }

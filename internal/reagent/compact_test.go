@@ -64,7 +64,7 @@ func TestCompact_ReplacesHistoryWithTheSummary(t *testing.T) {
 	if s.ID != id || s.Turns() != turns-1 || !s.seenCalls["old"] || len(s.history) != 1 || s.history[0].Kind != EntrySummary || *s.history[0].Summary != (Summary{Text: result.Reply, ReplacedEntries: 2, Model: s.cfg.Model}) {
 		t.Fatalf("session changed incorrectly: %+v", s)
 	}
-	if s.LastTrace() != path || s.lastRequest != reply.Usage || result.Usage != reply.Usage {
+	if s.LastTrace() != path || s.lastRequest.Known || result.Usage != reply.Usage {
 		t.Fatalf("diagnostics: %+v %+v", s.lastRequest, result)
 	}
 	events := readEvents(t, path)

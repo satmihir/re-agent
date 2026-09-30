@@ -408,7 +408,7 @@ Plan mode (`docs/reagent-plan-mode.md`) is the enforced form of the first senten
 **Behavior.**
 
 - Before a turn starts, if the last request used at least 80% of a known context window, the chat compacts first and prints a line saying so.
-- After a turn ends with the context-window `limit_exceeded` from U7, the blocked message suggests `/compact` rather than `/reset`.
+- After a turn ends with the context-window `limit_exceeded` from U7, the blocked message stays `/reset`-only: a compaction request cannot fit an overflowed history (corrected 2026-09-29, per the U8 review clarification).
 - There is no compaction in the middle of a turn. A turn that overflows stops, as today.
 
 **Touches.** `internal/reagent/chat.go` and its test, plus `docs/reagent-v0-design.md` (§10 amendment).

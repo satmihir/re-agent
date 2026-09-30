@@ -133,6 +133,9 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	summary := Summary{Text: text, ReplacedEntries: len(s.history), Model: s.cfg.Model}
 	s.history = []Entry{{Kind: EntrySummary, Summary: &summary}}
 	s.blocked = ""
+	// The request's input was the whole old history, so its usage says nothing
+	// about the new one and would trigger another compaction (v0 §10, U10).
+	s.lastRequest = Usage{}
 	result.Status, result.Reply = StatusCompleted, text
 	s.trace.Write("compaction.finished", 1, map[string]any{"summary": text, "replaced_entries": summary.ReplacedEntries})
 	return result, len(oldJSON), nil
