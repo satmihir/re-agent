@@ -387,8 +387,6 @@ func (c *conversation) autoCompact(ctx context.Context, stderr io.Writer) bool {
 	case result.Status != StatusCompleted:
 		failure = result.Reason
 	default:
-		// The compaction request's usage would otherwise trigger another one.
-		c.session.lastRequest = Usage{}
 		printCompacted(stderr, result, replacedBytes)
 	}
 	if failure != "" {

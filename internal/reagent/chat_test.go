@@ -1253,7 +1253,7 @@ func TestChat_CompactVerboseFocusAndTrace(t *testing.T) {
 			if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
 				t.Fatal(code)
 			}
-			if !strings.HasSuffix(model.requests[0].History[2].User.Text, "\n\nFocus: "+test.focus) || c.usage.InputTokens != 123 || s.lastRequest.InputTokens != 123 || !strings.Contains(errs.String(), "history JSON") || !strings.Contains(errs.String(), "conversation summary") || !strings.Contains(errs.String(), s.LastTrace()) || !strings.Contains(errs.String(), "history    /compact") {
+			if !strings.HasSuffix(model.requests[0].History[2].User.Text, "\n\nFocus: "+test.focus) || c.usage.InputTokens != 123 || s.lastRequest.Known || !strings.Contains(errs.String(), "history JSON") || !strings.Contains(errs.String(), "conversation summary") || !strings.Contains(errs.String(), s.LastTrace()) || !strings.Contains(errs.String(), "history    /compact") {
 				t.Fatalf("out %q err %q", out.String(), errs.String())
 			}
 			if test.verbose && (out.String() != "Summary \\x1b[31mtest\n" || strings.Contains(out.String(), "\x1b")) {
@@ -1671,5 +1671,24 @@ func TestChat_AutoCompactFailureMakesNoSecondAttempt(t *testing.T) {
 	c.runTurn(context.Background(), "b", nil, &stdout, &stderr)
 	if strings.Count(stderr.String(), "compacting before") != 1 || len(model.requests) != before+1 {
 		t.Fatalf("requests %d then %d, stderr %s", before, len(model.requests), stderr.String())
+	}
+}
+
+func TestChat_ManualCompactThenMessageCompactsOnce(t *testing.T) {
+	summary := turn(textBlock("handoff"))
+	summary.Usage = Usage{Known: true, InputTokens: 900_000}
+	model := &compactModel{replies: []ModelResponse{summary, turn(textBlock("done"))}}
+	c := autoCompactConversation(t, model, 100)
+	var out, errs bytes.Buffer
+	c.session.display = NewDisplay(&errs)
+	input := "/compact\n/status\nsecond\n/exit\n"
+	if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
+		t.Fatal(code)
+	}
+	if len(model.requests) != 2 || strings.Contains(errs.String(), "compacting before") || strings.Contains(errs.String(), "last request") {
+		t.Fatalf("requests %d, stderr %s", len(model.requests), errs.String())
+	}
+	if h := model.requests[1].History; len(h) != 2 || h[0].Kind != EntrySummary {
+		t.Fatalf("history %+v", h)
 	}
 }
