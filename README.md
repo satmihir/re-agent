@@ -168,7 +168,7 @@ A few rules shape the rest:
   keeps the prompt cache warm.
 - **Provider state goes back verbatim.** Reasoning and thinking items return
   exactly as received, and one provider's items are never sent to the other.
-- **History is append-only except for `/reset` and `/compact`.** Compaction replaces the entire history at once with one model-written summary; it does not edit earlier entries in place. Failed attempts keep the history.
+- **History is append-only except for `/reset` and `/compact`.** Compaction replaces the entire history at once with one model-written summary; it does not edit earlier entries in place. Failed attempts keep the history. In chat, a turn that follows a request using at least 80% of a known context window is preceded by an automatic compaction.
 
 Two design documents govern the code: [v0](docs/reagent-v0-design.md) is what
 is built, and [v1](docs/reagent-v1-design.md) is the fuller target. Comments
@@ -208,7 +208,7 @@ to appear.
 A test that reaches the internet is a bug. [`AGENTS.md`](AGENTS.md) holds the
 house rules for any agent working here, re:agent included.
 
-**Not yet:** subagents, automatic compaction, retrieval, and a sandbox.
+**Not yet:** subagents, retrieval, and a sandbox.
 A completed run means the model gave a final answer, not that the task was
 done right.
 
