@@ -18,7 +18,7 @@ func TestResolveTarget_ProviderAndModel(t *testing.T) {
 		"other model is openai": {"", "gpt-x", openaiName, "gpt-x", ""},
 		"anthropic default":     {anthropicName, "", anthropicName, DefaultAnthropicModel, ""},
 		"openai default":        {openaiName, "", openaiName, DefaultOpenAIModel, ""},
-		"explicit agrees":       {anthropicName, "claude-sonnet-5", anthropicName, "claude-sonnet-5", ""},
+		"explicit agrees":       {anthropicName, "claude-sonnet-5-5", anthropicName, "claude-sonnet-5-5", ""},
 		"claude under openai":   {openaiName, "claude-haiku-4-5", "", "", "selects the anthropic provider"},
 		"gpt under anthropic":   {anthropicName, "gpt-x", "", "", "selects the openai provider"},
 		"unknown provider":      {"gemini", "", "", "", "unknown provider"},
@@ -54,7 +54,7 @@ func TestResolveEffort_AutoIsPerModelThenPerProvider(t *testing.T) {
 		// A catalog model knows its own; effort support varies inside a
 		// provider, not only between providers.
 		{"auto", anthropicName, "claude-haiku-4-5", ""},
-		{"auto", anthropicName, "claude-sonnet-5", "low"},
+		{"auto", anthropicName, "claude-sonnet-5-5", "low"},
 		{"auto", openaiName, "gpt-5.6-luna", "low"},
 		{"auto", openaiName, "gpt-6-luna", "low"},
 		{"auto", openaiName, "gpt-6-sol", "low"},

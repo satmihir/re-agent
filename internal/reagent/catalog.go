@@ -40,16 +40,16 @@ var modelCatalog = []modelInfo{
 		Note: "cheapest", ContextWindow: 1_050_000},
 	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "low",
 		Note: "most capable, costs most", ContextWindow: 1_050_000},
-	{ID: "gpt-6-sol", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
-		Note: "previous Sol, costs as much", ContextWindow: 1_050_000},
 	{ID: "gpt-5.6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
 		Note: "cheap"},
 	{ID: "gpt-5.6-terra", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
 		Note: "more capable, costs more"},
 	{ID: "claude-haiku-4-5", Provider: anthropicName, Efforts: nil, Effort: "",
 		Note: "cheapest; no effort setting", ContextWindow: 200_000},
-	{ID: "claude-sonnet-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
+	{ID: "claude-sonnet-5-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
 		Note: "more capable, costs more", ContextWindow: 1_000_000},
+	{ID: "claude-opus-5-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
+		Note: "most capable, costs most", ContextWindow: 1_000_000},
 }
 
 // findModel returns the catalog entry for an exact model id.
