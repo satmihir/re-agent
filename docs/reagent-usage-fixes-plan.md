@@ -1,6 +1,6 @@
 # re:agent — Roadmap From Real Use
 
-Status: B2 merged in #30, U1 in #28, U2 in #29, U3 in #32, U4 in #36, and U5 in #37. U6–U11 not started. Plan mode, a feature rather than a fix, has its own plan in `docs/reagent-plan-mode.md`.
+Status: B2 merged in #30, U1 in #28, U2 in #29, U3 in #32, U4 in #36, and U5 in #37. U11 implemented offline on 2026-09-30; live check pending. See v0 amendments for U6–U10 progress. Plan mode, a feature rather than a fix, has its own plan in `docs/reagent-plan-mode.md`.
 
 This plan is written for re:agent to implement, one milestone per session, with a human reviewing each one. §5 is addressed to the implementing agent. The notes in `docs/reagent-bench-fixes-plan.md` §6 and `docs/reagent-cli-plan.md` §7 still apply wherever this plan does not replace them.
 
@@ -425,6 +425,8 @@ Plan mode (`docs/reagent-plan-mode.md`) is the enforced form of the first senten
 
 A mode in which the model reports such rough edges as it meets them turns every test session into input for this roadmap.
 
+**Implementation decisions confirmed (2026-09-30).** Reports remain trace-only. The cap counts ten successfully validated submissions across the whole process; invalid submissions consume no slot, and resets, compaction, and model switches keep the count. Character limits mean Unicode code points; a summary must be nonblank and contain no CR/LF, and optional fields must be omitted rather than null. The instruction paragraph goes between Runtime and Project instructions. `buildRevision()` already exists, so reuse it unchanged; every ordinary `run.started` gets `build`, even when empty. `/friction` rejects arguments locally and otherwise uses the ordinary turn path, including auto-compaction: its review covers only the conversation still available to the model, including summaries, not restored old traces. The reader scans the platform default cache plus explicit roots, deduplicates paths, resolves related IDs from that trace's current events and initial history, and never emits historical reports again. It uses the configured model rather than the adapter name, labels rejected/capped reports, and treats missing outcomes/builds as unknown. `--since` is inclusive from midnight UTC; invalid explicit roots/dates are usage errors, and unreadable/malformed input warns and exits nonzero while preserving readable output. Recorded under v0 §10's 2026-09-30 amendment.
+
 **Behavior.**
 
 - The launch flag `--report-friction` (off by default, for both `run` and `chat`) registers one more tool, `report_friction`, and appends one paragraph to the instructions.
@@ -599,7 +601,7 @@ Not done or uncertain: <anything the human should look at>
 3. **Compaction replaces everything with one summary** (U8). The alternative, keeping the most recent turns word for word (as Codex and Cline do), fails on the newest Anthropic models unless their thinking is stripped from the kept turns, and it is more code. A single summary is what Anthropic recommends for client-side compaction.
 4. **Automatic compaction** (U10). Recommended yes, at 80%, between turns only, and only after U8 has been used by hand for a while. It is the larger reversal of v1's non-goal, so it is its own decision.
 5. **`write_file` does not create directories** (U2). No use seen needed one, and `mkdir` stays an `exec` effect. The alternative is creating missing parents inside the workspace.
-6. **Friction reports live only in the trace** (U11). The script derives the log, following v1 §16. The alternative is a separate `friction.jsonl` appended by the tool: easier to `tail`, but a second record that can disagree with the trace, and a tool that writes outside the workspace. Also: a cap of 10 reports per process, and `/friction` working without the flag.
+6. **Friction reports live only in the trace** (U11). **Confirmed 2026-09-30:** the script derives the log, following v1 §16; there is no separate `friction.jsonl`. The cap is 10 successfully validated reports per process, invalid submissions do not consume it, and `/friction` works without the flag and independently of that cap. `/friction` follows ordinary-turn auto-compaction and reviews only available history, including summaries. See the U11 implementation decisions in §4.
 
 ## 8. Out of scope
 

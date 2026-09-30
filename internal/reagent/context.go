@@ -12,6 +12,17 @@ import (
 //go:embed instructions.txt
 var defaultInstructions string
 
+const frictionInstructions = `
+# Friction reports
+
+This session is testing re:agent itself. When the harness gets in your way,
+call report_friction once, briefly, and carry on with the task: a tool error
+whose message misled you, a capability you had to work around, a tool
+description or instruction that was unclear, or harness behavior that looks
+wrong. Cite the calls involved. Do not report your own mistakes unless the
+harness made them likely, and do not stop the task to report.
+`
+
 // BuildContext assembles one model request.
 //
 // It is pure (v1 §8.1): no file reads, no clock, no randomness, no mutation of
@@ -55,7 +66,11 @@ func instructions(cfg Config) string {
 			"Workspace: %s\nMode: %s\nBudget: %d model requests and %d tool calls per run\n",
 		cfg.Provider, cfg.Model, effort, runtime.GOOS,
 		cfg.WorkspacePath, cfg.Registry.Mode().String(), cfg.MaxSteps, cfg.MaxToolCalls)
-	// v0 §6 U5: the launch-time copy follows the fixed runtime section.
+	// v0 §10 amendment (2026-09-30): opt-in text is fixed and precedes project instructions.
+	if cfg.ReportFriction {
+		text += frictionInstructions
+	}
+	// v0 §6 U5: the launch-time copy follows the runtime instructions.
 	if cfg.ProjectInstructions != nil {
 		text += "\n# Project instructions (AGENTS.md)\n\n" + *cfg.ProjectInstructions
 	}

@@ -6,6 +6,42 @@ import (
 	"testing"
 )
 
+func TestContext_FrictionInstructionsOnlyWithTheFlag(t *testing.T) {
+	cfg := testConfig(t)
+	plain := instructions(cfg)
+	if strings.Contains(plain, "# Friction reports") {
+		t.Fatal("friction instructions enabled by default")
+	}
+	want := `
+# Friction reports
+
+This session is testing re:agent itself. When the harness gets in your way,
+call report_friction once, briefly, and carry on with the task: a tool error
+whose message misled you, a capability you had to work around, a tool
+description or instruction that was unclear, or harness behavior that looks
+wrong. Cite the calls involved. Do not report your own mistakes unless the
+harness made them likely, and do not stop the task to report.
+`
+	cfg.ReportFriction = true
+	if got := instructions(cfg); got != plain+want {
+		t.Fatalf("friction instructions: %q", got)
+	}
+	project := "project text\n"
+	cfg.ProjectInstructions = &project
+	if got := instructions(cfg); got != plain+want+"\n# Project instructions (AGENTS.md)\n\n"+project {
+		t.Fatalf("instruction order: %q", got)
+	}
+	first := BuildContext(cfg, RequestScope{Step: 1}, nil)
+	later := BuildContext(cfg, RequestScope{Step: 2}, nil)
+	if first.Instructions != later.Instructions {
+		t.Fatal("friction instructions changed between requests")
+	}
+	cfg.ReportFriction = false
+	if got := instructions(cfg); got != plain+"\n# Project instructions (AGENTS.md)\n\n"+project {
+		t.Fatalf("flag-off instructions changed: %q", got)
+	}
+}
+
 func TestBuildContext_IsPureAndOrdered(t *testing.T) {
 	cfg := testConfig(t, NewEchoTool(), countingTool{runs: new(int)})
 	cfg.WorkspacePath = "/tmp/example"

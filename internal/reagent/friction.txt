@@ -1,0 +1,8 @@
+re:agent friction review
+Looking back over this whole session, list the places where the re:agent
+harness got in your way: misleading tool errors, capabilities you worked
+around, unclear tool descriptions or instructions, and harness behavior that
+looked wrong. For each, give a category (misleading_error,
+missing_capability, unclear_description, harness_bug, other), one line
+saying what happened, and the call ids involved. Leave out your own mistakes
+unless the harness made them likely. If there were none, say so.
