@@ -32,7 +32,7 @@ func TestWorkspaceConsent_ChatApprovesWithinTurnAndRetainsGrantAfterReset(t *tes
 	if code := chat(context.Background(), c, input, &out, &progress); code != exitOK {
 		t.Fatal(code)
 	}
-	if input.chooseCalls != 1 || input.choiceCurrent != 1 || input.choiceConfig.shortcuts || len(input.choices) != 2 || input.choices[0].label != "Allow for this session" || input.choices[1].label != "Deny" {
+	if input.chooseCalls != 1 || input.choiceCurrent != 1 || input.choiceConfig.shortcuts || !input.choiceConfig.freshInput || len(input.choices) != 2 || input.choices[0].label != "Allow for this session" || input.choices[1].label != "Deny" {
 		t.Fatalf("picker %+v", input)
 	}
 	if s.ID == oldID || out.String() != "first\nsecond\n" || s.blocked != "" {

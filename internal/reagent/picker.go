@@ -15,6 +15,7 @@ type choice struct {
 type pickerConfig struct {
 	title, cancelLabel string
 	shortcuts          bool
+	freshInput         bool
 }
 
 type key int

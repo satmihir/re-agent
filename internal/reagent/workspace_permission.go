@@ -12,6 +12,9 @@ func workspacePermission(ctx context.Context, input lineReader, progress io.Writ
 	if ctx.Err() != nil {
 		return false, errCancelled
 	}
+	if _, noninteractive := input.(*scannerReader); noninteractive {
+		return false, errNotInteractive
+	}
 	fmt.Fprintln(progress, "Allow this location as a workspace?")
 	fmt.Fprintln(progress, "Location: "+strconv.Quote(destination.path))
 	if destination.missing {
@@ -23,7 +26,7 @@ func workspacePermission(ctx context.Context, input lineReader, progress io.Writ
 	}
 	fmt.Fprintln(progress, "Duration: until this chat exits, including /reset, /model, and compaction.")
 	fmt.Fprintln(progress, "Files read here may be sent to the provider and recorded in traces.")
-	index, err := input.Choose(pickerConfig{title: "Workspace consent", cancelLabel: "deny"}, []choice{
+	index, err := input.Choose(pickerConfig{title: "Workspace consent", cancelLabel: "deny", freshInput: true}, []choice{
 		{label: "Allow for this session"}, {label: "Deny"},
 	}, 1)
 	if err != nil {

@@ -18,6 +18,11 @@ type editFileTool struct{ ws *Workspace }
 // mode; the human grants that at launch (v1 §10.3).
 func NewEditFileTool(ws *Workspace) Tool { return editFileTool{ws} }
 
+func (t editFileTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
 type editFileArgs struct {
 	Path           string `json:"path"`
 	ExpectedSHA256 string `json:"expected_sha256"`

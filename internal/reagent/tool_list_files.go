@@ -15,6 +15,11 @@ type listFilesTool struct{ ws *Workspace }
 // NewListFilesTool returns the directory listing tool.
 func NewListFilesTool(ws *Workspace) Tool { return listFilesTool{ws} }
 
+func (t listFilesTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
 type listFilesArgs struct {
 	Path   string          `json:"path"`
 	Offset json.RawMessage `json:"offset"`

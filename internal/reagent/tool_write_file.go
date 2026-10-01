@@ -22,6 +22,16 @@ func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws} }
 // NewDeleteFileTool returns the guarded regular-file deletion tool.
 func NewDeleteFileTool(ws *Workspace) Tool { return deleteFileTool{ws} }
 
+func (t writeFileTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
+func (t deleteFileTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
 type writeFileArgs struct {
 	Path           string          `json:"path"`
 	Content        json.RawMessage `json:"content"`

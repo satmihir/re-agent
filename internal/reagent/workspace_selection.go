@@ -179,6 +179,10 @@ func (s *Session) approveWorkspace(ctx context.Context, destination workspaceDes
 
 // v0 §4 amendment (2026-09-30): Git identity validates a linked worktree, not authority.
 func validateLinkedWorktree(ctx context.Context, root string) *ToolOutcome {
+	rootInfo, err := os.Stat(root)
+	if err != nil || !rootInfo.IsDir() {
+		return failPtr("workspace_validation_failed", "cannot identify selected worktree directory")
+	}
 	info, err := os.Lstat(filepath.Join(root, ".git"))
 	if os.IsNotExist(err) || (err == nil && info.IsDir()) {
 		return nil
@@ -191,7 +195,9 @@ func validateLinkedWorktree(ctx context.Context, root string) *ToolOutcome {
 		return failPtr("workspace_validation_failed", "cannot identify linked worktree")
 	}
 	canonicalTop, err := filepath.EvalSymlinks(strings.TrimSpace(top))
-	if err != nil || canonicalTop != root {
+	topInfo, statErr := os.Stat(canonicalTop)
+	// v0 §4 amendment (2026-09-30): Git may report the on-disk case, not the launch spelling.
+	if err != nil || statErr != nil || !os.SameFile(rootInfo, topInfo) {
 		return failPtr("workspace_validation_failed", "linked worktree top-level does not match the selected directory")
 	}
 	common, ok := snapshotGit(ctx, root, "rev-parse", "--git-common-dir")
@@ -215,8 +221,8 @@ func validateLinkedWorktree(ctx context.Context, root string) *ToolOutcome {
 	}
 	for _, field := range strings.Split(listing, "\x00") {
 		if strings.HasPrefix(field, "worktree ") {
-			path, err := filepath.EvalSymlinks(strings.TrimPrefix(field, "worktree "))
-			if err == nil && path == root {
+			listedInfo, err := os.Stat(strings.TrimPrefix(field, "worktree "))
+			if err == nil && os.SameFile(rootInfo, listedInfo) {
 				return nil
 			}
 		}
@@ -269,6 +275,9 @@ func (s *Session) selectWorkspace(ctx context.Context, destination workspaceDest
 	}
 	s.cfg.Workspace, s.cfg.WorkspacePath, s.cfg.ProjectInstructions = ws, ws.Root(), project
 	s.cfg.Registry = s.cfg.Registry.bindWorkspace(s, ws)
+	if !s.planMode && !s.cfg.Registry.Mode().ReadOnly {
+		s.display.headerLine("! exec mode: commands run as you, in " + sanitize(shortPath(ws.Root())) + ", and can read, write, and use the network")
+	}
 	if warnings.Len() != 0 {
 		fmt.Fprint(s.progress, warnings.String())
 	}

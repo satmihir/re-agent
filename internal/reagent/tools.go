@@ -69,32 +69,19 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 	return t, found
 }
 
+// v0 §6 amendment (2026-09-30): workspace-bound tools own their copied execution binding.
+type workspaceBoundTool interface {
+	Tool
+	withWorkspace(*Workspace) Tool
+}
+
 // v0 §6 amendment (2026-09-30): copy executable bindings, not schemas or active roots.
 func (r *Registry) bindWorkspace(s *Session, ws *Workspace) *Registry {
 	bound := &Registry{mode: r.mode, specs: r.specs, inactive: r.inactive, byName: make(map[string]Tool)}
 	for name, tool := range r.byName {
 		switch t := tool.(type) {
-		case listFilesTool:
-			t.ws = ws
-			tool = t
-		case readFileTool:
-			t.ws = ws
-			tool = t
-		case searchTextTool:
-			t.ws = ws
-			tool = t
-		case editFileTool:
-			t.ws = ws
-			tool = t
-		case writeFileTool:
-			t.ws = ws
-			tool = t
-		case deleteFileTool:
-			t.ws = ws
-			tool = t
-		case execTool:
-			t.ws = ws
-			tool = t
+		case workspaceBoundTool:
+			tool = t.withWorkspace(ws)
 		case switchWorkspaceTool:
 			t.session = s
 			tool = t

@@ -142,8 +142,8 @@ it is not a model tool call. Turn plan mode off with `/plan` to implement.
 The model can call `switch_workspace` to select an existing directory. For a
 location outside the approved scope, interactive chat pauses the turn and asks
 for consent with **Allow for this session** or **Deny**, defaulting to Deny.
-Only arrow keys and Enter choose; Escape, Ctrl-C, or Ctrl-D cancel without a
-grant. The complete escaped canonical destination, existing authority, and
+Only fresh arrow keys and Enter choose; pending type-ahead is discarded before
+the picker opens. Escape, Ctrl-C, or Ctrl-D cancel without a grant. The complete escaped canonical destination, existing authority, and
 provider/trace disclosure appear before the picker. Approval continues the same
 turn; later selections within that approved root need no further consent.
 
@@ -179,7 +179,17 @@ root. Relative paths and returned digests are not conflated across worktrees.
 Same-root selection is a no-op; changing a shell's own directory never selects
 a workspace for subsequent tools. Canonical path checks reject symlink escapes
 and withheld aliases but are not race-proof sandboxing. Read pagination and
-command-output limits are unchanged.
+command-output limits are unchanged. Withheld names are case-insensitive on all
+platforms, and automatic Git probes disable repository-configured fsmonitor
+commands. A switch in exec mode prints an updated notice naming its root.
+
+This feature changes the benchmark request baseline even without a switch:
+workspace tools are always declared, general instructions gain workspace-history
+guidance, and snapshots, shell records, and model-facing tool outcomes carry
+workspace attribution. The handoff prompt also includes workspace guidance.
+Per-result attribution is intentionally retained before the first switch for
+unambiguous history and trace replay; it counts toward the existing result limit.
+See the v0 §6 request-compatibility amendment.
 
 ## Every run is on disk
 

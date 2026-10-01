@@ -13,6 +13,11 @@ type readFileTool struct{ ws *Workspace }
 // NewReadFileTool returns the file reading tool.
 func NewReadFileTool(ws *Workspace) Tool { return readFileTool{ws} }
 
+func (t readFileTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
 type readFileArgs struct {
 	Path      string          `json:"path"`
 	StartLine json.RawMessage `json:"start_line"`

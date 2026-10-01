@@ -21,6 +21,13 @@ func terminalInput(input io.Reader) *terminalReader {
 			return func() {}, nil
 		}}
 	terminal.History = &reader.history
+	reader.discardInput = func() error {
+		if pending, ok := input.(*strings.Reader); ok {
+			_, err := pending.Seek(0, io.SeekEnd)
+			return err
+		}
+		return nil // pickerKeys models fresh keystrokes arriving after the draw.
+	}
 	return reader
 }
 
@@ -591,5 +598,71 @@ func TestScannerReader_ReportsEndOfInput(t *testing.T) {
 	}
 	if _, err := reader.ReadLine(); err != io.EOF {
 		t.Fatalf("got %v, want io.EOF", err)
+	}
+}
+
+func TestTerminalReader_ConsentDiscardsQueuedApproval(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[A\r"))
+	index, err := reader.Choose(pickerConfig{title: "Workspace consent", freshInput: true}, []choice{{label: "Allow"}, {label: "Deny"}}, 1)
+	if err == nil && index == 0 {
+		t.Fatal("pre-buffered Up/Enter granted access")
+	}
+	if err != io.EOF {
+		t.Fatalf("after discarding queued input: %v", err)
+	}
+}
+
+func TestTerminalReader_ConsentDrainPrecedesDrawAndKeepsFreshKeys(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want int
+	}{{"\r", 1}, {"\x1b[A\r", 0}} {
+		reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte(tc.key)}})
+		entered, discarded, restored := false, false, false
+		reader.enterRaw = func() (func(), error) { entered = true; return func() { restored = true }, nil }
+		reader.discardInput = func() error {
+			if !entered || reader.out.(*bytes.Buffer).Len() != 0 {
+				t.Fatal("drain did not precede first draw in raw mode")
+			}
+			discarded = true
+			return nil
+		}
+		index, err := reader.Choose(pickerConfig{title: "Workspace consent", freshInput: true}, []choice{{label: "Allow"}, {label: "Deny"}}, 1)
+		if err != nil || index != tc.want || !discarded || !restored {
+			t.Fatalf("index %d error %v, discarded %t restored %t", index, err, discarded, restored)
+		}
+	}
+}
+
+func TestTerminalReader_ConsentDropsPromptReadAheadAndRetainsEditing(t *testing.T) {
+	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("work\rqueued\r"), []byte("\r"), []byte("fresh\r")}})
+	reader.terminal.AutoCompleteCallback = func(line string, pos int, key rune) (string, int, bool) { return line, pos, false }
+	if line, err := reader.ReadLine(); err != nil || line != "work" {
+		t.Fatalf("first prompt %q %v", line, err)
+	}
+	reader.keys.pending, reader.keys.hold = []byte("old"), []byte("\x1b")
+	index, err := reader.Choose(pickerConfig{title: "Workspace consent", freshInput: true}, []choice{{label: "Allow"}, {label: "Deny"}}, 1)
+	if err != nil || index != 1 {
+		t.Fatalf("picker %d %v", index, err)
+	}
+	if reader.terminal.AutoCompleteCallback == nil || reader.terminal.History != &reader.history {
+		t.Fatal("consent discarded editing settings")
+	}
+	if line, err := reader.ReadLine(); err != nil || line != "fresh" {
+		t.Fatalf("old prompt input survived: %q %v", line, err)
+	}
+}
+
+func TestTerminalReader_ConsentDrainFailureRefusesAndRestores(t *testing.T) {
+	reader := terminalInput(strings.NewReader("\x1b[A\r"))
+	failure := errors.New("drain failed")
+	restored := false
+	reader.enterRaw = func() (func(), error) { return func() { restored = true }, nil }
+	reader.discardInput = func() error { return failure }
+	if _, err := reader.Choose(pickerConfig{title: "Workspace consent", freshInput: true}, []choice{{label: "Allow"}, {label: "Deny"}}, 1); err != failure {
+		t.Fatal(err)
+	}
+	if !restored || reader.out.(*bytes.Buffer).Len() != 0 {
+		t.Fatal("drain failure drew picker or did not restore terminal")
 	}
 }

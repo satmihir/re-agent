@@ -46,6 +46,11 @@ type execTool struct {
 // mode, which the human grants at launch alongside write mode (v1 §10.3).
 func NewExecTool(ws *Workspace) Tool { return execTool{ws: ws, minTimeout: minExecTimeout} }
 
+func (t execTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
 type execArgs struct {
 	Argv      []string        `json:"argv"`
 	Cwd       string          `json:"cwd"`

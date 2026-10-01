@@ -127,7 +127,9 @@ func (w *Workspace) resolve(rel string) (string, *ToolOutcome) {
 // internals; .env files conventionally hold credentials, and anything a tool
 // reads is sent to the provider and written to the trace (v0 §4).
 func withheld(name string) bool {
-	return name == ".git" || name == ".env" || strings.HasPrefix(name, ".env.")
+	// v0 §4 amendment (2026-09-30): case aliases must not bypass withholding.
+	lower := strings.ToLower(name)
+	return strings.EqualFold(name, ".git") || lower == ".env" || strings.HasPrefix(lower, ".env.")
 }
 
 func insidePath(root, path string) bool {

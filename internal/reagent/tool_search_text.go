@@ -25,6 +25,11 @@ type searchTextTool struct{ ws *Workspace }
 // NewSearchTextTool returns the text search tool, which is literal by default.
 func NewSearchTextTool(ws *Workspace) Tool { return searchTextTool{ws} }
 
+func (t searchTextTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
 type searchTextArgs struct {
 	Path       string          `json:"path"`
 	Query      string          `json:"query"`

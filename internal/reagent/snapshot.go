@@ -75,7 +75,8 @@ func collectSnapshot(ctx context.Context, root string) json.RawMessage {
 func snapshotGit(ctx context.Context, root string, args ...string) (string, bool) {
 	deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(deadline, "git", args...)
+	// v0 §6 amendment (2026-09-30): metadata probes must not run configured fsmonitor commands.
+	cmd := exec.CommandContext(deadline, "git", append([]string{"-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Dir = root
 	cmd.Env = childEnvironment()
 	cmd.Stdin = bytes.NewReader(nil)
