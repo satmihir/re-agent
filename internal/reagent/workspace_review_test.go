@@ -101,7 +101,7 @@ func TestWorkspaceReview_SwitchDoesNotRunFSMonitor(t *testing.T) {
 				t.Fatal(outcome)
 			}
 			var state workspaceState
-			if err := json.Unmarshal(collectSnapshot(context.Background(), s.cfg.WorkspacePath), &state); err != nil {
+			if err := json.Unmarshal(collectSnapshot(context.Background(), s.cfg.WorkspacePath, false), &state); err != nil {
 				t.Fatal(err)
 			}
 			if state.Git == nil {

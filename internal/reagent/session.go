@@ -19,7 +19,7 @@ type Session struct {
 	workspace        *workspaceSelection
 	workspaceConsent func(context.Context, workspaceDestination) (bool, error)
 	// v0 §6 amendment (2026-09-27): inject collection before each run.
-	snapshot func(context.Context, string) json.RawMessage
+	snapshot func(context.Context, string, bool) json.RawMessage
 
 	history   []Entry
 	seenCalls map[string]bool
@@ -63,7 +63,7 @@ func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunR
 
 	var workspace json.RawMessage
 	if s.snapshot != nil {
-		workspace = s.snapshot(ctx, s.cfg.WorkspacePath)
+		workspace = s.snapshot(ctx, s.cfg.WorkspacePath, s.refsOnlySnapshot(s.cfg.WorkspacePath))
 	}
 	marker := planMarkerFor(s.history, s.planMode)
 	if len(s.history) == 1 && s.history[0].Kind == EntrySummary && !s.planMode && s.compactedPlan == "on" {
@@ -75,6 +75,11 @@ func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunR
 		s.blocked = string(result.Status)
 	}
 	return result, nil
+}
+
+// v0 §6 amendment (2026-10-01): the launch trust boundary survives reset/model replacement.
+func (s *Session) refsOnlySnapshot(root string) bool {
+	return s.workspace != nil && root != s.workspace.launch && (s.cfg.Registry.Mode().ReadOnly || s.planMode)
 }
 
 // v0 §10 amendment (2026-09-28): the overflowing history cannot fit with an added handoff prompt.

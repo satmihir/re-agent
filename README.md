@@ -182,6 +182,13 @@ and withheld aliases but are not race-proof sandboxing. Read pagination and
 command-output limits are unchanged. Withheld names are case-insensitive on all
 platforms, and automatic Git probes disable repository-configured fsmonitor
 commands. A switch in exec mode prints an updated notice naming its root.
+When read-only or plan mode is active in a workspace other than the original
+launch root, snapshots use ref plumbing only: `git status` could execute clean
+filters. Branch/upstream/divergence metadata remains available, but change counts
+are absent and explicitly marked `counts: "omitted in read-only/plan mode"`.
+This policy applies on switches and later turns, and survives reset/model
+changes. Launch-root and unrestricted snapshots retain full status collection;
+this is not general Git sandboxing.
 
 This feature changes the benchmark request baseline even without a switch:
 workspace tools are always declared, general instructions gain workspace-history

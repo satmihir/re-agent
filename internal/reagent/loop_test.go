@@ -164,7 +164,7 @@ func TestLoop_SnapshotIsRecordedWithTheUserEntry(t *testing.T) {
 	dir := t.TempDir()
 	session := NewSession(testConfig(t), NewScriptedModel(turn(textBlock("first")), turn(textBlock("second"))), NewTrace(io.Discard), io.Discard)
 	snapshots := []json.RawMessage{json.RawMessage(`{"kind":"workspace_state","date":"2026-09-26"}`), json.RawMessage(`{"kind":"workspace_state","date":"2026-09-27"}`)}
-	session.snapshot = func(context.Context, string) json.RawMessage {
+	session.snapshot = func(context.Context, string, bool) json.RawMessage {
 		next := snapshots[0]
 		snapshots = snapshots[1:]
 		return next

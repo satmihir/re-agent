@@ -627,7 +627,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 		Provider: openaiName, Model: DefaultOpenAIModel, ReasoningEffort: DefaultReasoningEffort,
 		Registry: registry, WorkspacePath: ws.Root(),
 		MaxSteps: 200, MaxToolCalls: 400,
-	}, "Where is the timeout set?", collectSnapshot(context.Background(), ws.Root()))
+	}, "Where is the timeout set?", collectSnapshot(context.Background(), ws.Root(), false))
 	if err != nil {
 		t.Fatal(err)
 	}

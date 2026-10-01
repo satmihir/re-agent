@@ -163,7 +163,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// The preview is built before any live dependency exists, which is why it
 	// needs no credentials and creates no trace (v0 §6.1).
 	if options.showContext {
-		body, err := PreviewRequest(cfg, prompt, collectSnapshot(ctx, ws.Root()))
+		body, err := PreviewRequest(cfg, prompt, collectSnapshot(ctx, ws.Root(), false))
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return exitRunFail

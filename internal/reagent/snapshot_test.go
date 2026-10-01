@@ -52,7 +52,7 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "new"), []byte("new"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	state := collectSnapshot(context.Background(), dir)
+	state := collectSnapshot(context.Background(), dir, false)
 	var got workspaceState
 	if err := json.Unmarshal(state, &got); err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	if got.Kind != "workspace_state" || got.Date != time.Now().Format("2006-01-02") || got.TimeZone == "" || got.Git == nil {
 		t.Fatalf("state: %s", state)
 	}
-	if got.Git.Branch != "feat/x" || got.Git.DefaultBranch != "origin/main" || got.Git.AheadOfDefault == nil || *got.Git.AheadOfDefault != 1 || got.Git.BehindDefault == nil || *got.Git.BehindDefault != 0 || got.Git.Upstream != "origin/feat/x" || got.Git.Ahead == nil || *got.Git.Ahead != 1 || got.Git.Behind == nil || *got.Git.Behind != 0 || got.Git.Staged != 1 || got.Git.Modified != 1 || got.Git.Untracked != 1 {
+	if got.Git.Branch != "feat/x" || got.Git.DefaultBranch != "origin/main" || got.Git.AheadOfDefault == nil || *got.Git.AheadOfDefault != 1 || got.Git.BehindDefault == nil || *got.Git.BehindDefault != 0 || got.Git.Upstream != "origin/feat/x" || got.Git.Ahead == nil || *got.Git.Ahead != 1 || got.Git.Behind == nil || *got.Git.Behind != 0 || got.Git.Staged == nil || *got.Git.Staged != 1 || got.Git.Modified == nil || *got.Git.Modified != 1 || got.Git.Untracked == nil || *got.Git.Untracked != 1 {
 		t.Fatalf("state: %s", state)
 	}
 	// A divergence gives both left and right counts, not just the local tip.
@@ -73,7 +73,7 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	gitTest(t, dir, "commit", "-qm", "third")
 	gitTest(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
 	gitTest(t, dir, "checkout", "-q", "feat/x")
-	state = collectSnapshot(context.Background(), dir)
+	state = collectSnapshot(context.Background(), dir, false)
 	if err := json.Unmarshal(state, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	}
 	// A default branch containing the feature's commit yields zero ahead.
 	gitTest(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
-	state = collectSnapshot(context.Background(), dir)
+	state = collectSnapshot(context.Background(), dir, false)
 	if err := json.Unmarshal(state, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitTest(t, dir, "checkout", "--detach", "-q")
-	state = collectSnapshot(context.Background(), dir)
+	state = collectSnapshot(context.Background(), dir, false)
 	if err := json.Unmarshal(state, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestSnapshot_NoRemoteOmitsTheDefaultBranch(t *testing.T) {
 	gitTest(t, dir, "add", "tracked")
 	gitTest(t, dir, "commit", "-qm", "first")
 
-	state := collectSnapshot(context.Background(), dir)
+	state := collectSnapshot(context.Background(), dir, false)
 	var got workspaceState
 	if err := json.Unmarshal(state, &got); err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestSnapshot_NoRemoteOmitsTheDefaultBranch(t *testing.T) {
 }
 
 func TestSnapshot_OutsideRepositoryOmitsGit(t *testing.T) {
-	state := collectSnapshot(context.Background(), t.TempDir())
+	state := collectSnapshot(context.Background(), t.TempDir(), false)
 	var got workspaceState
 	if err := json.Unmarshal(state, &got); err != nil {
 		t.Fatal(err)

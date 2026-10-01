@@ -20,6 +20,7 @@ type workspaceDestination struct {
 }
 
 type workspaceSelection struct {
+	launch   string
 	active   *Workspace
 	approved map[string]workspaceDestination
 	handles  map[string]*Workspace
@@ -40,7 +41,7 @@ func (s *Session) approvedWorkspacePaths() []string {
 func newWorkspaceSelection(ws *Workspace, approved []workspaceDestination) *workspaceSelection {
 	active := &Workspace{root: ws.root, digests: make(map[string]map[string]bool)}
 	selection := &workspaceSelection{
-		active: active, approved: make(map[string]workspaceDestination),
+		launch: ws.Root(), active: active, approved: make(map[string]workspaceDestination),
 		handles: map[string]*Workspace{active.root: active},
 	}
 	selection.approved[active.root] = workspaceDestination{path: active.root}
@@ -52,7 +53,7 @@ func newWorkspaceSelection(ws *Workspace, approved []workspaceDestination) *work
 
 // Model replacement keeps grants and provenance, but not a mutable selection pointer.
 func (w *workspaceSelection) copy() *workspaceSelection {
-	copy := &workspaceSelection{active: w.active, approved: make(map[string]workspaceDestination), handles: make(map[string]*Workspace)}
+	copy := &workspaceSelection{launch: w.launch, active: w.active, approved: make(map[string]workspaceDestination), handles: make(map[string]*Workspace)}
 	for path, destination := range w.approved {
 		copy.approved[path] = destination
 	}
@@ -255,7 +256,7 @@ func (s *Session) selectWorkspace(ctx context.Context, destination workspaceDest
 	}
 	var warnings bytes.Buffer
 	project := loadProjectInstructions(ws, s.cfg.NoProjectInstructions, &warnings)
-	state := collectSnapshot(ctx, ws.Root())
+	state := collectSnapshot(ctx, ws.Root(), s.refsOnlySnapshot(ws.Root()))
 	if ctx.Err() != nil {
 		return failOutcome("permission_denied", "workspace request cancelled"), nil
 	}

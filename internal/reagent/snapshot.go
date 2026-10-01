@@ -19,6 +19,7 @@ type workspaceState struct {
 	Workspace string    `json:"workspace"`
 	Date      string    `json:"date,omitempty"`
 	TimeZone  string    `json:"time_zone,omitempty"`
+	Counts    string    `json:"counts,omitempty"`
 	Git       *gitState `json:"git,omitempty"`
 }
 
@@ -31,20 +32,28 @@ type gitState struct {
 	AheadOfDefault *int   `json:"ahead_of_default,omitempty"`
 	BehindDefault  *int   `json:"behind_default,omitempty"`
 	LastFetch      string `json:"last_fetch,omitempty"`
-	Staged         int    `json:"staged"`
-	Modified       int    `json:"modified"`
-	Untracked      int    `json:"untracked"`
+	Staged         *int   `json:"staged,omitempty"`
+	Modified       *int   `json:"modified,omitempty"`
+	Untracked      *int   `json:"untracked,omitempty"`
 }
 
 const workspacePreamble = "Workspace state when this message was sent, collected by re:agent:\n"
 
 // collectSnapshot omits fields that cannot be observed; it never fetches or guesses a ref.
-func collectSnapshot(ctx context.Context, root string) json.RawMessage {
+func collectSnapshot(ctx context.Context, root string, refsOnly bool) json.RawMessage {
 	now := time.Now()
 	zone, _ := now.Zone()
 	state := workspaceState{Kind: "workspace_state", Workspace: root, Date: now.Format("2006-01-02"), TimeZone: zone}
-	if status, ok := snapshotGit(ctx, root, "status", "--porcelain=v2", "--branch"); ok {
-		git := parseGitStatus(status)
+	var git *gitState
+	if refsOnly {
+		// v0 §6 amendment (2026-10-01): status can execute clean filters; unknown counts are not zero.
+		state.Counts = "omitted in read-only/plan mode"
+		git = collectGitRefs(ctx, root)
+	} else if status, ok := snapshotGit(ctx, root, "status", "--porcelain=v2", "--branch"); ok {
+		observed := parseGitStatus(status)
+		git = &observed
+	}
+	if git != nil {
 		// v0 §6 U4 review: a fallback ref is a candidate, not an observation.
 		defaultBranch := "origin/main"
 		if name, ok := snapshotGit(ctx, root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); ok && strings.TrimSpace(name) != "" {
@@ -66,10 +75,29 @@ func collectSnapshot(ctx context.Context, root string) json.RawMessage {
 				git.LastFetch = info.ModTime().In(time.Local).Format(time.RFC3339)
 			}
 		}
-		state.Git = &git
+		state.Git = git
 	}
 	raw, _ := json.Marshal(state)
 	return raw
+}
+
+// v0 §6 amendment (2026-10-01): these probes inspect refs, never worktree contents.
+func collectGitRefs(ctx context.Context, root string) *gitState {
+	var git gitState
+	if branch, ok := snapshotGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD"); ok {
+		git.Branch = strings.TrimSpace(branch)
+	} else if _, ok := snapshotGit(ctx, root, "rev-parse", "--verify", "HEAD"); ok {
+		git.Branch = "(detached)"
+	} else {
+		return nil
+	}
+	if upstream, ok := snapshotGit(ctx, root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); ok {
+		git.Upstream = strings.TrimSpace(upstream)
+		if counts, ok := snapshotGit(ctx, root, "rev-list", "--left-right", "--count", "HEAD..."+git.Upstream); ok {
+			git.Ahead, git.Behind = parseCounts(counts)
+		}
+	}
+	return &git
 }
 
 func snapshotGit(ctx context.Context, root string, args ...string) (string, bool) {
@@ -89,6 +117,7 @@ func snapshotGit(ctx context.Context, root string, args ...string) (string, bool
 
 func parseGitStatus(status string) gitState {
 	var state gitState
+	staged, modified, untracked := 0, 0, 0
 	for _, line := range strings.Split(status, "\n") {
 		switch {
 		case strings.HasPrefix(line, "# branch.head "):
@@ -104,19 +133,20 @@ func parseGitStatus(status string) gitState {
 				state.Ahead, state.Behind = parseCounts(fields[0][1:] + " " + fields[1][1:])
 			}
 		case strings.HasPrefix(line, "? "):
-			state.Untracked++
+			untracked++
 		case strings.HasPrefix(line, "1 "), strings.HasPrefix(line, "2 "), strings.HasPrefix(line, "u "):
 			fields := strings.Fields(line)
 			if len(fields) > 1 && len(fields[1]) == 2 {
 				if fields[1][0] != '.' {
-					state.Staged++
+					staged++
 				}
 				if fields[1][1] != '.' {
-					state.Modified++
+					modified++
 				}
 			}
 		}
 	}
+	state.Staged, state.Modified, state.Untracked = &staged, &modified, &untracked
 	return state
 }
 

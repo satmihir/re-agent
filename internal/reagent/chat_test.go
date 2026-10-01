@@ -67,7 +67,7 @@ func TestChat_FrictionSendsTheReviewPrompt(t *testing.T) {
 			cfg.ReportFriction, cfg.PlanMode = enabled, true
 			var stdout, stderr bytes.Buffer
 			s := NewSession(cfg, model, NewTrace(io.Discard), &stderr)
-			s.snapshot = func(context.Context, string) json.RawMessage {
+			s.snapshot = func(context.Context, string, bool) json.RawMessage {
 				return json.RawMessage(`{"kind":"workspace_state","date":"2026-09-30"}`)
 			}
 			c := &conversation{session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
@@ -176,7 +176,7 @@ func TestChat_SnapshotOnEveryTurn(t *testing.T) {
 	var errs, out bytes.Buffer
 	session := NewSession(testConfig(t), NewScriptedModel(turn(textBlock("one")), turn(textBlock("two"))), NewTrace(io.Discard), &errs)
 	n := 0
-	session.snapshot = func(context.Context, string) json.RawMessage {
+	session.snapshot = func(context.Context, string, bool) json.RawMessage {
 		n++
 		return json.RawMessage(fmt.Sprintf(`{"kind":"workspace_state","date":"day-%d"}`, n))
 	}
@@ -542,7 +542,9 @@ func TestChat_PlanSentenceEncodesLikeExplicitMode(t *testing.T) {
 		var out, errs bytes.Buffer
 		model := NewScriptedModel(turn(textBlock("planning")))
 		session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-		session.snapshot = func(context.Context, string) json.RawMessage { return json.RawMessage(`{"kind":"workspace_state"}`) }
+		session.snapshot = func(context.Context, string, bool) json.RawMessage {
+			return json.RawMessage(`{"kind":"workspace_state"}`)
+		}
 		c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 		if code := chat(context.Background(), c, newLineReader(strings.NewReader(inputText), &errs, nil), &out, &errs); code != exitOK {
 			t.Fatalf("exit %d: %s", code, errs.String())
@@ -1406,7 +1408,9 @@ func TestConversation_ModelSwitchCarriesOnlySummary(t *testing.T) {
 			old.blocked, old.planMode = "protocol_error", true
 			old.seenCalls["old-call"] = true
 			old.lastRequest = Usage{Known: true, InputTokens: 99}
-			old.snapshot = func(context.Context, string) json.RawMessage { return json.RawMessage(`{"kind":"workspace_state"}`) }
+			old.snapshot = func(context.Context, string, bool) json.RawMessage {
+				return json.RawMessage(`{"kind":"workspace_state"}`)
+			}
 			project := "keep launch instructions"
 			c.session.cfg.ProjectInstructions, old.cfg.ProjectInstructions = &project, &project
 			reply := turn(textBlock("handoff"))
