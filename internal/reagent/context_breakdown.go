@@ -67,7 +67,7 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 	lastEdit := map[string]int{}
 	for i, entry := range history {
 		if ref, ok := fileResult(entry, "edit_file"); ok && ref.Changed {
-			lastEdit[ref.Path] = i
+			lastEdit[entry.Tool.Outcome.Workspace+"\x00"+ref.Path] = i
 		}
 	}
 	stale, repeated := 0, 0
@@ -111,7 +111,7 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 			ref, ok := fileResult(entry, "read_file")
 			switch {
 			case !ok:
-			case lastEdit[ref.Path] > i:
+			case lastEdit[entry.Tool.Outcome.Workspace+"\x00"+ref.Path] > i:
 				stale += n
 			case seenReads[string(outcome)]:
 				repeated += n

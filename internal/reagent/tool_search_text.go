@@ -25,6 +25,11 @@ type searchTextTool struct{ ws *Workspace }
 // NewSearchTextTool returns the text search tool, which is literal by default.
 func NewSearchTextTool(ws *Workspace) Tool { return searchTextTool{ws} }
 
+func (t searchTextTool) withWorkspace(ws *Workspace) Tool {
+	t.ws = ws
+	return t
+}
+
 type searchTextArgs struct {
 	Path       string          `json:"path"`
 	Query      string          `json:"query"`
@@ -112,7 +117,7 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 		return *osOutcome(err), nil
 	}
 
-	s := &scan{match: match, maxResults: maxResults, complete: true}
+	s := &scan{workspace: t.ws.Root(), match: match, maxResults: maxResults, complete: true}
 	if info.IsDir() {
 		t.walk(abs, s)
 	} else {
@@ -164,6 +169,7 @@ func (t searchTextTool) walk(root string, s *scan) {
 // scan accumulates one search. complete stays true only while nothing that
 // could have held a match went unseen.
 type scan struct {
+	workspace  string
 	match      func(string) bool
 	maxResults int
 	matches    []searchMatch
@@ -227,7 +233,7 @@ func (s *scan) outcome() (ToolOutcome, error) {
 		s.matches = []searchMatch{}
 	}
 	fit := func() []searchMatch {
-		return s.matches[:fitElements(len(s.matches), func(n int) any { return s.result(s.matches[:n]) })]
+		return s.matches[:fitElements(len(s.matches), func(n int) any { return s.result(s.matches[:n]) }, s.workspace)]
 	}
 	shown := fit()
 	if len(shown) < len(s.matches) {
@@ -239,7 +245,7 @@ func (s *scan) outcome() (ToolOutcome, error) {
 		shown = s.shrinkFirst()
 	}
 
-	outcome, err := okOutcome(s.result(shown))
+	outcome, err := workspaceOutcome(s.result(shown), s.workspace)
 	if err != nil {
 		return ToolOutcome{}, err
 	}
@@ -251,7 +257,7 @@ func (s *scan) outcome() (ToolOutcome, error) {
 // model still learns where the match is (v0 §5).
 func (s *scan) shrinkFirst() []searchMatch {
 	only := s.matches[0]
-	fits := func(m searchMatch) bool { return fitsInResult(s.result([]searchMatch{m})) }
+	fits := func(m searchMatch) bool { return fitsInResult(s.result([]searchMatch{m}), s.workspace) }
 	for len(only.Text) > 0 && !fits(only) {
 		only.Text = truncateUTF8(only.Text, len(only.Text)/2)
 		only.PreviewTruncated = true

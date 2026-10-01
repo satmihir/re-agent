@@ -33,6 +33,7 @@ func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int,
 		reader := &terminalReader{fd: int(f.Fd()), terminal: terminal, keys: keys, prompt: "> ",
 			out: stderr, styled: styledOutput(stderr), size: func() (int, int, error) { return term.GetSize(int(f.Fd())) }}
 		terminal.History = &reader.history
+		reader.discardInput = func() error { return discardTerminalInput(reader.fd) }
 		return reader
 	}
 	s := bufio.NewScanner(stdin)
@@ -167,17 +168,18 @@ func (h *promptHistory) At(i int) string {
 // transformed input and prompt remembers the prompt to restore after a
 // continuation read.
 type terminalReader struct {
-	fd         int
-	terminal   *term.Terminal
-	keys       *keyReader
-	enterRaw   func() (func(), error)
-	out        io.Writer
-	styled     bool
-	size       func() (width, height int, err error)
-	width      int // x/term starts at 80; keep the last successful size for redraws.
-	prompt     string
-	bandPrefix string
-	history    promptHistory
+	fd           int
+	terminal     *term.Terminal
+	keys         *keyReader
+	enterRaw     func() (func(), error)
+	discardInput func() error
+	out          io.Writer
+	styled       bool
+	size         func() (width, height int, err error)
+	width        int // x/term starts at 80; keep the last successful size for redraws.
+	prompt       string
+	bandPrefix   string
+	history      promptHistory
 }
 
 // SetPrompt changes the prompt restored after a continuation read.
@@ -258,6 +260,24 @@ func (r *terminalReader) Choose(config pickerConfig, options []choice, current i
 		return 0, err
 	}
 	defer restore()
+	// v0 §10 amendment (2026-09-30): consent accepts only keys received after this boundary.
+	if config.freshInput {
+		if r.discardInput == nil {
+			return 0, errNotInteractive
+		}
+		if err := r.discardInput(); err != nil {
+			return 0, err
+		}
+		r.keys.pending, r.keys.hold = nil, nil
+		r.keys.paste, r.keys.lastCR, r.keys.interrupts, r.keys.err = false, false, 0, nil
+		// x/term may also have read ahead into the next prompt; keep editing settings, not buffered input.
+		complete := r.terminal.AutoCompleteCallback
+		r.terminal = term.NewTerminal(terminalIO{Reader: r.keys, Writer: r.out}, r.prompt)
+		r.terminal.AutoCompleteCallback, r.terminal.History = complete, &r.history
+		if err := r.terminal.SetSize(width, height); err != nil {
+			return 0, err
+		}
+	}
 
 	cursor := current
 	if cursor < 0 || cursor >= len(options) || options[cursor].disabled {

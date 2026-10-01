@@ -2,7 +2,6 @@ package reagent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -116,6 +115,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	tools := []Tool{
 		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws),
 		NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws),
+		NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool(),
 	}
 	// v0 §10 amendment (2026-09-30): one instance keeps its cap across chat sessions.
 	if options.reportFriction {
@@ -137,10 +137,17 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	}
 	cfg := Config{
 		Provider: provider, Model: model, ReasoningEffort: resolveEffort(options.reasoning, provider, model),
-		Registry: registry, WorkspacePath: ws.Root(),
+		Registry: registry, WorkspacePath: ws.Root(), Workspace: ws, NoProjectInstructions: options.noProjectInstructions,
 		ProjectInstructions: loadProjectInstructions(ws, options.noProjectInstructions, stderr),
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
 		PlanMode: options.plan, ReportFriction: options.reportFriction,
+	}
+	for _, path := range options.allowedWorkspaces {
+		destination, bad := workspaceDestinationAt(ctx, path, true)
+		if bad != nil {
+			return usage(stderr, command, "--allow-workspace: "+bad.Message)
+		}
+		cfg.approvedWorkspaces = append(cfg.approvedWorkspaces, destination)
 	}
 	if options.script != "" {
 		cfg.Provider, cfg.Model = "scripted", "scripted"
@@ -156,7 +163,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// The preview is built before any live dependency exists, which is why it
 	// needs no credentials and creates no trace (v0 §6.1).
 	if options.showContext {
-		body, err := PreviewRequest(cfg, prompt, collectSnapshot(ctx, ws.Root()))
+		body, err := PreviewRequest(cfg, prompt, collectSnapshot(ctx, ws.Root(), false))
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return exitRunFail
@@ -194,7 +201,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	}
 	session := NewSession(cfg, live, trace, stderr)
 	// v0 §6 amendment (2026-09-27): each accepted turn collects its own state.
-	session.snapshot = func(ctx context.Context) json.RawMessage { return collectSnapshot(ctx, ws.Root()) }
+	session.snapshot = collectSnapshot
 	endpoint := ""
 	if options.script == "" && proxy.serves(provider) {
 		endpoint = proxy.shown()
@@ -203,8 +210,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if command == "chat" {
 		session.display.header(cfg, ws.Root(), endpoint, true)
 		conversation := &conversation{
-			session: session, cfg: cfg, keys: keys, proxy: proxy, client: client, scripted: scripted,
-			trace: trace, traceDir: options.traceDir, progress: stderr, workspace: ws.Root(),
+			session: session, keys: keys, proxy: proxy, client: client, scripted: scripted,
+			trace: trace, traceDir: options.traceDir, progress: stderr,
 			recap: options.recap, usage: Usage{Known: true},
 		}
 		if terminal, ok := stdin.(*os.File); ok && isTerminal(terminal) {
@@ -248,11 +255,13 @@ type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
 	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction      bool
 	maxSteps, maxToolCalls                                                         int
+	allowedWorkspaces                                                              []string
 }
 
 func defineFlags(fs *flag.FlagSet) *options {
 	o := &options{}
-	fs.StringVar(&o.workspace, "workspace", ".", "directory the read tools may see")
+	fs.StringVar(&o.workspace, "workspace", ".", "initial directory the tools may see")
+	fs.Func("allow-workspace", "preapprove an exact absolute workspace or prospective destination; repeatable", func(path string) error { o.allowedWorkspaces = append(o.allowedWorkspaces, path); return nil })
 	fs.StringVar(&o.provider, "provider", "", "openai or anthropic; inferred from the model name when omitted")
 	fs.StringVar(&o.model, "model", "", "model to request; defaults to REAGENT_MODEL, then the provider's default")
 	fs.StringVar(&o.reasoning, "reasoning-effort", "auto", "reasoning effort to request; auto picks the provider's default, empty omits the parameter")
@@ -278,7 +287,7 @@ type flagGroup struct {
 
 var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
-	{"Authority", []string{"workspace", "read-only", "plan"}},
+	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
@@ -288,7 +297,7 @@ var runFlagGroups = []flagGroup{
 
 var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort"}},
-	{"Authority", []string{"workspace", "read-only", "plan"}},
+	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
@@ -297,7 +306,7 @@ var chatFlagGroups = []flagGroup{
 }
 
 var flagPlaceholders = map[string]string{
-	"workspace": "DIR", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL",
+	"workspace": "DIR", "allow-workspace": "PATH", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL",
 	"scripted": "FILE", "prompt-file": "PATH", "trace-file": "PATH", "trace-dir": "DIR",
 	"max-steps": "N", "max-tool-calls": "N",
 }
@@ -468,7 +477,7 @@ func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.
 	d.summary(result, elapsed, showTrace, recap || result.Status != StatusCompleted)
 }
 
-// v0 §6 U5: the root file is copied at launch, never consulted during a turn.
+// v0 §6 amendment (2026-09-30): copy instructions at launch and explicit switches.
 // An empty but present file is distinct from a missing or skipped one.
 func loadProjectInstructions(ws *Workspace, disabled bool, stderr io.Writer) *string {
 	if disabled {

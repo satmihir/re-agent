@@ -17,7 +17,7 @@ func chatSession(t *testing.T, model Model, input string) (stdout, stderr string
 	t.Helper()
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, errs.String())
 	}
@@ -67,10 +67,10 @@ func TestChat_FrictionSendsTheReviewPrompt(t *testing.T) {
 			cfg.ReportFriction, cfg.PlanMode = enabled, true
 			var stdout, stderr bytes.Buffer
 			s := NewSession(cfg, model, NewTrace(io.Discard), &stderr)
-			s.snapshot = func(context.Context) json.RawMessage {
+			s.snapshot = func(context.Context, string, bool) json.RawMessage {
 				return json.RawMessage(`{"kind":"workspace_state","date":"2026-09-30"}`)
 			}
-			c := &conversation{cfg: cfg, session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
+			c := &conversation{session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
 			code := chat(context.Background(), c, newLineReader(strings.NewReader("/friction\n/exit\n"), &stderr, nil), &stdout, &stderr)
 			if code != exitOK || len(model.requests) != 1 || stdout.String() != "No friction.\n" || s.Turns() != 1 || c.usage.InputTokens != 12 || !s.planMode {
 				t.Fatalf("exit %d, requests %d, reply %q, turns %d, usage %+v", code, len(model.requests), stdout.String(), s.Turns(), c.usage)
@@ -121,8 +121,7 @@ func TestChat_ReportFrictionCapSurvivesResetAndModel(t *testing.T) {
 	c := newConversation(t, "gpt-6-luna", "low", 0)
 	cfg := testConfig(t, tool)
 	cfg.ReportFriction = true
-	c.cfg.Registry, c.cfg.ReportFriction = cfg.Registry, true
-	c.session.cfg = c.cfg
+	c.session.cfg.Registry, c.session.cfg.ReportFriction = cfg.Registry, true
 	for i := 0; i < 10; i++ {
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"category":"other","summary":"rough edge"}`))
 		if err != nil || !out.OK {
@@ -148,7 +147,7 @@ func TestChat_SecondInterruptExits(t *testing.T) {
 	}{{err: errInterrupted}, {err: errInterrupted}}}
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, traceDir: t.TempDir(), progress: &errs}
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d", code)
 	}
@@ -164,7 +163,7 @@ func TestChat_SingleInterruptKeepsTheConversation(t *testing.T) {
 	}{{err: errInterrupted}, {line: "/exit"}}}
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, traceDir: t.TempDir(), progress: &errs}
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d", code)
 	}
@@ -177,11 +176,11 @@ func TestChat_SnapshotOnEveryTurn(t *testing.T) {
 	var errs, out bytes.Buffer
 	session := NewSession(testConfig(t), NewScriptedModel(turn(textBlock("one")), turn(textBlock("two"))), NewTrace(io.Discard), &errs)
 	n := 0
-	session.snapshot = func(context.Context) json.RawMessage {
+	session.snapshot = func(context.Context, string, bool) json.RawMessage {
 		n++
 		return json.RawMessage(fmt.Sprintf(`{"kind":"workspace_state","date":"day-%d"}`, n))
 	}
-	c := &conversation{session: session, cfg: session.cfg, scripted: session.model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, scripted: session.model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, newLineReader(strings.NewReader("one\ntwo\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
@@ -250,7 +249,7 @@ func TestChat_PlanPickerImplementsHere(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.PlanMode = true
 	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	input := &fakeLineReader{reads: []struct {
 		line string
 		err  error
@@ -278,7 +277,7 @@ func TestChat_PlanPickerImplementsFresh(t *testing.T) {
 	traceDir := t.TempDir()
 	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
 	before := session.ID
-	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: traceDir, progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, scripted: model, traceDir: traceDir, progress: &errs, usage: Usage{Known: true}}
 	input := &fakeLineReader{chosen: 1, reads: []struct {
 		line string
 		err  error
@@ -309,7 +308,7 @@ func TestChat_PlanPickerKeepsPlanning(t *testing.T) {
 			cfg := testConfig(t)
 			cfg.PlanMode = true
 			session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
-			c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+			c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 			input := &fakeLineReader{chosen: test.index, chooseErr: test.err, reads: []struct {
 				line string
 				err  error
@@ -330,7 +329,7 @@ func TestChat_PlanPickerTypedFeedbackCannotImplement(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.PlanMode = true
 	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	input := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("plan it\r"), []byte("ok but change step 2\r"), []byte("/exit\r")}})
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -354,7 +353,7 @@ func TestChat_NoPickerWithoutAPlan(t *testing.T) {
 			cfg := testConfig(t)
 			cfg.PlanMode = true
 			session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
-			c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+			c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 			input := &fakeLineReader{reads: []struct {
 				line string
 				err  error
@@ -373,7 +372,7 @@ func TestChat_PlanBlockDoesNotOpenPickerOutsidePlanMode(t *testing.T) {
 	var out, errs bytes.Buffer
 	model := NewScriptedModel(turn(textBlock("<plan>\n- Change it\n</plan>")))
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	input := &fakeLineReader{reads: []struct {
 		line string
 		err  error
@@ -392,7 +391,7 @@ func TestChat_PlanWithoutATerminalPrintsTheHint(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.PlanMode = true
 	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	input := newLineReader(strings.NewReader("plan it\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -406,7 +405,7 @@ func TestChat_PlanInASentenceTurnsItOn(t *testing.T) {
 	var out, errs bytes.Buffer
 	model := NewScriptedModel(turn(textBlock("still planning")))
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	input := &fakeLineReader{reads: []struct {
 		line string
 		err  error
@@ -435,7 +434,7 @@ func TestChat_PlanSentenceBandKeepsOriginalPrompt(t *testing.T) {
 	var out bytes.Buffer
 	model := NewScriptedModel(turn(textBlock("planning")))
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), terminal)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: terminal}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: terminal}
 	if code := chat(context.Background(), c, input, &out, terminal); code != exitOK {
 		t.Fatalf("exit %d", code)
 	}
@@ -457,7 +456,7 @@ func TestChat_PlanInPastedMessage(t *testing.T) {
 	var out, errs bytes.Buffer
 	model := NewScriptedModel(turn(textBlock("planning")))
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK || !session.planMode || session.history[0].User.Text != text || session.history[0].User.Plan != "on" {
 		t.Fatalf("exit %d; history %+v; stderr %q", code, session.history, errs.String())
 	}
@@ -467,7 +466,7 @@ func TestChat_PlanInASentenceWhenAlreadyOn(t *testing.T) {
 	model := NewScriptedModel(turn(textBlock("one")), turn(textBlock("two")))
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	input := newLineReader(strings.NewReader("can we /plan this?\ncan we /plan more?\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -481,7 +480,7 @@ func TestChat_PlanInCodeOrPathDoesNothing(t *testing.T) {
 	model := NewScriptedModel(turn(textBlock("one")), turn(textBlock("two")))
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	input := newLineReader(strings.NewReader("see docs/plan.md\nthe `/plan` command\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -510,7 +509,7 @@ func TestChat_PlanInEditedMessage(t *testing.T) {
 	var out, errs bytes.Buffer
 	model := NewScriptedModel(turn(textBlock("plan")))
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, stdin: stdin, stdout: terminal, stderr: terminal}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs, stdin: stdin, stdout: terminal, stderr: terminal}
 	input := newLineReader(strings.NewReader("/edit\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -525,7 +524,7 @@ func TestChat_ShellLineWithPlanDoesNothing(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.WorkspacePath = t.TempDir()
 	session := NewSession(cfg, NewScriptedModel(), NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: cfg, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, traceDir: t.TempDir(), progress: &errs}
 	input := newLineReader(strings.NewReader("!printf '/plan\\n'\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -543,8 +542,10 @@ func TestChat_PlanSentenceEncodesLikeExplicitMode(t *testing.T) {
 		var out, errs bytes.Buffer
 		model := NewScriptedModel(turn(textBlock("planning")))
 		session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-		session.snapshot = func(context.Context) json.RawMessage { return json.RawMessage(`{"kind":"workspace_state"}`) }
-		c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+		session.snapshot = func(context.Context, string, bool) json.RawMessage {
+			return json.RawMessage(`{"kind":"workspace_state"}`)
+		}
+		c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 		if code := chat(context.Background(), c, newLineReader(strings.NewReader(inputText), &errs, nil), &out, &errs); code != exitOK {
 			t.Fatalf("exit %d: %s", code, errs.String())
 		}
@@ -597,7 +598,7 @@ func TestChat_PlanPromptIsTeal(t *testing.T) {
 			var out bytes.Buffer
 			session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), terminal)
 			session.blocked = test.blocked
-			c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: terminal}
+			c := &conversation{session: session, traceDir: t.TempDir(), progress: terminal}
 			input := &fakeLineReader{reads: []struct {
 				line string
 				err  error
@@ -612,7 +613,7 @@ func TestChat_PlanPromptIsTeal(t *testing.T) {
 func TestChat_PlanTogglesAndChangesThePrompt(t *testing.T) {
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), NewScriptedModel(), NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, traceDir: t.TempDir(), progress: &errs}
 	input := &fakeLineReader{}
 	for _, line := range []string{"/plan", "/status", "/plan", "/status"} {
 		input.reads = append(input.reads, struct {
@@ -638,7 +639,7 @@ func TestChat_PlanReplyKeepsHistoryVerbatim(t *testing.T) {
 	var out, errs bytes.Buffer
 	model := NewScriptedModel(turn(textBlock("<plan>\nDo this.\n</plan>")))
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/plan work\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
@@ -651,7 +652,7 @@ func TestChat_PlanWithTextSendsInPlanMode(t *testing.T) {
 	model := NewScriptedModel(turn(textBlock("plan")))
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs}
 	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/plan fix the parser\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
@@ -678,7 +679,7 @@ func TestChat_ShellCommandWorksInPlanMode(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.WorkspacePath = t.TempDir()
 	session := NewSession(cfg, NewScriptedModel(turn(textBlock("ok"))), NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: cfg, scripted: session.model, traceDir: t.TempDir(), progress: &errs}
+	c := &conversation{session: session, scripted: session.model, traceDir: t.TempDir(), progress: &errs}
 	input := newLineReader(strings.NewReader("/plan\n!echo hi\nquestion\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -737,7 +738,6 @@ func newConversation(t *testing.T, model, effort string, turns int) *conversatio
 	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, model, effort
 
 	c := &conversation{
-		cfg:      cfg,
 		keys:     map[string]string{openaiName: "sk-openai", anthropicName: "sk-anthropic"},
 		client:   NewHTTPClient(),
 		trace:    NewTrace(io.Discard),
@@ -762,7 +762,7 @@ func newConversation(t *testing.T, model, effort string, turns int) *conversatio
 func TestChat_ProjectInstructionsSurviveSwitchAndReset(t *testing.T) {
 	c := newConversation(t, "gpt-6-luna", "low", 1)
 	project := "launch-time instructions\n"
-	c.cfg.ProjectInstructions = &project
+	c.session.cfg.ProjectInstructions = &project
 	c.session.cfg.ProjectInstructions = &project
 	c.session.Reset()
 	if got := instructions(c.session.cfg); !strings.HasSuffix(got, "# Project instructions (AGENTS.md)\n\n"+project) {
@@ -786,8 +786,8 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
-		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.cfg.Model, out.String())
+	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.session.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
+		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.session.cfg.Model, out.String())
 	}
 	if len(c.session.history) != 1 || c.session.history[0].Summary.Text != "x" || !strings.Contains(errs.String(), "switched to gpt-6.1-sol") || !strings.Contains(errs.String(), "carried the conversation over") {
 		t.Fatalf("stderr: %s", errs.String())
@@ -833,13 +833,13 @@ func TestChat_ModelPickerTitleMentionsTheSummary(t *testing.T) {
 func TestChat_ModelWithoutATerminalPrintsTheList(t *testing.T) {
 	model := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("reply")))}
 	c := newConversation(t, "gpt-6-luna", "low", 0)
-	c.session = NewSession(c.cfg, model, NewTrace(io.Discard), io.Discard)
+	c.session = NewSession(c.session.cfg, model, NewTrace(io.Discard), io.Discard)
 	var out, errs bytes.Buffer
 	input := newLineReader(strings.NewReader("/model\n2\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if len(model.requests) != 1 || model.requests[0].History[0].User.Text != "2" || c.cfg.Model != "gpt-6-luna" || !strings.Contains(errs.String(), "/model <number or name> switches\n") {
+	if len(model.requests) != 1 || model.requests[0].History[0].User.Text != "2" || c.session.cfg.Model != "gpt-6-luna" || !strings.Contains(errs.String(), "/model <number or name> switches\n") {
 		t.Fatalf("requests %+v; stderr %s", model.requests, errs.String())
 	}
 }
@@ -856,8 +856,8 @@ func TestChat_EffortPickerKeepsSession(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d", code)
 	}
-	if input.choiceCurrent != 1 || c.cfg.ReasoningEffort != "high" || c.session != before || c.session.Turns() != 2 || !strings.Contains(errs.String(), "reasoning effort is now high") {
-		t.Fatalf("effort %q, current %d, stderr %s", c.cfg.ReasoningEffort, input.choiceCurrent, errs.String())
+	if input.choiceCurrent != 1 || c.session.cfg.ReasoningEffort != "high" || c.session != before || c.session.Turns() != 2 || !strings.Contains(errs.String(), "reasoning effort is now high") {
+		t.Fatalf("effort %q, current %d, stderr %s", c.session.cfg.ReasoningEffort, input.choiceCurrent, errs.String())
 	}
 }
 
@@ -873,8 +873,8 @@ func TestChat_EffortPickerCancelWithUnsetEffort(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.choiceCurrent != 1 || c.cfg.ReasoningEffort != "" || c.session != before || c.session.Turns() != 1 || strings.TrimSpace(errs.String()) != "kept provider default" {
-		t.Fatalf("cursor %d, effort %q, session %p/%p, stderr %q", input.choiceCurrent, c.cfg.ReasoningEffort, c.session, before, errs.String())
+	if input.choiceCurrent != 1 || c.session.cfg.ReasoningEffort != "" || c.session != before || c.session.Turns() != 1 || strings.TrimSpace(errs.String()) != "kept provider default" {
+		t.Fatalf("cursor %d, effort %q, session %p/%p, stderr %q", input.choiceCurrent, c.session.cfg.ReasoningEffort, c.session, before, errs.String())
 	}
 }
 
@@ -892,13 +892,13 @@ func TestConversation_SwitchingModelStartsAFreshSession(t *testing.T) {
 	if len(c.session.history) != 0 || c.session.Turns() != 0 {
 		t.Fatalf("the new session carries %d entries", len(c.session.history))
 	}
-	if c.cfg.Model != "claude-haiku-4-5" || c.cfg.Provider != anthropicName {
-		t.Fatalf("got %+v", c.cfg)
+	if c.session.cfg.Model != "claude-haiku-4-5" || c.session.cfg.Provider != anthropicName {
+		t.Fatalf("got %+v", c.session.cfg)
 	}
 	// Effort resets to the new model's own default: Haiku rejects the value
 	// the previous model was using.
-	if c.cfg.ReasoningEffort != "" || c.session.cfg.ReasoningEffort != "" {
-		t.Fatalf("effort survived the switch: %q", c.cfg.ReasoningEffort)
+	if c.session.cfg.ReasoningEffort != "" {
+		t.Fatalf("effort survived the switch: %q", c.session.cfg.ReasoningEffort)
 	}
 	if !strings.Contains(stderr.String(), "conversation discarded") {
 		t.Fatalf("the switch did not say what it discarded: %q", stderr.String())
@@ -951,8 +951,8 @@ func TestConversation_EffortChangeKeepsTheConversation(t *testing.T) {
 	var stderr bytes.Buffer
 	c.commandEffort("xhigh", nil, &stderr)
 
-	if c.cfg.ReasoningEffort != "xhigh" || c.session.cfg.ReasoningEffort != "xhigh" {
-		t.Fatalf("got %q", c.cfg.ReasoningEffort)
+	if c.session.cfg.ReasoningEffort != "xhigh" {
+		t.Fatalf("got %q", c.session.cfg.ReasoningEffort)
 	}
 	if c.session != before || c.session.Turns() != 2 {
 		t.Fatal("setting effort discarded the conversation")
@@ -965,8 +965,8 @@ func TestConversation_EffortChangeKeepsTheConversation(t *testing.T) {
 	haiku := newConversation(t, "claude-haiku-4-5", "", 0)
 	stderr.Reset()
 	haiku.commandEffort("high", nil, &stderr)
-	if haiku.cfg.ReasoningEffort != "" || !strings.Contains(stderr.String(), "takes no reasoning effort") {
-		t.Fatalf("got %q after %q", haiku.cfg.ReasoningEffort, stderr.String())
+	if haiku.session.cfg.ReasoningEffort != "" || !strings.Contains(stderr.String(), "takes no reasoning effort") {
+		t.Fatalf("got %q after %q", haiku.session.cfg.ReasoningEffort, stderr.String())
 	}
 }
 
@@ -1017,7 +1017,7 @@ func TestChat_OverflowOnlyOffersReset(t *testing.T) {
 		next: NewScriptedModel(),
 	}
 	s := NewSession(cfg, model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: s, cfg: cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+	c := &conversation{session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
 	input := newLineReader(strings.NewReader("first\n/status\nnext\n/exit\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatal(code)
@@ -1092,7 +1092,7 @@ func TestChat_StatusFormatsModel(t *testing.T) {
 		t.Fatalf("status: %s", stderr.String())
 	}
 
-	c.cfg.Provider = "scripted"
+	c.session.cfg.Provider = "scripted"
 	stderr.Reset()
 	c.commandStatus(&stderr)
 	if !strings.Contains(stderr.String(), "model      scripted\n") || strings.Contains(stderr.String(), "effort") {
@@ -1124,7 +1124,7 @@ func TestChat_BlockedPrompt(t *testing.T) {
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), NewScriptedModel(
 		turn(callBlock("call_1", "echo", `{"text":"hi"}`), callBlock("call_1", "echo", `{"text":"hi"}`))), NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d", code)
 	}
@@ -1241,7 +1241,7 @@ func TestChat_MultiLineBangIsAMessage(t *testing.T) {
 	model := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("a diagram")))}
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
@@ -1256,7 +1256,7 @@ func TestChat_ShellOutputReachesTheNextRequest(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.WorkspacePath = t.TempDir()
 	session := NewSession(cfg, model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: cfg, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, scripted: model, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	input := newLineReader(strings.NewReader("!echo marker-4417; exit 2\nwhat did that print?\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
@@ -1291,7 +1291,7 @@ func TestChat_ProviderErrorDoesNotBlock(t *testing.T) {
 	}
 	var out, errs bytes.Buffer
 	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
-	c := &conversation{session: session, cfg: session.cfg, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
+	c := &conversation{session: session, traceDir: t.TempDir(), progress: &errs, usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d", code)
 	}
@@ -1317,7 +1317,7 @@ func TestCompact_ScriptedAndEmptySessionsRefuse(t *testing.T) {
 			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "hi"}}}
 		}
 		dir := t.TempDir()
-		c := &conversation{session: s, cfg: s.cfg, traceDir: dir, usage: Usage{Known: true}}
+		c := &conversation{session: s, traceDir: dir, usage: Usage{Known: true}}
 		if scripted {
 			c.scripted = model
 		}
@@ -1351,7 +1351,7 @@ func TestChat_CompactVerboseFocusAndTrace(t *testing.T) {
 			s := compactSession(t, model)
 			s.display = NewDisplay(&errs)
 			s.cfg.Provider = openaiName
-			c := &conversation{session: s, cfg: s.cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+			c := &conversation{session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
 			input := "/compact " + test.argument + "\n/status\n/context\n/trace\n/exit\n"
 			if code := chat(context.Background(), c, newLineReader(strings.NewReader(input), &errs, nil), &out, &errs); code != exitOK {
 				t.Fatal(code)
@@ -1375,7 +1375,7 @@ func TestChat_CompactThenPlanOffCarriesEndedMarker(t *testing.T) {
 	s := NewSession(testConfig(t), model, NewTrace(io.Discard), &errs)
 	s.planMode = true
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "plan", Plan: "on"}}}
-	c := &conversation{session: s, cfg: s.cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+	c := &conversation{session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/compact\n/plan\nimplement\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatal(code)
 	}
@@ -1389,7 +1389,7 @@ func TestChat_FailedCompactDoesNotClaimSuccess(t *testing.T) {
 	var out, errs bytes.Buffer
 	s := compactSession(t, model)
 	s.blocked = "protocol_error"
-	c := &conversation{session: s, cfg: s.cfg, traceDir: t.TempDir(), usage: Usage{Known: true}}
+	c := &conversation{session: s, traceDir: t.TempDir(), usage: Usage{Known: true}}
 	if code := chat(context.Background(), c, newLineReader(strings.NewReader("/status\n/compact\n/status\n/trace\nnext\n/exit\n"), &errs, nil), &out, &errs); code != exitOK {
 		t.Fatal(code)
 	}
@@ -1408,9 +1408,11 @@ func TestConversation_ModelSwitchCarriesOnlySummary(t *testing.T) {
 			old.blocked, old.planMode = "protocol_error", true
 			old.seenCalls["old-call"] = true
 			old.lastRequest = Usage{Known: true, InputTokens: 99}
-			old.snapshot = func(context.Context) json.RawMessage { return json.RawMessage(`{"kind":"workspace_state"}`) }
+			old.snapshot = func(context.Context, string, bool) json.RawMessage {
+				return json.RawMessage(`{"kind":"workspace_state"}`)
+			}
 			project := "keep launch instructions"
-			c.cfg.ProjectInstructions, old.cfg.ProjectInstructions = &project, &project
+			c.session.cfg.ProjectInstructions, old.cfg.ProjectInstructions = &project, &project
 			reply := turn(textBlock("handoff"))
 			reply.Usage = Usage{Known: true, InputTokens: 123, CachedInputTokens: 80, OutputTokens: 7}
 			model := &compactModel{replies: []ModelResponse{reply}}
@@ -1509,14 +1511,14 @@ func TestConversation_ModelSwitchFailureStillSwitches(t *testing.T) {
 			model := &compactModel{replies: []ModelResponse{test.reply}, err: test.err}
 			runs := 0
 			cfg := testConfig(t, countingTool{runs: &runs})
-			c.cfg.Registry, old.cfg.Registry = cfg.Registry, cfg.Registry
+			c.session.cfg.Registry, old.cfg.Registry = cfg.Registry, cfg.Registry
 			old.model = model
 			if test.name == "limit" {
 				old.history[0].User.Text = strings.Repeat("x", MaxRequestBytes)
 			}
 			var stderr bytes.Buffer
 			c.commandModel(context.Background(), "2", nil, &stderr)
-			if c.session.ID == old.ID || c.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.session.compactedPlan != "" || c.session.blocked != "" || runs != 0 || c.session.LastTrace() == "" || c.session.LastTrace() != old.LastTrace() {
+			if c.session.ID == old.ID || c.session.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.session.compactedPlan != "" || c.session.blocked != "" || runs != 0 || c.session.LastTrace() == "" || c.session.LastTrace() != old.LastTrace() {
 				t.Fatalf("session %+v, runs %d", c.session, runs)
 			}
 			if !strings.Contains(stderr.String(), "fresh session, conversation not carried over:") || !strings.Contains(stderr.String(), test.reason) || strings.Contains(stderr.String(), "\x1b") {
@@ -1591,13 +1593,13 @@ func TestConversation_CancelledModelSwitchKeepsConversation(t *testing.T) {
 			s := c.session
 			s.planMode, s.blocked, s.compactedPlan = true, blocked, "on"
 			s.seenCalls["old-call"] = true
-			cfg, history := c.cfg, string(mustJSON(t, s.history))
+			cfg, history := c.session.cfg, string(mustJSON(t, s.history))
 			usage := Usage{Known: true, InputTokens: 100, CachedInputTokens: 50, OutputTokens: 9}
 			c.usage = usage
 			s.model = &compactModel{err: &ModelError{Status: StatusCancelled, Message: "cancelled during a model request", Usage: Usage{Known: true, InputTokens: 12}}}
 			var stderr bytes.Buffer
 			c.commandModel(context.Background(), "2", nil, &stderr)
-			if c.cfg.Model != cfg.Model || c.cfg.Provider != cfg.Provider || c.cfg.ReasoningEffort != cfg.ReasoningEffort || c.session != s || string(mustJSON(t, s.history)) != history || !s.planMode || s.blocked != blocked || s.compactedPlan != "on" || !s.seenCalls["old-call"] || c.usage != usage {
+			if c.session.cfg.Model != cfg.Model || c.session.cfg.Provider != cfg.Provider || c.session.cfg.ReasoningEffort != cfg.ReasoningEffort || c.session != s || string(mustJSON(t, s.history)) != history || !s.planMode || s.blocked != blocked || s.compactedPlan != "on" || !s.seenCalls["old-call"] || c.usage != usage {
 				t.Fatalf("cancelled switch changed conversation: %+v, usage %+v", c.session, c.usage)
 			}
 			if stderr.String() != "summarizing the conversation for gpt-6.1-sol; Ctrl-C keeps gpt-6-luna\nkept gpt-6-luna; switch cancelled\n" {
@@ -1620,7 +1622,7 @@ func TestConversation_FailedModelSwitchRetainsHandoffUsage(t *testing.T) {
 	c.usage = Usage{Known: true, InputTokens: 1000}
 	c.session.model = &compactModel{err: &ModelError{Status: StatusProviderError, Message: "provider down", Usage: usage}}
 	c.commandModel(context.Background(), "2", nil, io.Discard)
-	if c.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.usage != usage {
+	if c.session.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.usage != usage {
 		t.Fatalf("session %+v, usage %+v", c.session, c.usage)
 	}
 	var stderr bytes.Buffer
@@ -1664,7 +1666,7 @@ func TestChat_AutoCompactSkipsWhenItShould(t *testing.T) {
 		mutate func(*conversation)
 	}{
 		{"below threshold", 839_999, func(*conversation) {}},
-		{"unknown window", 900_000, func(c *conversation) { c.cfg.Model = "custom-model" }},
+		{"unknown window", 900_000, func(c *conversation) { c.session.cfg.Model = "custom-model" }},
 		{"blocked", 900_000, func(c *conversation) { c.session.blocked = string(StatusProtocolError) }},
 		{"empty history", 900_000, func(c *conversation) { c.session.history = nil }},
 		{"usage unknown", 0, func(c *conversation) { c.session.lastRequest = Usage{} }},
@@ -1740,7 +1742,7 @@ func TestChat_AutoCompactFailureDisarmsUntilCompactResetOrSwitch(t *testing.T) {
 	if c.shouldAutoCompact() {
 		t.Fatal("auto-compaction retried after a failure")
 	}
-	c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model), c.shouldAutoCompact())
+	c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.session.cfg.Model), c.shouldAutoCompact())
 	if !strings.Contains(stderr.String(), "/compact summarizes or /reset starts over") {
 		t.Fatalf("stderr %s", stderr.String())
 	}

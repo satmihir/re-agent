@@ -619,7 +619,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws))
+	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +627,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 		Provider: openaiName, Model: DefaultOpenAIModel, ReasoningEffort: DefaultReasoningEffort,
 		Registry: registry, WorkspacePath: ws.Root(),
 		MaxSteps: 200, MaxToolCalls: 400,
-	}, "Where is the timeout set?", collectSnapshot(context.Background(), ws.Root()))
+	}, "Where is the timeout set?", collectSnapshot(context.Background(), ws.Root(), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -707,10 +707,10 @@ func TestMain_ReadOnlyWithholdsMutatingTools(t *testing.T) {
 		return strings.Join(names, ",") + " | " + strings.SplitN(mode, "\n", 2)[0]
 	}
 
-	if got := declared(); got != "delete_file,edit_file,exec,list_files,read_file,search_text,write_file | Mode: read, write, and execute" {
+	if got := declared(); got != "delete_file,edit_file,exec,list_files,read_file,request_workspace_access,search_text,switch_workspace,write_file | Mode: read, write, and execute" {
 		t.Fatalf("default run declared %q", got)
 	}
-	if got := declared("--read-only"); got != "list_files,read_file,search_text | Mode: read only" {
+	if got := declared("--read-only"); got != "list_files,read_file,request_workspace_access,search_text,switch_workspace | Mode: read only" {
 		t.Fatalf("read-only run declared %q", got)
 	}
 }

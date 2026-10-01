@@ -15,7 +15,7 @@ var (
 )
 
 // Registry is the set of tools available for one run. It is built once at
-// startup and never changes while the run is in progress.
+// startup; its declarations stay fixed while session-local implementations can be rebound.
 //
 // It keeps the names of tools this build has but this mode does not allow, so
 // a call for one of them can be refused for the right reason instead of being
@@ -67,6 +67,31 @@ func (r *Registry) Specs() []ToolSpec { return r.specs }
 func (r *Registry) Lookup(name string) (Tool, bool) {
 	t, found := r.byName[name]
 	return t, found
+}
+
+// v0 §6 amendment (2026-09-30): workspace-bound tools own their copied execution binding.
+type workspaceBoundTool interface {
+	Tool
+	withWorkspace(*Workspace) Tool
+}
+
+// v0 §6 amendment (2026-09-30): copy executable bindings, not schemas or active roots.
+func (r *Registry) bindWorkspace(s *Session, ws *Workspace) *Registry {
+	bound := &Registry{mode: r.mode, specs: r.specs, inactive: r.inactive, byName: make(map[string]Tool)}
+	for name, tool := range r.byName {
+		switch t := tool.(type) {
+		case workspaceBoundTool:
+			tool = t.withWorkspace(ws)
+		case switchWorkspaceTool:
+			t.session = s
+			tool = t
+		case requestWorkspaceAccessTool:
+			t.session = s
+			tool = t
+		}
+		bound.byName[name] = tool
+	}
+	return bound
 }
 
 // known reports whether this build has a tool by that name at all, active or
@@ -138,6 +163,13 @@ func okOutcome(data any) (ToolOutcome, error) {
 		return ToolOutcome{}, fmt.Errorf("marshal tool data: %w", err)
 	}
 	return ToolOutcome{OK: true, Code: "ok", Data: raw, Effect: EffectNone}, nil
+}
+
+// workspaceOutcome attributes an observation before its encoded size is measured.
+func workspaceOutcome(data any, workspace string) (ToolOutcome, error) {
+	outcome, err := okOutcome(data)
+	outcome.Workspace = workspace
+	return outcome, err
 }
 
 // failOutcome builds an expected failure the model is meant to read and react to.

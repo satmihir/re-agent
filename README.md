@@ -68,7 +68,7 @@ local observation; re:agent never fetches automatically. The preview includes it
 
 At launch, re:agent also loads the workspace root's `AGENTS.md` into its
 instructions, if it is valid UTF-8 and at most 32 KiB. The text stays fixed
-throughout a chat, including after `/reset` or `/model`. An invalid or oversized
+between workspace switches, including after `/reset` or `/model`. An invalid or oversized
 file is skipped with a warning. Use `--no-project-instructions` on `run` or
 `chat` to leave it out, for example when comparing requests. Project text
 cannot grant tools beyond the chosen mode.
@@ -117,8 +117,8 @@ You grant tools at launch, and nothing the model says can widen that grant.
 
 | Mode | Tools |
 |---|---|
-| Default | `list_files`, `read_file`, `search_text`, `edit_file`, `write_file`, `delete_file`, `exec` |
-| `--read-only` | `list_files`, `read_file`, `search_text` |
+| Default | `list_files`, `read_file`, `search_text`, `edit_file`, `write_file`, `delete_file`, `exec`, `request_workspace_access`, `switch_workspace` |
+| `--read-only` | `list_files`, `read_file`, `search_text`, `request_workspace_access`, `switch_workspace` |
 
 Plan mode (`chat --plan`, `run --plan`, or `/plan` in chat) narrows the launch
 mode: the harness refuses model calls to `edit_file`, `write_file`,
@@ -136,6 +136,67 @@ it is not a model tool call. Turn plan mode off with `/plan` to implement.
   network. Use `--read-only` when that is too much.
 - **Uncertainty stops the run.** A command that timed out may have changed
   anything, so re:agent says so and stops, rather than guessing.
+
+### Changing workspace during a task
+
+The model can call `switch_workspace` to select an existing directory. For a
+location outside the approved scope, interactive chat pauses the turn and asks
+for consent with **Allow for this session** or **Deny**, defaulting to Deny.
+Only fresh arrow keys and Enter choose; pending type-ahead is discarded before
+the picker opens. Escape, Ctrl-C, or Ctrl-D cancel without a grant. The complete escaped canonical destination, existing authority, and
+provider/trace disclosure appear before the picker. Approval continues the same
+turn; later selections within that approved root need no further consent.
+
+Consent lasts until chat exits, including `/reset`, `/model`, and compaction.
+It approves that exact root and permitted descendants, not its parent, siblings,
+or every Git worktree. Read-only and plan restrictions stay in force. `/status`
+shows the current root and approved locations. There is no permanent grant or
+in-session revocation command; exit to discard consent.
+
+For a new worktree, the model first calls `request_workspace_access` with the
+exact absolute destination, gets consent, creates it via `exec`, then calls
+`switch_workspace`. Access requests neither create nor select a directory. A
+missing destination must have an existing immediate parent; a redirected
+reservation is refused. Git worktree identity is validated, never treated as
+permission. Explicitly approved non-Git directories also work.
+
+For one-shot or piped use, preapprove destinations at launch:
+
+```bash
+reagent run --workspace /repos/re-agent \
+  --allow-workspace /repos/re-agent-fix "Create a worktree there and fix issue 59."
+```
+
+`--allow-workspace` is repeatable and accepts existing or prospective exact
+absolute destinations. Without consent or preapproval, an outside selection
+returns `permission_required`; prompt lines are never consumed as consent.
+Both workspace tools must be the sole tool call in their response.
+
+A successful switch rebinds ordinary tools, command working directories, Git
+snapshots, status, and model context, and reloads the new root's `AGENTS.md`
+(unless disabled). Earlier observations remain historical for their recorded
+root. Relative paths and returned digests are not conflated across worktrees.
+Same-root selection is a no-op; changing a shell's own directory never selects
+a workspace for subsequent tools. Canonical path checks reject symlink escapes
+and withheld aliases but are not race-proof sandboxing. Read pagination and
+command-output limits are unchanged. Withheld names are case-insensitive on all
+platforms, and automatic Git probes disable repository-configured fsmonitor
+commands. A switch in exec mode prints an updated notice naming its root.
+When read-only or plan mode is active in a workspace other than the original
+launch root, snapshots use ref plumbing only: `git status` could execute clean
+filters. Branch/upstream/divergence metadata remains available, but change counts
+are absent and explicitly marked `counts: "omitted in read-only/plan mode"`.
+This policy applies on switches and later turns, and survives reset/model
+changes. Launch-root and unrestricted snapshots retain full status collection;
+this is not general Git sandboxing.
+
+This feature changes the benchmark request baseline even without a switch:
+workspace tools are always declared, general instructions gain workspace-history
+guidance, and snapshots, shell records, and model-facing tool outcomes carry
+workspace attribution. The handoff prompt also includes workspace guidance.
+Per-result attribution is intentionally retained before the first switch for
+unambiguous history and trace replay; it counts toward the existing result limit.
+See the v0 §6 request-compatibility amendment.
 
 ## Every run is on disk
 
@@ -218,7 +279,8 @@ cite them by section, for example `// v0 §6.2`.
 
 | Flag | Meaning |
 |---|---|
-| `--workspace` | Directory the tools may see. Defaults to the current one. |
+| `--workspace` | Initial directory the tools may see. Defaults to the current one. |
+| `--allow-workspace PATH` | Preapprove an exact absolute workspace or prospective destination; repeatable. |
 | `--model`, `--provider` | Model to use. Falls back to `REAGENT_MODEL`, then the provider's default. |
 | `--reasoning-effort` | Effort from the model's own vocabulary; `auto` for the provider's default. |
 | `--read-only` | Withhold writing and execution. |
