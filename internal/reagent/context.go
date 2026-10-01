@@ -44,14 +44,9 @@ func BuildContext(cfg Config, scope RequestScope, history []Entry) ModelRequest 
 // instructions is the embedded text plus a labelled runtime section, which is
 // the only way the model learns anything about its own environment.
 //
-// Every line is fixed for the session. That is what keeps BuildContext pure
-// and every request's prefix byte-identical (v1 §8.1), which is in turn what
-// both providers match on to serve a cached prefix. A step counter, a
-// remaining budget, or a clock reading would invalidate that cache on every
-// single request, so nothing that changes between steps belongs here.
-//
-// The tools array is what actually authorizes anything; this section only says
-// where the model is working, with what authority, and as what.
+// v0 §6 amendment (2026-09-30): the prefix is fixed between explicit setting
+// or workspace transitions; collected observations belong in history instead.
+// Declarations and dispatch gates, not instruction text, enforce authority.
 func instructions(cfg Config) string {
 	// An unset effort means the harness sends no such parameter, leaving the
 	// model wherever the provider puts it by default.
@@ -70,7 +65,7 @@ func instructions(cfg Config) string {
 	if cfg.ReportFriction {
 		text += frictionInstructions
 	}
-	// v0 §6 U5: the launch-time copy follows the runtime instructions.
+	// v0 §6 amendment (2026-09-30): the selected root copy follows runtime instructions.
 	if cfg.ProjectInstructions != nil {
 		text += "\n# Project instructions (AGENTS.md)\n\n" + *cfg.ProjectInstructions
 	}

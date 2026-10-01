@@ -155,9 +155,9 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
 	code, message, effect := classifyRun(parent, deadline, runErr, &result)
-	result.trimToResultBudget()
+	result.trimToResultBudget(t.ws.Root(), code, message, effect)
 
-	outcome, err := okOutcome(result)
+	outcome, err := workspaceOutcome(result, t.ws.Root())
 	if err != nil {
 		return ToolOutcome{}, err
 	}
@@ -223,8 +223,14 @@ func exitStatus(exitErr *exec.ExitError) (*int, *string) {
 
 // trimToResultBudget shortens captured output until the whole encoded outcome
 // fits, always at a rune boundary and always marking what it cut (v0 §9).
-func (r *execResult) trimToResultBudget() {
-	for !fitsInResult(*r) && (len(r.Stdout) > 0 || len(r.Stderr) > 0) {
+func (r *execResult) trimToResultBudget(workspace, code, message string, effect EffectState) {
+	fits := func() bool {
+		outcome, err := workspaceOutcome(*r, workspace)
+		outcome.OK, outcome.Code, outcome.Message, outcome.Effect = code == "ok", code, message, effect
+		outcome.Truncated = r.StdoutTruncated || r.StderrTruncated
+		return err == nil && encodedSize(outcome) <= MaxResultBytes
+	}
+	for !fits() && (len(r.Stdout) > 0 || len(r.Stderr) > 0) {
 		if len(r.Stdout) >= len(r.Stderr) {
 			r.Stdout = truncateUTF8(r.Stdout, len(r.Stdout)/2)
 			r.StdoutTruncated = true

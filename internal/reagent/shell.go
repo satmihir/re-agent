@@ -34,7 +34,7 @@ func runShellCommand(ctx context.Context, dir, command string, live io.Writer) (
 	started := time.Now()
 	runErr := process.Run()
 	record := ShellCommand{
-		Kind: "user_shell_command", Command: command,
+		Kind: "user_shell_command", Command: command, Workspace: dir,
 		DurationMS: time.Since(started).Milliseconds(), Interrupted: ctx.Err() != nil,
 	}
 	var exitErr *exec.ExitError

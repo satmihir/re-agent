@@ -90,12 +90,12 @@ func (t readFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 		wanted = wanted[:maxLines]
 	}
 	build := func(n int) any { return readFileData(t.ws.relative(abs), snap, start, wanted[:n]) }
-	shown := fitElements(len(wanted), build)
+	shown := fitElements(len(wanted), build, t.ws.Root())
 	if shown == 0 && len(wanted) > 0 {
 		return failOutcome("line_too_long", fmt.Sprintf("line %d alone does not fit in one result", start)), nil
 	}
 
-	outcome, err := okOutcome(build(shown))
+	outcome, err := workspaceOutcome(build(shown), t.ws.Root())
 	if err != nil {
 		return ToolOutcome{}, err
 	}

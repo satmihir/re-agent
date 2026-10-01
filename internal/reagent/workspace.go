@@ -16,18 +16,20 @@ import (
 
 // Workspace is the directory the read tools may see.
 //
-// Its path checks are lexical (v0 §4). They stop the obvious escapes, but they
-// are not a sandbox and do not defend against filesystem aliases; v1 §11.1
-// restores rooted access.
+// Its ordinary path checks are not race-proof sandboxing; v1 §11.1 restores rooted access.
 type Workspace struct {
 	root    string
 	mu      sync.Mutex
 	digests map[string]map[string]bool
 }
 
-// OpenWorkspace resolves the directory once, at startup.
+// OpenWorkspace opens an existing directory with a canonical immutable root.
 func OpenWorkspace(path string) (*Workspace, error) {
 	root, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, err
 	}
@@ -47,6 +49,11 @@ func (w *Workspace) Root() string { return w.root }
 // v0 §8 amendment (2026-09-27, U3): returned digests distinguish stale
 // mismatches from unknown ones for each path. Tools share the workspace.
 func (w *Workspace) remember(path, digest string) {
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return
+	}
+	path = canonical
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.digests[path] == nil {
@@ -56,6 +63,11 @@ func (w *Workspace) remember(path, digest string) {
 }
 
 func (w *Workspace) returned(path, digest string) bool {
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	path = canonical
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.digests[path][digest]
@@ -87,7 +99,28 @@ func (w *Workspace) resolve(rel string) (string, *ToolOutcome) {
 			return "", failPtr("invalid_path", part+" is not readable")
 		}
 	}
-	return filepath.Join(w.root, rel), nil
+	abs := filepath.Join(w.root, rel)
+	// v0 §4 amendment (2026-09-30): verify aliases without hiding symlink leaves from writers.
+	probe := abs
+	for {
+		_, err := os.Lstat(probe)
+		if !os.IsNotExist(err) {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		return "", osOutcome(err)
+	}
+	if !insidePath(w.root, resolved) || withheldPath(resolved) {
+		return "", failPtr("invalid_path", "resolved path must be inside the workspace and not withheld")
+	}
+	return abs, nil
 }
 
 // withheld names the entries no file tool may see. .git is repository
@@ -95,6 +128,20 @@ func (w *Workspace) resolve(rel string) (string, *ToolOutcome) {
 // reads is sent to the provider and written to the trace (v0 §4).
 func withheld(name string) bool {
 	return name == ".git" || name == ".env" || strings.HasPrefix(name, ".env.")
+}
+
+func insidePath(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func withheldPath(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if withheld(part) {
+			return true
+		}
+	}
+	return false
 }
 
 // relative renders an absolute path the way the model should refer to it.

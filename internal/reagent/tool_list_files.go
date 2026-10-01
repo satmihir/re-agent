@@ -102,9 +102,9 @@ func (t listFilesTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		page = page[:limit]
 	}
 	build := func(n int) any { return listFilesData(a.Path, entries, offset, page[:n], skipped) }
-	shown := page[:fitElements(len(page), build)]
+	shown := page[:fitElements(len(page), build, t.ws.Root())]
 
-	outcome, err := okOutcome(build(len(shown)))
+	outcome, err := workspaceOutcome(build(len(shown)), t.ws.Root())
 	if err != nil {
 		return ToolOutcome{}, err
 	}

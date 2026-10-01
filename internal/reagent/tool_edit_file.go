@@ -119,7 +119,7 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 		Operation: "update", Path: path, Changed: true,
 		BeforeSHA256: snap.sha256, AfterSHA256: digestOf(after), SizeBytes: len(after),
 	}
-	outcome, err := okOutcome(result)
+	outcome, err := workspaceOutcome(result, t.ws.Root())
 	if err != nil {
 		return ToolOutcome{}, err
 	}

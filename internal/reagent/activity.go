@@ -127,6 +127,17 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 				a.result = fmt.Sprintf("exit %d in %s", *result.ExitCode, d)
 			}
 		}
+	case "switch_workspace":
+		var result workspaceSwitchResult
+		if json.Unmarshal(outcome.Data, &result) == nil {
+			a.target = sanitize(result.Workspace)
+			a.result = "selected"
+			if !result.Changed {
+				a.result = "already active"
+			}
+		}
+	case "request_workspace_access":
+		a.result = "approved for this conversation"
 	case "echo":
 		var args echoArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
@@ -236,6 +247,13 @@ func callTarget(call ToolCall) string {
 		var args reportFrictionArgs
 		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
 			return sanitize(args.Category + ": " + args.Summary)
+		}
+	case "switch_workspace", "request_workspace_access":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			return sanitize(args.Path)
 		}
 	case "echo":
 		var args echoArgs

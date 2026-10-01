@@ -61,18 +61,16 @@ Pasted text is sent as one message, however many lines it has.`)
 // conversation is the chat session plus what it needs to build a replacement
 // when the model changes.
 type conversation struct {
-	session   *Session
-	cfg       Config
-	keys      map[string]string
-	proxy     apiProxy
-	client    *http.Client
-	scripted  Model
-	trace     *Trace
-	traceDir  string
-	progress  io.Writer
-	workspace string
-	recap     bool
-	usage     Usage
+	session  *Session
+	keys     map[string]string
+	proxy    apiProxy
+	client   *http.Client
+	scripted Model
+	trace    *Trace
+	traceDir string
+	progress io.Writer
+	recap    bool
+	usage    Usage
 	// autoCompactOff is set by a failed automatic compaction so a persistent
 	// failure is not retried before every message; /compact, /reset, and a
 	// model switch clear it.
@@ -110,7 +108,7 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 	if len(fields) == 0 {
 		current := -1
 		for i, info := range modelCatalog {
-			if info.ID == c.cfg.Model {
+			if info.ID == c.session.cfg.Model {
 				current = i
 				break
 			}
@@ -120,13 +118,13 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 			// v0 §10 amendment (2026-09-29): a switch now costs a request.
 			title += " · carries a summary; /model N fresh skips"
 		}
-		index, err := input.Choose(pickerConfig{title: title, shortcuts: true}, modelChoices(c.cfg.Model, c.available()), current)
+		index, err := input.Choose(pickerConfig{title: title, shortcuts: true}, modelChoices(c.session.cfg.Model, c.available()), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
-			fmt.Fprintln(stderr, renderModels(c.cfg.Model, c.available()))
+			fmt.Fprintln(stderr, renderModels(c.session.cfg.Model, c.available()))
 			return
 		case errors.Is(err, errCancelled):
-			fmt.Fprintf(stderr, "kept %s\n", c.cfg.Model)
+			fmt.Fprintf(stderr, "kept %s\n", c.session.cfg.Model)
 			return
 		case err != nil:
 			fmt.Fprintf(stderr, "error: %v\n", err)
@@ -140,7 +138,7 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 		return
 	}
 	switch {
-	case info.ID == c.cfg.Model:
+	case info.ID == c.session.cfg.Model:
 		fmt.Fprintf(stderr, "already using %s\n", info.ID)
 		return
 	case c.keys[info.Provider] == "" && !c.proxy.serves(info.Provider):
@@ -153,12 +151,12 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 	var plan, tracePath, failure string
 	handoffUsage := Usage{Known: true}
 	if hadHistory && !fresh {
-		fmt.Fprintf(stderr, "summarizing the conversation for %s; Ctrl-C keeps %s\n", info.ID, c.cfg.Model)
+		fmt.Fprintf(stderr, "summarizing the conversation for %s; Ctrl-C keeps %s\n", info.ID, c.session.cfg.Model)
 		previousUsage := c.usage
 		result, _, err := c.compact(ctx, "")
 		if result.Status == StatusCancelled {
 			c.usage = previousUsage
-			fmt.Fprintf(stderr, "kept %s; switch cancelled\n", c.cfg.Model)
+			fmt.Fprintf(stderr, "kept %s; switch cancelled\n", c.session.cfg.Model)
 			return
 		}
 		if err == nil {
@@ -202,12 +200,19 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 // resets to that model's own default, since the value the last model used may
 // be one this one rejects.
 func (c *conversation) switchTo(info modelInfo) {
-	c.cfg.Provider, c.cfg.Model, c.cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
-	c.cfg.Proxied = c.proxy.serves(info.Provider)
+	cfg := c.session.cfg
+	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
+	cfg.Proxied = c.proxy.serves(info.Provider)
 	model := newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, c.trace)
-	snapshot, planMode := c.session.snapshot, c.session.planMode
-	c.session = NewSession(c.cfg, model, c.trace, c.progress)
-	c.session.snapshot, c.session.planMode = snapshot, planMode
+	previous := c.session
+	c.session = NewSession(cfg, model, c.trace, c.progress)
+	c.session.snapshot, c.session.planMode = previous.snapshot, previous.planMode
+	c.session.workspaceConsent = previous.workspaceConsent
+	if previous.workspace != nil {
+		c.session.workspace = previous.workspace.copy()
+		c.session.cfg.Workspace = c.session.workspace.active
+		c.session.cfg.Registry = previous.cfg.Registry.bindWorkspace(c.session, c.session.workspace.active)
+	}
 	c.usage = Usage{Known: true}
 	c.autoCompactOff = false
 }
@@ -220,18 +225,18 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 		fmt.Fprintln(stderr, "a scripted run sends no requests, so reasoning effort has no effect")
 		return
 	}
-	info, known := findModel(c.cfg.Model)
+	info, known := findModel(c.session.cfg.Model)
 	if !known {
 		fmt.Fprintf(stderr, "%s is not in the catalog, so what it accepts is unknown; "+
-			"start again with --reasoning-effort to choose one\n", c.cfg.Model)
+			"start again with --reasoning-effort to choose one\n", c.session.cfg.Model)
 		return
 	}
 	if argument == "" {
 		if len(info.Efforts) == 0 {
-			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
+			fmt.Fprintln(stderr, renderEfforts(info, c.session.cfg.ReasoningEffort))
 			return
 		}
-		selected := c.cfg.ReasoningEffort
+		selected := c.session.cfg.ReasoningEffort
 		if selected == "" {
 			selected = info.Effort
 		}
@@ -242,13 +247,13 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 				break
 			}
 		}
-		index, err := input.Choose(pickerConfig{title: "Select reasoning effort", shortcuts: true}, effortChoices(info, c.cfg.ReasoningEffort), current)
+		index, err := input.Choose(pickerConfig{title: "Select reasoning effort", shortcuts: true}, effortChoices(info, c.session.cfg.ReasoningEffort), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
-			fmt.Fprintln(stderr, renderEfforts(info, c.cfg.ReasoningEffort))
+			fmt.Fprintln(stderr, renderEfforts(info, c.session.cfg.ReasoningEffort))
 			return
 		case errors.Is(err, errCancelled):
-			kept := c.cfg.ReasoningEffort
+			kept := c.session.cfg.ReasoningEffort
 			if kept == "" {
 				kept = "provider default"
 			}
@@ -265,39 +270,41 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 		fmt.Fprintf(stderr, "%v\n", err)
 		return
 	}
-	c.cfg.ReasoningEffort = effort
 	c.session.SetEffort(effort)
 	fmt.Fprintf(stderr, "reasoning effort is now %s; the next request starts a new prompt cache\n", effort)
 }
 
 // commandStatus reports only state already held by the conversation.
 func (c *conversation) commandStatus(stderr io.Writer) {
-	workspace := c.workspace
+	workspace := c.session.cfg.WorkspacePath
 	if styledOutput(stderr) {
 		workspace = shortPath(workspace)
 	}
-	model, provider, effort := modelPresentation(c.cfg)
+	model, provider, effort := modelPresentation(c.session.cfg)
 	if provider == "" {
 		fmt.Fprintf(stderr, "model      %s\n", sanitize(model))
 	} else {
 		fmt.Fprintf(stderr, "model      %s (%s), %s\n", sanitize(model), sanitize(provider), sanitize(effort))
 	}
-	if c.scripted == nil && c.proxy.serves(c.cfg.Provider) {
+	if c.scripted == nil && c.proxy.serves(c.session.cfg.Provider) {
 		fmt.Fprintf(stderr, "endpoint   %s (%s)\n", sanitize(c.proxy.shown()), proxyURLVariable)
 	}
 	fmt.Fprintf(stderr, "workspace  %s\n", sanitize(workspace))
-	mode := sanitize(c.cfg.Registry.Mode().String())
+	mode := sanitize(c.session.cfg.Registry.Mode().String())
 	if c.session.planMode {
 		mode += " · " + planModeLabel(styledOutput(stderr))
 	}
 	fmt.Fprintf(stderr, "mode       %s\n", mode)
-	fmt.Fprintf(stderr, "budget     %d steps, %d tool calls per turn\n", c.cfg.MaxSteps, c.cfg.MaxToolCalls)
+	for _, root := range c.session.approvedWorkspacePaths() {
+		fmt.Fprintf(stderr, "approved   %s (until chat exits)\n", sanitize(root))
+	}
+	fmt.Fprintf(stderr, "budget     %d steps, %d tool calls per turn\n", c.session.cfg.MaxSteps, c.session.cfg.MaxToolCalls)
 	if c.usage.Known {
 		fmt.Fprintf(stderr, "session    %s · %s in (%s cached) · %s out\n", plural(c.session.Turns(), "turn", "turns"), formatCount(c.usage.InputTokens), formatCount(c.usage.CachedInputTokens), formatCount(c.usage.OutputTokens))
 	} else {
 		fmt.Fprintf(stderr, "session    %s · tokens unknown\n", plural(c.session.Turns(), "turn", "turns"))
 	}
-	if window := contextWindow(c.cfg.Model); window > 0 {
+	if window := contextWindow(c.session.cfg.Model); window > 0 {
 		if line := lastRequestLine(c.session.lastRequest, window); line != "" {
 			fmt.Fprintln(stderr, line)
 		}
@@ -328,7 +335,7 @@ func (c *conversation) commandContext(stderr io.Writer) {
 		return
 	}
 	breakdown.lastUsage = c.session.lastRequest
-	breakdown.window = contextWindow(c.cfg.Model)
+	breakdown.window = contextWindow(c.session.cfg.Model)
 	fmt.Fprintln(stderr, breakdown.render())
 }
 
@@ -372,7 +379,7 @@ func printCompacted(stderr io.Writer, result RunResult, replacedBytes int) {
 const autoCompactPercent = 80
 
 func (c *conversation) shouldAutoCompact() bool {
-	window := contextWindow(c.cfg.Model)
+	window := contextWindow(c.session.cfg.Model)
 	last := c.session.lastRequest
 	return c.scripted == nil && !c.autoCompactOff && c.session.blocked == "" && len(c.session.history) > 0 &&
 		window > 0 && last.Known && last.InputTokens*100 >= autoCompactPercent*window
@@ -381,7 +388,7 @@ func (c *conversation) shouldAutoCompact() bool {
 // autoCompact compacts before a turn and reports whether the turn should go on.
 // Only a cancellation stops it: a failed compaction leaves the session as it was.
 func (c *conversation) autoCompact(ctx context.Context, stderr io.Writer) bool {
-	percent := 100 * float64(c.session.lastRequest.InputTokens) / float64(contextWindow(c.cfg.Model))
+	percent := 100 * float64(c.session.lastRequest.InputTokens) / float64(contextWindow(c.session.cfg.Model))
 	line := fmt.Sprintf("context %.0f%% of the window; compacting before this turn", percent)
 	if styledOutput(stderr) {
 		line = ansiDim + line + ansiReset
@@ -505,7 +512,7 @@ func (c *conversation) commandShell(ctx context.Context, command string, stdout,
 	defer stop()
 
 	live := &lineEnd{w: stdout}
-	record, err := runShellCommand(shellCtx, c.cfg.WorkspacePath, command, live)
+	record, err := runShellCommand(shellCtx, c.session.cfg.WorkspacePath, command, live)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
 		return
@@ -634,6 +641,9 @@ func planSwitchLine(on, styled bool) string {
 // session (v1 §18.2). Slash commands are local controls; /compact and model handoffs call the model.
 // A terminal submission may contain a bracketed paste or continued lines.
 func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
+	c.session.workspaceConsent = func(ctx context.Context, destination workspaceDestination) (bool, error) {
+		return workspacePermission(ctx, input, stderr, c.session.cfg, c.session.planMode, destination)
+	}
 	var interrupted time.Time
 	for {
 		prompt, bandPrefix := "> ", "> "
@@ -745,7 +755,7 @@ func (c *conversation) completionArguments(command string) []string {
 		}
 		return models
 	case "/effort":
-		if model, ok := findModel(c.cfg.Model); ok {
+		if model, ok := findModel(c.session.cfg.Model); ok {
 			return model.Efforts
 		}
 	}
@@ -812,7 +822,7 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 		}
 	}
 	if result.Steps > 0 && c.session.blocked != string(StatusLimitExceeded) {
-		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.cfg.Model), c.shouldAutoCompact())
+		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.session.cfg.Model), c.shouldAutoCompact())
 	}
 	c.session.display.spacer()
 	if result.Status != StatusCompleted || !c.session.planMode {

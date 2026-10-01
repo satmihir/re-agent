@@ -46,7 +46,7 @@ func TestCompact_ReplacesHistoryWithTheSummary(t *testing.T) {
 	old := append([]Entry(nil), s.history...)
 	oldJSON, _ := json.Marshal(old)
 	id, turns := s.ID, s.Turns()
-	s.snapshot = func(context.Context) json.RawMessage { t.Fatal("compaction collected a snapshot"); return nil }
+	s.snapshot = func(context.Context, string) json.RawMessage { t.Fatal("compaction collected a snapshot"); return nil }
 	path := filepath.Join(t.TempDir(), "compact.jsonl")
 	result, replacedBytes, err := s.Compact(context.Background(), "  files to keep  ", "compact-run", path)
 	if err != nil || result.Status != StatusCompleted || result.Reply != "Part one\npart two" || replacedBytes != len(oldJSON) {

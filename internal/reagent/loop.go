@@ -11,13 +11,16 @@ import (
 	"strings"
 )
 
-// Config is the fixed configuration of one run.
+// Config holds model settings and the current workspace request prefix.
 type Config struct {
-	Provider        string
-	Model           string
-	ReasoningEffort string
-	Registry        *Registry
-	WorkspacePath   string
+	Provider              string
+	Model                 string
+	ReasoningEffort       string
+	Registry              *Registry
+	WorkspacePath         string
+	Workspace             *Workspace
+	approvedWorkspaces    []workspaceDestination
+	NoProjectInstructions bool
 	// v0 §6 U5: nil means no root AGENTS.md was loaded; an empty file is present.
 	ProjectInstructions *string
 	MaxSteps            int
@@ -77,13 +80,15 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"provider":   r.cfg.Provider,
 		"configured": r.cfg.Model,
 		// v0 §10 amendment (2026-09-30): build metadata belongs only in the trace.
-		"build":           buildRevision(),
-		"max_steps":       r.cfg.MaxSteps,
-		"max_tool_calls":  r.cfg.MaxToolCalls,
-		"prompt":          prompt,
-		"instructions":    defaultInstructions,
-		"tools":           r.cfg.Registry.Specs(),
-		"initial_history": s.history,
+		"build":               buildRevision(),
+		"workspace":           r.cfg.WorkspacePath,
+		"approved_workspaces": s.approvedWorkspacePaths(),
+		"max_steps":           r.cfg.MaxSteps,
+		"max_tool_calls":      r.cfg.MaxToolCalls,
+		"prompt":              prompt,
+		"instructions":        instructions(r.cfg),
+		"tools":               r.cfg.Registry.Specs(),
+		"initial_history":     s.history,
 	})
 	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}})
 
@@ -93,6 +98,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.finish(StatusCancelled, "cancelled before the next model request", "")
 		}
 
+		r.cfg = s.cfg // v0 §6 amendment (2026-09-30): switches replace the next prefix.
 		r.steps++
 		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.history)
 		r.trace.Write("model.requested", r.steps, req)
@@ -216,6 +222,15 @@ func (r *Run) reserve(n int) (string, bool) {
 // dispatch executes one accepted batch sequentially, in the order the model
 // produced it (I07), appending exactly one terminal result per call (I05).
 func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, string) {
+	// v0 §10 amendment (2026-09-30): a selection never shares a dispatch batch.
+	if len(calls) > 1 {
+		for _, call := range calls {
+			if call.Name == "switch_workspace" || call.Name == "request_workspace_access" {
+				r.recordNotExecuted(calls, "workspace operations must be the only tool call in their response")
+				return "", ""
+			}
+		}
+	}
 	for i, call := range calls {
 		if ctx.Err() != nil {
 			r.recordNotExecuted(calls[i:], "cancelled")
@@ -245,7 +260,7 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 		// Recorded only immediately before a real implementation runs, so an
 		// intent with no result is visible in the trace (v1 §16.3).
 		r.trace.Write("tool.started", r.steps, map[string]any{
-			"call_id": call.CallID, "name": call.Name, "arguments": call.Arguments,
+			"call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "workspace": r.cfg.WorkspacePath,
 		})
 		r.session.display.toolStarted(*call)
 		outcome, err := tool.Execute(ctx, json.RawMessage(call.Arguments))
@@ -273,12 +288,15 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 // recordResult appends one observation to the transcript, which is how the tool
 // result becomes part of the next model request (I09).
 func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
+	if outcome.Workspace == "" {
+		outcome.Workspace = r.cfg.WorkspacePath
+	}
 	result := ToolResult{CallID: call.CallID, Name: call.Name, Outcome: outcome}
 	if outcome.Effect != EffectNone {
 		// Recorded from the outcome, so a failed run still reports what it
 		// actually changed (v1 §19.3).
 		r.effects = append(r.effects, EffectRecord{
-			Step: r.steps, CallID: call.CallID, Tool: call.Name,
+			Step: r.steps, CallID: call.CallID, Tool: call.Name, Workspace: outcome.Workspace,
 			Summary: argumentSummary(call.Arguments), Effect: outcome.Effect,
 		})
 	}

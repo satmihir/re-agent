@@ -7,18 +7,19 @@ import (
 	"io"
 )
 
-// Session is what outlives one run: the fixed configuration, the accepted
-// transcript, and every call id ever accepted (I04). It keeps one provider,
-// one model, and one launch mode from its first run to its last; /reset makes
-// a new one rather than changing any of them (v1 §6.1). Plan mode only narrows.
+// Session holds model configuration, workspace selection, the accepted transcript,
+// and every call id ever accepted (I04); launch mode remains its authority ceiling.
 type Session struct {
-	ID      string
-	cfg     Config
-	model   Model
-	trace   *Trace
-	display *Display
+	ID               string
+	cfg              Config
+	model            Model
+	trace            *Trace
+	display          *Display
+	progress         io.Writer
+	workspace        *workspaceSelection
+	workspaceConsent func(context.Context, workspaceDestination) (bool, error)
 	// v0 §6 amendment (2026-09-27): inject collection before each run.
-	snapshot func(context.Context) json.RawMessage
+	snapshot func(context.Context, string) json.RawMessage
 
 	history   []Entry
 	seenCalls map[string]bool
@@ -36,10 +37,17 @@ type Session struct {
 
 // NewSession starts a session with an empty transcript.
 func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Session {
-	return &Session{
-		ID: NewID(), cfg: cfg, model: model, trace: trace, display: NewDisplay(progress),
+	s := &Session{
+		ID: NewID(), cfg: cfg, model: model, trace: trace, display: NewDisplay(progress), progress: progress,
 		seenCalls: make(map[string]bool), planMode: cfg.PlanMode,
 	}
+	if cfg.Workspace != nil {
+		s.workspace = newWorkspaceSelection(cfg.Workspace, cfg.approvedWorkspaces)
+		s.cfg.Workspace = s.workspace.active
+		s.cfg.WorkspacePath = s.workspace.active.Root()
+		s.cfg.Registry = cfg.Registry.bindWorkspace(s, s.workspace.active)
+	}
+	return s
 }
 
 // Turn runs one user submission as a new run and returns its result. The run
@@ -55,7 +63,7 @@ func (s *Session) Turn(ctx context.Context, text, runID, tracePath string) (RunR
 
 	var workspace json.RawMessage
 	if s.snapshot != nil {
-		workspace = s.snapshot(ctx)
+		workspace = s.snapshot(ctx, s.cfg.WorkspacePath)
 	}
 	marker := planMarkerFor(s.history, s.planMode)
 	if len(s.history) == 1 && s.history[0].Kind == EntrySummary && !s.planMode && s.compactedPlan == "on" {
@@ -146,7 +154,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 }
 
 // Reset discards the transcript and becomes a fresh session with the same
-// launch configuration. Nothing is rolled back: the old history is simply no
+// model, launch authority, and selected workspace. Nothing is rolled back: the old history is simply no
 // longer sent, and its traces stay on disk.
 func (s *Session) Reset() {
 	s.ID = NewID()

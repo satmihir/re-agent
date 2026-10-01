@@ -137,7 +137,7 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		result := writeFileResult{
 			Operation: "create", Path: t.ws.relative(abs), AfterSHA256: digestOf(content), SizeBytes: len(content),
 		}
-		outcome, err := appliedOutcome(result)
+		outcome, err := appliedOutcome(result, t.ws.Root())
 		if err != nil {
 			return ToolOutcome{}, err
 		}
@@ -164,7 +164,7 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		Operation: "overwrite", Path: t.ws.relative(abs), BeforeSHA256: &snap.sha256,
 		AfterSHA256: digestOf(content), SizeBytes: len(content),
 	}
-	outcome, err := appliedOutcome(result)
+	outcome, err := appliedOutcome(result, t.ws.Root())
 	if err != nil {
 		return ToolOutcome{}, err
 	}
@@ -198,7 +198,7 @@ func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	if err := os.Remove(abs); err != nil {
 		return *osOutcome(err), nil
 	}
-	return appliedOutcome(deleteFileResult{Operation: "delete", Path: t.ws.relative(abs), BeforeSHA256: snap.sha256})
+	return appliedOutcome(deleteFileResult{Operation: "delete", Path: t.ws.relative(abs), BeforeSHA256: snap.sha256}, t.ws.Root())
 }
 
 func fileTarget(info os.FileInfo) *ToolOutcome {
@@ -227,8 +227,8 @@ func (w *Workspace) checkFileDigest(abs, expected string) (*snapshot, *ToolOutco
 	return nil, failPtr("unknown_digest", "this is not a digest read_file returned for this file; its current digest is "+snap.sha256)
 }
 
-func appliedOutcome(result any) (ToolOutcome, error) {
-	outcome, err := okOutcome(result)
+func appliedOutcome(result any, workspace string) (ToolOutcome, error) {
+	outcome, err := workspaceOutcome(result, workspace)
 	if err != nil {
 		return ToolOutcome{}, err
 	}

@@ -46,6 +46,7 @@ type UserTurn struct {
 // ShellCommand is a command the user ran with ! in chat, and what it printed
 // (v0 §10 amendment of 2026-09-26). The model sees it but never caused it.
 type ShellCommand struct {
+	Workspace        string  `json:"workspace,omitempty"`
 	Kind             string  `json:"kind"`
 	Command          string  `json:"command"`
 	ExitCode         *int    `json:"exit_code"`
@@ -199,11 +200,12 @@ func (m Mode) allows(effect EffectClass) bool {
 // EffectRecord is one thing a run did outside its own memory. It is derived
 // from actual outcomes, never from the model's account of them (v1 §19.3).
 type EffectRecord struct {
-	Step    int         `json:"step"`
-	CallID  string      `json:"call_id"`
-	Tool    string      `json:"tool"`
-	Summary string      `json:"summary"`
-	Effect  EffectState `json:"effect"`
+	Workspace string      `json:"workspace,omitempty"`
+	Step      int         `json:"step"`
+	CallID    string      `json:"call_id"`
+	Tool      string      `json:"tool"`
+	Summary   string      `json:"summary"`
+	Effect    EffectState `json:"effect"`
 }
 
 // ToolSpec is the model-visible declaration of one tool. It is the single
@@ -225,6 +227,7 @@ type Tool interface {
 
 // ToolOutcome is the one envelope every tool returns to the model (v1 §5.3).
 type ToolOutcome struct {
+	Workspace string          `json:"workspace,omitempty"`
 	OK        bool            `json:"ok"`
 	Code      string          `json:"code"`
 	Message   string          `json:"message"`

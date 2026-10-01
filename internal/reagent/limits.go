@@ -26,18 +26,18 @@ const unlimited = -1
 // observation stops at a complete element instead of at a cut in the
 // serialized JSON (v0 §4). build must recompute its own continuation metadata
 // for the n it is given.
-func fitElements(total int, build func(n int) any) int {
-	if fitsInResult(build(total)) {
+func fitElements(total int, build func(n int) any, workspace string) int {
+	if fitsInResult(build(total), workspace) {
 		return total
 	}
 	// Encoded size grows with n, so the first n that does not fit bounds the rest.
-	return sort.Search(total, func(n int) bool { return !fitsInResult(build(n + 1)) })
+	return sort.Search(total, func(n int) bool { return !fitsInResult(build(n+1), workspace) })
 }
 
 // fitsInResult measures the whole outcome envelope, not just its data, because
 // that envelope is what the model actually receives.
-func fitsInResult(data any) bool {
-	outcome, err := okOutcome(data)
+func fitsInResult(data any, workspace string) bool {
+	outcome, err := workspaceOutcome(data, workspace)
 	if err != nil {
 		return false
 	}

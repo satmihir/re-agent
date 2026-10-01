@@ -15,10 +15,11 @@ import (
 // workspaceState is the dated, best-effort record attached to one user turn.
 // v0 §6 amendment (2026-09-27): collect before the run, not in BuildContext.
 type workspaceState struct {
-	Kind     string    `json:"kind"`
-	Date     string    `json:"date,omitempty"`
-	TimeZone string    `json:"time_zone,omitempty"`
-	Git      *gitState `json:"git,omitempty"`
+	Kind      string    `json:"kind"`
+	Workspace string    `json:"workspace"`
+	Date      string    `json:"date,omitempty"`
+	TimeZone  string    `json:"time_zone,omitempty"`
+	Git       *gitState `json:"git,omitempty"`
 }
 
 type gitState struct {
@@ -41,7 +42,7 @@ const workspacePreamble = "Workspace state when this message was sent, collected
 func collectSnapshot(ctx context.Context, root string) json.RawMessage {
 	now := time.Now()
 	zone, _ := now.Zone()
-	state := workspaceState{Kind: "workspace_state", Date: now.Format("2006-01-02"), TimeZone: zone}
+	state := workspaceState{Kind: "workspace_state", Workspace: root, Date: now.Format("2006-01-02"), TimeZone: zone}
 	if status, ok := snapshotGit(ctx, root, "status", "--porcelain=v2", "--branch"); ok {
 		git := parseGitStatus(status)
 		// v0 §6 U4 review: a fallback ref is a candidate, not an observation.
@@ -78,8 +79,11 @@ func snapshotGit(ctx context.Context, root string, args ...string) (string, bool
 	cmd.Dir = root
 	cmd.Env = childEnvironment()
 	cmd.Stdin = bytes.NewReader(nil)
-	out, err := cmd.Output()
-	return string(out), err == nil
+	cmd.WaitDelay = time.Second
+	out := &boundedWriter{limit: MaxResultBytes}
+	cmd.Stdout = out
+	err := cmd.Run()
+	return string(out.kept), err == nil && out.seen <= MaxResultBytes
 }
 
 func parseGitStatus(status string) gitState {
