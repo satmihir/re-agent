@@ -33,9 +33,10 @@ type Session struct {
 	// blocked explains why ordinary input is refused until recovery or /reset. A run whose
 	// outcome cannot be continued from sets it; the transcript is never rolled
 	// back to hide that outcome (v1 §7.5).
-	blocked     string
-	lastTrace   string
-	lastRequest Usage
+	blocked       string
+	lastTrace     string
+	lastRequest   Usage
+	tokensPerByte float64
 }
 
 // NewSession starts a session with an empty transcript.
@@ -153,6 +154,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	summary := Summary{Text: text, ReplacedEntries: len(s.history), Model: s.cfg.Model}
 	s.history = []Entry{{Kind: EntrySummary, Summary: &summary}}
 	s.handoff = nil
+	s.tokensPerByte = 0
 	s.blocked = ""
 	// The request's input was the whole old history, so its usage says nothing
 	// about the new one and would trigger another compaction (v0 §10, U10).
@@ -169,6 +171,7 @@ func (s *Session) Reset() {
 	s.ID = NewID()
 	s.history = nil
 	s.handoff = nil
+	s.tokensPerByte = 0
 	s.compactedPlan = ""
 	s.seenCalls = make(map[string]bool)
 	s.blocked = ""

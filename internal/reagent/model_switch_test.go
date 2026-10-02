@@ -61,7 +61,7 @@ func TestModelSwitch_PreservesSourceAndSessionWithoutGeneration(t *testing.T) {
 			if err := json.Unmarshal([]byte(strings.TrimPrefix(view[0].User.Text, transcriptPreamble)), &records); err != nil {
 				t.Fatal(err)
 			}
-			if len(records) != 5 || records[0].Number != 1 || !reflect.DeepEqual(records[0].User, s.history[0].User) || records[1].Assistant.Model != pair[0] || records[1].Assistant.ResponseID != "original-response" || records[1].Assistant.OmittedNativeItems != 2 || records[1].Assistant.Blocks[1].Call.Arguments != response.Blocks[1].Call.Arguments || !reflect.DeepEqual(records[2].Tool, s.history[2].Tool) || !reflect.DeepEqual(records[3].Shell, s.history[3].Shell) || !reflect.DeepEqual(records[4].Summary, s.history[4].Summary) {
+			if len(records) != 5 || records[0].Number != 1 || !reflect.DeepEqual(records[0].User, s.history[0].User) || records[1].Assistant.Model != pair[0] || records[1].Assistant.ResponseID != "original-response" || records[1].Assistant.OmittedNativeItems != 2 || records[1].Assistant.Blocks[1].Call.Arguments != response.Blocks[1].Call.Arguments || !reflect.DeepEqual(records[2].Tool, s.history[2].Tool) || records[2].Trust != "untrusted_tool_data" || records[3].Trust != "untrusted_tool_data" || !reflect.DeepEqual(records[3].Shell, s.history[3].Shell) || !reflect.DeepEqual(records[4].Summary, s.history[4].Summary) {
 				t.Fatalf("visible evidence differs: %+v", records)
 			}
 			for _, encode := range []func(ModelRequest) ([]byte, error){EncodeOpenAIRequest, EncodeAnthropicRequest} {
@@ -96,7 +96,7 @@ func TestModelSwitch_RefusalPreservesUsableState(t *testing.T) {
 		change                    func(*Session)
 	}{
 		{"encoded size", "gpt-6-luna", "byte limit", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", MaxRequestBytes) }},
-		{"smaller window", "claude-haiku-4-5", "window allowance", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", 100_000) }},
+		{"smaller window", "claude-haiku-4-5", "window allowance", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", 400_000) }},
 		{"unknown window", "gpt-5.6-luna", "unknown", func(*Session) {}},
 		{"malformed snapshot", "gpt-6-luna", "encode historical", func(s *Session) { s.history[0].User.Workspace = json.RawMessage(`{`) }},
 		{"unsupported block", "gpt-6-luna", "unsupported block", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{{Kind: "image"}} }},
@@ -318,15 +318,16 @@ func TestModelSwitch_CompactAndResetClearViewOnlyOnSuccess(t *testing.T) {
 	c.session.history[0].User.Plan = "on"
 	c.commandModel(context.Background(), "claude-haiku-4-5", nil, io.Discard)
 	s, handoff := c.session, c.session.handoff
+	s.tokensPerByte = 0.211
 	model := &compactModel{err: fmt.Errorf("provider down")}
 	s.model = model
 	result, _, err := s.Compact(context.Background(), "", NewID(), filepath.Join(t.TempDir(), "failed.jsonl"))
-	if err != nil || result.Status == StatusCompleted || s.handoff != handoff || len(model.requests[0].History) != 2 || model.requests[0].History[0].User.Text != handoff.Text {
+	if err != nil || result.Status == StatusCompleted || s.handoff != handoff || s.tokensPerByte != 0.211 || len(model.requests[0].History) != 2 || model.requests[0].History[0].User.Text != handoff.Text {
 		t.Fatalf("failed compaction: %+v, %v", result, err)
 	}
 	model.err, model.replies = nil, []ModelResponse{turn(textBlock("summary"))}
 	result, _, err = s.Compact(context.Background(), "", NewID(), filepath.Join(t.TempDir(), "compact.jsonl"))
-	if err != nil || result.Status != StatusCompleted || s.handoff != nil || s.compactedPlan != "on" || len(s.requestHistory()) != 1 || s.requestHistory()[0].Kind != EntrySummary {
+	if err != nil || result.Status != StatusCompleted || s.handoff != nil || s.tokensPerByte != 0 || s.compactedPlan != "on" || len(s.requestHistory()) != 1 || s.requestHistory()[0].Kind != EntrySummary {
 		t.Fatalf("successful compaction: %+v, %v", result, err)
 	}
 	c.commandModel(context.Background(), "gpt-6.1-sol", nil, io.Discard)
@@ -336,5 +337,75 @@ func TestModelSwitch_CompactAndResetClearViewOnlyOnSuccess(t *testing.T) {
 	s.Reset()
 	if s.handoff != nil || len(s.requestHistory()) != 0 {
 		t.Fatal("reset left a historical prefix")
+	}
+}
+
+func TestModelSwitch_CalibratedAdmissionAndCompactOffer(t *testing.T) {
+	for _, test := range []struct {
+		name, destination string
+		bytes             int
+		rate              float64
+		admitted          bool
+	}{
+		{"review reproduction", "gpt-6-luna", 600_000, 0, true},
+		{"unknown measurement", "gpt-6-luna", 2_400_000, 0, false},
+		{"measured with margin", "gpt-6-luna", 2_400_000, 0.211, true},
+		{"dense tokens", "gpt-6-luna", 600_000, 1, true},
+		{"dense tokens overflow", "gpt-6-luna", 800_000, 1, false},
+		{"provider change uses fallback", "claude-haiku-4-5", 400_000, 0.1, false},
+		{"minimum estimate", "gpt-6-luna", 4_200_000, 0.001, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newConversation(t, "gpt-6.1-sol", "medium", 1)
+			s := c.session
+			s.history[1].Assistant.Blocks = []OutputBlock{textBlock(strings.Repeat("x", test.bytes))}
+			s.tokensPerByte = test.rate
+			before, id := string(mustJSON(t, s.history)), s.ID
+			var stderr bytes.Buffer
+			c.commandModel(context.Background(), test.destination, nil, &stderr)
+			if (s.cfg.Model == test.destination) != test.admitted || s.ID != id || string(mustJSON(t, s.history)) != before {
+				t.Fatalf("admission/state: %s", stderr.String())
+			}
+			if !test.admitted && (!strings.Contains(stderr.String(), "/compact then retry /model") || s.tokensPerByte != test.rate) {
+				t.Fatalf("missing recovery offer or changed measurement: %s", stderr.String())
+			}
+			if test.admitted && s.tokensPerByte != 0 {
+				t.Fatal("model change retained old measurement")
+			}
+		})
+	}
+}
+
+func TestModelSwitch_AdmissionUsesReportedGenerationBytes(t *testing.T) {
+	c := newConversation(t, "gpt-6.1-sol", "medium", 0)
+	s := c.session
+	response := autoTestReply(s.cfg.Model, textBlock(strings.Repeat("reply", 120_000)))
+	response.Usage.InputTokens = 130_000
+	model := &requestRecorder{ScriptedModel: NewScriptedModel(response)}
+	s.model = model
+	result, err := s.Turn(context.Background(), strings.Repeat("request", 90_000), "run", filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil || result.Status != StatusCompleted {
+		t.Fatalf("turn: %+v, %v", result, err)
+	}
+	body, err := encodeRequest(s.cfg, model.requests[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := float64(response.Usage.InputTokens) / float64(len(body))
+	if s.tokensPerByte != want {
+		t.Fatalf("measurement = %g, want %g", s.tokensPerByte, want)
+	}
+	s.SetEffort("high")
+	if s.tokensPerByte != want {
+		t.Fatal("effort change discarded measurement")
+	}
+	c.commandModel(context.Background(), "gpt-6-luna", nil, io.Discard)
+	if s.cfg.Model != "gpt-6-luna" || s.tokensPerByte != 0 {
+		t.Fatal("calibrated switch failed or retained measurement")
+	}
+	s.tokensPerByte = want
+	s.Reset()
+	if s.tokensPerByte != 0 {
+		t.Fatal("reset retained measurement")
 	}
 }

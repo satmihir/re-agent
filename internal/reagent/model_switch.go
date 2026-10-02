@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -30,6 +31,7 @@ type transcriptAssistant struct {
 
 type transcriptEntry struct {
 	Number    int                  `json:"entry"`
+	Trust     string               `json:"trust,omitempty"`
 	Kind      EntryKind            `json:"kind"`
 	User      *UserTurn            `json:"user,omitempty"`
 	Assistant *transcriptAssistant `json:"assistant,omitempty"`
@@ -77,6 +79,7 @@ func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 			record.Summary = entry.Summary
 		case entry.Kind == EntryShell && entry.Shell != nil:
 			record.Shell = entry.Shell
+			record.Trust = "untrusted_tool_data"
 		case entry.Kind == EntryAssistant && entry.Assistant != nil:
 			response := entry.Assistant
 			for _, block := range response.Blocks {
@@ -107,6 +110,7 @@ func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 			}
 			delete(pending, result.CallID)
 			record.Tool = result
+			record.Trust = "untrusted_tool_data"
 		default:
 			return nil, 0, fmt.Errorf("entry %d has unsupported or missing %q data", i+1, entry.Kind)
 		}
@@ -127,7 +131,7 @@ func (s *Session) requestHistory() []Entry {
 	return append(history, s.history[s.handoff.Entries:]...)
 }
 
-func stageModelSwitch(ctx context.Context, history []Entry, cfg Config, window int64) (*modelHandoff, int, error) {
+func stageModelSwitch(ctx context.Context, history []Entry, cfg Config, window int64, tokensPerByte float64) (*modelHandoff, int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
@@ -139,7 +143,7 @@ func stageModelSwitch(ctx context.Context, history []Entry, cfg Config, window i
 	if handoff != nil {
 		projected = []Entry{{Kind: EntryUser, User: &UserTurn{Text: handoff.Text, Plan: handoff.Plan}}}
 	}
-	size, err := validateDestination(cfg, projected, window)
+	size, err := validateDestination(cfg, projected, window, tokensPerByte)
 	if err != nil {
 		return nil, size, err
 	}
@@ -149,18 +153,26 @@ func stageModelSwitch(ctx context.Context, history []Entry, cfg Config, window i
 	return handoff, size, nil
 }
 
-func validateDestination(cfg Config, history []Entry, window int64) (int, error) {
+// v0 §10 amendment (2026-10-02): a provider change has no matching measurement.
+func (s *Session) admissionRate(provider string) float64 {
+	if provider != s.cfg.Provider || s.tokensPerByte == 0 {
+		return 0.5
+	}
+	return math.Max(0.25, s.tokensPerByte*1.5)
+}
+
+func validateDestination(cfg Config, history []Entry, window int64, tokensPerByte float64) (int, error) {
 	body, err := encodeRequest(cfg, BuildContext(cfg, RequestScope{}, history))
 	if err != nil {
 		return 0, fmt.Errorf("validate destination request: %w", err)
 	}
-	// v0 §10 amendment (2026-10-02): conservative admission, not an exact tokenizer count.
+	// v0 §10 amendment (2026-10-02): calibrated admission, not an exact token count.
 	if len(history) != 0 {
 		if window == 0 {
 			return len(body), fmt.Errorf("destination context window is unknown; use fresh to discard history explicitly")
 		}
-		if int64(len(body))*2+16_000 > window {
-			return len(body), fmt.Errorf("handoff exceeds the conservative destination window allowance; /compact first or use fresh")
+		if math.Ceil(float64(len(body))*tokensPerByte)+16_000 > float64(window) {
+			return len(body), fmt.Errorf("handoff exceeds the estimated destination window allowance; use /compact then retry /model, or use fresh to discard history")
 		}
 	}
 	return len(body), nil
@@ -191,7 +203,7 @@ func (c *conversation) transitionModel(ctx context.Context, info modelInfo, fres
 	if fresh {
 		history = nil
 	}
-	handoff, size, err := stageModelSwitch(ctx, history, cfg, info.ContextWindow)
+	handoff, size, err := stageModelSwitch(ctx, history, cfg, info.ContextWindow, s.admissionRate(cfg.Provider))
 	metadata["request_bytes"] = size
 	metadata["latency_ms"] = time.Since(started).Milliseconds()
 	if err != nil {
@@ -211,6 +223,7 @@ func (c *conversation) transitionModel(ctx context.Context, info modelInfo, fres
 		s.cfg, s.handoff = cfg, handoff
 		s.model = newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, s.trace)
 		s.lastRequest = Usage{}
+		s.tokensPerByte = 0
 		c.autoCompactOff = false
 	}
 	c.session.lastTrace = path

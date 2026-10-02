@@ -97,6 +97,10 @@ the session; new responses continue natively. Repeated switches rebuild from
 the original records, not nested handoffs. Provider-native state, including
 opaque reasoning, is retained locally but omitted from the handoff: this is
 not lossless native continuation and may change answer quality or cache costs.
+Tool and shell records are individually labelled `untrusted_tool_data`, including
+file contents and command output. They still travel inside user-role text:
+labels and JSON escaping are not a structural trust boundary or a guarantee
+against embedded instructions gaining influence.
 
 Normal switches keep session identity, permissions, workspace grants, blocking,
 seen-call IDs, and token totals; effort resets to the destination default.
@@ -106,11 +110,15 @@ empty fallback. Unresolved tool batches and uncertain effects refuse a handoff.
 a new session; selecting the current model is still a no-op, even with `fresh`.
 
 Carried history must fit the destination encoding and its known catalog window.
-The experiment conservatively estimates two input tokens per encoded request
-byte plus 16,000 tokens of output headroom; this is not an exact token count or
-an OpenAI output cap. Unknown windows refuse a nonempty handoff. There is no
-truncation: use `/compact` separately, or `fresh` to discard explicitly. The
-next user message and later growth can still exceed limits. `/context` measures
+Admission uses the latest successful generation's reported input tokens per
+encoded body byte, with a 1.5× margin and a 0.25-token/byte minimum. Without a
+measurement, or across providers, it uses 0.5 tokens per byte. All estimates add
+16,000 tokens of output headroom; they are not exact token counts or an OpenAI
+output cap. Different content/model tokenizers can invalidate the estimate;
+the provider remains authoritative. Unknown windows refuse a nonempty handoff.
+There is no truncation or automatic summary request: if it cannot fit, the
+switch offers `/compact` then retry `/model`, or `fresh` to discard explicitly.
+The next user message and later growth can still exceed limits. `/context` measures
 the outgoing view; `/trace` shows switch validation metadata until the next run.
 ### Auto routing (experiment)
 
@@ -137,19 +145,25 @@ cancellation does not. Selecting a Luna/low fallback gives one candidate and no
 Jev calls. `/reset` retains the Auto setting but starts fresh accounting.
 
 Enabling Auto discloses the endpoint `https://api.typesafe.ai/v1/systemone` and
-what leaves the process: all accepted user requests/summaries and effective
-project instructions, any latest complete plan, and selected assistant/tool/
-shell evidence with provenance. Transport credentials remain in the HTTP
-header, and native reasoning is omitted; this is not general secret filtering
-of content you or tools supplied. The packet has deterministic bounds and
-explicit omission/preview markers. Critical material is never truncated:
+what leaves the machine: TypeSafe receives the full effective root `AGENTS.md`,
+every accepted user request and summary in full, the latest complete plan, and
+selected recent assistant/tool/shell evidence with provenance. Noncritical text
+may be shortened to 512-byte previews; evidence includes file contents and
+command output. Those contents can contain secrets beyond withheld file names.
+Transport credentials remain in the HTTP header, and native reasoning is
+omitted; there is no general secret filtering of content you or tools supplied.
+The packet has deterministic bounds and explicit omission/preview markers. Critical material is never truncated:
 if it does not fit, Auto uses compatible fallback without contacting Jev.
 The selected generative model receives full admitted history, not this packet.
 
 Jev `jev-1.13.0` chooses a joint model/effort route at turn start, after every
 three generations, or on new non-permission tool failure evidence, always after
-complete tool batches. Ordinary switches dwell for three generations; failure
-escalation or conservative fallback can override dwell. At most three route
+complete tool batches. **Model changes are allowed only at user-turn start.**
+Within a run, only same-model effort changes are eligible, even on tool failure;
+if the fallback is another model, the current usable route stays active. Fewer
+than two eligible routes means no Jev call. Ordinary effort changes dwell for
+three generations; failure escalation or conservative fallback can override
+dwell. At most three route
 changes occur per run, after which routing stops and the task continues on the
 current route. Confidence below 0.70 uses fallback; choosing the fast route
 requires 0.85. These experimental thresholds are not calibrated quality claims.
@@ -158,8 +172,11 @@ turn can try again. Cancellation stops instead of falling back and generating.
 
 Full destination requests are validated before changes. Incompatible or overfull
 fallback is deferred without discarding evidence. Model changes use the software
-handoff above; effort-only changes retain native state. No new session, trace,
-budget or authority is created, and completed tools are never replayed. There
+handoff above, changing the prefix and potentially requiring a full uncached
+prefill on the destination. Returning to a model rebuilds the projection, not
+its old native branch. Effort-only changes retain native state but do not
+guarantee cache hits. No new session, trace, budget or authority is created,
+and completed tools are never replayed. There
 is no automatic mid-run compaction or generative-error retry. Existing between-
 turn compaction remains a separate capacity action.
 
@@ -168,6 +185,8 @@ and each operation to two seconds; redirects and automatic retries are refused.
 It validates version, choice, confidence, distribution and reported token usage.
 `auto.route` trace events record decisions, packet size/hash/omission markers,
 latency and switch/fallback/defer reasons, not another copy of packet contents.
+A follow-up `auto.route` event records the first post-switch generation attempt's
+input and cached-input tokens (or unknown usage), linked by switch step.
 Results and `/status` show Jev usage separately from generation tokens; unknown
 costs stay unknown. Preview and scripted replay reject `--auto` before any live
 request. Net latency, cost and semantic quality need an end-to-end comparison;

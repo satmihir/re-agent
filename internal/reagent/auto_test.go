@@ -101,68 +101,69 @@ func autoConfig(t *testing.T, tool Tool) Config {
 	return cfg
 }
 
-func TestAuto_IntraRunRoutesKeepEvidenceEffectsTraceAndAccounting(t *testing.T) {
+func TestAuto_ModelChangesOnlyBetweenTurnsKeepEvidenceAndCacheUsage(t *testing.T) {
 	for _, fallbackModel := range []string{"gpt-6.1-sol", "claude-sonnet-5-5"} {
 		t.Run(fallbackModel, func(t *testing.T) {
 			runs := 0
-			cfg := autoConfig(t, autoEffectTool{runs: &runs})
+			cfg := autoConfig(t, autoEffectTool{runs: &runs, failUntil: 1})
 			cfg.Model = fallbackModel
 			if strings.HasPrefix(fallbackModel, "claude-") {
 				cfg.Provider = anthropicName
 			}
-			cfg.MaxSteps, cfg.MaxToolCalls = 7, 6
-			capable := &requestRecorder{ScriptedModel: NewScriptedModel(
-				autoTestReply(fallbackModel, callBlock("c4", "counter", `{}`)), autoTestReply(fallbackModel, callBlock("c5", "counter", `{}`)), autoTestReply(fallbackModel, callBlock("c6", "counter", `{}`)),
-			)}
-			fast := &requestRecorder{ScriptedModel: NewScriptedModel(
-				autoTestReply("gpt-6-luna", callBlock("c1", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("c2", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("c3", "counter", `{}`)), autoTestReply("gpt-6-luna", textBlock("verified")),
-			)}
-			api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95), autoChoice("fast", 0.95))
+			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply(fallbackModel, textBlock("verified")))}
+			fastFinal := autoTestReply("gpt-6-luna", textBlock("done"))
+			fastFirst := autoTestReply("gpt-6-luna", callBlock("c1", "counter", `{}`))
+			fastFirst.Usage.CachedInputTokens = 7
+			fast := &requestRecorder{ScriptedModel: NewScriptedModel(fastFirst, fastFinal)}
+			api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95))
 			s := autoSession(t, cfg, capable, fast, api)
 			id, registry := s.ID, s.cfg.Registry
-			result, err := s.Turn(context.Background(), "Preserve signing semantics; fix and verify the task.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-			if err != nil || result.Status != StatusCompleted || result.Steps != 7 || result.ToolCalls != 6 || runs != 6 || len(result.Effects) != 6 || s.ID != id || s.cfg.Registry != registry || len(s.seenCalls) != 6 {
-				t.Fatalf("run state: %+v, %v, effects=%d", result, err, runs)
-			}
-			if result.Usage.InputTokens != 70 || result.Usage.OutputTokens != 14 || result.RouterUsage == nil || !result.RouterUsage.Known || result.RouterUsage.InputTokens != 954 || result.RouterUsage.OutputTokens != 102 || s.auto.usage != *result.RouterUsage || s.auto.attempts != 3 {
-				t.Fatalf("usage mixed, lost or duplicated: %+v", result)
-			}
-			if len(api.received()) != 3 || len(capable.requests) != 3 || len(fast.requests) != 4 || capable.requests[0].Scope.Step != 4 || fast.requests[3].Scope.Step != 7 {
-				t.Fatal("router consumed steps or failed to change adapters")
-			}
-			for _, recorder := range []*requestRecorder{capable, fast} {
-				for _, request := range recorder.requests {
-					if request.Scope.SessionID != id || request.Scope.RunID != "run" {
-						t.Fatal("scope reset across segments")
-					}
-					info, _ := findModel(request.Model)
-					if _, err := encodeRequest(Config{Provider: info.Provider}, request); err != nil {
-						t.Fatalf("segment request encoding: %v", err)
-					}
+			previous := autoTestReply(fallbackModel, textBlock("accepted evidence"))
+			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "Preserve signing semantics"}}, {Kind: EntryAssistant, Assistant: &previous}}
+			before := string(mustJSON(t, s.history))
+			for turn, prompt := range []string{"fix", "verify"} {
+				result, err := s.Turn(context.Background(), prompt, prompt, filepath.Join(t.TempDir(), "events.jsonl"))
+				if err != nil || result.Status != StatusCompleted || s.ID != id || s.cfg.Registry != registry || string(mustJSON(t, s.history[:2])) != before || len(api.received()) != turn+1 {
+					t.Fatalf("turn %d: %+v, %v", turn, result, err)
 				}
-			}
-			if !strings.Contains(capable.requests[0].History[0].User.Text, "applied-3") || !strings.Contains(fast.requests[3].History[0].User.Text, "applied-6") || strings.Contains(fast.requests[3].History[0].User.Text, "opaque-") || !strings.Contains(fast.requests[3].History[0].User.Text, "Preserve signing semantics") {
-				t.Fatal("handoff lost exact evidence or exposed native reasoning")
-			}
-			events := readEvents(t, result.TracePath)
-			if events[0].Type != "run.started" || events[len(events)-1].Type != "run.finished" {
-				t.Fatal("active trace was replaced")
-			}
-			decisions := 0
-			for _, event := range events {
-				if strings.HasPrefix(event.Type, "compaction.") || strings.HasPrefix(event.Type, "model.switch.") {
-					t.Fatal("routing opened a second continuation system")
+				if result.RouterUsage == nil || result.RouterUsage.InputTokens != 318 || result.RouterUsage.OutputTokens != 34 {
+					t.Fatalf("router accounting: %+v", result)
 				}
-				if event.Type == "auto.route" {
-					decisions++
+				postSwitch := 0
+				for _, event := range readEvents(t, result.TracePath) {
+					if event.Type != "auto.route" {
+						continue
+					}
 					metadata := event.Data.(map[string]any)
-					if _, found := metadata["packet_sha256"]; !found || strings.Contains(string(mustJSON(t, metadata)), "Preserve signing semantics") || strings.Contains(string(mustJSON(t, metadata)), "fake-router-key") {
-						t.Fatal("trace missing bounded metadata or duplicating sensitive state")
+					if metadata["action"] == "post_switch_usage" {
+						postSwitch++
+						cached := float64(0)
+						if turn == 0 {
+							cached = 7
+						}
+						if metadata["cached_input_tokens"] != cached || metadata["usage_known"] != true || metadata["switch_step"] != float64(1) {
+							t.Fatalf("post-switch cache metadata: %+v", metadata)
+						}
+					}
+					if strings.Contains(string(mustJSON(t, metadata)), "Preserve signing semantics") {
+						t.Fatal("trace duplicated transcript")
 					}
 				}
+				if postSwitch != 1 {
+					t.Fatalf("post-switch measurements: %d", postSwitch)
+				}
 			}
-			if decisions != 3 {
-				t.Fatalf("routing decisions: %d", decisions)
+			if runs != 1 || len(s.seenCalls) != 1 || len(fast.requests) != 2 || len(capable.requests) != 1 || s.auto.attempts != 2 || s.auto.usage.InputTokens != 636 {
+				t.Fatal("model changed on tool failure, effects replayed, or accounting reset")
+			}
+			if !strings.Contains(capable.requests[0].History[0].User.Text, "stale_digest") || !strings.Contains(capable.requests[0].History[0].User.Text, "untrusted_tool_data") || strings.Contains(capable.requests[0].History[0].User.Text, "opaque-") {
+				t.Fatal("return handoff lost evidence or resurrected native reasoning")
+			}
+			for _, request := range []ModelRequest{fast.requests[0], fast.requests[1], capable.requests[0]} {
+				info, _ := findModel(request.Model)
+				if _, err := encodeRequest(Config{Provider: info.Provider}, request); err != nil {
+					t.Fatal(err)
+				}
 			}
 		})
 	}
@@ -180,8 +181,8 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 		{"critical overflow", autoChoice("fast", 0.95), "fake", strings.Repeat("constraint ", 800), 0, true},
 		{"rate limit", apiReply{status: 429, body: "private"}, "fake", "task", 1, false},
 		{"malformed", okReply(`{broken`), "fake", "task", 1, false},
-		{"low confidence", autoChoice("fast", 0.3), "fake", "task", 2, true},
-		{"fast hysteresis", autoChoice("fast", 0.8), "fake", "task", 2, true},
+		{"low confidence", autoChoice("fast", 0.3), "fake", "task", 1, true},
+		{"fast hysteresis", autoChoice("fast", 0.8), "fake", "task", 1, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runs := 0
@@ -212,12 +213,23 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 func TestAuto_ToolFailureEscalatesButDwellPreventsThrashing(t *testing.T) {
 	runs := 0
 	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`)))}
-	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6.1-sol", textBlock("done")))}
+	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95), autoChoice("fast", 0.95), autoChoice("fast", 0.95))
-	s := autoSession(t, autoConfig(t, autoEffectTool{runs: &runs, failUntil: 3}), capable, fast, api)
+	cfg := autoConfig(t, autoEffectTool{runs: &runs, failUntil: 3})
+	cfg.Model = "gpt-6-luna"
+	s := autoSession(t, cfg, capable, fast, api)
 	result, err := s.Turn(context.Background(), "Resolve the failures without changing the API.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || len(fast.requests) != 1 || len(capable.requests) != 3 || len(api.received()) != 4 || runs != 3 {
 		t.Fatalf("failure routing: %+v, %v", result, err)
+	}
+	if s.handoff != nil {
+		t.Fatal("effort changes created a projection")
+	}
+	for _, request := range capable.requests {
+		body, err := EncodeOpenAIRequest(request)
+		if err != nil || !bytes.Contains(body, []byte("opaque-gpt-6-luna")) {
+			t.Fatal("mid-run effort change lost native continuation")
+		}
 	}
 	deferrals := 0
 	for _, event := range readEvents(t, result.TracePath) {
@@ -234,12 +246,8 @@ func TestAuto_SwitchLimitStopsRouterCallsNotTheRun(t *testing.T) {
 	runs := 0
 	var fastReplies, capableReplies []ModelResponse
 	for step := 1; step <= 10; step++ {
-		model := "gpt-6-luna"
+		reply := autoTestReply("gpt-6-luna", callBlock(fmt.Sprint(step), "counter", `{}`))
 		if step >= 4 && step <= 6 {
-			model = "gpt-6.1-sol"
-		}
-		reply := autoTestReply(model, callBlock(fmt.Sprint(step), "counter", `{}`))
-		if model == "gpt-6.1-sol" {
 			capableReplies = append(capableReplies, reply)
 		} else {
 			fastReplies = append(fastReplies, reply)
@@ -248,7 +256,9 @@ func TestAuto_SwitchLimitStopsRouterCallsNotTheRun(t *testing.T) {
 	fastReplies = append(fastReplies, autoTestReply("gpt-6-luna", textBlock("done")))
 	fast, capable := &requestRecorder{ScriptedModel: NewScriptedModel(fastReplies...)}, &requestRecorder{ScriptedModel: NewScriptedModel(capableReplies...)}
 	api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95), autoChoice("fast", 0.95), autoChoice("capable", 0.95))
-	s := autoSession(t, autoConfig(t, autoEffectTool{runs: &runs}), capable, fast, api)
+	cfg := autoConfig(t, autoEffectTool{runs: &runs})
+	cfg.Model = "gpt-6-luna"
+	s := autoSession(t, cfg, capable, fast, api)
 	result, err := s.Turn(context.Background(), "Finish the whole task.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || result.Steps != 11 || runs != 10 || len(api.received()) != 3 || len(result.Effects) != 10 {
 		t.Fatalf("switch limit: %+v, %v", result, err)
@@ -284,9 +294,10 @@ func TestAuto_PlanAndReadOnlySurviveIntraRunSwitches(t *testing.T) {
 			}
 			cfg := autoConfig(t, NewEchoTool())
 			cfg.Registry = registry
+			cfg.Model = "gpt-6-luna"
 			cfg.PlanMode = true
 			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("3", "counter", `{}`)))}
-			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-sol", textBlock("done")))}
+			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
 			api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95))
 			s := autoSession(t, cfg, capable, fast, api)
 			result, err := s.Turn(context.Background(), "Explore only.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
@@ -332,6 +343,18 @@ func TestAuto_GenerationFailureAndUnknownEffectsNeverRerouteOrReplay(t *testing.
 			}
 			if !unknown && (result.Status != StatusProviderError || runs != 0) {
 				t.Fatal("ambiguous generation was retried")
+			}
+			measurements := 0
+			for _, event := range readEvents(t, result.TracePath) {
+				if event.Type == "auto.route" && event.Data.(map[string]any)["action"] == "post_switch_usage" {
+					measurements++
+					if event.Data.(map[string]any)["usage_known"] != unknown {
+						t.Fatal("post-switch usage fabricated on failure")
+					}
+				}
+			}
+			if measurements != 1 {
+				t.Fatalf("post-switch measurements: %d", measurements)
 			}
 		})
 	}
@@ -439,7 +462,7 @@ func TestAuto_OverfullFallbackDefersWithoutDiscardingHistory(t *testing.T) {
 	s := autoSession(t, cfg, NewScriptedModel(), fast, api)
 	s.cfg.Model, s.cfg.Provider, s.cfg.ReasoningEffort, s.model = "gpt-6-luna", openaiName, "low", fast
 	old := autoTestReply("gpt-6-luna", textBlock("accepted evidence"))
-	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("critical constraint ", 5500)}}, {Kind: EntryAssistant, Assistant: &old}}
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("critical constraint ", 22000)}}, {Kind: EntryAssistant, Assistant: &old}}
 	before, id := string(mustJSON(t, s.history)), s.ID
 	result, err := s.Turn(context.Background(), "continue", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || s.ID != id || s.cfg.Model != "gpt-6-luna" || string(mustJSON(t, s.history[:2])) != before || len(api.received()) != 0 || s.handoff != nil {

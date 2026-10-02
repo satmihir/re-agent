@@ -54,6 +54,7 @@ type Run struct {
 	routerUsage                                                     *Usage
 	routingStep, routingEntries, routingSwitchStep, routingSwitches int
 	routingOff                                                      bool
+	routingPostSwitch                                               bool
 }
 
 func newRun(session *Session, runID string) *Run {
@@ -121,6 +122,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			status, usage := classifyModelError(err)
 			s.lastRequest = usage
 			r.usage.Add(usage)
+			r.recordRouteUsage(usage)
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": err.Error()})
 			// Nothing was appended, so the transcript still ends where this
 			// request was built from. A request too large to send is not
@@ -129,6 +131,13 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.finish(status, err.Error(), "")
 		}
 		s.lastRequest = resp.Usage
+		r.recordRouteUsage(resp.Usage)
+		if resp.Usage.Known && resp.Usage.InputTokens > 0 {
+			// Scripted responses need not have a valid provider encoding.
+			if body, err := encodeRequest(r.cfg, req); err == nil && len(body) != 0 {
+				s.tokensPerByte = float64(resp.Usage.InputTokens) / float64(len(body))
+			}
+		}
 		if reason := r.validateResponse(resp); reason != "" {
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": reason, "response": resp})
 			return r.finish(StatusProtocolError, reason, "")

@@ -57,7 +57,7 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 }
 
 func autoDisclosure(w io.Writer, a *autoRouting) {
-	fmt.Fprintf(w, "auto on: %s; sends bounded user requests, project instructions and selected assistant/tool/shell evidence to TypeSafe; native reasoning omitted; routing credentials stay in the HTTP header\n", jevEndpoint)
+	fmt.Fprintf(w, "auto on: %s; TypeSafe receives full user requests/summaries, root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header\n", jevEndpoint)
 	fmt.Fprintf(w, "auto fallback: %s / %s; %d allowed route(s); /auto off or manual model/effort selection pins the current route\n", a.fallback.Model, a.fallback.Effort, len(a.routes))
 	if strings.TrimSpace(a.jev.key) == "" {
 		fmt.Fprintln(w, "TYPESAFE_API_KEY is not set; Auto uses compatible fallback without routing calls")
@@ -86,13 +86,13 @@ func stageAutoCandidate(ctx context.Context, s *Session, route jevRoute) (autoCa
 		}
 	}
 	if cfg.Model == s.cfg.Model {
-		size, err = validateDestination(cfg, s.requestHistory(), info.ContextWindow)
+		size, err = validateDestination(cfg, s.requestHistory(), info.ContextWindow, s.admissionRate(cfg.Provider))
 	} else if textOnly {
 		// No native assistant state exists yet; preserve ordinary user snapshot/plan parts.
 		handoff = nil
-		size, err = validateDestination(cfg, s.history, info.ContextWindow)
+		size, err = validateDestination(cfg, s.history, info.ContextWindow, s.admissionRate(cfg.Provider))
 	} else {
-		handoff, size, err = stageModelSwitch(ctx, s.history, cfg, info.ContextWindow)
+		handoff, size, err = stageModelSwitch(ctx, s.history, cfg, info.ContextWindow, s.admissionRate(cfg.Provider))
 	}
 	if err != nil {
 		return autoCandidate{}, err
@@ -150,6 +150,11 @@ func (r *Run) routeNext(ctx context.Context) error {
 	var routes []jevRoute
 	var excluded []string
 	for _, route := range a.routes {
+		// v0 §10 amendment (2026-10-02): avoid repeated cross-model prefills mid-run.
+		if r.steps != 0 && route.Model != s.cfg.Model {
+			excluded = append(excluded, route.ID+": model_change_requires_user_turn")
+			continue
+		}
 		candidate, err := stageAutoCandidate(ctx, s, route)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -235,6 +240,10 @@ func (r *Run) routeNext(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if selected.cfg.Model != s.cfg.Model {
+				s.tokensPerByte = 0
+			}
+			r.routingPostSwitch = true
 			s.cfg, s.handoff, s.model = selected.cfg, selected.handoff, a.models[selected.route.ID]
 			s.lastRequest = Usage{}
 			r.routingSwitches++
@@ -295,4 +304,18 @@ func routerUsageLine(usage Usage) string {
 		return "router     Jev usage unknown; separate from generation"
 	}
 	return fmt.Sprintf("router     Jev %s tokens in · %s out; separate from generation", formatCount(usage.InputTokens), formatCount(usage.OutputTokens))
+}
+
+// v0 §10 amendment (2026-10-02): measure the first attempt, not a cache-hit promise.
+func (r *Run) recordRouteUsage(usage Usage) {
+	if !r.routingPostSwitch {
+		return
+	}
+	r.routingPostSwitch = false
+	r.trace.Write("auto.route", r.steps, map[string]any{
+		"action": "post_switch_usage", "switch_step": r.routingSwitchStep + 1,
+		"model": r.cfg.Model, "effort": r.cfg.ReasoningEffort,
+		"usage_known": usage.Known, "input_tokens": usage.InputTokens,
+		"cached_input_tokens": usage.CachedInputTokens,
+	})
 }
