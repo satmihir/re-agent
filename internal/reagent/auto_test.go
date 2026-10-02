@@ -182,7 +182,7 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 		{"rate limit", apiReply{status: 429, body: "private"}, "fake", "task", 1, false},
 		{"malformed", okReply(`{broken`), "fake", "task", 1, false},
 		{"low confidence", autoChoice("fast", 0.3), "fake", "task", 1, true},
-		{"fast hysteresis", autoChoice("fast", 0.8), "fake", "task", 1, true},
+		{"fast hysteresis", autoChoice("fast", 0.74), "fake", "task", 1, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runs := 0
@@ -262,6 +262,28 @@ func TestAuto_SwitchLimitStopsRouterCallsNotTheRun(t *testing.T) {
 	result, err := s.Turn(context.Background(), "Finish the whole task.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || result.Steps != 11 || runs != 10 || len(api.received()) != 3 || len(result.Effects) != 10 {
 		t.Fatalf("switch limit: %+v, %v", result, err)
+	}
+}
+
+func TestAuto_FastConfidenceBoundary(t *testing.T) {
+	for _, confidence := range []float64{0.74, 0.75, 0.8} {
+		t.Run(fmt.Sprint(confidence), func(t *testing.T) {
+			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-sol", textBlock("done")))}
+			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+			api := newFakeAPI(t, autoChoice("fast", confidence))
+			s := autoSession(t, autoConfig(t, NewEchoTool()), capable, fast, api)
+			result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
+			if err != nil || result.Status != StatusCompleted || len(api.received()) != 1 {
+				t.Fatalf("routing: %+v, %v", result, err)
+			}
+			wantFast := 0
+			if confidence >= 0.75 {
+				wantFast = 1
+			}
+			if len(fast.requests) != wantFast || len(capable.requests) != 1-wantFast {
+				t.Fatalf("generation requests: fast=%d capable=%d", len(fast.requests), len(capable.requests))
+			}
+		})
 	}
 }
 

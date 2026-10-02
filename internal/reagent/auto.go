@@ -14,7 +14,7 @@ const (
 	autoDwell          = 3
 	autoSwitchLimit    = 3
 	autoConfidence     = 0.70
-	autoFastConfidence = 0.85
+	autoFastConfidence = 0.75
 )
 
 type autoRouting struct {
