@@ -208,11 +208,12 @@ func (r *Run) validateResponse(resp ModelResponse) string {
 // calls ends the run, so the loop can only come back around through here, and
 // refusing a batch on the last allowed step is what caps the step count.
 func (r *Run) reserve(n int) (string, bool) {
-	if r.calls+n > r.cfg.MaxToolCalls {
+	// v0 §3 amendment (2026-10-01): zero disables each budget independently.
+	if r.cfg.MaxToolCalls > 0 && n > r.cfg.MaxToolCalls-r.calls {
 		return fmt.Sprintf("call budget of %d exhausted", r.cfg.MaxToolCalls), false
 	}
 	// Do not perform an effect that no remaining step could report back.
-	if r.steps >= r.cfg.MaxSteps {
+	if r.cfg.MaxSteps > 0 && r.steps >= r.cfg.MaxSteps {
 		return "no_followup_step", false
 	}
 	r.calls += n

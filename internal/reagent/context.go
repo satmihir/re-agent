@@ -58,9 +58,9 @@ func instructions(cfg Config) string {
 	// snapshot of it, which the trace records separately from the response.
 	text := defaultInstructions + fmt.Sprintf(
 		"\n# Runtime\n\nProvider: %s\nModel: %s\nReasoning effort: %s\nPlatform: %s\n"+
-			"Workspace: %s\nMode: %s\nBudget: %d model requests and %d tool calls per run\n",
+			"Workspace: %s\nMode: %s\nBudget: %s model requests and %s tool calls per run\n",
 		cfg.Provider, cfg.Model, effort, runtime.GOOS,
-		cfg.WorkspacePath, cfg.Registry.Mode().String(), cfg.MaxSteps, cfg.MaxToolCalls)
+		cfg.WorkspacePath, cfg.Registry.Mode().String(), formatLimit(cfg.MaxSteps), formatLimit(cfg.MaxToolCalls))
 	// v0 §10 amendment (2026-09-30): opt-in text is fixed and precedes project instructions.
 	if cfg.ReportFriction {
 		text += frictionInstructions
@@ -70,4 +70,12 @@ func instructions(cfg Config) string {
 		text += "\n# Project instructions (AGENTS.md)\n\n" + *cfg.ProjectInstructions
 	}
 	return text
+}
+
+// v0 §3 amendment (2026-10-01): prompts and UI name the unlimited sentinel.
+func formatLimit(limit int) string {
+	if limit == 0 {
+		return "unlimited"
+	}
+	return fmt.Sprint(limit)
 }

@@ -287,7 +287,7 @@ cite them by section, for example `// v0 §6.2`.
 | `--plan` | Start `run` or `chat` in plan mode; the model may only use read tools. |
 | `--no-project-instructions` | Do not load the workspace root's `AGENTS.md`. |
 | `--report-friction` | Opt in to trace-only harness reports on `run` or `chat`; off by default. |
-| `--max-steps`, `--max-tool-calls` | Budget per run or chat turn. Defaults 200 and 400. |
+| `--max-steps`, `--max-tool-calls` | Optional budgets per run or chat turn. Both default to `0` (unlimited); positive values set limits. |
 | `--scripted FILE` | Replay recorded model responses instead of calling a provider. |
 
 To route OpenAI requests through a proxy that speaks the Responses API, set

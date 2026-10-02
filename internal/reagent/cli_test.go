@@ -408,7 +408,7 @@ func TestMain_ChatUsesDefaultPerTurnBudgets(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "budget     200 steps, 400 tool calls per turn") {
+	if !strings.Contains(stderr.String(), "budget     unlimited steps, unlimited tool calls per turn") {
 		t.Fatalf("chat budget: %s", stderr.String())
 	}
 }
@@ -626,7 +626,6 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 	want, err := PreviewRequest(Config{
 		Provider: openaiName, Model: DefaultOpenAIModel, ReasoningEffort: DefaultReasoningEffort,
 		Registry: registry, WorkspacePath: ws.Root(),
-		MaxSteps: 200, MaxToolCalls: 400,
 	}, "Where is the timeout set?", collectSnapshot(context.Background(), ws.Root(), false))
 	if err != nil {
 		t.Fatal(err)
