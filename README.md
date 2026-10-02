@@ -78,7 +78,8 @@ cannot grant tools beyond the chosen mode.
 | | |
 |---|---|
 | `/plan`, `/plan <text>` | Toggle plan mode, or start planning with a message. The model may read but cannot edit or run commands until you turn it off. |
-| `/model`, `/effort` | Pick a model or reasoning effort with the arrow keys. |
+| `/model`, `/effort` | Pick a model or reasoning effort with the arrow keys; successful selection pins manual mode. |
+| `/auto [on\|off]` | Report, enable or disable optional TypeSafe routing. |
 | `!command` | Run a shell command yourself; its output joins the conversation. |
 | `/context` | What the next request is made of, including project instructions and past workspace snapshots, byte by byte. |
 | `/compact [-v] [what to keep]` | Ask the current model for a handoff summary and replace the conversation with it. `-v` prints the summary; extra text gives the model a focus. Works in plan mode or when blocked, but not with `--scripted`. |
@@ -87,15 +88,103 @@ cannot grant tools beyond the chosen mode.
 | `/edit` | Write the next message in `$EDITOR`. |
 | `/reset`, `/exit` | Start over, or leave. |
 
-Switching with `/model` or `/model <number or name>` asks the current model
-for a handoff summary of any nonempty conversation, then carries only that
-summary into a new session. This spends a model request and may lose detail;
-it also works after `/compact` or when blocked. `/model <number or name> fresh`
-skips the request and discards the conversation. Ctrl-C during the handoff
-cancels the switch and keeps the old model and conversation. Other failures
-still switch with an empty conversation and an explanation. The new session's
-token totals start with the handoff request's usage; earlier totals are dropped.
-`/trace` shows the handoff attempt until the next run.
+On this experiment branch, `/model <number or name>` carries the conversation
+as one deterministic, JSON-escaped historical text block, with **no summary
+request and no network call during the switch**. It includes recorded user and
+assistant text, constraints, workspace/plan markers, tool arguments and exact
+outcomes, shell records, and any existing summaries. Original history stays in
+the session; new responses continue natively. Repeated switches rebuild from
+the original records, not nested handoffs. Provider-native state, including
+opaque reasoning, is retained locally but omitted from the handoff: this is
+not lossless native continuation and may change answer quality or cache costs.
+
+Normal switches keep session identity, permissions, workspace grants, blocking,
+seen-call IDs, and token totals; effort resets to the destination default.
+A failed or cancelled switch keeps the old model and usable state, never an
+empty fallback. Unresolved tool batches and uncertain effects refuse a handoff.
+`/model <number or name> fresh` explicitly discards the conversation and starts
+a new session; selecting the current model is still a no-op, even with `fresh`.
+
+Carried history must fit the destination encoding and its known catalog window.
+The experiment conservatively estimates two input tokens per encoded request
+byte plus 16,000 tokens of output headroom; this is not an exact token count or
+an OpenAI output cap. Unknown windows refuse a nonempty handoff. There is no
+truncation: use `/compact` separately, or `fresh` to discard explicitly. The
+next user message and later growth can still exceed limits. `/context` measures
+the outgoing view; `/trace` shows switch validation metadata until the next run.
+### Auto routing (experiment)
+
+Auto is **off by default**. A TypeSafe key by itself does not enable it or make
+routing calls. With provider credentials and `TYPESAFE_API_KEY` exported in your
+shell (the CLI does not automatically load `.env`):
+
+```sh
+go run ./cmd/reagent chat --auto
+go run ./cmd/reagent run --auto --workspace ./repo "Fix the bug and run the tests."
+```
+
+Without an explicit provider/model or `REAGENT_MODEL`, `--auto` starts with
+`gpt-6.1-sol / medium` as fallback. An explicit effort still wins. Otherwise the
+configured model/effort is the fallback; Auto requires a supported catalog pair
+with a known window. The other candidate is `gpt-6-luna / low`, when distinct
+and usable with the process's OpenAI credentials or proxy. A sole candidate or
+missing TypeSafe key needs no router calls. Manual defaults are unchanged.
+
+In chat, `/auto` reports state, `/auto on` enables routing with the current
+manual pair as fallback, and `/auto off` pins the current model/effort. Successful
+explicit `/model` or `/effort` selection also exits Auto; rejection or picker
+cancellation does not. Selecting a Luna/low fallback gives one candidate and no
+Jev calls. `/reset` retains the Auto setting but starts fresh accounting.
+
+Enabling Auto discloses the endpoint `https://api.typesafe.ai/v1/systemone` and
+what leaves the process: all accepted user requests/summaries and effective
+project instructions, any latest complete plan, and selected assistant/tool/
+shell evidence with provenance. Transport credentials remain in the HTTP
+header, and native reasoning is omitted; this is not general secret filtering
+of content you or tools supplied. The packet has deterministic bounds and
+explicit omission/preview markers. Critical material is never truncated:
+if it does not fit, Auto uses compatible fallback without contacting Jev.
+The selected generative model receives full admitted history, not this packet.
+
+Jev `jev-1.13.0` chooses a joint model/effort route at turn start, after every
+three generations, or on new non-permission tool failure evidence, always after
+complete tool batches. Ordinary switches dwell for three generations; failure
+escalation or conservative fallback can override dwell. At most three route
+changes occur per run, after which routing stops and the task continues on the
+current route. Confidence below 0.70 uses fallback; choosing the fast route
+requires 0.85. These experimental thresholds are not calibrated quality claims.
+A router error disables further router attempts for that run; the next user
+turn can try again. Cancellation stops instead of falling back and generating.
+
+Full destination requests are validated before changes. Incompatible or overfull
+fallback is deferred without discarding evidence. Model changes use the software
+handoff above; effort-only changes retain native state. No new session, trace,
+budget or authority is created, and completed tools are never replayed. There
+is no automatic mid-run compaction or generative-error retry. Existing between-
+turn compaction remains a separate capacity action.
+
+The router bounds the complete request to 8 KiB, successful responses to 16 KiB,
+and each operation to two seconds; redirects and automatic retries are refused.
+It validates version, choice, confidence, distribution and reported token usage.
+`auto.route` trace events record decisions, packet size/hash/omission markers,
+latency and switch/fallback/defer reasons, not another copy of packet contents.
+Results and `/status` show Jev usage separately from generation tokens; unknown
+costs stay unknown. Preview and scripted replay reject `--auto` before any live
+request. Net latency, cost and semantic quality need an end-to-end comparison;
+the earlier six synthetic Jev requests established only API conformance.
+
+With separate approval for API spending and `TYPESAFE_API_KEY` exported locally,
+run the six-request Jev-only qualification with:
+
+```sh
+REAGENT_JEV_LIVE_TESTS=1 go test ./internal/reagent -run '^TestLive_JevRoutesSyntheticSegments$' -v -count=1
+```
+
+This test never calls OpenAI or Anthropic. It skips by default even when a key
+exists, stops on its first failure, and makes no retries. `.env` is not loaded
+by ordinary CLI startup or this test; supply the key through the environment
+without pasting it into a prompt or command argument. Reported routing latency
+and token usage do not establish downstream quality or end-to-end speedup.
 
 Writing `/plan` in a chat sentence also starts plan mode and keeps `/plan` in
 the sent message. Like other chat messages, surrounding whitespace is trimmed.
@@ -267,9 +356,10 @@ A few rules shape the rest:
 - **Requests are built by a pure function.** There are no clocks or file reads
   inside it. Two requests differ only where the conversation does, which also
   keeps the prompt cache warm.
-- **Provider state goes back verbatim.** Reasoning and thinking items return
-  exactly as received, and one provider's items are never sent to the other.
-- **History is append-only except for `/reset` and `/compact`.** Compaction replaces the entire history at once with one model-written summary; it does not edit earlier entries in place. Failed attempts keep the history. In chat, a turn that follows a request using at least 80% of a known context window is preceded by an automatic compaction.
+- **Native continuation goes back verbatim within a model segment.** Reasoning
+  and thinking items return exactly as received. A model switch projects visible
+  evidence into text instead; foreign or old-segment native items are never replayed.
+- **History is append-only except for `/reset`, `/model ... fresh`, and `/compact`.** Compaction replaces the entire history at once with one model-written summary; it does not edit earlier entries in place. Failed attempts keep the history. In chat, a turn that follows a request using at least 80% of a known context window is preceded by an automatic compaction.
 
 Two design documents govern the code: [v0](docs/reagent-v0-design.md) is what
 is built, and [v1](docs/reagent-v1-design.md) is the fuller target. Comments
@@ -283,6 +373,7 @@ cite them by section, for example `// v0 §6.2`.
 | `--allow-workspace PATH` | Preapprove an exact absolute workspace or prospective destination; repeatable. |
 | `--model`, `--provider` | Model to use. Falls back to `REAGENT_MODEL`, then the provider's default. |
 | `--reasoning-effort` | Effort from the model's own vocabulary; `auto` for the provider's default. |
+| `--auto` | Opt in to Jev routing; off by default. With no explicit target, fallback is Sol/medium. |
 | `--read-only` | Withhold writing and execution. |
 | `--plan` | Start `run` or `chat` in plan mode; the model may only use read tools. |
 | `--no-project-instructions` | Do not load the workspace root's `AGENTS.md`. |

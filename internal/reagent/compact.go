@@ -18,7 +18,7 @@ func compactRequest(s *Session, focus, runID string) ModelRequest {
 	if focus = strings.TrimSpace(focus); focus != "" {
 		prompt = strings.TrimSuffix(prompt, "\n") + "\n\nFocus: " + focus
 	}
-	history := append([]Entry(nil), s.history...)
+	history := append([]Entry(nil), s.requestHistory()...)
 	history = append(history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}})
 	return BuildContext(s.cfg, RequestScope{SessionID: s.ID, RunID: runID, Step: 1}, history)
 }

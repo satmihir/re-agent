@@ -50,7 +50,10 @@ type Run struct {
 	usage   Usage
 	// resumable is set only where a run stops before a response is accepted
 	// (v0 §10 amendment of 2026-09-26).
-	resumable bool
+	resumable                                                       bool
+	routerUsage                                                     *Usage
+	routingStep, routingEntries, routingSwitchStep, routingSwitches int
+	routingOff                                                      bool
 }
 
 func newRun(session *Session, runID string) *Run {
@@ -98,9 +101,13 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.finish(StatusCancelled, "cancelled before the next model request", "")
 		}
 
-		r.cfg = s.cfg // v0 §6 amendment (2026-09-30): switches replace the next prefix.
+		if err := r.routeNext(ctx); err != nil {
+			r.resumable = true
+			return r.finish(StatusCancelled, "cancelled during routing", "")
+		}
+		r.cfg, r.model = s.cfg, s.model // v0 §10 amendment (2026-10-02): commit the next segment together.
 		r.steps++
-		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.history)
+		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
 		r.trace.Write("model.requested", r.steps, req)
 
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)
@@ -318,7 +325,7 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 	result := RunResult{
 		Status: status, Reason: reason, Reply: reply,
 		Steps: r.steps, ToolCalls: r.calls, Usage: r.usage, TracePath: r.trace.Path(),
-		Effects: r.effects, Resumable: r.resumable,
+		Effects: r.effects, Resumable: r.resumable, RouterUsage: r.routerUsage,
 	}
 	r.trace.Write("run.finished", r.steps, result)
 	return result

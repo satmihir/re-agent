@@ -754,7 +754,7 @@ func newConversation(t *testing.T, model, effort string, turns int) *conversatio
 	for i := 0; i < turns; i++ {
 		c.session.history = append(c.session.history,
 			Entry{Kind: EntryUser, User: &UserTurn{Text: "q"}},
-			Entry{Kind: EntryAssistant, Assistant: &ModelResponse{Native: NativeOutput{Provider: native, Items: []json.RawMessage{item}}}})
+			Entry{Kind: EntryAssistant, Assistant: &ModelResponse{Model: model, Blocks: []OutputBlock{textBlock("answer")}, Native: NativeOutput{Provider: native, Items: []json.RawMessage{item}}}})
 	}
 	return c
 }
@@ -786,10 +786,10 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.session.cfg.Model != modelCatalog[1].ID || c.session == before || c.session.Turns() != 0 || out.Len() != 0 {
+	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.session.cfg.Model != modelCatalog[1].ID || c.session != before || c.session.Turns() != 1 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.session.cfg.Model, out.String())
 	}
-	if len(c.session.history) != 1 || c.session.history[0].Summary.Text != "x" || !strings.Contains(errs.String(), "switched to gpt-6.1-sol") || !strings.Contains(errs.String(), "carried the conversation over") {
+	if len(c.session.history) != 2 || c.session.handoff == nil || !strings.Contains(errs.String(), "switched to gpt-6.1-sol") || !strings.Contains(errs.String(), "carried 2 entries") {
 		t.Fatalf("stderr: %s", errs.String())
 	}
 }
@@ -811,15 +811,14 @@ func TestChat_ModelPickerCancelKeepsTheModel(t *testing.T) {
 	}
 }
 
-// A switch after a conversation spends a model request, so the picker says so
-// before anything is chosen; with nothing to carry it stays plain.
-func TestChat_ModelPickerTitleMentionsTheSummary(t *testing.T) {
+// The picker discloses the software handoff and the explicit discard option.
+func TestChat_ModelPickerTitleMentionsHistoricalText(t *testing.T) {
 	for _, test := range []struct {
 		turns int
 		title string
 	}{
 		{0, "Select a model"},
-		{2, "Select a model · carries a summary; /model N fresh skips"},
+		{2, "Select a model · carries text; /model N fresh discards"},
 	} {
 		c := newConversation(t, "gpt-6-luna", "low", test.turns)
 		input := &fakeLineReader{chooseErr: errCancelled}
@@ -976,7 +975,7 @@ func TestChat_ModelAndEffortDoNotApplyToAScriptedRun(t *testing.T) {
 	for _, want := range []string{
 		"no model to choose",
 		"reasoning effort has no effect",
-		"/model    [model] [fresh]    choose a model; carry a summary, or discard with fresh",
+		"/model    [model] [fresh]    choose a model; carry historical text, or discard with fresh",
 		"/effort   [number or name]   choose reasoning effort (picker on a terminal)",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -1398,145 +1397,6 @@ func TestChat_FailedCompactDoesNotClaimSuccess(t *testing.T) {
 	}
 }
 
-func TestConversation_ModelSwitchCarriesOnlySummary(t *testing.T) {
-	for _, destination := range []string{"gpt-6.1-sol", "claude-haiku-4-5"} {
-		t.Run(destination, func(t *testing.T) {
-			c := newConversation(t, "gpt-6-luna", "low", 1)
-			old := c.session
-			old.history[0].User.Plan = "on"
-			old.history[1].Assistant.Native = NativeOutput{Provider: openaiProvider, Items: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old native text"}]}`)}}
-			old.blocked, old.planMode = "protocol_error", true
-			old.seenCalls["old-call"] = true
-			old.lastRequest = Usage{Known: true, InputTokens: 99}
-			old.snapshot = func(context.Context, string, bool) json.RawMessage {
-				return json.RawMessage(`{"kind":"workspace_state"}`)
-			}
-			project := "keep launch instructions"
-			c.session.cfg.ProjectInstructions, old.cfg.ProjectInstructions = &project, &project
-			reply := turn(textBlock("handoff"))
-			reply.Usage = Usage{Known: true, InputTokens: 123, CachedInputTokens: 80, OutputTokens: 7}
-			model := &compactModel{replies: []ModelResponse{reply}}
-			old.model = model
-			c.usage = Usage{Known: true, InputTokens: 100}
-			var stderr bytes.Buffer
-			c.commandModel(context.Background(), destination, nil, &stderr)
-			if len(model.requests) != 1 || model.requests[0].Model != "gpt-6-luna" || model.requests[0].ReasoningEffort != "low" || len(model.requests[0].History) != 3 || model.requests[0].History[2].User.Text != compactPrompt || len(model.requests[0].History[2].User.Workspace) != 0 {
-				t.Fatalf("compaction requests: %+v", model.requests)
-			}
-			s := c.session
-			if s.ID == old.ID || len(s.history) != 1 || s.history[0].Kind != EntrySummary || *s.history[0].Summary != (Summary{Text: "handoff", ReplacedEntries: 2, Model: "gpt-6-luna"}) || s.Turns() != 0 || len(s.seenCalls) != 0 || s.blocked != "" || s.lastRequest != (Usage{}) || c.usage != reply.Usage || !s.planMode || s.compactedPlan != "on" || s.snapshot == nil || s.cfg.ProjectInstructions != &project {
-				t.Fatalf("replacement: %+v, usage %+v", s, c.usage)
-			}
-			if !strings.Contains(stderr.String(), "carried the conversation over as a 7 B summary") || strings.Contains(stderr.String(), "compacted:") || s.LastTrace() == "" || s.LastTrace() != old.LastTrace() {
-				t.Fatalf("switch: %s", stderr.String())
-			}
-			events := readEvents(t, s.LastTrace())
-			if events[0].Type != "compaction.requested" || events[1].Type != "compaction.finished" {
-				t.Fatalf("events: %+v", events)
-			}
-			// Both encoders must accept the portable handoff without old native items.
-			next := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("done")))}
-			s.model, s.planMode = next, false
-			if _, err := s.Turn(context.Background(), "continue", NewID(), filepath.Join(t.TempDir(), "next.jsonl")); err != nil {
-				t.Fatal(err)
-			}
-			req := next.requests[0]
-			if len(req.History) != 2 || req.History[0].Summary.Text != "handoff" || req.History[1].User.Plan != "ended" {
-				t.Fatalf("next request: %+v", req)
-			}
-			for _, encode := range []func(ModelRequest) ([]byte, error){EncodeOpenAIRequest, EncodeAnthropicRequest} {
-				body, err := encode(req)
-				if err != nil || !bytes.Contains(body, []byte(summaryPreamble)) || bytes.Contains(body, []byte("old native text")) {
-					t.Fatalf("body %s, error %v", body, err)
-				}
-			}
-			t.Logf("compaction final message: %s", model.requests[0].History[2].User.Text)
-			t.Logf("next request history: %s", mustJSON(t, req.History))
-		})
-	}
-}
-
-func TestConversation_ModelSwitchNonTurnHistory(t *testing.T) {
-	for _, entry := range []Entry{
-		{Kind: EntrySummary, Summary: &Summary{Text: "previous handoff", Model: "gpt-6-luna"}},
-		{Kind: EntryShell, Shell: &ShellCommand{Command: "pwd", Output: "workspace"}},
-	} {
-		t.Run(string(entry.Kind), func(t *testing.T) {
-			c := newConversation(t, "gpt-6-luna", "low", 0)
-			c.session.history = []Entry{entry}
-			model := &compactModel{replies: []ModelResponse{turn(textBlock("handoff"))}}
-			c.session.model = model
-			c.commandModel(context.Background(), "2", nil, io.Discard)
-			if len(model.requests) != 1 || len(c.session.history) != 1 || c.session.history[0].Summary.Text != "handoff" {
-				t.Fatalf("requests %+v, history %+v", model.requests, c.session.history)
-			}
-		})
-	}
-}
-
-func TestConversation_ModelSwitchFreshAndEmptySkipCompaction(t *testing.T) {
-	for _, turns := range []int{0, 1} {
-		c := newConversation(t, "gpt-6-luna", "low", turns)
-		model := &compactModel{}
-		c.session.model = model
-		c.session.compactedPlan = "on"
-		argument := "2"
-		if turns > 0 {
-			argument += " fresh"
-		}
-		c.commandModel(context.Background(), argument, nil, io.Discard)
-		if len(model.requests) != 0 || len(c.session.history) != 0 || c.session.compactedPlan != "" || c.session.LastTrace() != "" {
-			t.Fatalf("session %+v", c.session)
-		}
-	}
-}
-
-func TestConversation_ModelSwitchFailureStillSwitches(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		reply  ModelResponse
-		err    error
-		reason string
-	}{
-		{"provider", ModelResponse{}, fmt.Errorf("provider down\x1b"), "provider down\\x1b"},
-
-		{"empty", turn(textBlock("  ")), nil, "empty"},
-		{"tool", turn(callBlock("new", "counter", `{}`)), nil, "tool call"},
-		{"limit", ModelResponse{}, nil, "use /reset"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			c := newConversation(t, "gpt-6-luna", "low", 1)
-			old := c.session
-			old.compactedPlan, old.blocked = "on", "protocol_error"
-			model := &compactModel{replies: []ModelResponse{test.reply}, err: test.err}
-			runs := 0
-			cfg := testConfig(t, countingTool{runs: &runs})
-			c.session.cfg.Registry, old.cfg.Registry = cfg.Registry, cfg.Registry
-			old.model = model
-			if test.name == "limit" {
-				old.history[0].User.Text = strings.Repeat("x", MaxRequestBytes)
-			}
-			var stderr bytes.Buffer
-			c.commandModel(context.Background(), "2", nil, &stderr)
-			if c.session.ID == old.ID || c.session.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.session.compactedPlan != "" || c.session.blocked != "" || runs != 0 || c.session.LastTrace() == "" || c.session.LastTrace() != old.LastTrace() {
-				t.Fatalf("session %+v, runs %d", c.session, runs)
-			}
-			if !strings.Contains(stderr.String(), "fresh session, conversation not carried over:") || !strings.Contains(stderr.String(), test.reason) || strings.Contains(stderr.String(), "\x1b") {
-				t.Fatalf("stderr: %s", stderr.String())
-			}
-			data, err := os.ReadFile(c.session.LastTrace())
-			if err != nil {
-				t.Fatal(err)
-			}
-			lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
-			var finished event
-			if len(lines) != 2 || json.Unmarshal(lines[1], &finished) != nil || finished.Type != "compaction.failed" {
-				t.Fatal("missing compaction failure event")
-			}
-		})
-	}
-}
-
 func TestConversation_ModelSwitchArgumentValidation(t *testing.T) {
 	for _, argument := range []string{"2 wrong", "2 fresh extra", "gpt-6-luna fresh", "fresh"} {
 		c := newConversation(t, "gpt-6-luna", "low", 1)
@@ -1548,87 +1408,6 @@ func TestConversation_ModelSwitchArgumentValidation(t *testing.T) {
 		if c.session != before || len(model.requests) != 0 || stderr.Len() == 0 {
 			t.Fatalf("argument %q: %s", argument, stderr.String())
 		}
-	}
-}
-
-func TestConversation_ModelSwitchFirstAdapterRequestHasSummary(t *testing.T) {
-	for _, source := range []string{"gpt-6-luna", "claude-haiku-4-5"} {
-		t.Run(source, func(t *testing.T) {
-			api := newFakeAPI(t, okReply(streamedTextReply()))
-			c := newConversation(t, source, "", 1)
-			c.proxy = apiProxy{provider: openaiName, endpoint: api.server.URL}
-			oldModel := &compactModel{replies: []ModelResponse{turn(textBlock("portable handoff"))}}
-			c.session.model = oldModel
-			c.commandModel(context.Background(), "gpt-6.1-sol", nil, io.Discard)
-			result, err := c.session.Turn(context.Background(), "continue", NewID(), filepath.Join(t.TempDir(), "next.jsonl"))
-			if err != nil || result.Status != StatusCompleted {
-				t.Fatalf("result %+v, error %v", result, err)
-			}
-			bodies := api.received()
-			if len(bodies) != 1 {
-				t.Fatalf("requests: %d", len(bodies))
-			}
-			var body struct {
-				Input []struct {
-					Role    string `json:"role"`
-					Content []struct {
-						Text string `json:"text"`
-					} `json:"content"`
-				} `json:"input"`
-			}
-			if err := json.Unmarshal(bodies[0], &body); err != nil {
-				t.Fatal(err)
-			}
-			if len(body.Input) != 2 || body.Input[0].Role != "user" || len(body.Input[0].Content) != 1 || body.Input[0].Content[0].Text != summaryPreamble+"\nportable handoff" || body.Input[1].Content[0].Text != "continue" || bytes.Contains(bodies[0], []byte("answer")) {
-				t.Fatalf("body: %s", bodies[0])
-			}
-		})
-	}
-}
-
-func TestConversation_CancelledModelSwitchKeepsConversation(t *testing.T) {
-	for _, blocked := range []string{"", "protocol_error"} {
-		t.Run("blocked="+blocked, func(t *testing.T) {
-			c := newConversation(t, "gpt-6-luna", "low", 1)
-			s := c.session
-			s.planMode, s.blocked, s.compactedPlan = true, blocked, "on"
-			s.seenCalls["old-call"] = true
-			cfg, history := c.session.cfg, string(mustJSON(t, s.history))
-			usage := Usage{Known: true, InputTokens: 100, CachedInputTokens: 50, OutputTokens: 9}
-			c.usage = usage
-			s.model = &compactModel{err: &ModelError{Status: StatusCancelled, Message: "cancelled during a model request", Usage: Usage{Known: true, InputTokens: 12}}}
-			var stderr bytes.Buffer
-			c.commandModel(context.Background(), "2", nil, &stderr)
-			if c.session.cfg.Model != cfg.Model || c.session.cfg.Provider != cfg.Provider || c.session.cfg.ReasoningEffort != cfg.ReasoningEffort || c.session != s || string(mustJSON(t, s.history)) != history || !s.planMode || s.blocked != blocked || s.compactedPlan != "on" || !s.seenCalls["old-call"] || c.usage != usage {
-				t.Fatalf("cancelled switch changed conversation: %+v, usage %+v", c.session, c.usage)
-			}
-			if stderr.String() != "summarizing the conversation for gpt-6.1-sol; Ctrl-C keeps gpt-6-luna\nkept gpt-6-luna; switch cancelled\n" {
-				t.Fatalf("stderr: %s", stderr.String())
-			}
-			if s.LastTrace() == "" {
-				t.Fatal("missing cancellation trace")
-			}
-			events := readEvents(t, s.LastTrace())
-			if len(events) != 2 || events[1].Type != "compaction.failed" {
-				t.Fatalf("events: %+v", events)
-			}
-		})
-	}
-}
-
-func TestConversation_FailedModelSwitchRetainsHandoffUsage(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 1)
-	usage := Usage{Known: true, InputTokens: 123, CachedInputTokens: 80, OutputTokens: 7}
-	c.usage = Usage{Known: true, InputTokens: 1000}
-	c.session.model = &compactModel{err: &ModelError{Status: StatusProviderError, Message: "provider down", Usage: usage}}
-	c.commandModel(context.Background(), "2", nil, io.Discard)
-	if c.session.cfg.Model != modelCatalog[1].ID || len(c.session.history) != 0 || c.usage != usage {
-		t.Fatalf("session %+v, usage %+v", c.session, c.usage)
-	}
-	var stderr bytes.Buffer
-	c.commandStatus(&stderr)
-	if !strings.Contains(stderr.String(), "123 in (80 cached) · 7 out") {
-		t.Fatalf("status: %s", stderr.String())
 	}
 }
 

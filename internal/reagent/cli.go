@@ -94,6 +94,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, "--max-steps and --max-tool-calls must be nonnegative (0 means unlimited)")
 	case options.script != "" && (options.model != "" || options.provider != ""):
 		return usage(stderr, command, "--scripted replays recorded responses, so it takes no --model or --provider")
+	case options.auto && (options.script != "" || options.showContext):
+		return usage(stderr, command, "--auto cannot be combined with --scripted or --show-context")
 	case options.script != "" && options.showContext:
 		return usage(stderr, command, "--show-context previews a live request, so it cannot be combined with --scripted")
 	}
@@ -130,6 +132,18 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	registry, err := NewRegistry(mode, tools...)
 	if err != nil {
 		return usage(stderr, command, err.Error())
+	}
+	if options.auto && options.provider == "" && options.model == "" && os.Getenv("REAGENT_MODEL") == "" {
+		options.model = "gpt-6.1-sol"
+		explicitEffort := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "reasoning-effort" {
+				explicitEffort = true
+			}
+		})
+		if !explicitEffort {
+			options.reasoning = "medium"
+		}
 	}
 	provider, model, err := resolveTarget(options.provider, options.model)
 	if err != nil {
@@ -202,6 +216,13 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	session := NewSession(cfg, live, trace, stderr)
 	// v0 §6 amendment (2026-09-27): each accepted turn collects its own state.
 	session.snapshot = collectSnapshot
+	if options.auto {
+		session.auto, err = newAutoRouting(cfg, os.Getenv("TYPESAFE_API_KEY"), keys, proxy, client, trace)
+		if err != nil {
+			return usage(stderr, command, err.Error())
+		}
+		autoDisclosure(stderr, session.auto)
+	}
 	endpoint := ""
 	if options.script == "" && proxy.serves(provider) {
 		endpoint = proxy.shown()
@@ -254,6 +275,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
 	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction      bool
+	auto                                                                           bool
 	maxSteps, maxToolCalls                                                         int
 	allowedWorkspaces                                                              []string
 }
@@ -269,6 +291,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.showContext, "show-context", false, "print the request the first step would send, then exit")
 	fs.BoolVar(&o.readOnly, "read-only", false, "withhold write and exec tools; only allow reading")
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
+	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6.1-sol/medium")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")
@@ -286,7 +309,7 @@ type flagGroup struct {
 }
 
 var runFlagGroups = []flagGroup{
-	{"Model", []string{"provider", "model", "reasoning-effort"}},
+	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
@@ -296,7 +319,7 @@ var runFlagGroups = []flagGroup{
 }
 
 var chatFlagGroups = []flagGroup{
-	{"Model", []string{"provider", "model", "reasoning-effort"}},
+	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
@@ -326,6 +349,7 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run")
 	fmt.Fprintln(w, "  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,")
 	fmt.Fprintln(w, "                                      with no key; the provider must be openai")
+	fmt.Fprintln(w, "  TYPESAFE_API_KEY                    optional router key; read only when Auto is enabled")
 	fmt.Fprintln(w, "  REAGENT_MODEL                       default model")
 	fmt.Fprintln(w, "  NO_COLOR                            turn off styling")
 }
@@ -475,6 +499,9 @@ func startupError(stderr io.Writer, message string) int {
 func printResult(d *Display, result RunResult, elapsed time.Duration, stdout io.Writer, recap, showTrace, showPlan bool) {
 	d.reply(stdout, result.Reply, showPlan)
 	d.summary(result, elapsed, showTrace, recap || result.Status != StatusCompleted)
+	if result.RouterUsage != nil {
+		d.note(routerUsageLine(*result.RouterUsage))
+	}
 }
 
 // v0 §6 amendment (2026-09-30): copy instructions at launch and explicit switches.

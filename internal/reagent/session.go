@@ -21,7 +21,10 @@ type Session struct {
 	// v0 §6 amendment (2026-09-27): inject collection before each run.
 	snapshot func(context.Context, string, bool) json.RawMessage
 
-	history   []Entry
+	history []Entry
+	// v0 §10 amendment (2026-10-02): a fixed request view, never accepted history.
+	auto      *autoRouting
+	handoff   *modelHandoff
 	seenCalls map[string]bool
 	planMode  bool
 	// The last user's plan marker survives replacement until the next turn.
@@ -149,6 +152,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	}
 	summary := Summary{Text: text, ReplacedEntries: len(s.history), Model: s.cfg.Model}
 	s.history = []Entry{{Kind: EntrySummary, Summary: &summary}}
+	s.handoff = nil
 	s.blocked = ""
 	// The request's input was the whole old history, so its usage says nothing
 	// about the new one and would trigger another compaction (v0 §10, U10).
@@ -164,11 +168,15 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 func (s *Session) Reset() {
 	s.ID = NewID()
 	s.history = nil
+	s.handoff = nil
 	s.compactedPlan = ""
 	s.seenCalls = make(map[string]bool)
 	s.blocked = ""
 	s.lastTrace = ""
 	s.lastRequest = Usage{}
+	if s.auto != nil {
+		s.auto.usage, s.auto.attempts = Usage{Known: true}, 0
+	}
 }
 
 // recordShell appends a command the user ran with !. It is not a turn: no run
@@ -182,11 +190,11 @@ func (s *Session) LastTrace() string { return s.lastTrace }
 
 // SetEffort changes the reasoning effort used by later turns.
 //
-// This is safe mid-session, unlike a model change: effort is a request
+// This needs no history projection: effort is a request
 // parameter rather than part of the transcript, so nothing already accepted
 // becomes invalid. It does change the request prefix, so the next request
 // starts a new prompt cache.
-func (s *Session) SetEffort(effort string) { s.cfg.ReasoningEffort = effort }
+func (s *Session) SetEffort(effort string) { s.pinAuto(); s.cfg.ReasoningEffort = effort }
 
 // Turns counts the submissions accepted so far.
 func (s *Session) Turns() int {

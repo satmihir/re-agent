@@ -268,7 +268,9 @@ type RunResult struct {
 	Steps     int       `json:"steps"`
 	ToolCalls int       `json:"tool_calls"`
 	Usage     Usage     `json:"usage"`
-	TracePath string    `json:"trace_path,omitempty"`
+	// RouterUsage is separate from generative-model accounting and omitted without attempts.
+	RouterUsage *Usage `json:"router_usage,omitempty"`
+	TracePath   string `json:"trace_path,omitempty"`
 	// Effects lists what the run actually changed, so a failed run still
 	// reports the edits it made before stopping.
 	Effects []EffectRecord `json:"effects,omitempty"`
