@@ -22,8 +22,9 @@ type chatCommand struct{ name, argument, help string }
 
 var chatCommands = []chatCommand{
 	{"/plan", "[text]", "toggle planning; optional text starts a planning turn"},
-	{"/model", "[model] [fresh]", "choose a model; carry a summary, or discard with fresh"},
+	{"/model", "[model] [fresh]", "choose a model; carry historical text, or discard with fresh"},
 	{"/effort", "[number or name]", "choose reasoning effort (picker on a terminal)"},
+	{"/auto", "[on|off]", "optional TypeSafe routing; off pins the current route"},
 	{"/status", "", "model, mode, workspace, turns, and tokens so far"},
 	{"/context", "", "what the next request is made of, by size"},
 	{"/compact", "[-v] [focus]", "summarize and replace the conversation (-v prints it)"},
@@ -58,8 +59,7 @@ Pasted text is sent as one message, however many lines it has.`)
 	return b.String()
 }
 
-// conversation is the chat session plus what it needs to build a replacement
-// when the model changes.
+// conversation holds the session and its manual model controls.
 type conversation struct {
 	session  *Session
 	keys     map[string]string
@@ -89,7 +89,7 @@ func (c *conversation) available() map[string]bool {
 }
 
 // commandModel lists the catalog, or switches to one of its entries.
-// v0 §10 amendment (2026-09-29): only a text summary crosses model boundaries.
+// v0 §10 amendment (2026-10-02): software-only historical text handoffs.
 func (c *conversation) commandModel(ctx context.Context, argument string, input lineReader, stderr io.Writer) {
 	if c.scripted != nil {
 		fmt.Fprintln(stderr, "a scripted run replays recorded responses, so it has no model to choose")
@@ -115,8 +115,8 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 		}
 		title := "Select a model"
 		if len(c.session.history) > 0 {
-			// v0 §10 amendment (2026-09-29): a switch now costs a request.
-			title += " · carries a summary; /model N fresh skips"
+			// v0 §10 amendment (2026-10-02): no summary request is needed.
+			title += " · carries text; /model N fresh discards"
 		}
 		index, err := input.Choose(pickerConfig{title: title, shortcuts: true}, modelChoices(c.session.cfg.Model, c.available()), current)
 		switch {
@@ -139,6 +139,7 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 	}
 	switch {
 	case info.ID == c.session.cfg.Model:
+		c.session.pinAuto()
 		fmt.Fprintf(stderr, "already using %s\n", info.ID)
 		return
 	case c.keys[info.Provider] == "" && !c.proxy.serves(info.Provider):
@@ -146,59 +147,33 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 		return
 	}
 
-	hadHistory := len(c.session.history) > 0
-	var summary *Summary
-	var plan, tracePath, failure string
-	handoffUsage := Usage{Known: true}
-	if hadHistory && !fresh {
-		fmt.Fprintf(stderr, "summarizing the conversation for %s; Ctrl-C keeps %s\n", info.ID, c.session.cfg.Model)
-		previousUsage := c.usage
-		result, _, err := c.compact(ctx, "")
-		if result.Status == StatusCancelled {
-			c.usage = previousUsage
+	switchCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+	handoff, err := c.transitionModel(switchCtx, info, fresh)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
 			fmt.Fprintf(stderr, "kept %s; switch cancelled\n", c.session.cfg.Model)
 			return
 		}
-		if err == nil {
-			handoffUsage = result.Usage
-		}
-		tracePath = result.TracePath
-		if err != nil {
-			failure = err.Error()
-		} else if result.Status != StatusCompleted {
-			failure = result.Reason
-		} else {
-			value := *c.session.history[0].Summary
-			summary = &value
-			plan = c.session.compactedPlan
-		}
+		fmt.Fprintf(stderr, "kept %s; switch failed: %s\n", c.session.cfg.Model, sanitize(err.Error()))
+		return
 	}
-	c.switchTo(info)
-	c.usage = handoffUsage
-	c.session.lastTrace = tracePath
-	if summary != nil {
-		c.session.history = []Entry{{Kind: EntrySummary, Summary: summary}}
-		c.session.compactedPlan = plan
-	}
+	c.session.pinAuto()
 	route := info.Provider
 	if c.proxy.serves(info.Provider) {
 		route += " via " + proxyURLVariable
 	}
 	switch {
-	case summary != nil:
-		fmt.Fprintf(stderr, "switched to %s (%s); carried the conversation over as a %s summary\n", info.ID, route, formatBytes(len(summary.Text)))
-	case failure != "":
-		fmt.Fprintf(stderr, "switched to %s (%s); fresh session, conversation not carried over: %s\n", info.ID, route, sanitize(failure))
-	case hadHistory:
+	case fresh:
 		fmt.Fprintf(stderr, "switched to %s (%s); fresh session, conversation discarded\n", info.ID, route)
+	case handoff != nil:
+		fmt.Fprintf(stderr, "switched to %s (%s); carried %d entries as %s historical text; native state omitted; no model request\n", info.ID, route, handoff.Entries, formatBytes(len(handoff.Text)))
 	default:
 		fmt.Fprintf(stderr, "switched to %s (%s)\n", info.ID, route)
 	}
 }
 
-// switchTo replaces the session with one built for a different model. Effort
-// resets to that model's own default, since the value the last model used may
-// be one this one rejects.
+// switchTo starts an explicitly fresh session at the destination default effort.
 func (c *conversation) switchTo(info modelInfo) {
 	cfg := c.session.cfg
 	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
@@ -303,6 +278,12 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 	} else {
 		fmt.Fprintf(stderr, "session    %s · tokens unknown\n", plural(c.session.Turns(), "turn", "turns"))
 	}
+	if a := c.session.auto; a != nil {
+		fmt.Fprintf(stderr, "auto       %t · fallback %s / %s · %d router attempts\n", a.enabled, a.fallback.Model, a.fallback.Effort, a.attempts)
+		if a.attempts > 0 {
+			fmt.Fprintln(stderr, routerUsageLine(a.usage))
+		}
+	}
 	if window := contextWindow(c.session.cfg.Model); window > 0 {
 		if line := lastRequestLine(c.session.lastRequest, window); line != "" {
 			fmt.Fprintln(stderr, line)
@@ -328,10 +309,19 @@ func (c *conversation) commandContext(stderr io.Writer) {
 		fmt.Fprintln(stderr, "a scripted run replays recorded responses, so it sends no requests to measure")
 		return
 	}
-	breakdown, err := measureContext(c.session.cfg, c.session.history)
+	breakdown, err := measureContext(c.session.cfg, c.session.requestHistory())
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
 		return
+	}
+	if c.session.handoff != nil {
+		n := encodedSize(c.session.handoff.Text)
+		for i := range breakdown.parts {
+			if breakdown.parts[i].label == "your messages" {
+				breakdown.parts[i].bytes -= n
+			}
+		}
+		breakdown.parts = append(breakdown.parts, contextPart{label: "historical transcript", bytes: n})
 	}
 	breakdown.lastUsage = c.session.lastRequest
 	breakdown.window = contextWindow(c.session.cfg.Model)
@@ -413,7 +403,7 @@ func (c *conversation) autoCompact(ctx context.Context, stderr io.Writer) bool {
 	return true
 }
 
-// compact shares tracing and interrupt handling between /compact and /model.
+// compact shares tracing and interrupt handling for manual and automatic compaction.
 func (c *conversation) compact(ctx context.Context, focus string) (RunResult, int, error) {
 	runID := NewID()
 	path, err := tracePathFor(c.traceDir, runID)
@@ -637,7 +627,7 @@ func planSwitchLine(on, styled bool) string {
 }
 
 // chat runs a conversation: one submission per line, each its own run of one
-// session (v1 §18.2). Slash commands are local controls; /compact and model handoffs call the model.
+// session (v1 §18.2). Slash commands are local controls; only compaction and submitted turns call the model.
 // A terminal submission may contain a bracketed paste or continued lines.
 func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
 	c.session.workspaceConsent = func(ctx context.Context, destination workspaceDestination) (bool, error) {
@@ -704,6 +694,8 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			c.commandModel(ctx, argument, input, stderr)
 		case command == "/effort":
 			c.commandEffort(argument, input, stderr)
+		case command == "/auto":
+			c.commandAuto(argument, stderr)
 		case command == "/status":
 			c.commandStatus(stderr)
 		case command == "/context":
@@ -753,6 +745,8 @@ func (c *conversation) completionArguments(command string) []string {
 			models = append(models, model.ID)
 		}
 		return models
+	case "/auto":
+		return []string{"on", "off"}
 	case "/effort":
 		if model, ok := findModel(c.session.cfg.Model); ok {
 			return model.Efforts
