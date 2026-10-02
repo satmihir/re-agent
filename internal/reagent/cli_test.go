@@ -401,15 +401,15 @@ func TestMain_ChatPromptDoesNotReportAMisplacedFlag(t *testing.T) {
 	}
 }
 
-func TestMain_ChatUsesDefaultPerTurnBudgets(t *testing.T) {
+func TestMain_ChatOmitsBudgetLine(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main(context.Background(), []string{"chat", "--scripted", "../../testdata/scripts/echo_then_answer.json"},
 		strings.NewReader("/status\n"), &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "budget     unlimited steps, unlimited tool calls per turn") {
-		t.Fatalf("chat budget: %s", stderr.String())
+	if strings.Contains(stderr.String(), "budget     ") {
+		t.Fatalf("unexpected chat budget line: %s", stderr.String())
 	}
 }
 
