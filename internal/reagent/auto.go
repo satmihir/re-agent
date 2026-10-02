@@ -57,7 +57,7 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 }
 
 func autoDisclosure(w io.Writer, a *autoRouting) {
-	fmt.Fprintf(w, "auto on: %s; TypeSafe receives full user requests/summaries, root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header\n", jevEndpoint)
+	fmt.Fprintf(w, "auto on: %s; TypeSafe receives summaries, user requests (earlier ones may be shortened or omitted), root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header\n", jevEndpoint)
 	fmt.Fprintf(w, "auto fallback: %s / %s; %d allowed route(s); /auto off or manual model/effort selection pins the current route\n", a.fallback.Model, a.fallback.Effort, len(a.routes))
 	if strings.TrimSpace(a.jev.key) == "" {
 		fmt.Fprintln(w, "TYPESAFE_API_KEY is not set; Auto uses compatible fallback without routing calls")
@@ -187,6 +187,7 @@ func (r *Run) routeNext(ctx context.Context) error {
 			r.routingOff = true
 		} else {
 			metadata["omitted_earlier_entries"], metadata["omitted_native_items"], metadata["previews"] = packet.OmittedEarlier, packet.OmittedNative, packet.Truncations
+			metadata["omitted_earlier_user_requests"] = packet.OmittedRequests
 			s.display.startStatus("choosing a route with Jev")
 			decision, err := a.jev.decide(ctx, packet.State, routes)
 			s.display.stopStatus()

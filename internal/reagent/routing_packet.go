@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-// v0 §10 amendment (2026-10-02): only noncritical evidence gets previews.
+// v0 §10 amendment (2026-10-02): noncritical evidence and, when the packet
+// would not otherwise fit, earlier user requests get previews.
 const routingPreviewBytes = 512
 
 type routingTruncation struct {
@@ -26,15 +27,17 @@ type routingState struct {
 	Plan                *transcriptEntry    `json:"latest_complete_plan,omitempty"`
 	Recent              []transcriptEntry   `json:"recent_evidence"`
 	OmittedEarlier      int                 `json:"omitted_earlier_entries"`
+	OmittedRequests     int                 `json:"omitted_earlier_user_requests,omitempty"`
 	OmittedNative       int                 `json:"omitted_native_items"`
 	Truncations         []routingTruncation `json:"previews,omitempty"`
 }
 
 type routingPacket struct {
-	State          string
-	OmittedEarlier int
-	OmittedNative  int
-	Truncations    []routingTruncation
+	State           string
+	OmittedEarlier  int
+	OmittedRequests int
+	OmittedNative   int
+	Truncations     []routingTruncation
 }
 
 func buildRoutingPacket(cfg Config, history []Entry, planMode bool, routes []jevRoute) (routingPacket, error) {
@@ -94,6 +97,53 @@ func buildRoutingPacket(cfg Config, history []Entry, planMode bool, routes []jev
 		return string(body), nil
 	}
 	text, err := encode(state)
+	// v0 §10 amendment (2026-10-02): earlier user requests yield before the
+	// packet is refused, oldest first: previews, then omission. The latest
+	// request and every summary stay whole.
+	latest := -1
+	for i, entry := range state.Critical {
+		if entry.Kind == EntryUser {
+			latest = i
+		}
+	}
+	recent, previewed := state.Truncations, []routingTruncation(nil)
+	for i := 0; err != nil && i < latest; i++ {
+		if state.Critical[i].Kind != EntryUser {
+			continue
+		}
+		preview, markers := routingPreview(state.Critical[i])
+		if len(markers) == 0 {
+			continue
+		}
+		state.Critical = append([]transcriptEntry(nil), state.Critical...)
+		state.Critical[i] = preview
+		previewed = append(previewed, markers...)
+		state.Truncations = append(append([]routingTruncation(nil), previewed...), recent...)
+		text, err = encode(state)
+	}
+	for err != nil {
+		oldest := -1
+		for i := 0; i < latest && oldest < 0; i++ {
+			if state.Critical[i].Kind == EntryUser {
+				oldest = i
+			}
+		}
+		if oldest < 0 {
+			break
+		}
+		number := state.Critical[oldest].Number
+		state.Critical = append(append([]transcriptEntry(nil), state.Critical[:oldest]...), state.Critical[oldest+1:]...)
+		kept := state.Truncations[:0:0]
+		for _, marker := range state.Truncations {
+			if marker.Entry != number {
+				kept = append(kept, marker)
+			}
+		}
+		state.Truncations = kept
+		state.OmittedRequests++
+		latest--
+		text, err = encode(state)
+	}
 	if err != nil {
 		return routingPacket{}, fmt.Errorf("critical routing state or latest segment does not fit: %w", err)
 	}
@@ -113,7 +163,7 @@ func buildRoutingPacket(cfg Config, history []Entry, planMode bool, routes []jev
 		}
 		state, text = candidate, candidateText
 	}
-	return routingPacket{State: text, OmittedEarlier: state.OmittedEarlier, OmittedNative: nativeItems, Truncations: state.Truncations}, nil
+	return routingPacket{State: text, OmittedEarlier: state.OmittedEarlier, OmittedRequests: state.OmittedRequests, OmittedNative: nativeItems, Truncations: state.Truncations}, nil
 }
 
 func routingPreview(entry transcriptEntry) (transcriptEntry, []routingTruncation) {
@@ -124,6 +174,11 @@ func routingPreview(entry transcriptEntry) (transcriptEntry, []routingTruncation
 		}
 		markers = append(markers, routingTruncation{Entry: entry.Number, Field: field, OriginalBytes: len(text)})
 		return truncateUTF8(text, routingPreviewBytes)
+	}
+	if entry.User != nil {
+		copy := *entry.User
+		copy.Text = preview(copy.Text, "user.text")
+		entry.User = &copy
 	}
 	if entry.Assistant != nil {
 		copy := *entry.Assistant

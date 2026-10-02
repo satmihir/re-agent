@@ -149,14 +149,17 @@ Jev calls. `/reset` retains the Auto setting but starts fresh accounting.
 
 Enabling Auto discloses the endpoint `https://api.typesafe.ai/v1/systemone` and
 what leaves the machine: TypeSafe receives the full effective root `AGENTS.md`,
-every accepted user request and summary in full, the latest complete plan, and
-selected recent assistant/tool/shell evidence with provenance. Noncritical text
-may be shortened to 512-byte previews; evidence includes file contents and
+every summary and the latest user request in full, earlier user requests, the
+latest complete plan, and selected recent assistant/tool/shell evidence with
+provenance. Noncritical text may be shortened to 512-byte previews; evidence includes file contents and
 command output. Those contents can contain secrets beyond withheld file names.
 Transport credentials remain in the HTTP header, and native reasoning is
 omitted; there is no general secret filtering of content you or tools supplied.
-The packet has deterministic bounds and explicit omission/preview markers. Critical material is never truncated:
-if it does not fit, Auto uses compatible fallback without contacting Jev.
+The packet has deterministic bounds and explicit omission/preview markers. When
+a long session would not otherwise fit, earlier user requests yield oldest first,
+to 512-byte previews and then to a counted omission. The rest of the critical
+material is never truncated: if it does not fit, Auto uses compatible fallback
+without contacting Jev.
 The selected generative model receives full admitted history, not this packet.
 
 Jev `jev-1.13.0` chooses a joint model/effort route at turn start, after every
@@ -183,7 +186,7 @@ and completed tools are never replayed. There
 is no automatic mid-run compaction or generative-error retry. Existing between-
 turn compaction remains a separate capacity action.
 
-The router bounds the complete request to 8 KiB, successful responses to 16 KiB,
+The router bounds the complete request to 32 KiB, successful responses to 16 KiB,
 and each operation to two seconds; redirects and automatic retries are refused.
 It validates version, choice, confidence, distribution and reported token usage.
 `auto.route` trace events record decisions, packet size/hash/omission markers,
