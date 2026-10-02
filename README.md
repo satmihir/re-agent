@@ -172,7 +172,7 @@ three generations; failure escalation or conservative fallback can override
 dwell. At most three route
 changes occur per run, after which routing stops and the task continues on the
 current route. Confidence below 0.70 uses fallback; choosing the fast route
-requires 0.85. These experimental thresholds are not calibrated quality claims.
+requires 0.75. These experimental thresholds are not calibrated quality claims.
 A router error disables further router attempts for that run; the next user
 turn can try again. Cancellation stops instead of falling back and generating.
 
