@@ -39,6 +39,8 @@ func TestRun_ReportFrictionPreview(t *testing.T) {
 					if err := json.Unmarshal(out.Bytes(), &body); err != nil {
 						t.Fatal(err)
 					}
+					// The cache key is a digest of the instructions and tools compared here.
+					delete(body, "prompt_cache_key")
 					if !enabled {
 						plain = body
 						continue

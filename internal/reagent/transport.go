@@ -112,10 +112,10 @@ type transport struct {
 // call performs the bounded attempts for one logical request and returns the
 // status and body of the last one. A transport failure, including this
 // attempt's timeout, ends the call: only a reply the server actually sent is
-// retried.
-func (t *transport) call(ctx context.Context, step int, body []byte) (int, []byte, error) {
+// retried. headers are this request's own, sent after the transport's fixed ones.
+func (t *transport) call(ctx context.Context, step int, body []byte, headers map[string]string) (int, []byte, error) {
 	for attempt := 1; ; attempt++ {
-		status, raw, err := t.send(ctx, attempt, step, body)
+		status, raw, err := t.send(ctx, attempt, step, body, headers)
 		switch {
 		case err != nil:
 			if ctx.Err() != nil {
@@ -134,7 +134,7 @@ func (t *transport) call(ctx context.Context, step int, body []byte) (int, []byt
 
 // send performs one HTTP transmission and records its exact request and
 // response bytes before anything interprets them.
-func (t *transport) send(ctx context.Context, attempt, step int, body []byte) (int, []byte, error) {
+func (t *transport) send(ctx context.Context, attempt, step int, body []byte, headers map[string]string) (int, []byte, error) {
 	digest := sha256.Sum256(body)
 	t.trace.Write("api.attempt.started", step, map[string]any{
 		"attempt":        attempt,
@@ -151,6 +151,9 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte) (i
 	}
 	request.Header.Set("Content-Type", "application/json")
 	for name, value := range t.headers {
+		request.Header.Set(name, value)
+	}
+	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
 

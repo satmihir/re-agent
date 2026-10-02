@@ -41,7 +41,7 @@ func TestTransport_SteadyReplyOutlastsTheIdleBound(t *testing.T) {
 	tr := &transport{endpoint: server.URL, client: newHTTPClient(time.Second, 50*time.Millisecond), trace: NewTrace(io.Discard)}
 
 	started := time.Now()
-	status, raw, err := tr.call(context.Background(), 1, []byte("{}"))
+	status, raw, err := tr.call(context.Background(), 1, []byte("{}"), nil)
 	if err != nil || status != http.StatusOK || string(raw) != strings.Join(chunks, "") {
 		t.Fatalf("status %d, body %q, err %v", status, raw, err)
 	}
@@ -65,7 +65,7 @@ func TestTransport_StalledReplyEndsTheAttempt(t *testing.T) {
 	t.Cleanup(server.Close)
 	tr := &transport{endpoint: server.URL, client: newHTTPClient(time.Second, 50*time.Millisecond), trace: NewTrace(io.Discard)}
 
-	_, _, err := tr.call(context.Background(), 1, []byte("{}"))
+	_, _, err := tr.call(context.Background(), 1, []byte("{}"), nil)
 	me, ok := err.(*ModelError)
 	if !ok || me.Status != StatusProviderError || !strings.Contains(me.Message, "the provider sent nothing for 50ms") {
 		t.Fatalf("got %v", err)
@@ -82,7 +82,7 @@ func TestTransport_CancelDuringAReply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, _, err := tr.call(ctx, 1, []byte("{}"))
+	_, _, err := tr.call(ctx, 1, []byte("{}"), nil)
 	if me, ok := err.(*ModelError); !ok || me.Status != StatusCancelled {
 		t.Fatalf("got %v", err)
 	}

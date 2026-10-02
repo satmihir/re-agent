@@ -54,7 +54,13 @@ func (m *OpenAIModel) Generate(ctx context.Context, req ModelRequest) (ModelResp
 		return ModelResponse{}, &ModelError{Status: StatusProviderError, Message: err.Error()}
 	}
 
-	status, raw, err := m.transport.call(ctx, req.Scope.Step, body)
+	// v0 §6 amendment (2026-10-02): the ChatGPT backend behind a proxy picks its
+	// prompt cache by this header, as Codex sends it; one conversation keeps one.
+	var headers map[string]string
+	if m.proxied {
+		headers = map[string]string{"session-id": openAICacheKey(req)}
+	}
+	status, raw, err := m.transport.call(ctx, req.Scope.Step, body, headers)
 	if err != nil {
 		return ModelResponse{}, err
 	}

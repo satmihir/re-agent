@@ -1,6 +1,8 @@
 package reagent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 )
@@ -37,6 +39,7 @@ type responsesRequest struct {
 	ParallelToolCalls bool                `json:"parallel_tool_calls"`
 	Store             bool                `json:"store"`
 	Include           []string            `json:"include"`
+	PromptCacheKey    string              `json:"prompt_cache_key,omitempty"`
 	Truncation        string              `json:"truncation,omitempty"`
 	Stream            bool                `json:"stream"`
 }
@@ -126,6 +129,7 @@ func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 		ParallelToolCalls: true,
 		Store:             false,
 		Include:           []string{"reasoning.encrypted_content"},
+		PromptCacheKey:    openAICacheKey(req),
 		Truncation:        truncation,
 		Stream:            proxied,
 	})
@@ -199,4 +203,30 @@ func encodeHistory(history []Entry) ([]any, error) {
 		}
 	}
 	return input, nil
+}
+
+// openAICacheKey names a conversation's prompt cache, so that its requests are
+// routed to a server that already holds their prefix (v0 §6 amendment,
+// 2026-10-02). It is derived from what every request of the conversation
+// starts with: model, instructions, tools, and the first entry without its
+// workspace snapshot, which changes with the clock. So it holds across steps
+// and turns, changes exactly where the prefix does anyway (a workspace switch,
+// a compaction, /reset), and a preview computes the same key the run will send.
+func openAICacheKey(req ModelRequest) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00", req.Model, req.Instructions)
+	for _, spec := range req.Tools {
+		fmt.Fprintf(h, "%s\x00%s\x00", spec.Name, spec.InputSchema)
+	}
+	if len(req.History) > 0 {
+		first := req.History[0]
+		if first.User != nil {
+			user := *first.User
+			user.Workspace = nil
+			first.User = &user
+		}
+		raw, _ := json.Marshal(first)
+		h.Write(raw)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:32]
 }
