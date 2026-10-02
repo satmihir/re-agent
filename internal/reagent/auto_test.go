@@ -178,7 +178,7 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 		known       bool
 	}{
 		{"missing key", autoChoice("fast", 0.95), "", "task", 0, true},
-		{"critical overflow", autoChoice("fast", 0.95), "fake", strings.Repeat("constraint ", 800), 0, true},
+		{"critical overflow", autoChoice("fast", 0.95), "fake", strings.Repeat("constraint ", 4000), 0, true},
 		{"rate limit", apiReply{status: 429, body: "private"}, "fake", "task", 1, false},
 		{"malformed", okReply(`{broken`), "fake", "task", 1, false},
 		{"low confidence", autoChoice("fast", 0.3), "fake", "task", 1, true},

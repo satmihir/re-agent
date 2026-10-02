@@ -83,7 +83,7 @@ func TestRoutingPacket_RefusesMissingCriticalOrIncompleteEvidence(t *testing.T) 
 		history []Entry
 	}{
 		{"objective", []Entry{{Kind: EntrySummary, Summary: &Summary{Text: "unknown objective"}}}},
-		{"critical overflow", []Entry{{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("requirement", 1000)}}}},
+		{"critical overflow", []Entry{{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("requirement", 4000)}}}},
 		{"unresolved call", []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}, {Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{callBlock("pending", "echo", `{}`)}}}}},
 		{"unsupported block", []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}, {Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{{Kind: "image"}}}}}},
 	} {
@@ -93,5 +93,85 @@ func TestRoutingPacket_RefusesMissingCriticalOrIncompleteEvidence(t *testing.T) 
 				t.Fatalf("incomplete critical material routed: %+v, %v", packet, err)
 			}
 		})
+	}
+}
+
+// A session's earlier requests yield to the packet bound oldest first, as
+// marked previews and then omissions, so routing survives a long session.
+func TestRoutingPacket_EarlierRequestsYieldOldestFirst(t *testing.T) {
+	cfg := testConfig(t)
+	project := strings.Repeat("project rule. ", 400)
+	cfg.ProjectInstructions = &project
+	turn := func(n int) []Entry {
+		return []Entry{
+			{Kind: EntryUser, User: &UserTurn{Text: fmt.Sprintf("request %d: ", n) + strings.Repeat("keep the behaviour. ", 120)}},
+			{Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{textBlock(fmt.Sprintf("done %d", n))}}},
+		}
+	}
+	summary := Entry{Kind: EntrySummary, Summary: &Summary{Text: strings.Repeat("summary ", 200)}}
+	latest := Entry{Kind: EntryUser, User: &UserTurn{Text: "latest: " + strings.Repeat("now do this. ", 150)}}
+	decode := func(history []Entry) (routingPacket, routingState) {
+		t.Helper()
+		packet, err := buildRoutingPacket(cfg, history, false, jevTestRoutes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var state routingState
+		if err := json.Unmarshal([]byte(packet.State), &state); err != nil {
+			t.Fatal(err)
+		}
+		if body, err := encodeJevRequest(packet.State, jevTestRoutes()); err != nil || len(body) > jevMaxRequestBytes {
+			t.Fatalf("packet over the bound: %v", err)
+		}
+		return packet, state
+	}
+
+	// A few turns fit whole.
+	history := []Entry{summary}
+	for n := 1; n <= 3; n++ {
+		history = append(history, turn(n)...)
+	}
+	packet, state := decode(append(history, latest))
+	if packet.OmittedRequests != 0 || len(state.Critical) != 5 || len(packet.Truncations) != 0 {
+		t.Fatalf("short session was trimmed: %+v", packet)
+	}
+
+	// More turns: the oldest requests become previews first, in order.
+	for n := 4; n <= 14; n++ {
+		history = append(history, turn(n)...)
+	}
+	packet, state = decode(append(append([]Entry(nil), history...), latest))
+	if packet.OmittedRequests != 0 || len(packet.Truncations) == 0 || packet.Truncations[0].Field != "user.text" || packet.Truncations[0].Entry != 2 {
+		t.Fatalf("oldest request was not previewed first: %+v", packet.Truncations)
+	}
+	for i := 1; i < len(packet.Truncations); i++ {
+		if packet.Truncations[i-1].Entry >= packet.Truncations[i].Entry {
+			t.Fatalf("previews out of order: %+v", packet.Truncations)
+		}
+	}
+	if last := state.Critical[len(state.Critical)-1]; last.User.Text != latest.User.Text {
+		t.Fatal("latest request was shortened")
+	}
+
+	// Many more: the oldest requests are omitted and counted.
+	for n := 15; n <= 80; n++ {
+		history = append(history, turn(n)...)
+	}
+	history = append(history, latest)
+	packet, state = decode(history)
+	if packet.OmittedRequests == 0 || state.OmittedRequests != packet.OmittedRequests {
+		t.Fatalf("no omissions in a long session: %+v", packet)
+	}
+	if state.Critical[0].Kind != EntrySummary || state.Critical[0].Summary.Text != summary.Summary.Text ||
+		state.Critical[1].Number != 2+2*packet.OmittedRequests || state.Critical[len(state.Critical)-1].User.Text != latest.User.Text {
+		t.Fatalf("summary, oldest kept request or latest request wrong: %+v", state.Critical[:2])
+	}
+	for _, marker := range packet.Truncations {
+		if marker.Entry < state.Critical[1].Number {
+			t.Fatalf("marker for an omitted request: %+v", marker)
+		}
+	}
+	if string(mustJSON(t, history[1].User)) == "" || len(history[1].User.Text) <= routingPreviewBytes {
+		t.Fatal("accepted history was changed")
 	}
 }

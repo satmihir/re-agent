@@ -19,7 +19,7 @@ const (
 	jevModel            = "jev-1.13.0"
 	jevEndpoint         = "https://api.typesafe.ai/v1/systemone"
 	jevDeadline         = 2 * time.Second
-	jevMaxRequestBytes  = 8 << 10
+	jevMaxRequestBytes  = 32 << 10
 	jevMaxResponseBytes = 16 << 10
 )
 
