@@ -40,10 +40,13 @@ func TestWelcome_DrawsTheFlaskBesideTheDetails(t *testing.T) {
 	}
 	plain := stripANSI(out.String())
 	for _, want := range []string{"re:agent", "gpt-6-luna · openai · effort low", "/work/repo",
-		"read, write, and execute · 20 steps, 40 tool calls a turn", "/help commands", "❯", "●"} {
+		"read, write, and execute", "/help commands", "❯", "●"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing %q in:\n%s", want, plain)
 		}
+	}
+	if strings.Contains(plain, "steps") || strings.Contains(plain, "tool calls") {
+		t.Fatalf("welcome shows turn budgets:\n%s", plain)
 	}
 	// The colon carries the logo's purple, and the liquid its shades.
 	if !strings.Contains(out.String(), ansiBubble+ansiBold+":") || !strings.Contains(out.String(), "\x1b[48;5;17m") {
