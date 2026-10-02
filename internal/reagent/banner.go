@@ -98,8 +98,7 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 	if cfg.PlanMode {
 		mode += " · plan mode"
 	}
-	modeLine := truncateWidth(fmt.Sprintf("%s · %s steps, %s tool calls a turn",
-		mode, formatLimit(cfg.MaxSteps), formatLimit(cfg.MaxToolCalls)), room)
+	modeLine := truncateWidth(mode, room)
 	if cfg.PlanMode {
 		modeLine = strings.Replace(modeLine, "plan mode", ansiPromptTeal+"plan mode"+"\x1b[22;39m"+ansiDim, 1)
 	}
