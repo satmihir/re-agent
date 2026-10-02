@@ -298,7 +298,7 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 	for _, root := range c.session.approvedWorkspacePaths() {
 		fmt.Fprintf(stderr, "approved   %s (until chat exits)\n", sanitize(root))
 	}
-	fmt.Fprintf(stderr, "budget     %d steps, %d tool calls per turn\n", c.session.cfg.MaxSteps, c.session.cfg.MaxToolCalls)
+	fmt.Fprintf(stderr, "budget     %s steps, %s tool calls per turn\n", formatLimit(c.session.cfg.MaxSteps), formatLimit(c.session.cfg.MaxToolCalls))
 	if c.usage.Known {
 		fmt.Fprintf(stderr, "session    %s · %s in (%s cached) · %s out\n", plural(c.session.Turns(), "turn", "turns"), formatCount(c.usage.InputTokens), formatCount(c.usage.CachedInputTokens), formatCount(c.usage.OutputTokens))
 	} else {

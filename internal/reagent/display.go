@@ -37,7 +37,11 @@ func NewDisplay(w io.Writer) *Display {
 
 // modelStarted shows progress while a model request is in flight.
 func (d *Display) modelStarted(model string, step, maxSteps int) {
-	d.startStatus(fmt.Sprintf("waiting for %s · step %d of %d", sanitize(model), step, maxSteps))
+	status := fmt.Sprintf("waiting for %s · step %d", sanitize(model), step)
+	if maxSteps > 0 {
+		status += fmt.Sprintf(" of %d", maxSteps)
+	}
+	d.startStatus(status)
 }
 
 // modelFinished removes the model-request status line.
@@ -377,7 +381,7 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 		if via != "" {
 			d.headerLine(via)
 		}
-		d.headerLine(fmt.Sprintf("workspace %s · %s · %d steps, %d tool calls per turn", workspace, mode, cfg.MaxSteps, cfg.MaxToolCalls))
+		d.headerLine(fmt.Sprintf("workspace %s · %s · %s steps, %s tool calls per turn", workspace, mode, formatLimit(cfg.MaxSteps), formatLimit(cfg.MaxToolCalls)))
 		if loaded := projectInstructionsLabel(cfg); loaded != "" {
 			d.headerLine(loaded)
 		}

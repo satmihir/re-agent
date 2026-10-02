@@ -58,6 +58,8 @@ Use the loop and response ordering referenced in §2. Keep it in one readable fu
 
 The only run budgets are `max_steps` and `max_tool_calls`, defaulting to 20 and 40. Adopt v1 §7.4's whole-batch and follow-up-step reservation. Invalid/denied calls consume the call budget. Count HTTP attempts separately from logical steps, but do not add another runtime budget for them.
 
+**Amendment (2026-10-01):** Both budgets now default to unlimited rather than finite counts. Keep `--max-steps` and `--max-tool-calls`: zero means unlimited independently for each budget, positive values retain whole-batch and follow-up-step reservation, and negative values are invalid. Counters and trace fields remain numeric, with zero recording an unlimited configured budget; runtime instructions and UI show `unlimited`, and unlimited-step progress has no denominator. This removes only the default model-request and tool-call caps, not cancellation, provider/context limits, tool bounds, or retry rules. Longer single-shot tasks should not stop at an arbitrary count; explicit budgets remain available as opt-in cost controls.
+
 **Relaxation:** Remove the eight-call response cap, the run deadline, the logical model-call deadline, and token budgets; the run's call budget limits batches, one fixed HTTP client timeout (§6.2) bounds a single attempt, and v1 §§7.3 and 15 restore the other limits.
 
 Keep distinct internal reasons for completion, refusal, cancellation, budget exhaustion, provider error, incomplete response, and protocol error, as required by I11. Return the reason with the result; a three-code CLI does not require collapsing the internal distinctions.

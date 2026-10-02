@@ -90,8 +90,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, "--show-context and --trace-file apply to run; chat writes one trace per turn")
 	case command == "run" && options.traceDir != "":
 		return usage(stderr, command, "--trace-dir applies to chat; run takes --trace-file")
-	case options.maxSteps < 1 || options.maxToolCalls < 1:
-		return usage(stderr, command, "--max-steps and --max-tool-calls must be positive")
+	case options.maxSteps < 0 || options.maxToolCalls < 0:
+		return usage(stderr, command, "--max-steps and --max-tool-calls must be nonnegative (0 means unlimited)")
 	case options.script != "" && (options.model != "" || options.provider != ""):
 		return usage(stderr, command, "--scripted replays recorded responses, so it takes no --model or --provider")
 	case options.script != "" && options.showContext:
@@ -275,8 +275,8 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
 	fs.StringVar(&o.traceDir, "trace-dir", "", "write each turn's trace under this directory")
-	fs.IntVar(&o.maxSteps, "max-steps", 200, "maximum model requests in one run")
-	fs.IntVar(&o.maxToolCalls, "max-tool-calls", 400, "maximum accepted tool calls in one run")
+	fs.IntVar(&o.maxSteps, "max-steps", 0, "maximum model requests in one run (0 means unlimited)")
+	fs.IntVar(&o.maxToolCalls, "max-tool-calls", 0, "maximum accepted tool calls in one run (0 means unlimited)")
 	return o
 }
 
