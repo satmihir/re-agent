@@ -296,3 +296,82 @@ func TestOpenAIRequest_ProxyFormStreamsAndOmitsTruncation(t *testing.T) {
 		t.Fatalf("the forms differ beyond stream and truncation:\n%v\n%v", d, p)
 	}
 }
+
+// Every request of a conversation names the same prompt cache, in the body and,
+// through a proxy, in the session-id header the ChatGPT backend routes by; a
+// direct request carries no such header (v0 §6 amendment, 2026-10-02).
+func TestOpenAI_CacheKeyHoldsAcrossAConversation(t *testing.T) {
+	for _, proxied := range []bool{true, false} {
+		replies := []apiReply{okReply(callReply), okReply(textReply)}
+		if proxied {
+			replies = []apiReply{okReply(sse(itemDone(0, streamCall), completed(`[]`))), okReply(streamedTextReply())}
+		}
+		api := newFakeAPI(t, replies...)
+		cfg := testConfig(t)
+		cfg.Provider, cfg.Model, cfg.Proxied = openaiName, DefaultOpenAIModel, proxied
+		trace := NewTrace(io.Discard)
+		model := Model(NewOpenAIModel("sk-test", api.server.URL, NewHTTPClient(), trace))
+		if proxied {
+			model = newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+		}
+		oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "find the marker")
+
+		sent, headers := api.received(), api.receivedHeaders()
+		if len(sent) != 2 {
+			t.Fatalf("proxied %t: %d requests", proxied, len(sent))
+		}
+		var keys [2]string
+		for i, body := range sent {
+			var decoded struct {
+				PromptCacheKey string `json:"prompt_cache_key"`
+			}
+			if err := json.Unmarshal(body, &decoded); err != nil || len(decoded.PromptCacheKey) != 32 {
+				t.Fatalf("proxied %t request %d: key %q, err %v", proxied, i, decoded.PromptCacheKey, err)
+			}
+			keys[i] = decoded.PromptCacheKey
+			want := ""
+			if proxied {
+				want = decoded.PromptCacheKey
+			}
+			if got := headers[i].Get("session-id"); got != want {
+				t.Fatalf("proxied %t request %d: session-id %q, want %q", proxied, i, got, want)
+			}
+		}
+		if keys[0] != keys[1] {
+			t.Fatalf("proxied %t: the key changed between steps: %q, %q", proxied, keys[0], keys[1])
+		}
+	}
+}
+
+// The key ignores the clock-dependent snapshot and follows the prefix: same
+// start, same key; another start (a switch, a compaction, a model) another key.
+func TestOpenAICacheKey_FollowsThePrefix(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model = openaiName, DefaultOpenAIModel
+	user := func(text, snapshot string) Entry {
+		return Entry{Kind: EntryUser, User: &UserTurn{Text: text, Workspace: json.RawMessage(snapshot)}}
+	}
+	request := func(cfg Config, history ...Entry) string {
+		return openAICacheKey(BuildContext(cfg, RequestScope{Step: 1}, history))
+	}
+	base := request(cfg, user("task", `{"date":"2026-10-01"}`))
+	later := request(cfg, user("task", `{"date":"2026-10-02"}`), user("more", `{}`))
+	if base != later {
+		t.Fatal("the snapshot or later history changed the key")
+	}
+	switched := cfg
+	switched.WorkspacePath = "/elsewhere"
+	other := cfg
+	other.Model = "gpt-6.1-sol"
+	summary := Entry{Kind: EntrySummary, Summary: &Summary{Text: "handoff"}}
+	for name, key := range map[string]string{
+		"switch":     request(switched, user("task", `{}`)),
+		"model":      request(other, user("task", `{}`)),
+		"compaction": request(cfg, summary),
+		"new task":   request(cfg, user("other task", `{}`)),
+	} {
+		if key == base {
+			t.Fatalf("%s kept the key", name)
+		}
+	}
+}

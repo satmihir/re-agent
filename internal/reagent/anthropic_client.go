@@ -46,7 +46,7 @@ func (m *AnthropicModel) Generate(ctx context.Context, req ModelRequest) (ModelR
 		return ModelResponse{}, &ModelError{Status: StatusProviderError, Message: err.Error()}
 	}
 
-	status, raw, err := m.transport.call(ctx, req.Scope.Step, body)
+	status, raw, err := m.transport.call(ctx, req.Scope.Step, body, nil)
 	if err != nil {
 		return ModelResponse{}, err
 	}
