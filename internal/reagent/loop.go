@@ -134,8 +134,8 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		r.recordRouteUsage(resp.Usage)
 		if resp.Usage.Known && resp.Usage.InputTokens > 0 {
 			// Scripted responses need not have a valid provider encoding.
-			if body, err := encodeRequest(r.cfg, req); err == nil && len(body) != 0 {
-				s.tokensPerByte = float64(resp.Usage.InputTokens) / float64(len(body))
+			if size, err := admissionRequestBytes(r.cfg, req); err == nil && size > 0 {
+				s.tokensPerByte = float64(resp.Usage.InputTokens) / float64(size)
 			}
 		}
 		if reason := r.validateResponse(resp); reason != "" {

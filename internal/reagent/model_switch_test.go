@@ -376,6 +376,99 @@ func TestModelSwitch_CalibratedAdmissionAndCompactOffer(t *testing.T) {
 	}
 }
 
+func TestModelSwitch_ReasoningBytesDoNotDiluteAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name, source, kind string
+		proxied, excluded  bool
+	}{
+		{"OpenAI direct", "gpt-6.1-sol", "reasoning", false, true},
+		{"OpenAI proxy", "gpt-6.1-sol", "reasoning", true, true},
+		{"Anthropic thinking", "claude-sonnet-5-5", "thinking", false, true},
+		{"Anthropic redacted", "claude-sonnet-5-5", "redacted_thinking", false, true},
+		{"other native data stays counted", "gpt-6.1-sol", "future_state", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newConversation(t, test.source, "medium", 0)
+			s := c.session
+			s.cfg.Proxied = test.proxied
+			previous := autoTestReply(test.source, textBlock(strings.Repeat("x1", 450_000)))
+			// Whitespace and HTML escaping make raw length differ from wire length.
+			item := json.RawMessage(` { "type" : "` + test.kind + `", "data" : "` + strings.Repeat("A", 2_000_000) + `<&>" } `)
+			previous.Native.Items = append(previous.Native.Items[1:], item)
+			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "Keep all evidence."}}, {Kind: EntryAssistant, Assistant: &previous}}
+			before := string(mustJSON(t, s.history))
+			response := autoTestReply(test.source, textBlock("measured"))
+			response.Usage.InputTokens = 800_000
+			model := &requestRecorder{ScriptedModel: NewScriptedModel(response)}
+			s.model = model
+			result, err := s.Turn(context.Background(), "continue", "run", filepath.Join(t.TempDir(), "events.jsonl"))
+			if err != nil || result.Status != StatusCompleted {
+				t.Fatalf("turn: %+v, %v", result, err)
+			}
+			body, err := encodeRequest(s.cfg, model.requests[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			denominator := len(body)
+			if test.excluded {
+				denominator -= len(mustJSON(t, item))
+			}
+			want := float64(response.Usage.InputTokens) / float64(denominator)
+			if s.tokensPerByte != want || string(mustJSON(t, s.history[:2])) != before {
+				t.Fatal("measurement changed native state or counted reasoning bytes")
+			}
+			info, _ := findModel("gpt-6-luna")
+			if s.cfg.Provider == anthropicName {
+				info, _ = findModel("claude-opus-5-5")
+			}
+			cfg := s.cfg
+			cfg.Model, cfg.ReasoningEffort = info.ID, info.Effort
+			// The old whole-body rate admits this same handoff; the corrected rate refuses it.
+			wholeBodyRate := 1.5 * float64(response.Usage.InputTokens) / float64(len(body))
+			if _, _, err := stageModelSwitch(context.Background(), s.history, cfg, info.ContextWindow, wholeBodyRate); err != nil {
+				t.Fatalf("fixture should fit under old rate: %v", err)
+			}
+			var stderr bytes.Buffer
+			c.commandModel(context.Background(), info.ID, nil, &stderr)
+			refused := s.cfg.Model == test.source
+			if refused != test.excluded {
+				t.Fatalf("admission: %s", stderr.String())
+			}
+			if refused && (s.model != model || s.tokensPerByte != want || !strings.Contains(stderr.String(), "/compact then retry /model")) {
+				t.Fatal("refusal lost usable source state")
+			}
+		})
+	}
+}
+
+func TestModelSwitch_CalibrationIgnoresSourceOnlyReasoning(t *testing.T) {
+	c := newConversation(t, "gpt-6.1-sol", "medium", 1)
+	s := c.session
+	s.history[1].Assistant.Native.Items = append(s.history[1].Assistant.Native.Items,
+		json.RawMessage(`{"type":"reasoning","encrypted_content":"`+strings.Repeat("A", 2_000_000)+`"}`))
+	c.commandModel(context.Background(), "gpt-6-luna", nil, io.Discard)
+	if s.handoff == nil {
+		t.Fatal("switch did not create an outgoing view")
+	}
+	before := string(mustJSON(t, s.history))
+	response := autoTestReply("gpt-6-luna", textBlock("done"))
+	response.Usage.InputTokens = 500
+	model := &requestRecorder{ScriptedModel: NewScriptedModel(response)}
+	s.model = model
+	result, err := s.Turn(context.Background(), "continue", "run", filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil || result.Status != StatusCompleted {
+		t.Fatalf("turn: %+v, %v", result, err)
+	}
+	body, err := encodeRequest(s.cfg, model.requests[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := float64(response.Usage.InputTokens) / float64(len(body))
+	if s.tokensPerByte != want || string(mustJSON(t, s.history[:2])) != before {
+		t.Fatal("source-only reasoning changed the outgoing-view measurement or source history")
+	}
+}
+
 func TestModelSwitch_AdmissionUsesReportedGenerationBytes(t *testing.T) {
 	c := newConversation(t, "gpt-6.1-sol", "medium", 0)
 	s := c.session

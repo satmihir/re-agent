@@ -110,9 +110,12 @@ empty fallback. Unresolved tool batches and uncertain effects refuse a handoff.
 a new session; selecting the current model is still a no-op, even with `fresh`.
 
 Carried history must fit the destination encoding and its known catalog window.
-Admission uses the latest successful generation's reported input tokens per
-encoded body byte, with a 1.5× margin and a 0.25-token/byte minimum. Without a
-measurement, or across providers, it uses 0.5 tokens per byte. All estimates add
+Admission uses the latest successful generation's reported input tokens divided
+by encoded body bytes **excluding native reasoning/thinking items**, which the
+handoff omits. The numerator still includes all reported input tokens, so large
+reasoning blobs cannot dilute the text rate. It applies a 1.5× margin and a
+0.25-token/byte minimum. Without a measurement, or across providers, it uses
+0.5 tokens per byte. All estimates add
 16,000 tokens of output headroom; they are not exact token counts or an OpenAI
 output cap. Different content/model tokenizers can invalidate the estimate;
 the provider remains authoritative. Unknown windows refuse a nonempty handoff.

@@ -153,6 +153,37 @@ func stageModelSwitch(ctx context.Context, history []Entry, cfg Config, window i
 	return handoff, size, nil
 }
 
+// v0 §10 amendment (2026-10-02): omitted reasoning must not dilute the text rate.
+func admissionRequestBytes(cfg Config, req ModelRequest) (int, error) {
+	body, err := encodeRequest(cfg, req)
+	if err != nil {
+		return 0, err
+	}
+	size := len(body)
+	for _, entry := range req.History {
+		if entry.Kind != EntryAssistant || entry.Assistant == nil {
+			continue
+		}
+		for _, item := range entry.Assistant.Native.Items {
+			var kind struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(item, &kind); err != nil {
+				return 0, fmt.Errorf("measure native item type: %w", err)
+			}
+			switch kind.Type {
+			case "reasoning", "thinking", "redacted_thinking":
+				encoded, err := json.Marshal(item)
+				if err != nil {
+					return 0, fmt.Errorf("measure native reasoning bytes: %w", err)
+				}
+				size -= len(encoded)
+			}
+		}
+	}
+	return size, nil
+}
+
 // v0 §10 amendment (2026-10-02): a provider change has no matching measurement.
 func (s *Session) admissionRate(provider string) float64 {
 	if provider != s.cfg.Provider || s.tokensPerByte == 0 {
