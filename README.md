@@ -175,21 +175,19 @@ Jev `jev-1.13.0` chooses a joint model/effort route at turn start, after every
 three generations, or on new non-permission tool failure evidence, always after
 complete tool batches. **Model changes are allowed only at user-turn start.**
 Within a run, only the current model's effort pairs are eligible, even on tool
-failure. The configured pair is fallback at turn start; current-model/high is
-conservative fallback within the run. If high is unsupported, the configured
-pair is fallback only on that same model; if the designated fallback cannot be
-admitted, keep the current usable pair. Fewer than two eligible routes means no
-Jev call. Failure evidence triggers reconsideration, not automatic high effort;
-a clear correction can stay low, and direct low-to-high changes are allowed.
-Ordinary effort changes dwell for three generations; failure-driven selection
-of the designated fallback or conservative fallback can override dwell. At most
-three route changes occur per run, after which routing stops and the task
-continues on the current route. Confidence below 0.70 uses fallback; same-model
-effort reductions and model changes to Luna require 0.75. There is no global
-cross-provider capability ranking. These experimental thresholds are not
-calibrated quality claims.
-A router error disables further router attempts for that run; the next user
-turn can try again. Cancellation stops instead of falling back and generating.
+failure. Jev is asked for the cheapest allowed pair that can do the next
+segment well. Admitted pairs form a cost ladder: Luna, then Sol, then any other
+configured model, with each model's efforts in catalog order. This is not a
+capability ranking. Auto selects the first pair whose cumulative Jev
+probability reaches 0.80 (experimental, to be tuned from traces); confidence
+is recorded but does not gate selection. Fallback applies only without a valid
+decision: the configured pair at turn start, the current pair mid-run. Fewer
+than two eligible routes means no Jev call. Tool failure prompts reconsideration,
+not automatic high effort; a failure-driven selection of a higher pair bypasses
+dwell. Other switches dwell for three generations. At most three route changes
+occur per run, after which routing stops and the task continues on its current
+route. A router error disables further router attempts for that run; the next
+user turn can try again. Cancellation stops instead of falling back and generating.
 
 Full destination requests are validated before changes. Incompatible or overfull
 fallback is deferred without discarding evidence. Model changes use the software
