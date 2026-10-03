@@ -681,6 +681,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 		typed, err := input.ReadLine()
 		if errors.Is(err, errInterrupted) {
 			if !interrupted.IsZero() && time.Since(interrupted) < 2*time.Second {
+				fmt.Fprintf(stderr, "session ID: %s · resume: reagent chat --resume %s\n", c.session.ID, c.session.ID)
 				return exitOK
 			}
 			interrupted = time.Now()
