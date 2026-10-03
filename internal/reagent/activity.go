@@ -93,6 +93,10 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 			a.result = "no change"
 			return a
 		}
+		if len(args.Edits) != 0 || len(args.AppendText) != 0 {
+			a.result = editSummary(result)
+			return a
+		}
 		old, new := changedLines(args.OldText, args.NewText)
 		a.result = fmt.Sprintf("+%d -%d", len(new), len(old))
 		a.preview = previewLines(old, new)
@@ -279,7 +283,17 @@ func recapLine(call ToolCall, outcome ToolOutcome) string {
 	}
 	switch call.Name {
 	case "edit_file":
-		return "changed " + callTarget(call)
+		var result editFileResult
+		if json.Unmarshal(outcome.Data, &result) != nil {
+			return "changed " + callTarget(call)
+		}
+		var args editFileArgs
+		json.Unmarshal([]byte(call.Arguments), &args)
+		summary := editSummary(result)
+		if summary == "" || len(args.Edits) == 0 && len(args.AppendText) == 0 {
+			return "changed " + callTarget(call)
+		}
+		return "changed " + callTarget(call) + " (" + summary + ")"
 	case "write_file":
 		var result writeFileResult
 		if json.Unmarshal(outcome.Data, &result) != nil {
@@ -295,6 +309,17 @@ func recapLine(call ToolCall, outcome ToolOutcome) string {
 		return "ran " + callTarget(call)
 	}
 	return ""
+}
+
+func editSummary(result editFileResult) string {
+	var parts []string
+	if result.Edits > 0 {
+		parts = append(parts, plural(result.Edits, "edit", "edits"))
+	}
+	if result.AppendedBytes > 0 {
+		parts = append(parts, "append")
+	}
+	return strings.Join(parts, " + ")
 }
 
 func formatActivitySize(n int) string {

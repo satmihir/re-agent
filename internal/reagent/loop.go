@@ -422,7 +422,7 @@ func argumentSummary(arguments string) string {
 
 	var parts []string
 	for _, key := range keys {
-		if key == "content" {
+		if key == "content" || key == "old_text" || key == "new_text" || key == "edits" || key == "append_text" {
 			continue
 		}
 		if value := fmt.Sprint(fields[key]); len(value) <= 60 {

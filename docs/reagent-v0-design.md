@@ -111,13 +111,13 @@ Events: `run.started` (resolved nonsecret options, instructions, prompt, tools, 
 
 All require write authority, use §4's path rules, reject symlink leaves and directories, read one snapshot under `MaxFileBytes`, and publish by writing a sibling temp file and renaming (permissions preserved). Errors before publication have `effect: none`; publication is `effect: applied`.
 
-- `edit_file(path, expected_sha256, old_text, new_text)`: exactly one match of nonempty `old_text` is replaced (v1 §13.3, §13.5 fields); the result must fit `MaxFileBytes` and contain no NUL. `old_text == new_text` is `invalid_arguments`.
+- `edit_file(path, expected_sha256, old_text, new_text | edits?, append_text?)`: either one `old_text`/`new_text` pair or a nonempty `edits` array of required `{old_text, new_text}` pairs, but not both; `append_text` may stand alone or accompany either form and adds bytes at the end without an implicit newline. Each nonempty `old_text` must occur exactly once in the digest-checked snapshot (overlap-aware), and matched ranges must not overlap. Apply all replacements against that snapshot, then append; any invalid edit, oversized result or NUL fails without publication. Empty `append_text`, no change, and identity edits are `invalid_arguments`; errors for an array edit name its index. Publish once, return the replacement count and appended byte count when nonzero, and remember one new digest.
 - `write_file(path, content, expected_sha256?)`: without a digest the target must be missing and its parent exist; create links a staged file exclusively, mode 0644. With a digest it overwrites an existing regular file. A digest for a missing file is `not_found`; an existing file without one is `invalid_arguments`. Content must be UTF-8 without NUL within `MaxFileBytes`. Returns `operation` create/overwrite, before/after digests, size.
 - `delete_file(path, expected_sha256)`: removes one existing regular file.
 
 **Digests.** `expected_sha256` must be 64 lowercase hex characters, else `invalid_arguments`. A digest matching the current snapshot is accepted. On mismatch, one previously returned for that path by `read_file`, `edit_file` or `write_file` is `stale_file`; any other is `unknown_digest`, naming the current digest. Remembered digests classify errors only; they never authorize a write.
 
-No directory creation, patch format, fuzzy matching, or rooted publication.
+No directory creation, ordered patch format, multi-file patches, fuzzy matching, or rooted publication.
 
 ## 9. `exec`
 
@@ -215,7 +215,7 @@ The v0 milestones (mechanical loop, read tools, visible context, live model, one
 | Exit codes beyond 0, 1, 2 | §18.4 |
 | Strict-schema nullable convention | §10.1 |
 | Trace inspection command | §16.6 |
-| Multi-edit patch surface | §§13.2–13.4 |
+| Ordered patch format and multi-file patches | §§13.2–13.4 |
 | Rooted filesystem protection, FIFO handling | §11.1 |
 | Process groups and signal escalation | §14.3 |
 | Durable trace barriers | §16.5 |
