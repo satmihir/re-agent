@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
@@ -44,11 +45,12 @@ type deleteFileArgs struct {
 }
 
 type writeFileResult struct {
-	Operation    string  `json:"operation"`
-	Path         string  `json:"path"`
-	BeforeSHA256 *string `json:"before_sha256"`
-	AfterSHA256  string  `json:"after_sha256"`
-	SizeBytes    int     `json:"size_bytes"`
+	Operation    string   `json:"operation"`
+	Path         string   `json:"path"`
+	BeforeSHA256 *string  `json:"before_sha256"`
+	AfterSHA256  string   `json:"after_sha256"`
+	SizeBytes    int      `json:"size_bytes"`
+	CreatedDirs  []string `json:"created_dirs,omitempty"`
 }
 
 type deleteFileResult struct {
@@ -61,7 +63,7 @@ func (writeFileTool) Spec() ToolSpec {
 	return ToolSpec{
 		Name: "write_file",
 		Description: "Create a UTF-8 text file, or replace all of an existing file's content. " +
-			"Creating requires the file not to exist, with its parent directory present. " +
+			"Creating requires the file not to exist; missing parent directories are created. " +
 			"Replacing requires expected_sha256 from the latest read_file of that file. " +
 			"Prefer edit_file for changes to part of a file. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
@@ -137,6 +139,17 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		if hasDigest {
 			return failOutcome("not_found", "no such path in the workspace"), nil
 		}
+		// v0 §8: create parents only for a new file, and undo empty ones on failure.
+		created, bad := t.createParents(filepath.Dir(abs))
+		if bad != nil {
+			return *bad, nil
+		}
+		published := false
+		defer func() {
+			if !published {
+				removeEmptyDirs(created)
+			}
+		}()
 		// v0 §8 amendment: a create must not replace a path that appears mid-call.
 		if err := publishNew(abs, []byte(content)); err != nil {
 			if errors.Is(err, os.ErrExist) {
@@ -147,11 +160,15 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		result := writeFileResult{
 			Operation: "create", Path: t.ws.relative(abs), AfterSHA256: digestOf(content), SizeBytes: len(content),
 		}
+		for _, dir := range created {
+			result.CreatedDirs = append(result.CreatedDirs, t.ws.relative(dir))
+		}
 		outcome, err := appliedOutcome(result, t.ws.Root())
 		if err != nil {
 			return ToolOutcome{}, err
 		}
 		t.ws.remember(abs, result.AfterSHA256)
+		published = true
 		return outcome, nil
 	}
 	if err != nil {
@@ -180,6 +197,56 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 	}
 	t.ws.remember(abs, result.AfterSHA256)
 	return outcome, nil
+}
+
+// v0 §8: only create may add directories; each parent must be a real directory.
+func (t writeFileTool) createParents(parent string) ([]string, *ToolOutcome) {
+	rel, err := filepath.Rel(t.ws.Root(), parent)
+	if err != nil || !insidePath(t.ws.Root(), parent) {
+		return nil, failPtr("invalid_path", "parent must be inside the workspace")
+	}
+	var created []string
+	current := t.ws.Root()
+	if rel == "." {
+		return nil, nil
+	}
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if withheld(part) {
+			removeEmptyDirs(created)
+			return nil, failPtr("invalid_path", part+" is not readable")
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.Mkdir(current, 0o755); err != nil {
+				removeEmptyDirs(created)
+				return nil, osOutcome(err)
+			}
+			created = append(created, current)
+			continue
+		}
+		if err != nil {
+			removeEmptyDirs(created)
+			return nil, osOutcome(err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			removeEmptyDirs(created)
+			return nil, failPtr("symlink_target", "parent path is a symlink")
+		}
+		if !info.IsDir() {
+			removeEmptyDirs(created)
+			return nil, failPtr("not_directory", "parent path is not a directory")
+		}
+	}
+	return created, nil
+}
+
+func removeEmptyDirs(created []string) {
+	for i := len(created) - 1; i >= 0; i-- {
+		if err := os.Remove(created[i]); err != nil {
+			break
+		}
+	}
 }
 
 func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcome, error) {
