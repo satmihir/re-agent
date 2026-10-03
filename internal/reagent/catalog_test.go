@@ -11,6 +11,7 @@ func TestModelCatalog_ContextWindows(t *testing.T) {
 		window int64
 	}{
 		{"gpt-6-luna", 1_050_000},
+		{"gpt-6-sol", 1_050_000},
 		{"gpt-6.1-sol", 1_050_000},
 		{"gpt-5.6-luna", 0},
 		{"gpt-5.6-terra", 0},
@@ -75,8 +76,13 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 	if err != nil || byPosition.ID != "gpt-6-luna" {
 		t.Fatalf("position 1 got %+v %v", byPosition, err)
 	}
-	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6.1-sol" {
+	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6-sol" {
 		t.Fatalf("position 2 got %+v %v", sol, err)
+	}
+	for _, choice := range []string{"8", "gpt-6.1-sol"} {
+		if sol, err := selectModel(choice); err != nil || sol.ID != "gpt-6.1-sol" {
+			t.Fatalf("6.1 Sol selection %q got %+v %v", choice, sol, err)
+		}
 	}
 	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", ""} {
 		if _, err := selectModel(choice); err == nil {
@@ -118,7 +124,8 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 
 	for _, want := range []string{
 		"1  gpt-6-luna        openai",
-		"2  gpt-6.1-sol       openai",
+		"2  gpt-6-sol         openai",
+		"8  gpt-6.1-sol       openai",
 		"3  gpt-5.6-luna      openai     current",
 		"5  claude-haiku-4-5  anthropic  no key",
 		"7  claude-opus-5-5   anthropic  no key",
@@ -163,6 +170,7 @@ func TestModelCatalog_EffortSupport(t *testing.T) {
 		{"gpt-5.6-luna", "none,low,medium,high,xhigh,max"},
 		{"gpt-5.6-terra", "none,low,medium,high,xhigh,max"},
 		{"gpt-6-luna", "none,low,medium,high,xhigh,max"},
+		{"gpt-6-sol", "none,low,medium,high,xhigh,max"},
 		{"gpt-6.1-sol", "low,medium,high,xhigh,max"},
 		{"claude-haiku-4-5", ""},
 		{"claude-sonnet-5-5", "low,medium,high,xhigh,max"},

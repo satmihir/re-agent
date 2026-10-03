@@ -99,12 +99,12 @@ func autoSession(t *testing.T, cfg Config, capable, fast Model, api *fakeAPI) *S
 
 func autoConfig(t *testing.T, tool Tool) Config {
 	cfg := testConfig(t, tool)
-	cfg.Provider, cfg.Model, cfg.ReasoningEffort, cfg.WorkspacePath = openaiName, "gpt-6.1-sol", "medium", "/repo"
+	cfg.Provider, cfg.Model, cfg.ReasoningEffort, cfg.WorkspacePath = openaiName, "gpt-6-sol", "medium", "/repo"
 	return cfg
 }
 
 func TestAuto_ModelChangesOnlyBetweenTurnsKeepEvidenceAndCacheUsage(t *testing.T) {
-	for _, fallbackModel := range []string{"gpt-6.1-sol", "claude-sonnet-5-5"} {
+	for _, fallbackModel := range []string{"gpt-6-sol", "claude-sonnet-5-5"} {
 		t.Run(fallbackModel, func(t *testing.T) {
 			runs := 0
 			cfg := autoConfig(t, autoEffectTool{runs: &runs, failUntil: 1})
@@ -189,7 +189,7 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			runs := 0
 			capable := &requestRecorder{ScriptedModel: NewScriptedModel(
-				autoTestReply("gpt-6.1-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6.1-sol", textBlock("done")),
+				autoTestReply("gpt-6-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6-sol", textBlock("done")),
 			)}
 			fast := &requestRecorder{ScriptedModel: NewScriptedModel()}
 			api := newFakeAPI(t, test.reply, test.reply)
@@ -270,7 +270,7 @@ func TestAuto_SwitchLimitStopsRouterCallsNotTheRun(t *testing.T) {
 func TestAuto_FastConfidenceBoundary(t *testing.T) {
 	for _, confidence := range []float64{0.74, 0.75, 0.8} {
 		t.Run(fmt.Sprint(confidence), func(t *testing.T) {
-			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-sol", textBlock("done")))}
+			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-sol", textBlock("done")))}
 			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
 			api := newFakeAPI(t, autoChoice("fast", confidence))
 			s := autoSession(t, autoConfig(t, NewEchoTool()), capable, fast, api)
@@ -394,14 +394,14 @@ func TestAuto_CancelledRouterNeverStartsGeneration(t *testing.T) {
 	s := autoSession(t, autoConfig(t, NewEchoTool()), capable, fast, api)
 	s.auto.jev = newJevClient("fake", server.URL, server.Client())
 	result, err := s.Turn(ctx, "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-	if err != nil || result.Status != StatusCancelled || result.Steps != 0 || len(capable.requests) != 0 || len(fast.requests) != 0 || s.cfg.Model != "gpt-6.1-sol" || result.RouterUsage == nil || result.RouterUsage.Known {
+	if err != nil || result.Status != StatusCancelled || result.Steps != 0 || len(capable.requests) != 0 || len(fast.requests) != 0 || s.cfg.Model != "gpt-6-sol" || result.RouterUsage == nil || result.RouterUsage.Known {
 		t.Fatalf("cancelled routing: %+v, %v", result, err)
 	}
 }
 
 func TestAuto_ManualSelectionPinsAndRejectedSelectionDoesNot(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "")
-	c := newConversation(t, "gpt-6.1-sol", "medium", 0)
+	c := newConversation(t, "gpt-6-sol", "medium", 0)
 	c.commandAuto("on", io.Discard)
 	if c.session.auto == nil || !c.session.auto.enabled {
 		t.Fatal("Auto did not enable")
@@ -412,7 +412,7 @@ func TestAuto_ManualSelectionPinsAndRejectedSelectionDoesNot(t *testing.T) {
 	if !c.session.auto.enabled {
 		t.Fatal("rejected/cancelled selection disabled Auto")
 	}
-	c.commandModel(context.Background(), "gpt-6.1-sol", nil, io.Discard)
+	c.commandModel(context.Background(), "gpt-6-sol", nil, io.Discard)
 	if c.session.auto.enabled {
 		t.Fatal("explicit current-model selection did not pin")
 	}
@@ -460,7 +460,7 @@ func TestAuto_DisabledWithKeyLeavesProviderRequestUnchanged(t *testing.T) {
 func TestAuto_CooldownEndsOnlyAtNextUserTurn(t *testing.T) {
 	runs := 0
 	capable := &requestRecorder{ScriptedModel: NewScriptedModel(
-		autoTestReply("gpt-6.1-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6.1-sol", textBlock("done")), autoTestReply("gpt-6.1-sol", textBlock("next")),
+		autoTestReply("gpt-6-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6-sol", textBlock("done")), autoTestReply("gpt-6-sol", textBlock("next")),
 	)}
 	api := newFakeAPI(t, apiReply{status: 529, body: "overloaded"}, autoChoice("capable", 0.95))
 	s := autoSession(t, autoConfig(t, autoEffectTool{runs: &runs}), capable, NewScriptedModel(), api)
@@ -491,6 +491,40 @@ func TestAuto_OverfullFallbackDefersWithoutDiscardingHistory(t *testing.T) {
 	result, err := s.Turn(context.Background(), "continue", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || s.ID != id || s.cfg.Model != "gpt-6-luna" || string(mustJSON(t, s.history[:2])) != before || len(api.received()) != 0 || s.handoff != nil {
 		t.Fatalf("unsafe capacity fallback: %+v, %v", result, err)
+	}
+}
+
+func TestAuto_CLIExplicitSelectionsOverrideDefaults(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "")
+	for _, test := range []struct {
+		name, env, model, effort string
+		flags                    []string
+	}{
+		{"explicit effort", "", "gpt-6-sol", "high", []string{"--auto", "--reasoning-effort", "high"}},
+		{"explicit 6.1 Sol", "", "gpt-6.1-sol", "low", []string{"--auto", "--model", "gpt-6.1-sol"}},
+		{"environment 6.1 Sol", "gpt-6.1-sol", "gpt-6.1-sol", "low", []string{"--auto"}},
+		{"manual 6.1 Sol", "", "gpt-6.1-sol", "low", []string{"--model", "gpt-6.1-sol"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("REAGENT_MODEL", test.env)
+			api := newFakeAPI(t, okReply(streamedTextReply()))
+			t.Setenv(proxyProviderVariable, openaiName)
+			t.Setenv(proxyURLVariable, api.server.URL)
+			args := []string{"run", "--workspace", t.TempDir(), "--no-project-instructions", "--trace-file", filepath.Join(t.TempDir(), "events.jsonl")}
+			args = append(args, test.flags...)
+			args = append(args, "Report a version")
+			var out, errs bytes.Buffer
+			if code := Main(context.Background(), args, strings.NewReader(""), &out, &errs); code != exitOK {
+				t.Fatalf("CLI: %d, %s", code, errs.String())
+			}
+			if len(api.received()) != 1 {
+				t.Fatal("explicit fallback did not make exactly one generation request")
+			}
+			var request decodedRequest
+			if err := json.Unmarshal(api.received()[0], &request); err != nil || request.Model != test.model || request.Reasoning.Effort != test.effort {
+				t.Fatalf("explicit selection: %+v, %v", request, err)
+			}
+		})
 	}
 }
 
@@ -527,7 +561,7 @@ func TestAuto_DefaultOffAndNoKeyCLIStayOffline(t *testing.T) {
 	if err := json.Unmarshal(api.received()[1], &automatic); err != nil {
 		t.Fatal(err)
 	}
-	if normal.Model != "gpt-6-luna" || automatic.Model != "gpt-6.1-sol" || automatic.Reasoning.Effort != "medium" {
+	if normal.Model != "gpt-6-luna" || automatic.Model != "gpt-6-sol" || automatic.Reasoning.Effort != "medium" {
 		t.Fatal("manual defaults changed or Auto fallback was not explicit")
 	}
 	for _, extra := range []string{"--show-context", "--scripted"} {

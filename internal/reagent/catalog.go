@@ -38,8 +38,9 @@ type modelInfo struct {
 var modelCatalog = []modelInfo{
 	{ID: "gpt-6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
 		Note: "cheapest", ContextWindow: 1_050_000},
-	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "low",
-		Note: "most capable, costs most", ContextWindow: 1_050_000},
+	// v0 §10 amendment (2026-10-02): restore Sol for Auto; retain 6.1 for selection.
+	{ID: "gpt-6-sol", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
+		Note: "more capable, costs more", ContextWindow: 1_050_000},
 	{ID: "gpt-5.6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
 		Note: "cheap"},
 	{ID: "gpt-5.6-terra", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
@@ -50,6 +51,8 @@ var modelCatalog = []modelInfo{
 		Note: "more capable, costs more", ContextWindow: 1_000_000},
 	{ID: "claude-opus-5-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
 		Note: "most capable, costs most", ContextWindow: 1_000_000},
+	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "low",
+		Note: "most capable, costs most", ContextWindow: 1_050_000},
 }
 
 // findModel returns the catalog entry for an exact model id.

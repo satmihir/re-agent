@@ -134,7 +134,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, err.Error())
 	}
 	if options.auto && options.provider == "" && options.model == "" && os.Getenv("REAGENT_MODEL") == "" {
-		options.model = "gpt-6.1-sol"
+		options.model = "gpt-6-sol"
 		explicitEffort := false
 		fs.Visit(func(f *flag.Flag) {
 			if f.Name == "reasoning-effort" {
@@ -291,7 +291,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.showContext, "show-context", false, "print the request the first step would send, then exit")
 	fs.BoolVar(&o.readOnly, "read-only", false, "withhold write and exec tools; only allow reading")
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
-	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6.1-sol/medium")
+	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6-sol/medium")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")
