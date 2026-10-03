@@ -57,7 +57,7 @@ func (c *ShellCommand) trimToResultBudget() {
 		if err == nil && len(encoded) <= MaxResultBytes {
 			return
 		}
-		c.Output = truncateUTF8(c.Output, len(c.Output)/2)
+		c.Output = trimMiddle(c.Output, len(c.Output)/2)
 		c.OutputTruncated = true
 	}
 }

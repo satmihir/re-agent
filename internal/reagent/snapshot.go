@@ -112,7 +112,7 @@ func snapshotGit(ctx context.Context, root string, args ...string) (string, bool
 	out := &boundedWriter{limit: MaxResultBytes}
 	cmd.Stdout = out
 	err := cmd.Run()
-	return string(out.kept), err == nil && out.seen <= MaxResultBytes
+	return string(out.head) + string(out.tail), err == nil && out.seen <= MaxResultBytes
 }
 
 func parseGitStatus(status string) gitState {

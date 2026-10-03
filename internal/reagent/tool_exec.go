@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -237,10 +239,10 @@ func (r *execResult) trimToResultBudget(workspace, code, message string, effect 
 	}
 	for !fits() && (len(r.Stdout) > 0 || len(r.Stderr) > 0) {
 		if len(r.Stdout) >= len(r.Stderr) {
-			r.Stdout = truncateUTF8(r.Stdout, len(r.Stdout)/2)
+			r.Stdout = trimMiddle(r.Stdout, len(r.Stdout)/2)
 			r.StdoutTruncated = true
 		} else {
-			r.Stderr = truncateUTF8(r.Stderr, len(r.Stderr)/2)
+			r.Stderr = trimMiddle(r.Stderr, len(r.Stderr)/2)
 			r.StderrTruncated = true
 		}
 	}
@@ -258,24 +260,37 @@ func childEnvironment() []string {
 	return env
 }
 
-// boundedWriter keeps a prefix of one stream and counts everything it was
-// given. It always accepts the whole write: refusing bytes after the cap would
-// block the command and turn an output limit into a deadlock (v1 §14.4).
+// v0 §9: keep the first and last bytes without blocking a noisy child.
 type boundedWriter struct {
 	mu    sync.Mutex
 	limit int
-	kept  []byte
+	head  []byte
+	tail  []byte
 	seen  int
 }
 
 func (w *boundedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.seen += len(p)
-	if room := w.limit - len(w.kept); room > 0 {
-		w.kept = append(w.kept, p[:min(room, len(p))]...)
+	n := len(p)
+	w.seen += n
+	room := (w.limit+1)/2 - len(w.head)
+	if room > 0 {
+		take := min(room, len(p))
+		w.head = append(w.head, p[:take]...)
+		p = p[take:]
 	}
-	return len(p), nil
+	tailLimit := w.limit / 2
+	if len(p) >= tailLimit {
+		w.tail = append(w.tail[:0], p[len(p)-tailLimit:]...)
+	} else {
+		w.tail = append(w.tail, p...)
+		if extra := len(w.tail) - tailLimit; extra > 0 {
+			copy(w.tail, w.tail[extra:])
+			w.tail = w.tail[:len(w.tail)-extra]
+		}
+	}
+	return n, nil
 }
 
 // report fills in one stream's fields. Output that is not valid UTF-8 is made
@@ -284,10 +299,62 @@ func (w *boundedWriter) report(text *string, seen *int, truncated, replaced *boo
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	*seen = w.seen
-	*truncated = w.seen > len(w.kept)
-	*text = string(w.kept)
-	if !utf8.Valid(w.kept) {
+	*truncated = w.seen > len(w.head)+len(w.tail)
+	if *truncated {
+		*text = joinMiddle(string(w.head), string(w.tail), w.seen-len(w.head)-len(w.tail))
+	} else {
+		*text = string(w.head) + string(w.tail)
+	}
+	if !utf8.ValidString(*text) {
 		*text = strings.ToValidUTF8(*text, "�")
 		*replaced = true
 	}
+}
+
+func joinMiddle(head, tail string, omitted int) string {
+	if omitted == 0 {
+		return head + tail
+	}
+	for i := len(head) - 1; i >= 0 && i >= len(head)-4; i-- {
+		if utf8.RuneStart(head[i]) {
+			if !utf8.FullRuneInString(head[i:]) {
+				omitted += len(head) - i
+				head = head[:i]
+			}
+			break
+		}
+	}
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+		omitted++
+	}
+	return head + fmt.Sprintf("\n…[%d bytes omitted]…\n", omitted) + tail
+}
+
+// trimMiddle preserves an existing omission count when a result needs more space.
+func trimMiddle(text string, budget int) string {
+	head, tail, omitted := text, "", 0
+	if before, after, found := strings.Cut(text, "\n…["); found {
+		if count, rest, ok := strings.Cut(after, " bytes omitted]…\n"); ok {
+			if n, err := strconv.Atoi(count); err == nil {
+				head, tail, omitted = before, rest, n
+			}
+		}
+	}
+	keep := max(0, budget/2)
+	if omitted == 0 {
+		tail = head[max(0, len(head)-keep):]
+		head = head[:min(keep, len(head)-len(tail))]
+		omitted = len(text) - len(head) - len(tail)
+	} else {
+		if len(head) > keep {
+			omitted += len(head) - keep
+			head = head[:keep]
+		}
+		if len(tail) > keep {
+			omitted += len(tail) - keep
+			tail = tail[len(tail)-keep:]
+		}
+	}
+	return joinMiddle(head, tail, omitted)
 }

@@ -62,6 +62,9 @@ func TestShell_OutputTrimmedToResultBudget(t *testing.T) {
 	if len(encoded) > MaxResultBytes || !got.OutputTruncated || got.OutputBytesSeen != 100000 {
 		t.Fatalf("encoded %d bytes, truncated %v, seen %d", len(encoded), got.OutputTruncated, got.OutputBytesSeen)
 	}
+	if !strings.Contains(got.Output, "bytes omitted") || !strings.HasPrefix(got.Output, "xxxxx") || !strings.HasSuffix(got.Output, "xxxxx") {
+		t.Fatalf("record lost head or tail: %q", got.Output)
+	}
 	// Only the record is bounded; the terminal saw everything.
 	if live.Len() != 100000 {
 		t.Fatalf("live output was %d bytes", live.Len())

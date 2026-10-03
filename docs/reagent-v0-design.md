@@ -121,7 +121,7 @@ No directory creation, ordered patch format, multi-file patches, fuzzy matching,
 
 ## 9. `exec`
 
-Explicit `argv`, required `cwd` (an existing workspace-relative directory, `.` for the root, §4 path rules), optional `timeout_ms` (default 2 min; values under 10 s are raised to 10 s and the effective value reported). v1 §14.2's environment allowlist and empty stdin. `exec.CommandContext` with `WaitDelay = 1s`; no process groups. stdout and stderr each go through a bounded writer that keeps the first `MaxResultBytes` and counts the rest; the combined outcome is then fitted to `MaxResultBytes`, streams separate, truncation marked.
+Explicit `argv`, required `cwd` (an existing workspace-relative directory, `.` for the root, §4 path rules), optional `timeout_ms` (default 2 min; values under 10 s are raised to 10 s and the effective value reported). v1 §14.2's environment allowlist and empty stdin. `exec.CommandContext` with `WaitDelay = 1s`; no process groups. stdout and stderr each go through a bounded writer that keeps the first and last halves of `MaxResultBytes` and counts all bytes; the combined outcome is then fitted to `MaxResultBytes` by removing from each stream's middle, streams separate, truncation marked with omitted byte counts at UTF-8 boundaries. `!` records use the same capture and trimming.
 
 A nonzero exit is an ordinary error observation. A timeout, a user cancellation of a started command, or an inherited-pipe wait failure reports `effect: unknown` and stops the run (§3); never report it as clean, and never claim descendants were killed.
 
