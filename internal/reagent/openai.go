@@ -27,14 +27,14 @@ const DefaultReasoningEffort = "low"
 // provider's own token limit can still be lower.
 const MaxRequestBytes = 10 << 20
 
-// responsesRequest is the Responses body v0 sends (v1 §9.2). Every field is
-// fixed except the model, instructions, input, and tools.
+// responsesRequest is the Responses body v0 sends (v1 §9.2).
 type responsesRequest struct {
 	Model             string              `json:"model"`
 	Instructions      string              `json:"instructions"`
 	Input             []any               `json:"input"`
 	Tools             []responsesTool     `json:"tools"`
 	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+	Text              *responsesText      `json:"text,omitempty"`
 	ToolChoice        string              `json:"tool_choice"`
 	ParallelToolCalls bool                `json:"parallel_tool_calls"`
 	Store             bool                `json:"store"`
@@ -47,6 +47,10 @@ type responsesRequest struct {
 // responsesReasoning is encoded once, and only when an effort is configured.
 type responsesReasoning struct {
 	Effort string `json:"effort"`
+}
+
+type responsesText struct {
+	Verbosity string `json:"verbosity"`
 }
 
 // responsesTool is one native function declaration. v0 sets strict to false so
@@ -114,6 +118,12 @@ func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 		reasoning = &responsesReasoning{Effort: req.ReasoningEffort}
 	}
 
+	// v0 §10 amendment (2026-10-02): unknown models have no confirmed verbosity.
+	var text *responsesText
+	if info, found := findModel(req.Model); found && info.Verbosity != "" {
+		text = &responsesText{Verbosity: info.Verbosity}
+	}
+
 	truncation := "disabled"
 	if proxied {
 		truncation = ""
@@ -125,6 +135,7 @@ func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 		Input:             input,
 		Tools:             tools,
 		Reasoning:         reasoning,
+		Text:              text,
 		ToolChoice:        "auto",
 		ParallelToolCalls: true,
 		Store:             false,

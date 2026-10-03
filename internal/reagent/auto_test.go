@@ -103,6 +103,33 @@ func autoConfig(t *testing.T, tool Tool) Config {
 	return cfg
 }
 
+func TestAuto_StagedSwitchAndPostSwitchRequestUseDestinationVerbosity(t *testing.T) {
+	cfg := autoConfig(t, NewEchoTool())
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+	api := newFakeAPI(t, autoChoice("fast", 0.95))
+	s := autoSession(t, cfg, NewScriptedModel(), fast, api)
+	previous := autoTestReply("gpt-6-sol", textBlock("prior answer"))
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "prior task"}}, {Kind: EntryAssistant, Assistant: &previous}}
+
+	candidate, err := stageAutoCandidate(context.Background(), s, s.auto.routes[0])
+	if err != nil || candidate.handoff == nil {
+		t.Fatalf("staging destination: %+v, %v", candidate, err)
+	}
+	staged, err := encodeRequest(candidate.cfg, BuildContext(candidate.cfg, RequestScope{}, []Entry{{Kind: EntryUser, User: &UserTurn{Text: candidate.handoff.Text, Plan: candidate.handoff.Plan}}}))
+	if err != nil || candidate.bytes != len(staged) || !bytes.Contains(staged, []byte(`"text":{"verbosity":"low"}`)) {
+		t.Fatalf("staged request (%d bytes): %s, %v", candidate.bytes, staged, err)
+	}
+
+	result, err := s.Turn(context.Background(), "continue", "run", filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil || result.Status != StatusCompleted || len(fast.requests) != 1 {
+		t.Fatalf("switch: %+v, %v", result, err)
+	}
+	postSwitch, err := EncodeOpenAIRequest(fast.requests[0])
+	if err != nil || fast.requests[0].Model != "gpt-6-luna" || !bytes.Contains(postSwitch, []byte(`"text":{"verbosity":"low"}`)) {
+		t.Fatalf("post-switch request: %s, %v", postSwitch, err)
+	}
+}
+
 func TestAuto_ModelChangesOnlyBetweenTurnsKeepEvidenceAndCacheUsage(t *testing.T) {
 	for _, fallbackModel := range []string{"gpt-6-sol", "claude-sonnet-5-5"} {
 		t.Run(fallbackModel, func(t *testing.T) {

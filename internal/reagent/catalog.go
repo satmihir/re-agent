@@ -20,12 +20,14 @@ var (
 //
 // Efforts lists exactly what the model accepts; an empty list means the model
 // rejects the parameter outright. Effort is what a run uses when this model is
-// chosen and nothing else was asked for.
+// chosen and nothing else was asked for. An empty Verbosity means the
+// parameter is never sent.
 type modelInfo struct {
 	ID            string
 	Provider      string
 	Efforts       []string
 	Effort        string
+	Verbosity     string
 	Note          string
 	ContextWindow int64
 }
@@ -36,14 +38,15 @@ type modelInfo struct {
 // one more thing that can fail at startup, for a menu that changes a few times
 // a year, and --model still accepts any name a provider knows.
 var modelCatalog = []modelInfo{
-	{ID: "gpt-6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
+	// v0 §10 amendment (2026-10-02): catalog OpenAI models request low verbosity.
+	{ID: "gpt-6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
 		Note: "cheapest", ContextWindow: 1_050_000},
 	// v0 §10 amendment (2026-10-02): restore Sol for Auto; retain 6.1 for selection.
-	{ID: "gpt-6-sol", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
+	{ID: "gpt-6-sol", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
 		Note: "more capable, costs more", ContextWindow: 1_050_000},
-	{ID: "gpt-5.6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
+	{ID: "gpt-5.6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
 		Note: "cheap"},
-	{ID: "gpt-5.6-terra", Provider: openaiName, Efforts: openaiEfforts, Effort: "low",
+	{ID: "gpt-5.6-terra", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
 		Note: "more capable, costs more"},
 	{ID: "claude-haiku-4-5", Provider: anthropicName, Efforts: nil, Effort: "",
 		Note: "cheapest; no effort setting", ContextWindow: 200_000},
@@ -51,7 +54,7 @@ var modelCatalog = []modelInfo{
 		Note: "more capable, costs more", ContextWindow: 1_000_000},
 	{ID: "claude-opus-5-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
 		Note: "most capable, costs most", ContextWindow: 1_000_000},
-	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "low",
+	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "low", Verbosity: "low",
 		Note: "most capable, costs most", ContextWindow: 1_050_000},
 }
 
