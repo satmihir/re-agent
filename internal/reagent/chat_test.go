@@ -154,6 +154,9 @@ func TestChat_SecondInterruptExits(t *testing.T) {
 	if got := strings.Count(errs.String(), "Ctrl-C again"); got != 1 {
 		t.Fatalf("warning count %d: %q", got, errs.String())
 	}
+	if !strings.Contains(errs.String(), "session ID: "+session.ID+" · resume: reagent chat --resume "+session.ID) {
+		t.Fatalf("missing exit session ID: %q", errs.String())
+	}
 }
 
 func TestChat_SingleInterruptKeepsTheConversation(t *testing.T) {
