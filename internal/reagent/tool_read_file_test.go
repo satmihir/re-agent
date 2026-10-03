@@ -165,3 +165,23 @@ func TestReadFile_MalformedArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestReadFile_DefaultPageAndExplicitLargerPage(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"large.txt": strings.Repeat("line\n", 600)})
+	for _, tc := range []struct {
+		name, args string
+		count      int
+	}{
+		{"default", `{"path":"large.txt"}`, 250},
+		{"larger", `{"path":"large.txt","max_lines":500}`, 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got readFileResult
+			outcome := runTool(t, NewReadFileTool(ws), tc.args)
+			data(t, outcome, &got)
+			if len(got.Lines) != tc.count || got.NextLine == nil || *got.NextLine != tc.count+1 || got.EOF || !outcome.Truncated {
+				t.Fatalf("got %d lines, next %v, eof %v", len(got.Lines), got.NextLine, got.EOF)
+			}
+		})
+	}
+}

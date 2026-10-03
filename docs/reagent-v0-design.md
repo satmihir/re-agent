@@ -65,7 +65,7 @@ Read files through a limit-plus-one reader. Adopt v1 §11.3's text, digest, line
 | Tool | v1 contract | v0 arguments |
 |---|---|---|
 | `list_files` | §12.1 | `path` required; `offset` default 0; omitted `limit` = as many as fit |
-| `read_file` | §12.2 | `path` required; `start_line` default 1; omitted `max_lines` = as many as fit |
+| `read_file` | §12.2 | `path` required; `start_line` default 1; omitted `max_lines` = 250, still fit to result budget |
 | `search_text` | §12.3 | `path`, `query` required; literal case-sensitive by default; `regex: true` uses Go RE2 per line (reject non-compiling, empty-matching, or null); omitted `max_results` = as many as fit |
 
 Counts are positive when given, offsets nonnegative. An oversized search match is shortened with `preview_truncated`; a byte-limited or skipping search reports `complete: false`. Descriptions state the v0 defaults and claim no v1 maxima.
