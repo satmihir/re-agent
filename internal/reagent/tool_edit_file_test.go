@@ -429,3 +429,42 @@ func TestEditFile_AppendAndResultFields(t *testing.T) {
 		})
 	}
 }
+
+func TestEditFile_MatchErrorsNameLinesWithoutChangingBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, old, code, message string
+		multi                             bool
+	}{
+		{"two matches", "aa\naa\n", "aa", "ambiguous_edit", "old_text occurs 2 times, at lines 1, 2; include enough surrounding text to make it unique", false},
+		{"three matches", "aa\naa\naa\n", "aa", "ambiguous_edit", "old_text occurs 3 times, at lines 1, 2, 3; include enough surrounding text to make it unique", false},
+		{"twelve matches", strings.Repeat("aa\n", 12), "aa", "ambiguous_edit", "old_text occurs at least 10 times, first at lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; include enough surrounding text to make it unique", false},
+		{"overlapping matches", "aaa\n", "aa", "ambiguous_edit", "old_text occurs 2 times, at lines 1, 1; include enough surrounding text to make it unique", false},
+		{"tab difference", "first\nvalue\t= 1\n", "value = 1", "edit_not_found", "old_text does not occur in the file; it matches with different whitespace at line 2 (read that range again and copy it exactly)", false},
+		{"trailing spaces", "first\nvalue  \n", "value\n", "edit_not_found", "old_text does not occur in the file; it matches with different whitespace at line 2 (read that range again and copy it exactly)", false},
+		{"five line cap", strings.Repeat("value\t= 1\n", 7), "value = 1", "edit_not_found", "old_text does not occur in the file; it matches with different whitespace at line 1, 2, 3, 4, 5 (read that range again and copy it exactly)", false},
+		{"no near match", "first\nvalue\n", "missing", "edit_not_found", "old_text does not occur in the file; read the range again before retrying", false},
+		{"indexed edit", "first\nvalue\t= 1\n", "value = 1", "edit_not_found", "edits[1]: old_text does not occur in the file; it matches with different whitespace at line 2 (read that range again and copy it exactly)", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"a.txt": tc.content})
+			digest := readDigest(t, ws, "a.txt")
+			changes := map[string]any{"path": "a.txt", "expected_sha256": digest, "old_text": tc.old, "new_text": "replacement"}
+			if tc.multi {
+				delete(changes, "old_text")
+				delete(changes, "new_text")
+				changes["edits"] = []fileEdit{{OldText: "first", NewText: "changed"}, {OldText: tc.old, NewText: "replacement"}}
+			}
+			args, err := json.Marshal(changes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcome := runTool(t, NewEditFileTool(ws), string(args))
+			if outcome.Code != tc.code || outcome.Message != tc.message || outcome.Effect != EffectNone {
+				t.Fatalf("got %+v, want %s: %s", outcome, tc.code, tc.message)
+			}
+			if fileContent(t, ws, "a.txt") != tc.content || digestOfFile(t, ws, "a.txt") != digest {
+				t.Fatal("failed edit changed file bytes")
+			}
+		})
+	}
+}
