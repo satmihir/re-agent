@@ -57,14 +57,15 @@ func TestAuto_JointCandidateAvailabilityAndDeduplication(t *testing.T) {
 		proxy                         apiProxy
 		want                          int
 	}{
-		{"default", "gpt-6.1-sol", openaiName, "medium", map[string]string{openaiName: "fake"}, apiProxy{}, 6},
+		{"default", "gpt-6-sol", openaiName, "medium", map[string]string{openaiName: "fake"}, apiProxy{}, 6},
 		{"luna high fallback", "gpt-6-luna", openaiName, "high", map[string]string{openaiName: "fake"}, apiProxy{}, 6},
-		{"explicit max retained", "gpt-6.1-sol", openaiName, "max", map[string]string{openaiName: "fake"}, apiProxy{}, 7},
+		{"explicit max retained", "gpt-6-sol", openaiName, "max", map[string]string{openaiName: "fake"}, apiProxy{}, 7},
+		{"explicit 6.1 Sol retained", "gpt-6.1-sol", openaiName, "medium", map[string]string{openaiName: "fake"}, apiProxy{}, 8},
 		{"other model", "claude-sonnet-5-5", anthropicName, "low", map[string]string{openaiName: "fake", anthropicName: "fake"}, apiProxy{}, 8},
 		{"other high deduplicated", "claude-sonnet-5-5", anthropicName, "high", map[string]string{openaiName: "fake", anthropicName: "fake"}, apiProxy{}, 7},
 		{"no OpenAI credentials", "claude-sonnet-5-5", anthropicName, "low", map[string]string{anthropicName: "fake"}, apiProxy{}, 2},
 		{"no effort support", "claude-haiku-4-5", anthropicName, "", map[string]string{anthropicName: "fake"}, apiProxy{}, 1},
-		{"OpenAI proxy", "gpt-6.1-sol", openaiName, "medium", nil, apiProxy{provider: openaiName}, 6},
+		{"OpenAI proxy", "gpt-6-sol", openaiName, "medium", nil, apiProxy{provider: openaiName}, 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := autoConfig(t, NewEchoTool())
@@ -79,6 +80,9 @@ func TestAuto_JointCandidateAvailabilityAndDeduplication(t *testing.T) {
 				info, known := findModel(route.Model)
 				if pairs[pair] || !known || info.ContextWindow == 0 || (route.Effort != "" && !info.accepts(route.Effort)) || !strings.Contains(route.Description, route.Model+" / "+route.Effort) {
 					t.Fatalf("invalid or duplicate pair: %+v", route)
+				}
+				if test.model != "gpt-6.1-sol" && route.Model == "gpt-6.1-sol" {
+					t.Fatal("6.1 Sol offered without explicit selection")
 				}
 				pairs[pair] = true
 			}
@@ -95,7 +99,7 @@ func TestAuto_JointCandidateAvailabilityAndDeduplication(t *testing.T) {
 }
 
 func TestAuto_AllSixPairsSelectedInOneDecision(t *testing.T) {
-	for _, model := range []string{"gpt-6-luna", "gpt-6.1-sol"} {
+	for _, model := range []string{"gpt-6-luna", "gpt-6-sol"} {
 		for _, effort := range []string{"low", "medium", "high"} {
 			t.Run(model+"/"+effort, func(t *testing.T) {
 				generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply(model, textBlock("done")))}
@@ -205,7 +209,7 @@ func TestAuto_UnsupportedFallbackRefusesEnablement(t *testing.T) {
 		{"gpt-5.6-luna", openaiName, "medium", map[string]string{openaiName: "fake"}},
 		{"gpt-6.1-sol", openaiName, "none", map[string]string{openaiName: "fake"}},
 		{"claude-haiku-4-5", anthropicName, "high", map[string]string{anthropicName: "fake"}},
-		{"gpt-6.1-sol", openaiName, "medium", nil},
+		{"gpt-6-sol", openaiName, "medium", nil},
 	} {
 		cfg := autoConfig(t, NewEchoTool())
 		cfg.Model, cfg.Provider, cfg.ReasoningEffort = test.model, test.provider, test.effort

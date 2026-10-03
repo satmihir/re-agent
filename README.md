@@ -135,17 +135,21 @@ go run ./cmd/reagent run --auto --workspace ./repo "Fix the bug and run the test
 ```
 
 Without an explicit provider/model or `REAGENT_MODEL`, `--auto` starts with
-`gpt-6.1-sol / medium` as fallback. An explicit effort still wins. Otherwise the
+`gpt-6-sol / medium` as fallback. An explicit effort still wins. Otherwise the
 configured model/effort is the fallback; Auto requires a supported catalog pair
-with a known window. Auto offers **Luna and Sol at low, medium and high effort**
-when supported and usable with the process's OpenAI credentials or proxy:
+with a known window. Auto offers **`gpt-6-luna` and `gpt-6-sol` at low, medium
+and high effort** when supported and usable with the process's OpenAI
+credentials or proxy:
 six default pairs, selected in one joint Jev decision. Low targets clear mechanical
 work, medium bounded multi-step reasoning, and high difficult diagnosis and subtle
 invariants. These are experimental rubrics, not measured capability rankings;
 Luna/high is not assumed to outrank Sol/low. The configured fallback is retained
 and deduplicated; a different configured model also contributes its high pair
 when supported (at most eight pairs). A sole candidate or missing TypeSafe key
-needs no router calls. Manual defaults are unchanged.
+needs no router calls. `gpt-6.1-sol` remains in the model picker and accepts
+explicit selection with `--model gpt-6.1-sol` or `/model gpt-6.1-sol`; it is not
+a standard Auto candidate, but can be an explicitly configured fallback.
+Manual defaults are unchanged.
 
 In chat, `/auto` reports state, `/auto on` enables routing with the current
 manual pair as fallback, and `/auto off` pins the current model/effort. Successful

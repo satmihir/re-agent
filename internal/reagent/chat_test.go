@@ -789,7 +789,7 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.session.cfg.Model != modelCatalog[1].ID || c.session != before || c.session.Turns() != 1 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.session.cfg.Model, out.String())
 	}
-	if len(c.session.history) != 2 || c.session.handoff == nil || !strings.Contains(errs.String(), "switched to gpt-6.1-sol") || !strings.Contains(errs.String(), "carried 2 entries") {
+	if len(c.session.history) != 2 || c.session.handoff == nil || !strings.Contains(errs.String(), "switched to gpt-6-sol") || !strings.Contains(errs.String(), "carried 2 entries") {
 		t.Fatalf("stderr: %s", errs.String())
 	}
 }
