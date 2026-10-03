@@ -1,6 +1,7 @@
 package reagent
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,14 +20,17 @@ type statusLine struct {
 
 // Display writes harness presentation output for a session.
 type Display struct {
-	mu      sync.Mutex
-	w       io.Writer
-	styled  bool
-	live    bool
-	tick    time.Duration
-	status  *statusLine
-	printed bool
-	recap   []string
+	mu        sync.Mutex
+	w         io.Writer
+	styled    bool
+	live      bool
+	tick      time.Duration
+	status    *statusLine
+	printed   bool
+	recap     []string
+	readFiles map[[2]string]bool
+	searches  int
+	listings  int
 }
 
 // NewDisplay creates a display for w.
@@ -133,6 +137,9 @@ func (d *Display) beginTurn() {
 	defer d.mu.Unlock()
 	d.printed = false
 	d.recap = nil
+	d.readFiles = nil
+	d.searches = 0
+	d.listings = 0
 }
 func (d *Display) note(text string) {
 	text = "  · " + strings.ReplaceAll(sanitize(text), "\n", "\n    ")
@@ -143,10 +150,29 @@ func (d *Display) note(text string) {
 }
 func (d *Display) toolFinished(call ToolCall, outcome ToolOutcome) {
 	d.stopStatus()
-	a := describeActivity(call, outcome)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	fmt.Fprint(d.w, a.render(d.styled, d.columns()))
+	// v0 §10 amendment (2026-10-02): successful browsing shares one turn summary.
+	if outcome.OK {
+		switch call.Name {
+		case "read_file":
+			var args readFileArgs
+			if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+				if d.readFiles == nil {
+					d.readFiles = make(map[[2]string]bool)
+				}
+				d.readFiles[[2]string{outcome.Workspace, args.Path}] = true
+				return
+			}
+		case "search_text":
+			d.searches++
+			return
+		case "list_files":
+			d.listings++
+			return
+		}
+	}
+	fmt.Fprint(d.w, describeActivity(call, outcome).render(d.styled, d.columns()))
 	d.printed = true
 	if recap := recapLine(call, outcome); recap != "" {
 		d.recap = append(d.recap, recap)
@@ -207,6 +233,23 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 		summary = markText + ansiDim + summary[len(markText):] + ansiReset
 	}
 	fmt.Fprintln(d.w, summary)
+	var reads []string
+	if len(d.readFiles) > 0 {
+		reads = append(reads, "read "+plural(len(d.readFiles), "file", "files"))
+	}
+	if d.searches > 0 {
+		reads = append(reads, plural(d.searches, "search", "searches"))
+	}
+	if d.listings > 0 {
+		reads = append(reads, plural(d.listings, "listing", "listings"))
+	}
+	if len(reads) > 0 {
+		line := "  ✓ " + strings.Join(reads, " · ")
+		if d.styled {
+			line = "  " + styleMark(markOK, "✓") + ansiDim + " " + strings.Join(reads, " · ") + ansiReset
+		}
+		fmt.Fprintln(d.w, line)
+	}
 	if result.Reason != "" {
 		reason := result.Reason
 		if reason == "no_followup_step" {
