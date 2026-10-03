@@ -166,3 +166,14 @@ func TestEncodeAnthropic_ShellCommandJoinsTheNextUserMessage(t *testing.T) {
 		t.Fatalf("cache control on %+v", blocks)
 	}
 }
+
+func TestShell_LongCommandDoesNotHangWhenOutputCannotFit(t *testing.T) {
+	command := "echo out # " + strings.Repeat("x", 40*1024)
+	got, err := runShellCommand(context.Background(), t.TempDir(), command, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.OutputTruncated || got.OutputBytesSeen != 4 || got.Output != "" {
+		t.Fatalf("got output %q, truncated=%v, seen=%d", got.Output, got.OutputTruncated, got.OutputBytesSeen)
+	}
+}

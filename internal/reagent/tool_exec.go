@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -158,11 +157,11 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 		Argv: a.Argv, ResolvedExecutable: command.Path, Cwd: a.Cwd,
 		DurationMS: time.Since(started).Milliseconds(), TimeoutMS: timeout.Milliseconds(),
 	}
-	stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
-	stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
+	stdoutText := stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
+	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
 	code, message, effect := classifyRun(parent, deadline, runErr, &result)
-	result.trimToResultBudget(t.ws.Root(), code, message, effect)
+	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText)
 
 	outcome, err := workspaceOutcome(result, t.ws.Root())
 	if err != nil {
@@ -230,7 +229,7 @@ func exitStatus(exitErr *exec.ExitError) (*int, *string) {
 
 // trimToResultBudget shortens captured output until the whole encoded outcome
 // fits, always at a rune boundary and always marking what it cut (v0 §9).
-func (r *execResult) trimToResultBudget(workspace, code, message string, effect EffectState) {
+func (r *execResult) trimToResultBudget(workspace, code, message string, effect EffectState, stdout, stderr *middleOutput) {
 	fits := func() bool {
 		outcome, err := workspaceOutcome(*r, workspace)
 		outcome.OK, outcome.Code, outcome.Message, outcome.Effect = code == "ok", code, message, effect
@@ -239,10 +238,18 @@ func (r *execResult) trimToResultBudget(workspace, code, message string, effect 
 	}
 	for !fits() && (len(r.Stdout) > 0 || len(r.Stderr) > 0) {
 		if len(r.Stdout) >= len(r.Stderr) {
-			r.Stdout = trimMiddle(r.Stdout, len(r.Stdout)/2)
+			before := len(r.Stdout)
+			r.Stdout = stdout.trim(before / 2)
+			if len(r.Stdout) >= before {
+				r.Stdout = ""
+			}
 			r.StdoutTruncated = true
 		} else {
-			r.Stderr = trimMiddle(r.Stderr, len(r.Stderr)/2)
+			before := len(r.Stderr)
+			r.Stderr = stderr.trim(before / 2)
+			if len(r.Stderr) >= before {
+				r.Stderr = ""
+			}
 			r.StderrTruncated = true
 		}
 	}
@@ -293,68 +300,68 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// report fills in one stream's fields. Output that is not valid UTF-8 is made
-// displayable and flagged, rather than corrupting the result's JSON.
-func (w *boundedWriter) report(text *string, seen *int, truncated, replaced *bool) {
+// The omitted count stays separate from command text, which can contain the marker.
+type middleOutput struct {
+	head, tail string
+	omitted    int
+}
+
+// report fills one stream's fields and retains its pieces for further trimming.
+func (w *boundedWriter) report(text *string, seen *int, truncated, replaced *bool) middleOutput {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	*seen = w.seen
 	*truncated = w.seen > len(w.head)+len(w.tail)
+	m := middleOutput{head: string(w.head), tail: string(w.tail)}
 	if *truncated {
-		*text = joinMiddle(string(w.head), string(w.tail), w.seen-len(w.head)-len(w.tail))
-	} else {
-		*text = string(w.head) + string(w.tail)
+		m.omitted = w.seen - len(w.head) - len(w.tail)
+		m.render()
 	}
-	if !utf8.ValidString(*text) {
-		*text = strings.ToValidUTF8(*text, "�")
+	if !utf8.ValidString(m.head) || !utf8.ValidString(m.tail) {
+		m.head = strings.ToValidUTF8(m.head, "�")
+		m.tail = strings.ToValidUTF8(m.tail, "�")
 		*replaced = true
 	}
+	*text = m.render()
+	return m
 }
 
-func joinMiddle(head, tail string, omitted int) string {
-	if omitted == 0 {
-		return head + tail
+func (m *middleOutput) render() string {
+	if m.omitted == 0 {
+		return m.head + m.tail
 	}
-	for i := len(head) - 1; i >= 0 && i >= len(head)-4; i-- {
-		if utf8.RuneStart(head[i]) {
-			if !utf8.FullRuneInString(head[i:]) {
-				omitted += len(head) - i
-				head = head[:i]
+	for i := len(m.head) - 1; i >= 0 && i >= len(m.head)-4; i-- {
+		if utf8.RuneStart(m.head[i]) {
+			if !utf8.FullRuneInString(m.head[i:]) {
+				m.omitted += len(m.head) - i
+				m.head = m.head[:i]
 			}
 			break
 		}
 	}
-	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
-		tail = tail[1:]
-		omitted++
+	for len(m.tail) > 0 && !utf8.RuneStart(m.tail[0]) {
+		m.tail = m.tail[1:]
+		m.omitted++
 	}
-	return head + fmt.Sprintf("\n…[%d bytes omitted]…\n", omitted) + tail
+	return m.head + fmt.Sprintf("\n…[%d bytes omitted]…\n", m.omitted) + m.tail
 }
 
-// trimMiddle preserves an existing omission count when a result needs more space.
-func trimMiddle(text string, budget int) string {
-	head, tail, omitted := text, "", 0
-	if before, after, found := strings.Cut(text, "\n…["); found {
-		if count, rest, ok := strings.Cut(after, " bytes omitted]…\n"); ok {
-			if n, err := strconv.Atoi(count); err == nil {
-				head, tail, omitted = before, rest, n
-			}
-		}
-	}
+func (m *middleOutput) trim(budget int) string {
 	keep := max(0, budget/2)
-	if omitted == 0 {
-		tail = head[max(0, len(head)-keep):]
-		head = head[:min(keep, len(head)-len(tail))]
-		omitted = len(text) - len(head) - len(tail)
+	if m.omitted == 0 {
+		text := m.head + m.tail
+		m.head = text[:min(keep, len(text))]
+		m.tail = text[max(len(m.head), len(text)-keep):]
+		m.omitted = len(text) - len(m.head) - len(m.tail)
 	} else {
-		if len(head) > keep {
-			omitted += len(head) - keep
-			head = head[:keep]
+		if len(m.head) > keep {
+			m.omitted += len(m.head) - keep
+			m.head = m.head[:keep]
 		}
-		if len(tail) > keep {
-			omitted += len(tail) - keep
-			tail = tail[len(tail)-keep:]
+		if len(m.tail) > keep {
+			m.omitted += len(m.tail) - keep
+			m.tail = m.tail[len(m.tail)-keep:]
 		}
 	}
-	return joinMiddle(head, tail, omitted)
+	return m.render()
 }

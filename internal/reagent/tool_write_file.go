@@ -139,10 +139,19 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		if hasDigest {
 			return failOutcome("not_found", "no such path in the workspace"), nil
 		}
-		// v0 §8: create parents only for a new file, and undo empty ones on failure.
-		created, bad := t.createParents(filepath.Dir(abs))
-		if bad != nil {
-			return *bad, nil
+		// v0 §8: preserve existing-parent behavior; create only missing parents.
+		parent := filepath.Dir(abs)
+		parentInfo, err := os.Stat(parent)
+		var created []string
+		if errors.Is(err, os.ErrNotExist) {
+			created, bad = t.createParents(parent)
+			if bad != nil {
+				return *bad, nil
+			}
+		} else if err != nil {
+			return *osOutcome(err), nil
+		} else if !parentInfo.IsDir() {
+			return failOutcome("not_directory", "parent path is not a directory"), nil
 		}
 		published := false
 		defer func() {
@@ -199,7 +208,7 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 	return outcome, nil
 }
 
-// v0 §8: only create may add directories; each parent must be a real directory.
+// v0 §8: missing parents cannot be created through symlinked components.
 func (t writeFileTool) createParents(parent string) ([]string, *ToolOutcome) {
 	rel, err := filepath.Rel(t.ws.Root(), parent)
 	if err != nil || !insidePath(t.ws.Root(), parent) {

@@ -436,12 +436,43 @@ func TestExec_CaptureKeepsBothEndsAndValidUTF8(t *testing.T) {
 
 func TestExec_BudgetTrimPreservesEndsAndOmissionCount(t *testing.T) {
 	input := "START" + strings.Repeat("x", 100) + "END"
-	got := trimMiddle(input, 20)
+	output := middleOutput{head: input}
+	got := output.trim(20)
 	if got != "STARTxxxxx\n…[88 bytes omitted]…\nxxxxxxxEND" {
 		t.Fatalf("first trim: %q", got)
 	}
-	got = trimMiddle(got, 10)
+	got = output.trim(10)
 	if got != "START\n…[98 bytes omitted]…\nxxEND" {
 		t.Fatalf("second trim: %q", got)
+	}
+}
+
+func TestExec_LargeArgvDoesNotHangWhenStreamsCannotFit(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	script := "echo out; echo err >&2 # " + strings.Repeat("x", 40*1024)
+	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell(script), ".", 10000))
+	var got execResult
+	data(t, outcome, &got)
+	if got.ExitCode == nil || *got.ExitCode != 0 || !got.StdoutTruncated || !got.StderrTruncated || got.StdoutBytesSeen != 4 || got.StderrBytesSeen != 4 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestExec_LiteralMarkerInOutputIsNotParsedAsOmission(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	marker := "\n…[5 bytes omitted]…\n"
+	prefix := "FIRST" + marker + strings.Repeat("x", MaxResultBytes*2)
+	args, err := json.Marshal(map[string]any{"argv": []string{"/bin/sh", "-c", "cat payload"}, "cwd": "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Root(), "payload"), []byte(prefix+"LAST"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome := runTool(t, NewExecTool(ws), string(args))
+	var got execResult
+	data(t, outcome, &got)
+	if !strings.HasPrefix(got.Stdout, "FIRST"+marker) || !strings.HasSuffix(got.Stdout, "LAST") || !got.StdoutTruncated {
+		t.Fatalf("lost literal marker or tail: %q", got.Stdout)
 	}
 }

@@ -341,7 +341,7 @@ func TestWriteFile_RefusesSymlinkedAndWithheldParents(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	for _, tc := range []struct{ name, path, code string }{
-		{"symlink", "alias/new.txt", "symlink_target"},
+		{"symlink with missing parent", "alias/newdir/new.txt", "symlink_target"},
 		{"withheld git", "outer/.git/new.txt", "invalid_path"},
 		{"withheld env", "outer/.env/new.txt", "invalid_path"},
 		{"outside", "../outside/new.txt", "invalid_path"},
@@ -359,6 +359,11 @@ func TestWriteFile_RefusesSymlinkedAndWithheldParents(t *testing.T) {
 	}
 	if fileContent(t, ws, "real/keep") != "ok" {
 		t.Fatal("symlink target changed")
+	}
+	var created writeFileResult
+	data(t, runTool(t, NewWriteFileTool(ws), `{"path":"alias/new.txt","content":"hi"}`), &created)
+	if fileContent(t, ws, "real/new.txt") != "hi" || len(created.CreatedDirs) != 0 {
+		t.Fatalf("existing symlinked parent should still work: %+v", created)
 	}
 }
 

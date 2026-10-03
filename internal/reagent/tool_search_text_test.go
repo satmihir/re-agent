@@ -350,3 +350,15 @@ func TestSearchText_MultiplePathsShareResultBudget(t *testing.T) {
 		t.Fatalf("got %+v", limited)
 	}
 }
+
+func TestSearchText_SymlinkedParentAndWalkedFileDoNotDuplicate(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"real/a.txt": "hit\n"})
+	if err := os.Symlink("real", filepath.Join(ws.Root(), "alias")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	var got searchTextResult
+	data(t, runTool(t, NewSearchTextTool(ws), `{"paths":["alias/a.txt","real/a.txt","real"],"query":"hit"}`), &got)
+	if got.FilesScanned != 1 || matchLocations(got.Matches) != "alias/a.txt:1" || !got.Complete {
+		t.Fatalf("got %+v", got)
+	}
+}

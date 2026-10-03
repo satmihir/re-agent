@@ -44,20 +44,24 @@ func runShellCommand(ctx context.Context, dir, command string, live io.Writer) (
 		return ShellCommand{}, runErr
 	}
 	record.ExitCode, record.Signal = exitStatus(exitErr)
-	captured.report(&record.Output, &record.OutputBytesSeen, &record.OutputTruncated, &record.EncodingReplaced)
-	record.trimToResultBudget()
+	outputText := captured.report(&record.Output, &record.OutputBytesSeen, &record.OutputTruncated, &record.EncodingReplaced)
+	record.trimToResultBudget(&outputText)
 	return record, nil
 }
 
 // trimToResultBudget holds the encoded record to the size of a tool outcome,
 // cutting output at a rune boundary and marking the cut.
-func (c *ShellCommand) trimToResultBudget() {
+func (c *ShellCommand) trimToResultBudget(output *middleOutput) {
 	for len(c.Output) > 0 {
 		encoded, err := json.Marshal(c)
 		if err == nil && len(encoded) <= MaxResultBytes {
 			return
 		}
-		c.Output = trimMiddle(c.Output, len(c.Output)/2)
+		before := len(c.Output)
+		c.Output = output.trim(before / 2)
+		if len(c.Output) >= before {
+			c.Output = ""
+		}
 		c.OutputTruncated = true
 	}
 }

@@ -166,7 +166,11 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 			continue
 		}
 		// Explicitly named files report read errors instead of silent skips (v1 §12.3).
-		if s.alreadySeen(abs) {
+		canonical, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return *osOutcome(err), nil
+		}
+		if s.alreadySeen(canonical) {
 			continue
 		}
 		snap, bad := readSnapshot(abs)
@@ -181,6 +185,12 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 // walk searches a directory tree in name order, skipping what it cannot read
 // and recording that it did so.
 func (t searchTextTool) walk(root string, s *scan) {
+	// WalkDir does not follow directory symlinks; resolve this root only once.
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		s.skip()
+		return
+	}
 	filepath.WalkDir(root, func(abs string, entry fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -199,7 +209,12 @@ func (t searchTextTool) walk(root string, s *scan) {
 			s.skip()
 			return nil
 		}
-		if s.alreadySeen(abs) {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			s.skip()
+			return nil
+		}
+		if s.alreadySeen(filepath.Join(canonicalRoot, rel)) {
 			return nil
 		}
 		snap, bad := readSnapshot(abs)
@@ -230,11 +245,7 @@ type scan struct {
 	seen       map[string]bool
 }
 
-func (s *scan) alreadySeen(abs string) bool {
-	canonical, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		canonical = abs
-	}
+func (s *scan) alreadySeen(canonical string) bool {
 	if s.seen[canonical] {
 		return true
 	}
