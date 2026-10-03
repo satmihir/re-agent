@@ -107,6 +107,21 @@ func TestActivity_FileWriterRecap(t *testing.T) {
 	}
 }
 
+func TestActivity_MultiEditSummaries(t *testing.T) {
+	for _, tc := range []struct{ args, result, summary string }{
+		{`{"path":"a.go","edits":[{"old_text":"private secret","new_text":"also secret"},{"old_text":"x","new_text":"y"},{"old_text":"m","new_text":"n"}],"append_text":"secret append"}`, `{"changed":true,"edits":3,"appended_bytes":13}`, "3 edits + append"},
+		{`{"path":"a.go","append_text":"secret append"}`, `{"changed":true,"appended_bytes":13}`, "append"},
+		{`{"path":"a.go","edits":[{"old_text":"private secret","new_text":"also secret"}]}`, `{"changed":true,"edits":1}`, "1 edit"},
+	} {
+		call := ToolCall{Name: "edit_file", Arguments: tc.args}
+		out := ToolOutcome{OK: true, Effect: EffectApplied, Data: []byte(tc.result)}
+		row, recap := describeActivity(call, out).render(false, 0), recapLine(call, out)
+		if row != "  ✓ edit_file a.go → "+tc.summary+"\n" || recap != "changed a.go ("+tc.summary+")" || strings.Contains(row+recap, "secret") || strings.Contains(argumentSummary(tc.args), "secret") {
+			t.Fatalf("row %q, recap %q", row, recap)
+		}
+	}
+}
+
 func TestActivity_RegexSearchTarget(t *testing.T) {
 	regex := ToolCall{Name: "search_text", Arguments: `{"query":"a|b","regex":true,"path":"."}`}
 	if got, want := callTarget(regex), "/a|b/ in ."; got != want {

@@ -348,3 +348,84 @@ func TestEditFile_FailedPublicationAppliesNothing(t *testing.T) {
 		t.Fatal("the file changed despite a failed publication")
 	}
 }
+
+func TestEditFile_MultipleSnapshotEdits(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "alpha beta gamma"})
+	before := readDigest(t, ws, "a.txt")
+	call := `{"path":"a.txt","expected_sha256":"` + before + `","edits":[{"old_text":"gamma","new_text":"G"},{"old_text":"alpha","new_text":"A"},{"old_text":"beta","new_text":"B"}]}`
+	var got editFileResult
+	data(t, runTool(t, NewEditFileTool(ws), call), &got)
+	if content := fileContent(t, ws, "a.txt"); content != "A B G" || got.BeforeSHA256 != before || got.AfterSHA256 != digestOfFile(t, ws, "a.txt") || got.Edits != 3 || got.AppendedBytes != 0 || got.SizeBytes != len(content) {
+		t.Fatalf("result %+v, content %q", got, content)
+	}
+	if !ws.returned(filepath.Join(ws.Root(), "a.txt"), before) || !ws.returned(filepath.Join(ws.Root(), "a.txt"), got.AfterSHA256) {
+		t.Fatal("digests not remembered")
+	}
+	outcome := runTool(t, NewEditFileTool(ws), call)
+	if outcome.Code != "stale_file" {
+		t.Fatalf("old digest: %+v", outcome)
+	}
+}
+
+func TestEditFile_MultiEditFailuresAreAtomic(t *testing.T) {
+	for _, tc := range []struct{ name, content, change, code, message string }{
+		{"snapshot not cascade", "a b", `"edits":[{"old_text":"a","new_text":"z"},{"old_text":"z","new_text":"y"}]`, "edit_not_found", "edits[1]"},
+		{"missing second", "a b", `"edits":[{"old_text":"a","new_text":"z"},{"old_text":"missing","new_text":"y"}]`, "edit_not_found", "edits[1]"},
+		{"ambiguous second", "a bb bb", `"edits":[{"old_text":"a","new_text":"z"},{"old_text":"bb","new_text":"y"}]`, "ambiguous_edit", "edits[1]"},
+		{"overlap", "abcde", `"edits":[{"old_text":"abc","new_text":"x"},{"old_text":"bcd","new_text":"y"}]`, "invalid_arguments", "edits[0] and edits[1]"},
+		{"both forms", "abcde", `"old_text":"a","new_text":"b","edits":[{"old_text":"c","new_text":"d"}]`, "invalid_arguments", "edits[0]"},
+		{"no change", "abcde", ``, "invalid_arguments", "change"},
+		{"empty edits", "abcde", `"edits":[]`, "invalid_arguments", "edits"},
+		{"empty append", "abcde", `"append_text":""`, "invalid_arguments", "append_text"},
+		{"null append", "abcde", `"append_text":null`, "invalid_arguments", "append_text"},
+		{"null edits", "abcde", `"edits":null`, "invalid_arguments", "edits"},
+		{"null old", "abcde", `"old_text":null,"new_text":"x"`, "invalid_arguments", "old_text"},
+		{"both forms with empty old", "abcde", `"old_text":"","new_text":"x","edits":[{"old_text":"a","new_text":"b"}]`, "invalid_arguments", "edits[0]"},
+		{"identity", "abcde", `"edits":[{"old_text":"a","new_text":"b"},{"old_text":"c","new_text":"c"}]`, "invalid_arguments", "edits[1]"},
+		{"empty anchor", "abcde", `"edits":[{"old_text":"a","new_text":"b"},{"old_text":"","new_text":"c"}]`, "invalid_arguments", "edits[1]"},
+		{"missing new", "abcde", `"edits":[{"old_text":"a"}]`, "invalid_arguments", "edits[0]"},
+		{"unknown nested", "abcde", `"edits":[{"old_text":"a","new_text":"b","extra":1}]`, "invalid_arguments", "extra"},
+		{"oversize", strings.Repeat("x\n", (MaxFileBytes-2)/2) + "a", `"edits":[{"old_text":"a","new_text":"aaa"}],"append_text":"z"`, "file_too_large", ""},
+		{"binary", "abcde", `"edits":[{"old_text":"a","new_text":"z"}],"append_text":"\u0000"`, "binary_file", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"a.txt": tc.content})
+			before := readDigest(t, ws, "a.txt")
+			args := `{"path":"a.txt","expected_sha256":"` + before + `"`
+			if tc.change != "" {
+				args += "," + tc.change
+			}
+			outcome := runTool(t, NewEditFileTool(ws), args+`}`)
+			if outcome.Code != tc.code || outcome.Effect != EffectNone || !strings.Contains(outcome.Message, tc.message) {
+				t.Fatalf("got %+v, want %s containing %q", outcome, tc.code, tc.message)
+			}
+			if fileContent(t, ws, "a.txt") != tc.content || digestOfFile(t, ws, "a.txt") != before {
+				t.Fatal("rejected edit changed bytes")
+			}
+		})
+	}
+}
+
+func TestEditFile_AppendAndResultFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, change, want string
+		edits, appended    int
+	}{
+		{"append only", `"append_text":"\nend"`, "start\nend", 0, 4},
+		{"edit and append", `"edits":[{"old_text":"start","new_text":"new"}],"append_text":"!"`, "new!", 1, 1},
+		{"single and append", `"old_text":"start","new_text":"new","append_text":"!"`, "new!", 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"a.txt": "start"})
+			outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+readDigest(t, ws, "a.txt")+`",`+tc.change+`}`)
+			var got editFileResult
+			data(t, outcome, &got)
+			if fileContent(t, ws, "a.txt") != tc.want || got.Edits != tc.edits || got.AppendedBytes != tc.appended {
+				t.Fatalf("result %+v, content %q", got, fileContent(t, ws, "a.txt"))
+			}
+			if tc.edits == 0 && strings.Contains(string(outcome.Data), `"edits"`) || tc.appended == 0 && strings.Contains(string(outcome.Data), `"appended_bytes"`) {
+				t.Fatalf("zero fields not omitted: %s", outcome.Data)
+			}
+		})
+	}
+}
