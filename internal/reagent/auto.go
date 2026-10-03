@@ -11,10 +11,10 @@ import (
 
 // v0 §10 amendment (2026-10-02): fixed experimental stability rules, not calibrated thresholds.
 const (
-	autoDwell          = 3
-	autoSwitchLimit    = 3
-	autoConfidence     = 0.70
-	autoFastConfidence = 0.75
+	autoDwell                  = 3
+	autoSwitchLimit            = 3
+	autoConfidence             = 0.70
+	autoDeescalationConfidence = 0.75
 )
 
 type autoRouting struct {
@@ -43,12 +43,32 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 	if keys[info.Provider] == "" && !proxy.serves(info.Provider) {
 		return nil, fmt.Errorf("Auto fallback provider is unavailable")
 	}
-	fallback := jevRoute{ID: "capable", Model: cfg.Model, Effort: cfg.ReasoningEffort, Description: "Configured fallback for difficult reasoning, ambiguity, subtle correctness constraints and unresolved failures."}
+	fallback := jevRoute{ID: "capable", Model: cfg.Model, Effort: cfg.ReasoningEffort, Description: autoRouteDescription(cfg.Model, cfg.ReasoningEffort) + " Configured conservative fallback at user-turn start."}
 	a := &autoRouting{enabled: true, jev: newJevClient(key, "", client), fallback: fallback, proxy: proxy, usage: Usage{Known: true}, models: make(map[string]Model)}
-	if (cfg.Model != "gpt-6-luna" || cfg.ReasoningEffort != "low") && (keys[openaiName] != "" || proxy.serves(openaiName)) {
-		a.routes = append(a.routes, jevRoute{ID: "fast", Model: "gpt-6-luna", Effort: "low", Description: "Faster candidate for straightforward lookups, mechanical changes and interpreting clear tool results."})
-	}
+	// v0 §10 amendment (2026-10-02): one Choice over at most eight joint pairs.
 	a.routes = append(a.routes, fallback)
+	for _, modelID := range []string{"gpt-6-luna", "gpt-6.1-sol", cfg.Model} {
+		model, known := findModel(modelID)
+		if !known || model.ContextWindow == 0 || (keys[model.Provider] == "" && !proxy.serves(model.Provider)) {
+			continue
+		}
+		for _, effort := range []string{"low", "medium", "high"} {
+			if !model.accepts(effort) || (modelID != "gpt-6-luna" && modelID != "gpt-6.1-sol" && effort != "high") {
+				continue
+			}
+			duplicate := false
+			for _, route := range a.routes {
+				if route.Model == modelID && route.Effort == effort {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			a.routes = append(a.routes, jevRoute{ID: modelID + "/" + effort, Model: modelID, Effort: effort, Description: autoRouteDescription(modelID, effort)})
+		}
+	}
 	for _, route := range a.routes {
 		model, _ := findModel(route.Model)
 		a.models[route.ID] = newLiveModel(model.Provider, keys[model.Provider], proxy, client, trace)
@@ -56,9 +76,31 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 	return a, nil
 }
 
+// v0 §10 amendment (2026-10-02): the configured pair uses the same experimental rubric.
+func autoRouteDescription(model, effort string) string {
+	description := "Use the configured model's explicit effort setting."
+	switch effort {
+	case "low":
+		description = "Clear lookups, mechanical changes and interpreting straightforward tool results."
+	case "medium":
+		description = "Bounded multi-step reasoning, implementation decisions and ordinary debugging."
+	case "high":
+		description = "Difficult diagnosis, competing hypotheses, subtle invariants and unresolved correctness failures."
+	}
+	modelDescription := "Configured model."
+	switch model {
+	case "gpt-6-luna":
+		modelDescription = "Designated faster model; do not assume high effort equals the stronger model."
+	case "gpt-6.1-sol":
+		modelDescription = "Stronger model for ambiguity and subtle correctness constraints."
+	}
+	return fmt.Sprintf("%s / %s. %s %s", model, effort, modelDescription, description)
+}
+
 func autoDisclosure(w io.Writer, a *autoRouting) {
 	fmt.Fprintf(w, "auto on: %s; TypeSafe receives summaries, user requests (earlier ones may be shortened or omitted), root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header\n", jevEndpoint)
 	fmt.Fprintf(w, "auto fallback: %s / %s; %d allowed route(s); /auto off or manual model/effort selection pins the current route\n", a.fallback.Model, a.fallback.Effort, len(a.routes))
+	fmt.Fprintln(w, "auto scope: joint model/effort at user-turn start; current-model effort only within a run, with high effort as compatible conservative fallback")
 	if strings.TrimSpace(a.jev.key) == "" {
 		fmt.Fprintln(w, "TYPESAFE_API_KEY is not set; Auto uses compatible fallback without routing calls")
 	}
@@ -101,6 +143,26 @@ func stageAutoCandidate(ctx context.Context, s *Session, route jevRoute) (autoCa
 		return autoCandidate{}, err
 	}
 	return autoCandidate{route: route, cfg: cfg, handoff: handoff, bytes: size}, nil
+}
+
+// v0 §10 amendment (2026-10-02): only explicit model policy, not a global capability ranking.
+func autoDeescalation(cfg Config, route jevRoute) bool {
+	if route.Model != cfg.Model {
+		return route.Model == "gpt-6-luna"
+	}
+	info, known := findModel(cfg.Model)
+	if !known {
+		return false
+	}
+	for _, effort := range info.Efforts {
+		if effort == cfg.ReasoningEffort {
+			return false
+		}
+		if effort == route.Effort {
+			return true
+		}
+	}
+	return false
 }
 
 func routingToolFailure(history []Entry) bool {
@@ -168,7 +230,15 @@ func (r *Run) routeNext(ctx context.Context) error {
 	metadata["candidates"], metadata["excluded"] = routes, excluded
 	var fallback, selected *autoCandidate
 	for i := range candidates {
-		if candidates[i].route.ID == a.fallback.ID {
+		// v0 §10 amendment (2026-10-02): high on the current model is the mid-run fallback.
+		isFallback := candidates[i].route.ID == a.fallback.ID
+		if r.steps != 0 {
+			info, _ := findModel(s.cfg.Model)
+			if info.accepts("high") {
+				isFallback = candidates[i].route.Model == s.cfg.Model && candidates[i].route.Effort == "high"
+			}
+		}
+		if isFallback {
 			fallback = &candidates[i]
 		}
 	}
@@ -233,9 +303,9 @@ func (r *Run) routeNext(ctx context.Context) error {
 	} else {
 		metadata["selected_route"] = selected.route
 		changed := selected.cfg.Model != s.cfg.Model || selected.cfg.ReasoningEffort != s.cfg.ReasoningEffort
-		if changed && fallbackReason == "" && selected.route.ID == "fast" && confidence < autoFastConfidence {
-			metadata["action"], metadata["reason"] = "defer", "fast_confidence_threshold"
-		} else if changed && fallbackReason == "" && r.steps != 0 && r.steps-r.routingSwitchStep < autoDwell && !(failure && selected.route.ID == a.fallback.ID) {
+		if changed && fallbackReason == "" && autoDeescalation(s.cfg, selected.route) && confidence < autoDeescalationConfidence {
+			metadata["action"], metadata["reason"] = "defer", "deescalation_confidence_threshold"
+		} else if changed && fallbackReason == "" && r.steps != 0 && r.steps-r.routingSwitchStep < autoDwell && !(failure && selected == fallback) {
 			metadata["action"], metadata["reason"] = "defer", "minimum_dwell"
 		} else if changed {
 			if err := ctx.Err(); err != nil {

@@ -91,7 +91,9 @@ func autoSession(t *testing.T, cfg Config, capable, fast Model, api *fakeAPI) *S
 		t.Fatal(err)
 	}
 	s.auto.jev = newJevClient("fake-router-key", api.server.URL, api.server.Client())
-	s.auto.models["capable"], s.auto.models["fast"] = capable, fast
+	// Two-pair fixtures isolate loop invariants; production candidates are covered in auto_pairs_test.go.
+	s.auto.routes = []jevRoute{{ID: "fast", Model: "gpt-6-luna", Effort: "low", Description: "gpt-6-luna / low: straightforward work"}, s.auto.fallback}
+	s.auto.models = map[string]Model{"capable": capable, "fast": fast}
 	return s
 }
 
@@ -216,7 +218,7 @@ func TestAuto_ToolFailureEscalatesButDwellPreventsThrashing(t *testing.T) {
 	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95), autoChoice("fast", 0.95), autoChoice("fast", 0.95))
 	cfg := autoConfig(t, autoEffectTool{runs: &runs, failUntil: 3})
-	cfg.Model = "gpt-6-luna"
+	cfg.Model, cfg.ReasoningEffort = "gpt-6-luna", "high"
 	s := autoSession(t, cfg, capable, fast, api)
 	result, err := s.Turn(context.Background(), "Resolve the failures without changing the API.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || len(fast.requests) != 1 || len(capable.requests) != 3 || len(api.received()) != 4 || runs != 3 {

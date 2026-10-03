@@ -137,15 +137,20 @@ go run ./cmd/reagent run --auto --workspace ./repo "Fix the bug and run the test
 Without an explicit provider/model or `REAGENT_MODEL`, `--auto` starts with
 `gpt-6.1-sol / medium` as fallback. An explicit effort still wins. Otherwise the
 configured model/effort is the fallback; Auto requires a supported catalog pair
-with a known window. The other candidate is `gpt-6-luna / low`, when distinct
-and usable with the process's OpenAI credentials or proxy. A sole candidate or
-missing TypeSafe key needs no router calls. Manual defaults are unchanged.
+with a known window. Auto offers **Luna and Sol at low, medium and high effort**
+when supported and usable with the process's OpenAI credentials or proxy:
+six default pairs, selected in one joint Jev decision. Low targets clear mechanical
+work, medium bounded multi-step reasoning, and high difficult diagnosis and subtle
+invariants. These are experimental rubrics, not measured capability rankings;
+Luna/high is not assumed to outrank Sol/low. The configured fallback is retained
+and deduplicated; a different configured model also contributes its high pair
+when supported (at most eight pairs). A sole candidate or missing TypeSafe key
+needs no router calls. Manual defaults are unchanged.
 
 In chat, `/auto` reports state, `/auto on` enables routing with the current
 manual pair as fallback, and `/auto off` pins the current model/effort. Successful
 explicit `/model` or `/effort` selection also exits Auto; rejection or picker
-cancellation does not. Selecting a Luna/low fallback gives one candidate and no
-Jev calls. `/reset` retains the Auto setting but starts fresh accounting.
+cancellation does not. `/reset` retains the Auto setting but starts fresh accounting.
 
 Enabling Auto discloses the endpoint `https://api.typesafe.ai/v1/systemone` and
 what leaves the machine: TypeSafe receives the full effective root `AGENTS.md`,
@@ -165,14 +170,20 @@ The selected generative model receives full admitted history, not this packet.
 Jev `jev-1.13.0` chooses a joint model/effort route at turn start, after every
 three generations, or on new non-permission tool failure evidence, always after
 complete tool batches. **Model changes are allowed only at user-turn start.**
-Within a run, only same-model effort changes are eligible, even on tool failure;
-if the fallback is another model, the current usable route stays active. Fewer
-than two eligible routes means no Jev call. Ordinary effort changes dwell for
-three generations; failure escalation or conservative fallback can override
-dwell. At most three route
-changes occur per run, after which routing stops and the task continues on the
-current route. Confidence below 0.70 uses fallback; choosing the fast route
-requires 0.75. These experimental thresholds are not calibrated quality claims.
+Within a run, only the current model's effort pairs are eligible, even on tool
+failure. The configured pair is fallback at turn start; current-model/high is
+conservative fallback within the run. If high is unsupported, the configured
+pair is fallback only on that same model; if the designated fallback cannot be
+admitted, keep the current usable pair. Fewer than two eligible routes means no
+Jev call. Failure evidence triggers reconsideration, not automatic high effort;
+a clear correction can stay low, and direct low-to-high changes are allowed.
+Ordinary effort changes dwell for three generations; failure-driven selection
+of the designated fallback or conservative fallback can override dwell. At most
+three route changes occur per run, after which routing stops and the task
+continues on the current route. Confidence below 0.70 uses fallback; same-model
+effort reductions and model changes to Luna require 0.75. There is no global
+cross-provider capability ranking. These experimental thresholds are not
+calibrated quality claims.
 A router error disables further router attempts for that run; the next user
 turn can try again. Cancellation stops instead of falling back and generating.
 
