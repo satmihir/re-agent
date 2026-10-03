@@ -90,11 +90,70 @@ func TestAuto_JointCandidateAvailabilityAndDeduplication(t *testing.T) {
 				t.Fatal("configured fallback was lost")
 			}
 			if len(a.routes) > 1 {
-				if _, err := encodeJevRequest("task", a.routes); err != nil {
-					t.Fatal(err)
+				body, err := encodeJevRequest("task", a.routes)
+				if err != nil || len(body) > jevMaxRequestBytes || !bytes.Contains(body, []byte("Choose the cheapest allowed model and effort pair")) || bytes.Contains(body, []byte("Configured conservative fallback")) {
+					t.Fatalf("Jev question: %d bytes, %v", len(body), err)
 				}
 			}
 		})
+	}
+}
+
+func TestAuto_CheapestSufficientLadder(t *testing.T) {
+	for _, test := range []struct {
+		name, model, want string
+		probabilities     map[string]float64
+		wantLadder        []string
+	}{
+		{"turn decisive low", "", "gpt-6-luna/low", map[string]float64{"gpt-6-luna/low": 0.99, "capable": 0.01}, nil},
+		{"turn cheap uncertainty", "", "gpt-6-luna/medium", map[string]float64{"capable": 0.04, "gpt-6-luna/low": 0.53, "gpt-6-luna/medium": 0.39, "gpt-6-sol/low": 0.04}, nil},
+		{"turn needs sol medium", "", "capable", map[string]float64{"capable": 0.36, "gpt-6-luna/low": 0.10, "gpt-6-luna/medium": 0.48, "gpt-6-sol/low": 0.06}, nil},
+		{"mid-run stays medium", "gpt-6-sol", "capable", map[string]float64{"gpt-6-sol/low": 0.74, "capable": 0.25, "gpt-6-sol/high": 0.01}, []string{"gpt-6-sol/low", "capable", "gpt-6-sol/high"}},
+		{"tool failure reaches high", "gpt-6-sol", "gpt-6-sol/high", map[string]float64{"gpt-6-sol/low": 0.09, "capable": 0.49, "gpt-6-sol/high": 0.42}, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := autoConfig(t, NewEchoTool())
+			a, err := newAutoRouting(cfg, "fake", map[string]string{openaiName: "fake"}, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var routes []jevRoute
+			for _, route := range a.routes {
+				if test.model == "" || route.Model == test.model {
+					routes = append(routes, route)
+				}
+			}
+			selected, ladder, cumulative := autoCheapestSufficient(routes, test.probabilities)
+			if selected != test.want || len(ladder) != len(routes) || len(cumulative) != len(routes) || cumulative[len(cumulative)-1] < autoSufficiency {
+				t.Fatalf("selection %q ladder %v cumulative %v", selected, ladder, cumulative)
+			}
+			if test.wantLadder != nil && !reflect.DeepEqual(ladder, test.wantLadder) {
+				t.Fatalf("ladder: %v", ladder)
+			}
+		})
+	}
+}
+
+func TestAuto_ConfiguredModelLastAndCatalogEffortOrder(t *testing.T) {
+	cfg := autoConfig(t, NewEchoTool())
+	cfg.Model, cfg.ReasoningEffort = "gpt-6.1-sol", "medium"
+	a, err := newAutoRouting(cfg, "fake", map[string]string{openaiName: "fake"}, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ladder, _ := autoCheapestSufficient(a.routes, nil)
+	want := []string{"gpt-6-luna/low", "gpt-6-luna/medium", "gpt-6-luna/high", "gpt-6-sol/low", "gpt-6-sol/medium", "gpt-6-sol/high", "capable", "gpt-6.1-sol/high"}
+	if !reflect.DeepEqual(ladder, want) {
+		t.Fatalf("ladder: %v", ladder)
+	}
+	cfg.Model, cfg.ReasoningEffort = "gpt-6-sol", "max"
+	a, err = newAutoRouting(cfg, "fake", map[string]string{openaiName: "fake"}, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ladder, _ = autoCheapestSufficient(a.routes, nil)
+	if ladder[len(ladder)-1] != "capable" {
+		t.Fatalf("catalog max effort: %v", ladder)
 	}
 }
 
@@ -118,7 +177,7 @@ func TestAuto_AllSixPairsSelectedInOneDecision(t *testing.T) {
 	}
 }
 
-func TestAuto_CurrentModelHighFallbackAndFailureChoices(t *testing.T) {
+func TestAuto_MidRunFailureChoices(t *testing.T) {
 	for _, test := range []struct {
 		name, selected, want string
 		confidence           float64
@@ -126,9 +185,9 @@ func TestAuto_CurrentModelHighFallbackAndFailureChoices(t *testing.T) {
 	}{
 		{"direct high escalation", "high", "high", 0.70, 0},
 		{"obvious correction stays low", "low", "low", 0.95, 0},
-		{"ordinary medium observes dwell", "medium", "low", 0.95, 0},
-		{"low confidence fallback", "low", "high", 0.69, 0},
-		{"router error fallback", "low", "high", 0.95, 429},
+		{"failure-driven medium bypasses dwell", "medium", "medium", 0.95, 0},
+		{"low confidence stays low", "low", "low", 0.05, 0},
+		{"router error keeps current", "low", "low", 0.95, 429},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runs := 0
@@ -160,27 +219,21 @@ func TestAuto_CurrentModelHighFallbackAndFailureChoices(t *testing.T) {
 	}
 }
 
-func TestAuto_EffortReductionConfidenceBoundary(t *testing.T) {
-	for _, confidence := range []float64{0.74, 0.75} {
-		for _, effort := range []string{"low", "medium"} {
-			cfg := autoConfig(t, NewEchoTool())
-			cfg.ReasoningEffort = "high"
-			generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply(cfg.Model, textBlock("done")))}
-			s, api := jointAutoSession(t, cfg, generator)
-			api.replies = []apiReply{jointChoice(t, s.auto, "", cfg.Model, effort, confidence)}
-			result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-			want := "high"
-			if confidence >= 0.75 {
-				want = effort
-			}
-			if err != nil || result.Status != StatusCompleted || len(api.received()) != 1 || s.cfg.ReasoningEffort != want {
-				t.Fatalf("reduction to %s at %v: %+v, %v; effort=%s", effort, confidence, result, err, s.cfg.ReasoningEffort)
-			}
+func TestAuto_EffortReductionIgnoresConfidence(t *testing.T) {
+	for _, effort := range []string{"low", "medium"} {
+		cfg := autoConfig(t, NewEchoTool())
+		cfg.ReasoningEffort = "high"
+		generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply(cfg.Model, textBlock("done")))}
+		s, api := jointAutoSession(t, cfg, generator)
+		api.replies = []apiReply{jointChoice(t, s.auto, "", cfg.Model, effort, 0.05)}
+		result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
+		if err != nil || result.Status != StatusCompleted || len(api.received()) != 1 || s.cfg.ReasoningEffort != effort {
+			t.Fatalf("reduction to %s: %+v, %v; effort=%s", effort, result, err, s.cfg.ReasoningEffort)
 		}
 	}
 }
 
-func TestAuto_PeriodicEffortReductionAfterDwell(t *testing.T) {
+func TestAuto_HighToMediumAfterDwell(t *testing.T) {
 	runs := 0
 	var replies []ModelResponse
 	for _, id := range []string{"1", "2", "3"} {
@@ -189,13 +242,13 @@ func TestAuto_PeriodicEffortReductionAfterDwell(t *testing.T) {
 	replies = append(replies, autoTestReply("gpt-6-luna", textBlock("done")))
 	generator := &requestRecorder{ScriptedModel: NewScriptedModel(replies...)}
 	s, api := jointAutoSession(t, autoConfig(t, autoEffectTool{runs: &runs}), generator)
-	api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6-luna", "high", 0.95), jointChoice(t, s.auto, "gpt-6-luna", "gpt-6-luna", "low", 0.75)}
+	api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6-luna", "high", 0.95), jointChoice(t, s.auto, "gpt-6-luna", "gpt-6-luna", "medium", 0.05)}
 	result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	var efforts []string
 	for _, request := range generator.requests {
 		efforts = append(efforts, request.ReasoningEffort)
 	}
-	if err != nil || result.Status != StatusCompleted || len(api.received()) != 2 || runs != 3 || !reflect.DeepEqual(efforts, []string{"high", "high", "high", "low"}) {
+	if err != nil || result.Status != StatusCompleted || len(api.received()) != 2 || runs != 3 || !reflect.DeepEqual(efforts, []string{"high", "high", "high", "medium"}) {
 		t.Fatalf("periodic reduction: %+v, %v; efforts=%v", result, err, efforts)
 	}
 }
@@ -219,7 +272,7 @@ func TestAuto_UnsupportedFallbackRefusesEnablement(t *testing.T) {
 	}
 }
 
-func TestAuto_MissingHighCandidateDoesNotSubstituteConfiguredFallback(t *testing.T) {
+func TestAuto_MissingHighCandidateKeepsCurrentOnRouterError(t *testing.T) {
 	runs := 0
 	generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-luna", textBlock("done")))}
 	s, api := jointAutoSession(t, autoConfig(t, autoEffectTool{runs: &runs, failUntil: 1}), generator)
@@ -238,11 +291,11 @@ func TestAuto_MissingHighCandidateDoesNotSubstituteConfiguredFallback(t *testing
 	}
 	found := false
 	for _, event := range readEvents(t, result.TracePath) {
-		if event.Type == "auto.route" && event.Data.(map[string]any)["reason"] == "no_compatible_fallback" {
+		if event.Type == "auto.route" && event.Data.(map[string]any)["action"] == "fallback" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("missing fallback deferral was not recorded")
+		t.Fatal("router failure fallback was not recorded")
 	}
 }

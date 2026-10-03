@@ -20,8 +20,8 @@ const jevReply = `{"model":"jev-1.13.0","answers":{"route":{"type":"choice","cho
 
 func jevTestRoutes() []jevRoute {
 	return []jevRoute{
-		{ID: "fast", Model: "gpt-6-luna", Effort: "low", Description: "Faster candidate for straightforward lookups, mechanical changes and interpreting clear tool results."},
-		{ID: "capable", Model: "gpt-6.1-sol", Effort: "medium", Description: "Capable fallback for difficult reasoning, subtle correctness constraints, ambiguity and unresolved failures."},
+		{ID: "fast", Model: "gpt-6-luna", Effort: "low", Description: "Clear lookups and mechanical changes with straightforward tool results."},
+		{ID: "capable", Model: "gpt-6.1-sol", Effort: "medium", Description: "A concrete multi-step task needing integration of several findings."},
 	}
 }
 

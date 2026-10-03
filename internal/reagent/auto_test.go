@@ -210,8 +210,6 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 		{"critical overflow", autoChoice("fast", 0.95), "fake", strings.Repeat("constraint ", 4000), 0, true},
 		{"rate limit", apiReply{status: 429, body: "private"}, "fake", "task", 1, false},
 		{"malformed", okReply(`{broken`), "fake", "task", 1, false},
-		{"low confidence", autoChoice("fast", 0.3), "fake", "task", 1, true},
-		{"fast hysteresis", autoChoice("fast", 0.74), "fake", "task", 1, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runs := 0
@@ -222,9 +220,7 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 			api := newFakeAPI(t, test.reply, test.reply)
 			s := autoSession(t, autoConfig(t, autoEffectTool{runs: &runs}), capable, fast, api)
 			s.auto.jev.key = test.key
-			if test.name != "fast hysteresis" {
-				s.cfg.Model, s.cfg.ReasoningEffort, s.model = "gpt-6-luna", "low", fast
-			}
+			s.cfg.Model, s.cfg.ReasoningEffort, s.model = "gpt-6-luna", "low", fast
 			result, err := s.Turn(context.Background(), test.prompt, "run", filepath.Join(t.TempDir(), "events.jsonl"))
 			if err != nil || result.Status != StatusCompleted || len(capable.requests) != 4 || len(fast.requests) != 0 || runs != 3 || len(api.received()) != test.calls || !result.Usage.Known {
 				t.Fatalf("fallback: %+v, %v; requests=%d", result, err, len(api.received()))
@@ -294,26 +290,29 @@ func TestAuto_SwitchLimitStopsRouterCallsNotTheRun(t *testing.T) {
 	}
 }
 
-func TestAuto_FastConfidenceBoundary(t *testing.T) {
-	for _, confidence := range []float64{0.74, 0.75, 0.8} {
-		t.Run(fmt.Sprint(confidence), func(t *testing.T) {
-			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-sol", textBlock("done")))}
-			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
-			api := newFakeAPI(t, autoChoice("fast", confidence))
-			s := autoSession(t, autoConfig(t, NewEchoTool()), capable, fast, api)
-			result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-			if err != nil || result.Status != StatusCompleted || len(api.received()) != 1 {
-				t.Fatalf("routing: %+v, %v", result, err)
-			}
-			wantFast := 0
-			if confidence >= 0.75 {
-				wantFast = 1
-			}
-			if len(fast.requests) != wantFast || len(capable.requests) != 1-wantFast {
-				t.Fatalf("generation requests: fast=%d capable=%d", len(fast.requests), len(capable.requests))
-			}
-		})
+func TestAuto_LowConfidenceValidChoiceAndTrace(t *testing.T) {
+	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-sol", textBlock("done")))}
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+	api := newFakeAPI(t, autoChoice("fast", 0.05))
+	s := autoSession(t, autoConfig(t, NewEchoTool()), capable, fast, api)
+	result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil || result.Status != StatusCompleted || len(api.received()) != 1 || len(fast.requests) != 1 || len(capable.requests) != 0 {
+		t.Fatalf("routing: %+v, %v", result, err)
 	}
+	for _, event := range readEvents(t, result.TracePath) {
+		if event.Type != "auto.route" {
+			continue
+		}
+		data := event.Data.(map[string]any)
+		if data["action"] != "switch" {
+			continue
+		}
+		if data["rule"] != "cheapest_sufficient" || data["threshold"] != 0.8 || data["confidence"] != 0.05 || !reflect.DeepEqual(data["ladder"], []any{"fast", "capable"}) || !reflect.DeepEqual(data["cumulative"], []any{0.9, 1.0}) {
+			t.Fatalf("routing trace: %+v", data)
+		}
+		return
+	}
+	t.Fatal("missing switch trace")
 }
 
 func TestAuto_EffortOnlyChangePreservesNativeState(t *testing.T) {
