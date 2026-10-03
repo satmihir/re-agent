@@ -33,16 +33,25 @@ type Session struct {
 	// blocked explains why ordinary input is refused until recovery or /reset. A run whose
 	// outcome cannot be continued from sets it; the transcript is never rolled
 	// back to hide that outcome (v1 §7.5).
-	blocked       string
-	lastTrace     string
-	lastRequest   Usage
-	tokensPerByte float64
+	blocked                  string
+	lastTrace                string
+	lastRequest              Usage
+	tokensPerByte            float64
+	store                    *sessionStore
+	launchInstructions       *string
+	checkpointUsage          Usage
+	checkpointAutoCompactOff bool
+	checkpointPhase          string
+	checkpointInFlight       string
+	pendingSubmission        *UserTurn
+	recoveryWorkspace        string
 }
 
 // NewSession starts a session with an empty transcript.
 func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Session {
 	s := &Session{
 		ID: NewID(), cfg: cfg, model: model, trace: trace, display: NewDisplay(progress), progress: progress,
+		launchInstructions: cfg.ProjectInstructions, checkpointUsage: Usage{Known: true},
 		seenCalls: make(map[string]bool), planMode: cfg.PlanMode,
 	}
 	if cfg.Workspace != nil {
@@ -52,6 +61,128 @@ func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Sess
 		s.cfg.Registry = cfg.Registry.bindWorkspace(s, s.workspace.active)
 	}
 	return s
+}
+
+// checkpoint persists the complete accepted state before the next external action.
+// v0 §10 amendment (2026-10-02).
+func (s *Session) checkpoint(phase, inFlight string) error {
+	if s.store == nil {
+		return nil
+	}
+	launch := s.cfg.WorkspacePath
+	if s.workspace != nil {
+		launch = s.workspace.launch
+	}
+	cp := chatCheckpoint{
+		ID: s.ID, Provider: s.cfg.Provider, Model: s.cfg.Model, Effort: s.cfg.ReasoningEffort,
+		Launch: launch, Active: s.cfg.WorkspacePath, ReadOnly: s.cfg.Registry.Mode().ReadOnly,
+		Plan: s.planMode, NoProjectInstructions: s.cfg.NoProjectInstructions,
+		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
+		MaxToolCalls: s.cfg.MaxToolCalls, ReportFriction: s.cfg.ReportFriction,
+		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
+		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
+		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
+		Usage: s.checkpointUsage, AutoCompactOff: s.checkpointAutoCompactOff,
+		Phase: phase, InFlight: inFlight,
+	}
+	if s.auto != nil {
+		cp.Auto, cp.AutoEnabled = true, s.auto.enabled
+		cp.AutoFallbackModel, cp.AutoFallbackEffort = s.auto.fallback.Model, s.auto.fallback.Effort
+		cp.AutoUsage, cp.AutoAttempts = s.auto.usage, s.auto.attempts
+	}
+	if err := s.store.save(cp); err != nil {
+		return fmt.Errorf("save session %s: %w", s.ID, err)
+	}
+	s.checkpointPhase, s.checkpointInFlight = phase, inFlight
+	return nil
+}
+
+// checkpointWithUsage includes an interrupted run's usage without double-counting
+// it when chat records the completed run.
+func (s *Session) checkpointWithUsage(phase, inFlight string, usage Usage) error {
+	if s.store == nil {
+		return nil
+	}
+	previous := s.checkpointUsage
+	s.checkpointUsage.Add(usage)
+	err := s.checkpoint(phase, inFlight)
+	s.checkpointUsage = previous
+	return err
+}
+
+func (s *Session) restore(cp chatCheckpoint) {
+	s.ID, s.history, s.seenCalls = cp.ID, cp.History, cp.Seen
+	if s.seenCalls == nil {
+		s.seenCalls = make(map[string]bool)
+	}
+	s.handoff, s.planMode, s.compactedPlan = cp.Handoff, cp.Plan, cp.CompactedPlan
+	s.pendingSubmission, s.recoveryWorkspace = cp.PendingSubmission, cp.Active
+	s.blocked, s.lastTrace, s.lastRequest = cp.Blocked, cp.LastTrace, cp.LastRequest
+	s.tokensPerByte, s.checkpointUsage = cp.TokensPerByte, cp.Usage
+	s.checkpointAutoCompactOff = cp.AutoCompactOff
+	s.launchInstructions = cp.LaunchInstructions
+	if cp.Active == cp.Launch {
+		s.launchInstructions = cp.ProjectInstructions
+	}
+	s.checkpointPhase, s.checkpointInFlight = cp.Phase, cp.InFlight
+}
+
+// recoverInterrupted records unresolved calls as observations, never actions.
+func (s *Session) recoverInterrupted() (string, error) {
+	if (s.checkpointPhase == "terminal" || s.checkpointPhase == "idle") && s.pendingSubmission == nil {
+		return "", nil
+	}
+	pending := make(map[string]*ToolCall)
+	for _, e := range s.history {
+		if e.Assistant != nil {
+			for _, call := range toolCalls(*e.Assistant) {
+				pending[call.CallID] = call
+			}
+		}
+		if e.Tool != nil {
+			delete(pending, e.Tool.CallID)
+		}
+	}
+	unknown := false
+	workspace := s.recoveryWorkspace
+	if workspace == "" {
+		workspace = s.cfg.WorkspacePath
+	}
+	for _, e := range s.history {
+		if e.Assistant == nil {
+			continue
+		}
+		for _, call := range toolCalls(*e.Assistant) {
+			if pending[call.CallID] == nil {
+				continue
+			}
+			inFlight := call.CallID == s.checkpointInFlight
+			code, message, effect := "not_executed", "recovery: call was not executed", EffectNone
+			if inFlight {
+				code, message, effect, unknown = "recovery_effect_unknown", "recovery: call was in flight; effects are unknown; inspect before continuing", EffectUnknown, true
+			}
+			s.history = append(s.history, Entry{Kind: EntryTool, Tool: &ToolResult{CallID: call.CallID, Name: call.Name, Outcome: ToolOutcome{Code: code, Message: message, Effect: effect, Workspace: workspace}}})
+		}
+	}
+	pendingSubmission := s.pendingSubmission != nil
+	if pendingSubmission {
+		s.history = append(s.history, Entry{Kind: EntryUser, User: s.pendingSubmission})
+		s.pendingSubmission = nil
+	}
+	// Recovery itself executes nothing. A new user message can ask for inspection;
+	// it must not silently restart the stopped batch.
+	s.blocked = ""
+	message := "interrupted session restored; no pending model request or tool was restarted; send a new message"
+	if pendingSubmission {
+		message += "; the message submitted before compaction was retained but not sent to the model"
+	}
+	if unknown {
+		message += "; an in-flight tool has unknown effects; inspect them before further changes"
+	}
+	if err := s.checkpoint("terminal", ""); err != nil {
+		return "", err
+	}
+	return message, nil
 }
 
 // Turn runs one user submission as a new run and returns its result. The run
@@ -110,6 +241,9 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	fail := func(status RunStatus, reason string) (RunResult, int, error) {
 		result.Status, result.Reason = status, reason
 		s.trace.Write("compaction.failed", 1, map[string]any{"reason": reason})
+		if err := s.checkpointWithUsage("terminal", "", result.Usage); err != nil {
+			result.Status, result.Reason = StatusPersistenceError, err.Error()
+		}
 		return result, 0, nil
 	}
 	if _, err := encodeRequest(s.cfg, req); err != nil {
@@ -123,6 +257,10 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	}
 	// v0 §10 amendment (2026-09-29): a summary can take minutes, so show that
 	// it is under way, as a turn's model request does.
+	if err := s.checkpoint("model", ""); err != nil {
+		result.Status, result.Reason = StatusPersistenceError, err.Error()
+		return result, 0, nil
+	}
 	s.display.startStatus("summarizing the conversation with " + sanitize(s.cfg.Model))
 	resp, err := s.model.Generate(ctx, req)
 	s.display.stopStatus()
@@ -161,6 +299,9 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	s.lastRequest = Usage{}
 	result.Status, result.Reply = StatusCompleted, text
 	s.trace.Write("compaction.finished", 1, map[string]any{"summary": text, "replaced_entries": summary.ReplacedEntries})
+	if err := s.checkpointWithUsage("terminal", "", result.Usage); err != nil {
+		result.Status, result.Reason = StatusPersistenceError, err.Error()
+	}
 	return result, len(oldJSON), nil
 }
 
@@ -170,6 +311,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 func (s *Session) Reset() {
 	s.ID = NewID()
 	s.history = nil
+	s.pendingSubmission = nil
 	s.handoff = nil
 	s.tokensPerByte = 0
 	s.compactedPlan = ""

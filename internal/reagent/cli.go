@@ -78,8 +78,18 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		}
 	}
 
+	resumeFlag := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "resume" {
+			resumeFlag = true
+		}
+	})
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	switch {
+	case command == "run" && resumeFlag:
+		return usage(stderr, command, "--resume applies to chat only")
+	case command == "chat" && resumeFlag && options.resume == "":
+		return usage(stderr, command, "--resume requires a session ID")
 	case command == "run" && prompt == "" && options.promptFile == "":
 		return usage(stderr, command, "a prompt is required, as an argument or with --prompt-file")
 	case command == "run" && prompt != "" && options.promptFile != "":
@@ -100,6 +110,34 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, "--show-context previews a live request, so it cannot be combined with --scripted")
 	}
 
+	var saved chatCheckpoint
+	var store *sessionStore
+	if options.resume != "" {
+		conflicts := map[string]bool{"resume": false, "recap": false, "trace-dir": false}
+		var conflict string
+		fs.Visit(func(f *flag.Flag) {
+			if _, ok := conflicts[f.Name]; !ok {
+				conflict = f.Name
+			}
+		})
+		if conflict != "" {
+			return usage(stderr, command, "--resume cannot be combined with --"+conflict)
+		}
+		var err error
+		store, err = openSessionStore(options.resume, false)
+		if err != nil {
+			return startupError(stderr, err.Error())
+		}
+		defer store.close()
+		saved, err = store.load(options.resume)
+		if err != nil {
+			return startupError(stderr, err.Error())
+		}
+		options.workspace, options.provider, options.model = saved.Launch, saved.Provider, saved.Model
+		options.reasoning, options.readOnly, options.plan = saved.Effort, saved.ReadOnly, saved.Plan
+		options.maxSteps, options.maxToolCalls = saved.MaxSteps, saved.MaxToolCalls
+		options.noProjectInstructions, options.reportFriction, options.auto = saved.NoProjectInstructions, saved.ReportFriction, saved.Auto
+	}
 	if options.promptFile != "" {
 		text, err := readPrompt(options.promptFile, stdin)
 		if err != nil {
@@ -149,10 +187,19 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if err != nil {
 		return usage(stderr, command, err.Error())
 	}
+	var projectInstructions *string
+	if options.resume == "" {
+		projectInstructions = loadProjectInstructions(ws, options.noProjectInstructions, stderr)
+	} else {
+		projectInstructions = saved.LaunchInstructions
+		if saved.Active == saved.Launch {
+			projectInstructions = saved.ProjectInstructions
+		}
+	}
 	cfg := Config{
 		Provider: provider, Model: model, ReasoningEffort: resolveEffort(options.reasoning, provider, model),
 		Registry: registry, WorkspacePath: ws.Root(), Workspace: ws, NoProjectInstructions: options.noProjectInstructions,
-		ProjectInstructions: loadProjectInstructions(ws, options.noProjectInstructions, stderr),
+		ProjectInstructions: projectInstructions,
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
 		PlanMode: options.plan, ReportFriction: options.reportFriction,
 	}
@@ -214,12 +261,28 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		live = scripted
 	}
 	session := NewSession(cfg, live, trace, stderr)
+	if options.resume != "" {
+		session.restore(saved)
+		session.store = store
+	}
 	// v0 §6 amendment (2026-09-27): each accepted turn collects its own state.
 	session.snapshot = collectSnapshot
 	if options.auto {
-		session.auto, err = newAutoRouting(cfg, os.Getenv("TYPESAFE_API_KEY"), keys, proxy, client, trace)
+		autoCfg := cfg
+		if options.resume != "" && saved.AutoFallbackModel != "" {
+			info, ok := findModel(saved.AutoFallbackModel)
+			if !ok {
+				return startupError(stderr, "session has an unknown Auto fallback model")
+			}
+			autoCfg.Model, autoCfg.Provider, autoCfg.ReasoningEffort = info.ID, info.Provider, saved.AutoFallbackEffort
+		}
+		session.auto, err = newAutoRouting(autoCfg, os.Getenv("TYPESAFE_API_KEY"), keys, proxy, client, trace)
 		if err != nil {
 			return usage(stderr, command, err.Error())
+		}
+		if options.resume != "" {
+			session.auto.enabled = saved.AutoEnabled
+			session.auto.usage, session.auto.attempts = saved.AutoUsage, saved.AutoAttempts
 		}
 		autoDisclosure(stderr, session.auto)
 	}
@@ -229,11 +292,43 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	}
 
 	if command == "chat" {
-		session.display.header(cfg, ws.Root(), endpoint, true)
+		if options.resume == "" && options.script == "" {
+			store, err = openSessionStore(session.ID, true)
+			if err != nil {
+				return startupError(stderr, err.Error())
+			}
+			defer store.close()
+			session.store = store
+			if err := session.checkpoint("idle", ""); err != nil {
+				return startupError(stderr, err.Error())
+			}
+		}
+		if options.resume != "" {
+			if saved.Active != "" && saved.Active != saved.Launch {
+				fmt.Fprintf(stderr, "last active workspace was %s; resumed at launch workspace %s; reauthorize other workspaces before use\n", sanitize(saved.Active), sanitize(saved.Launch))
+			}
+			message, err := session.recoverInterrupted()
+			if err != nil {
+				return startupError(stderr, err.Error())
+			}
+			if message != "" {
+				fmt.Fprintln(stderr, message)
+			}
+		}
+		if session.store != nil {
+			session.display.sessionID = session.ID
+		}
+		session.display.header(session.cfg, ws.Root(), endpoint, true)
+		if session.store != nil {
+			fmt.Fprintf(stderr, "resume: reagent chat --resume %s\n", session.ID)
+		}
 		conversation := &conversation{
 			session: session, keys: keys, proxy: proxy, client: client, scripted: scripted,
 			trace: trace, traceDir: options.traceDir, progress: stderr,
 			recap: options.recap, usage: Usage{Known: true},
+		}
+		if options.resume != "" {
+			conversation.usage, conversation.autoCompactOff = saved.Usage, saved.AutoCompactOff
 		}
 		if terminal, ok := stdin.(*os.File); ok && isTerminal(terminal) {
 			conversation.stdin = terminal
@@ -243,7 +338,11 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		complete := func(line string, pos int, key rune) (string, int, bool) {
 			return completeLine(line, pos, key, completionCommands(), conversation.completionArguments, commandTakesArgument)
 		}
-		return chat(ctx, conversation, newLineReader(stdin, stderr, complete), stdout, stderr)
+		code := chat(ctx, conversation, newLineReader(stdin, stderr, complete), stdout, stderr)
+		if conversation.session.store != nil {
+			conversation.session.store.close()
+		}
+		return code
 	}
 
 	session.display.header(cfg, ws.Root(), endpoint, false)
@@ -273,11 +372,11 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 }
 
 type options struct {
-	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir string
-	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction      bool
-	auto                                                                           bool
-	maxSteps, maxToolCalls                                                         int
-	allowedWorkspaces                                                              []string
+	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir, resume string
+	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction              bool
+	auto                                                                                   bool
+	maxSteps, maxToolCalls                                                                 int
+	allowedWorkspaces                                                                      []string
 }
 
 func defineFlags(fs *flag.FlagSet) *options {
@@ -298,6 +397,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
 	fs.StringVar(&o.traceDir, "trace-dir", "", "write each turn's trace under this directory")
+	fs.StringVar(&o.resume, "resume", "", "resume a live chat by its session ID")
 	fs.IntVar(&o.maxSteps, "max-steps", 0, "maximum model requests in one run (0 means unlimited)")
 	fs.IntVar(&o.maxToolCalls, "max-tool-calls", 0, "maximum accepted tool calls in one run (0 means unlimited)")
 	return o
@@ -325,12 +425,13 @@ var chatFlagGroups = []flagGroup{
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir", "report-friction"}},
+	{"Resume", []string{"resume"}},
 	{"Offline", []string{"scripted"}},
 }
 
 var flagPlaceholders = map[string]string{
 	"workspace": "DIR", "allow-workspace": "PATH", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL",
-	"scripted": "FILE", "prompt-file": "PATH", "trace-file": "PATH", "trace-dir": "DIR",
+	"scripted": "FILE", "resume": "ID", "prompt-file": "PATH", "trace-file": "PATH", "trace-dir": "DIR",
 	"max-steps": "N", "max-tool-calls": "N",
 }
 

@@ -75,6 +75,7 @@ type conversation struct {
 	// failure is not retried before every message; /compact, /reset, and a
 	// model switch clear it.
 	autoCompactOff bool
+	persistenceErr error
 	stdin          *os.File
 	stdout         *os.File
 	stderr         *os.File
@@ -159,6 +160,10 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 		return
 	}
 	c.session.pinAuto()
+	if err := c.saveCheckpoint(); err != nil {
+		c.persistenceErr = err
+		return
+	}
 	route := info.Provider
 	if c.proxy.serves(info.Provider) {
 		route += " via " + proxyURLVariable
@@ -182,6 +187,7 @@ func (c *conversation) switchTo(info modelInfo) {
 	previous := c.session
 	c.session = NewSession(cfg, model, c.trace, c.progress)
 	c.session.snapshot, c.session.planMode = previous.snapshot, previous.planMode
+	c.session.launchInstructions = previous.launchInstructions
 	c.session.workspaceConsent = previous.workspaceConsent
 	if previous.workspace != nil {
 		c.session.workspace = previous.workspace.copy()
@@ -190,6 +196,19 @@ func (c *conversation) switchTo(info modelInfo) {
 	}
 	c.usage = Usage{Known: true}
 	c.autoCompactOff = false
+	if previous.store != nil {
+		st, err := openSessionStore(c.session.ID, true)
+		if err == nil {
+			c.session.store = st
+			err = c.session.checkpoint("idle", "")
+		}
+		previous.store.close()
+		if err != nil {
+			c.persistenceErr = err
+		} else {
+			fmt.Fprintf(c.progress, "session ID: %s · resume: reagent chat --resume %s\n", c.session.ID, c.session.ID)
+		}
+	}
 }
 
 // commandEffort lists or sets the reasoning effort for the current model. The
@@ -349,6 +368,9 @@ func (c *conversation) commandCompact(ctx context.Context, argument string, stdo
 		return
 	}
 	if result.Status != StatusCompleted {
+		if result.Status == StatusPersistenceError {
+			c.persistenceErr = errors.New(result.Reason)
+		}
 		fmt.Fprintf(stderr, "compaction failed: %s\n", sanitize(result.Reason))
 		return
 	}
@@ -393,6 +415,10 @@ func (c *conversation) autoCompact(ctx context.Context, stderr io.Writer) bool {
 		return false
 	case result.Status != StatusCompleted:
 		failure = result.Reason
+		if result.Status == StatusPersistenceError {
+			c.persistenceErr = errors.New(failure)
+			return false
+		}
 	default:
 		printCompacted(stderr, result, replacedBytes)
 	}
@@ -635,6 +661,10 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 	}
 	var interrupted time.Time
 	for {
+		if c.persistenceErr != nil {
+			fmt.Fprintf(stderr, "error: session checkpoint failed: %v; stop using this chat\n", c.persistenceErr)
+			return exitRunFail
+		}
 		prompt, bandPrefix := "> ", "> "
 		if c.session.planMode {
 			prompt, bandPrefix = "plan> ", "plan> "
@@ -717,6 +747,9 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 			}
 		case command == "/reset":
 			c.reset()
+			if c.persistenceErr != nil {
+				continue
+			}
 			fmt.Fprintln(stderr, "fresh session; the conversation so far is no longer sent")
 		case command == "/edit":
 			c.commandEdit(ctx, input, stdout, stderr)
@@ -733,6 +766,9 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 				c.planForMessage(line, stderr)
 			}
 			c.runTurn(ctx, line, input, stdout, stderr)
+		}
+		if err := c.saveCheckpoint(); err != nil {
+			c.persistenceErr = err
 		}
 	}
 }
@@ -776,9 +812,24 @@ func commandTakesArgument(name string) bool {
 
 // reset starts a fresh session for both /reset and an approved fresh handoff.
 func (c *conversation) reset() {
+	previous := c.session.store
 	c.session.Reset()
 	c.usage = Usage{Known: true}
 	c.autoCompactOff = false
+	c.session.checkpointUsage, c.session.checkpointAutoCompactOff = c.usage, false
+	if previous != nil {
+		st, err := openSessionStore(c.session.ID, true)
+		if err == nil {
+			c.session.store = st
+			err = c.session.checkpoint("idle", "")
+		}
+		previous.close()
+		if err != nil {
+			c.persistenceErr = err
+		} else {
+			fmt.Fprintf(c.progress, "session ID: %s · resume: reagent chat --resume %s\n", c.session.ID, c.session.ID)
+		}
+	}
 }
 
 // runTurn runs one turn under its own interrupt handler, so the first Ctrl-C
@@ -787,13 +838,39 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 	turnCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
-	if c.shouldAutoCompact() && !c.autoCompact(ctx, stderr) {
-		return
+	if c.shouldAutoCompact() {
+		if c.session.store != nil {
+			pending := &UserTurn{Text: text, Plan: planMarkerFor(c.session.history, c.session.planMode)}
+			if c.session.snapshot != nil {
+				pending.Workspace = c.session.snapshot(ctx, c.session.cfg.WorkspacePath, c.session.refsOnlySnapshot(c.session.cfg.WorkspacePath))
+			}
+			c.session.pendingSubmission = pending
+			if err := c.saveCheckpoint(); err != nil {
+				c.persistenceErr = err
+				return
+			}
+		}
+		if !c.autoCompact(ctx, stderr) {
+			if c.persistenceErr == nil {
+				c.session.pendingSubmission = nil
+				if err := c.saveCheckpoint(); err != nil {
+					c.persistenceErr = err
+				}
+			}
+			return
+		}
 	}
 	runID := NewID()
 	path, err := tracePathFor(c.traceDir, runID)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
+		if c.session.pendingSubmission != nil {
+			c.persistenceErr = err
+		}
+		return
+	}
+	if err := c.saveCheckpoint(); err != nil {
+		c.persistenceErr = err
 		return
 	}
 	c.session.display.beginTurn()
@@ -804,6 +881,10 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 		return
 	}
 	c.usage.Add(result.Usage)
+	if result.Status == StatusPersistenceError {
+		c.persistenceErr = errors.New(result.Reason)
+		return
+	}
 	showTrace := result.Status != StatusCompleted
 	if c.session.blocked != "" {
 		printResult(c.session.display, result, time.Since(started), stdout, c.recap, false, true)
@@ -858,6 +939,10 @@ func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan str
 	switch index {
 	case 0:
 		c.session.planMode = false
+		if err := c.saveCheckpoint(); err != nil {
+			c.persistenceErr = err
+			return
+		}
 		fmt.Fprintln(stderr, planSwitchLine(false, styledOutput(stderr)))
 		if styledOutput(stderr) {
 			width := terminalColumns(stderr)
@@ -878,6 +963,17 @@ func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan str
 	default:
 		fmt.Fprintln(stderr, "kept planning")
 	}
+}
+
+// saveCheckpoint records local changes before another prompt or model request.
+func (c *conversation) saveCheckpoint() error {
+	c.session.checkpointUsage = c.usage
+	c.session.checkpointAutoCompactOff = c.autoCompactOff
+	phase := c.session.checkpointPhase
+	if phase == "" {
+		phase = "idle"
+	}
+	return c.session.checkpoint(phase, c.session.checkpointInFlight)
 }
 
 // tracePathFor places a run's trace under dir, or under the default cache

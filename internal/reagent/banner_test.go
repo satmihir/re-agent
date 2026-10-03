@@ -169,3 +169,30 @@ func stripANSI(s string) string {
 	}
 	return b.String()
 }
+
+func TestChatWelcome_SessionIDAcrossWidths(t *testing.T) {
+	id := "0123456789abcdef"
+	cfg := welcomeConfig(t)
+	for _, mode := range []string{"logo", "plain", "narrow"} {
+		t.Run(mode, func(t *testing.T) {
+			var out bytes.Buffer
+			d := &Display{w: &out, sessionID: id, styled: mode != "plain"}
+			if mode == "logo" {
+				d.welcome(cfg, "/work/repo", "", welcomeColumns)
+			} else {
+				d.header(cfg, "/work/repo", "", true)
+			}
+			text := stripANSI(out.String())
+			if !strings.Contains(text, "session ID: "+id) {
+				t.Fatalf("missing ID: %q", text)
+			}
+			if mode == "logo" {
+				for _, line := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+					if displayWidth(line) >= welcomeColumns {
+						t.Fatalf("wrapped: %q", line)
+					}
+				}
+			}
+		})
+	}
+}
