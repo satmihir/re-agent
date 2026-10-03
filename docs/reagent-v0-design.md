@@ -183,7 +183,7 @@ Optional, off by default: `--auto` or `/auto on`. `/auto off` or an explicit mod
 
 ### 10.7 Friction reports
 
-`--report-friction` registers `report_friction` (read-class, effect none) and appends the fixed paragraph from `docs/reagent-usage-fixes-plan.md` §4 U11 after the runtime section. Arguments: category (`misleading_error`, `missing_capability`, `unclear_description`, `harness_bug`, `other`), one-line summary ≤ 300 code points, optional details ≤ 4,000, optional `related_call_ids` ≤ 20. At most ten valid reports per process. `/friction` sends the embedded review prompt as an ordinary turn. `bench/friction.py` derives reports from traces; nothing else is logged.
+`--report-friction` registers `report_friction` (read-class, effect none) and appends the fixed paragraph from `docs/reagent-usage-fixes-plan.md` §4 U11 after the runtime section. Arguments: category (`misleading_error`, `missing_capability`, `unclear_description`, `harness_bug`, `other`), one-line summary ≤ 300 code points, optional details ≤ 4,000, optional `related_call_ids` ≤ 20. The paragraph and tool description specifically ask for a report when `exec` substitutes for a file tool, naming what the tool could not do. At most ten valid reports per process. `/friction` sends the embedded review prompt as an ordinary turn. `bench/friction.py` derives reports from traces; nothing else is logged.
 
 ### 10.8 Durable chat resume
 

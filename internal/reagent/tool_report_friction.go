@@ -28,7 +28,8 @@ func (*reportFrictionTool) Spec() ToolSpec {
 		Name: "report_friction",
 		Description: "Report a rough edge in the re:agent harness itself: a misleading tool error, " +
 			"a missing capability you worked around, an unclear description or instruction, or a harness bug. " +
-			"Reports are for re:agent's developers; they do not change anything in this session. Use it briefly and continue your task.",
+			"Reports are for re:agent's developers; they do not change anything in this session. Use it briefly and continue your task. " +
+			"In particular, if you use exec (a script, sed, cat, grep, or similar) to do something a tool exists for, such as editing, reading, searching, or listing files, report what the tool could not do.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
