@@ -112,7 +112,12 @@ func (d *Display) welcome(cfg Config, workspace, endpoint string, columns int) {
 		loaded = dim(label)
 	}
 	details := [len(flaskArt)]string{
-		"",
+		func() string {
+			if d.sessionID == "" {
+				return ""
+			}
+			return dim("session ID: " + d.sessionID)
+		}(),
 		title,
 		modelLine,
 		truncateWidth(sanitize(shortPath(workspace)), room),

@@ -44,10 +44,11 @@ type Run struct {
 	trace   *Trace
 	runID   string
 
-	effects []EffectRecord
-	steps   int
-	calls   int
-	usage   Usage
+	effects        []EffectRecord
+	persistenceErr error
+	steps          int
+	calls          int
+	usage          Usage
 	// resumable is set only where a run stops before a response is accepted
 	// (v0 §10 amendment of 2026-09-26).
 	resumable                                                       bool
@@ -95,6 +96,10 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"initial_history":     s.history,
 	})
 	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}})
+	s.pendingSubmission = nil
+	if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
+		return r.persistenceFailure(err)
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -107,6 +112,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.finish(StatusCancelled, "cancelled during routing", "")
 		}
 		r.cfg, r.model = s.cfg, s.model // v0 §10 amendment (2026-10-02): commit the next segment together.
+		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
+			return r.persistenceFailure(err)
+		}
 		r.steps++
 		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
 		r.trace.Write("model.requested", r.steps, req)
@@ -147,6 +155,12 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		r.trace.Write("model.accepted", r.steps, resp)
 		// The whole response is appended before any of its results (I08).
 		s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &resp})
+		for _, call := range toolCalls(resp) {
+			s.seenCalls[call.CallID] = true
+		}
+		if err := s.checkpointWithUsage("accepted", "", r.usage); err != nil {
+			return r.persistenceFailure(err)
+		}
 
 		calls := toolCalls(resp)
 		if len(calls) == 0 {
@@ -154,9 +168,6 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 				return r.finish(StatusRefused, "the model refused the task", text)
 			}
 			return r.finish(StatusCompleted, "", blockText(resp, BlockText))
-		}
-		for _, call := range calls {
-			s.seenCalls[call.CallID] = true
 		}
 		if text := blockText(resp, BlockText); text != "" {
 			// Text alongside tool calls is progress, not an answer (v1 §7.3.4).
@@ -276,6 +287,10 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 
 		// Recorded only immediately before a real implementation runs, so an
 		// intent with no result is visible in the trace (v1 §16.3).
+		if err := r.session.checkpointWithUsage("tool", call.CallID, r.usage); err != nil {
+			r.persistenceErr = err
+			return StatusPersistenceError, err.Error()
+		}
 		r.trace.Write("tool.started", r.steps, map[string]any{
 			"call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "workspace": r.cfg.WorkspacePath,
 		})
@@ -287,6 +302,9 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			return StatusToolInternalError, err.Error()
 		}
 		r.recordResult(call, outcome)
+		if r.persistenceErr != nil {
+			return StatusPersistenceError, r.persistenceErr.Error()
+		}
 
 		// Once an effect is uncertain, no further work can be reasoned about:
 		// the run stops rather than trying again or reporting a clean state
@@ -319,6 +337,9 @@ func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 	}
 	r.trace.Write("tool.finished", r.steps, result)
 	r.session.history = append(r.session.history, Entry{Kind: EntryTool, Tool: &result})
+	if r.persistenceErr == nil {
+		r.persistenceErr = r.session.checkpointWithUsage("accepted", "", r.usage)
+	}
 	r.session.display.toolFinished(*call, outcome)
 }
 
@@ -326,6 +347,9 @@ func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 // result, so no accepted call is left silently unanswered.
 func (r *Run) recordNotExecuted(calls []*ToolCall, reason string) {
 	for _, call := range calls {
+		if r.persistenceErr != nil {
+			return
+		}
 		r.recordResult(call, failOutcome("not_executed", reason))
 	}
 }
@@ -337,7 +361,27 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 		Effects: r.effects, Resumable: r.resumable, RouterUsage: r.routerUsage,
 	}
 	r.trace.Write("run.finished", r.steps, result)
+	if r.persistenceErr != nil {
+		result.Status, result.Reason = StatusPersistenceError, r.persistenceErr.Error()
+		result.Resumable = false
+		return result
+	}
+	if r.session.store != nil {
+		r.session.lastTrace = result.TracePath
+		if !continuable(status) && !result.Resumable {
+			r.session.blocked = string(status)
+		}
+		if err := r.session.checkpointWithUsage("terminal", "", r.usage); err != nil {
+			result.Status, result.Reason = StatusPersistenceError, err.Error()
+			result.Resumable = false
+		}
+	}
 	return result
+}
+
+func (r *Run) persistenceFailure(err error) RunResult {
+	r.persistenceErr = err
+	return r.finish(StatusPersistenceError, err.Error(), "")
 }
 
 // classifyModelError reads the terminal status and any reported usage from a

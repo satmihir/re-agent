@@ -20,6 +20,7 @@ type statusLine struct {
 
 // Display writes harness presentation output for a session.
 type Display struct {
+	sessionID string
 	mu        sync.Mutex
 	w         io.Writer
 	styled    bool
@@ -421,6 +422,9 @@ func (d *Display) header(cfg Config, workspace, endpoint string, chat bool) {
 	}
 	if chat {
 		d.headerTitle("re:agent chat · ", model, details)
+		if d.sessionID != "" {
+			d.headerLine("session ID: " + d.sessionID)
+		}
 		if via != "" {
 			d.headerLine(via)
 		}

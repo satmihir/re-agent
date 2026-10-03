@@ -40,7 +40,7 @@ Never execute an accepted call twice. No automatic tool retry.
 
 The loop is one function. Budgets are `max_steps` and `max_tool_calls`; both default to unlimited (0). A positive value keeps v1 §7.4's whole-batch and follow-up-step reservation; invalid or denied calls consume the call budget; negative is invalid. HTTP attempts are counted but are not a budget. No response call cap, run deadline or token budget.
 
-Stop reasons stay distinct (I11): completed, refused, cancelled, provider error, incomplete response, protocol error, limit exceeded (budget exhaustion, request size, context overflow, each with its own reason), effect unknown, tool internal error. Malformed arguments in a valid call envelope are an observation; an incomplete response or duplicate call ID is a protocol stop.
+Stop reasons stay distinct (I11): completed, refused, cancelled, provider error, incomplete response, protocol error, limit exceeded (budget exhaustion, request size, context overflow, each with its own reason), effect unknown, tool internal error, persistence error (§10.8). Malformed arguments in a valid call envelope are an observation; an incomplete response or duplicate call ID is a protocol stop.
 
 **Session and Run.** A Session holds what outlives a run: fixed configuration, accepted transcript, every accepted call ID (I04 spans the session), workspace grants. A Run holds its ID, counters, effects and trace. Only `completed` and `refused` runs leave the session continuable (v1 §7.5), with one exception: a run that stops with `provider_error` or `cancelled` at a model request, during routing, or before the next request leaves the transcript where that request was built from, so it is marked `resumable` and the next message continues. Every other outcome blocks until `/reset` or a successful `/compact`. `/reset` discards history, seen call IDs, blocking, the meter, the admission rate and usage, and keeps the current model and effort, workspace selection and grants, plan mode and the Auto setting; it never rewrites the old transcript.
 
@@ -184,6 +184,12 @@ Optional, off by default: `--auto` or `/auto on`. `/auto off` or an explicit mod
 ### 10.7 Friction reports
 
 `--report-friction` registers `report_friction` (read-class, effect none) and appends the fixed paragraph from `docs/reagent-usage-fixes-plan.md` §4 U11 after the runtime section. Arguments: category (`misleading_error`, `missing_capability`, `unclear_description`, `harness_bug`, `other`), one-line summary ≤ 300 code points, optional details ≤ 4,000, optional `related_call_ids` ≤ 20. At most ten valid reports per process. `/friction` sends the embedded review prompt as an ordinary turn. `bench/friction.py` derives reports from traces; nothing else is logged.
+
+### 10.8 Durable chat resume
+
+**Amendment (2026-10-02):** Live `chat` shows an ID; `--resume ID` restores private, versioned checkpoints of exact history (native items included) and continuation state. This overrides v1's durable-resume exclusion (lines 110, 435) **for chat only**, without automatic recovery or effect reconciliation. Checkpoint atomically at submission, accepted response, tool intent/result, terminal outcome and local changes; a failed write stops work. Traces remain best effort. Resume retries nothing: in-flight tools have **unknown effects**, unstarted calls were **not executed**, and interrupted requests have no invented reply. Explain and await new input.
+
+Require an exact ID and fresh credentials; reject missing, corrupt, unsupported, open or incompatible sessions (except `--recap`/`--trace-dir`). Resume at the launch workspace without extra approvals. Scripted chats have no ID; `/reset` and fresh model switches issue new IDs, preserving old checkpoints. No listing.
 
 ## 11. Design fork: native versus prompt-defined tools
 

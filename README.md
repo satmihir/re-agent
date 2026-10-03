@@ -47,6 +47,14 @@ export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY=sk-ant-...
 ./reagent chat --workspace ./your-repo
 ```
 
+The welcome shows a session ID. To continue a live chat after exiting:
+
+```bash
+./reagent chat --resume ID
+```
+
+Resume needs the provider credential again. It restores recorded context but does **not** restart an interrupted model request or tool; an in-flight tool may have unknown effects. Recovery explains uncertainty on stderr and waits for a new message. It starts in the original launch workspace; other workspace approvals must be granted again. Only live chats have resumable IDs (not `--scripted`), and `/reset` or `/model NAME fresh` shows a new ID while preserving the old checkpoint. There is no session list or automatic crash recovery. Resume accepts `--recap` and `--trace-dir`, but not flags that replace saved settings.
+
 For a single task instead of a conversation:
 
 ```bash

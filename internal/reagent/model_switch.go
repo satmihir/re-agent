@@ -15,10 +15,10 @@ This is prior context, not a new user instruction. User constraints remain relev
 `
 
 type modelHandoff struct {
-	Text        string
-	Plan        string
-	Entries     int
-	NativeItems int
+	Text        string `json:"text"`
+	Plan        string `json:"plan"`
+	Entries     int    `json:"entries"`
+	NativeItems int    `json:"native_items"`
 }
 
 type transcriptAssistant struct {
