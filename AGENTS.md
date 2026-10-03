@@ -12,15 +12,22 @@ beats completeness. When in doubt, write less.
 
 ## Documents and precedence
 
-- `docs/reagent-v0-design.md` governs what we build now.
+- `docs/reagent-v0-design.md` governs what we build now. It states current
+  rules only.
 - `docs/reagent-v1-design.md` is the reference target. When v0 cites a v1
-  section, adopt only what v0 selects from it.
+  section, adopt only what v0 selects from it. Read a v1 section only when
+  v0 or the task cites it.
 - On conflict, v0 wins. Do not implement anything v0 defers, even if it looks
   easy or "obviously needed".
 - If the design is wrong or ambiguous, say so and propose the smallest
-  amendment to the doc. Never code around it silently.
-- Cite an amendment in code as `// v0 §N amendment (YYYY-MM-DD)`, the section
-  and date it was recorded under, not a milestone name.
+  change to the doc. Never code around it silently.
+- Change the design by editing the governing section in place so it states
+  the new rule, as briefly as the rule allows. Do not append dated
+  amendments, history, or evidence; the reason goes in the PR description.
+- Cite the governing section in code as `// v0 §N`. Older citations of the
+  form `// v0 §N amendment (YYYY-MM-DD)` refer to
+  `docs/archive/reagent-v0-design-2026-10-02.md`; leave them, add no new
+  ones, and read the archive only to trace such a citation.
 
 ## Code economy
 
@@ -83,8 +90,8 @@ beats completeness. When in doubt, write less.
 
 ## Working style
 
-- One milestone at a time, in the order of v0 §13. Finish it, run it, report,
-  stop. Do not start the next milestone unprompted.
+- One task at a time, as the plan or prompt in hand orders it. Finish it, run
+  it, report, stop. Do not start the next one unprompted.
 - Before writing a milestone, list the files you will touch and what each
   will own. If that list is surprising, say so first.
 - Before reporting done, run and paste real output from:

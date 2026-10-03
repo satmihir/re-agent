@@ -323,7 +323,7 @@ guidance, and snapshots, shell records, and model-facing tool outcomes carry
 workspace attribution. The handoff prompt also includes workspace guidance.
 Per-result attribution is intentionally retained before the first switch for
 unambiguous history and trace replay; it counts toward the existing result limit.
-See the v0 §6 request-compatibility amendment.
+See the 2026-09-30 request-compatibility note in `docs/archive/reagent-v0-design-2026-10-02.md` §6.
 
 ## Every run is on disk
 
