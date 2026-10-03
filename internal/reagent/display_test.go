@@ -44,6 +44,40 @@ func TestDisplay_SummaryLine(t *testing.T) {
 	}
 }
 
+func TestDisplay_BrowsingSummaryReplacesSuccessfulActivity(t *testing.T) {
+	var b bytes.Buffer
+	d := NewDisplay(&b)
+	d.beginTurn()
+	for _, tc := range []struct {
+		name, path, workspace string
+	}{
+		{"read_file", "a.go", "/one"},
+		{"read_file", "a.go", "/one"}, // another range of the same file
+		{"read_file", "a.go", "/two"}, // the same path in another workspace
+		{"search_text", ".", "/one"},
+		{"list_files", ".", "/one"},
+	} {
+		d.toolFinished(ToolCall{Name: tc.name, Arguments: `{"path":"` + tc.path + `"}`}, ToolOutcome{OK: true, Workspace: tc.workspace, Data: []byte(`{}`)})
+	}
+	if got := b.String(); got != "" {
+		t.Fatalf("successful browsing printed activity: %q", got)
+	}
+	d.toolFinished(ToolCall{Name: "read_file", Arguments: `{"path":"missing.go"}`}, failOutcome("not_found", "missing"))
+	d.toolFinished(ToolCall{Name: "search_text", Arguments: `{"path":".","query":"q"}`}, failOutcome("invalid_arguments", "bad query"))
+	d.summary(RunResult{Status: StatusCompleted}, time.Second, false, false)
+	if got := b.String(); got != "  ✗ read_file missing.go → not_found: missing\n  ✗ search_text \"q\" in . → invalid_arguments: bad query\n✓ completed · 0 steps · 0 tool calls · tokens unknown · 1.0s\n  ✓ read 2 files · 1 search · 1 listing\n" {
+		t.Fatalf("browsing summary: %q", got)
+	}
+
+	b.Reset()
+	d.beginTurn()
+	d.toolFinished(ToolCall{Name: "list_files", Arguments: `{"path":"."}`}, ToolOutcome{OK: true, Data: []byte(`{}`)})
+	d.summary(RunResult{Status: StatusProviderError}, time.Second, false, false)
+	if got := b.String(); !strings.Contains(got, "  ✓ 1 listing\n") || strings.Contains(got, "read 2 files") {
+		t.Fatalf("next turn summary: %q", got)
+	}
+}
+
 func TestDisplay_ContextWarningAtSixtyPercent(t *testing.T) {
 	for _, test := range []struct {
 		name   string
