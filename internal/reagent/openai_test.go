@@ -3,6 +3,7 @@ package reagent
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -192,6 +193,41 @@ func TestEncodeRequest_ReasoningEffort(t *testing.T) {
 	body, got = encode(t, ModelRequest{Model: "m"})
 	if got.Reasoning != nil || strings.Contains(string(body), `"reasoning":`) {
 		t.Fatalf("an unset effort still sent a parameter: %s", body)
+	}
+}
+
+func TestEncodeRequest_CatalogVerbosityInDirectAndProxyForms(t *testing.T) {
+	for _, info := range modelCatalog {
+		if info.Provider != openaiName {
+			continue
+		}
+		for _, proxied := range []bool{false, true} {
+			t.Run(info.ID+"/proxied="+strconv.FormatBool(proxied), func(t *testing.T) {
+				body, err := encodeOpenAIRequest(ModelRequest{Model: info.ID, ReasoningEffort: info.Effort}, proxied)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(body), `"reasoning":{"effort":"`+info.Effort+`"},"text":{"verbosity":"low"},"tool_choice":"auto"`) {
+					t.Fatalf("text missing or out of order: %s", body)
+				}
+			})
+		}
+	}
+}
+
+func TestEncodeRequest_UnknownModelOmitsVerbosity(t *testing.T) {
+	for _, proxied := range []bool{false, true} {
+		body, err := encodeOpenAIRequest(ModelRequest{Model: "gpt-test-unknown", ReasoningEffort: "low"}, proxied)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(body, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, found := fields["text"]; found {
+			t.Fatalf("unknown model sent text: %s", body)
+		}
 	}
 }
 

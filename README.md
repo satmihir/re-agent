@@ -395,7 +395,7 @@ A few rules shape the rest:
   executes.
 - **Requests are built by a pure function.** There are no clocks or file reads
   inside it. Two requests differ only where the conversation does, which also
-  keeps the prompt cache warm.
+  keeps the prompt cache warm. OpenAI catalog requests include `text.verbosity: "low"`; unknown models and Anthropic omit it.
 - **Native continuation goes back verbatim within a model segment.** Reasoning
   and thinking items return exactly as received. A model switch projects visible
   evidence into text instead; foreign or old-segment native items are never replayed.

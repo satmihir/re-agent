@@ -1,6 +1,7 @@
 package reagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -165,6 +166,26 @@ func TestOpenAI_RoundTripPreservesNativeItems(t *testing.T) {
 	// Cached input and reasoning tokens are subsets, never added again.
 	if got := result.Usage; !got.Known || got.InputTokens != 250 || got.OutputTokens != 42 {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestOpenAI_CatalogPreviewMatchesFirstLiveRequest(t *testing.T) {
+	api := newFakeAPI(t, okReply(strings.ReplaceAll(textReply, "test-model", "gpt-6-luna")))
+	cfg := testConfig(t, NewEchoTool())
+	cfg.Provider, cfg.Model, cfg.ReasoningEffort = openaiName, "gpt-6-luna", "low"
+	trace := NewTrace(io.Discard)
+	model := NewOpenAIModel("sk-secret-key", api.server.URL, api.server.Client(), trace)
+	_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "find the marker")
+	if result.Status != StatusCompleted {
+		t.Fatalf("run: %+v", result)
+	}
+	preview, err := PreviewRequest(cfg, "find the marker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := api.received()
+	if len(sent) != 1 || !bytes.Equal(sent[0], preview) || !bytes.Contains(preview, []byte(`"text":{"verbosity":"low"}`)) {
+		t.Fatalf("preview differs from first live request or omits text: %s / %s", preview, sent)
 	}
 }
 
