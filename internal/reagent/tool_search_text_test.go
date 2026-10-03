@@ -295,3 +295,58 @@ func TestSearchText_RejectsEscapingPath(t *testing.T) {
 		t.Fatalf("got %s (%s)", got.Code, got.Message)
 	}
 }
+
+func TestSearchText_MultiplePathsOrderAndOverlap(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"sub/a.txt": "hit\n", "sub/b.txt": "hit\n", "top.txt": "hit\n"})
+	for _, tc := range []struct {
+		name, paths, want string
+		files             int
+	}{
+		{"two files", `["top.txt","sub/a.txt"]`, "top.txt:1 sub/a.txt:1", 2},
+		{"overlap", `["sub","sub/a.txt","top.txt","sub"]`, "sub/a.txt:1 sub/b.txt:1 top.txt:1", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got searchTextResult
+			data(t, runTool(t, NewSearchTextTool(ws), `{"paths":`+tc.paths+`,"query":"hit"}`), &got)
+			if matchLocations(got.Matches) != tc.want || got.FilesScanned != tc.files || !got.Complete {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestSearchText_MultiplePathsValidateEveryPath(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "hit"})
+	for _, tc := range []struct{ name, args, code, message string }{
+		{"both", `{"path":"a.txt","paths":["a.txt"],"query":"hit"}`, "invalid_arguments", "exactly one"},
+		{"neither", `{"query":"hit"}`, "invalid_arguments", "exactly one"},
+		{"empty", `{"paths":[],"query":"hit"}`, "invalid_arguments", "1 to 20"},
+		{"null", `{"paths":null,"query":"hit"}`, "invalid_arguments", "1 to 20"},
+		{"invalid element", `{"paths":["a.txt",null],"query":"hit"}`, "invalid_arguments", "paths[1]"},
+		{"invalid path", `{"paths":["a.txt","../outside"],"query":"hit"}`, "invalid_path", "paths[1]"},
+		{"missing path", `{"paths":["a.txt","absent"],"query":"hit"}`, "not_found", "paths[1]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runTool(t, NewSearchTextTool(ws), tc.args)
+			if got.Code != tc.code || !strings.Contains(got.Message, tc.message) || got.Effect != EffectNone {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestSearchText_MultiplePathsShareResultBudget(t *testing.T) {
+	line := strings.Repeat("x", 900) + " hit\n"
+	ws := testWorkspace(t, map[string]string{"a.txt": strings.Repeat(line, 50), "b.txt": "hit\n"})
+	var got searchTextResult
+	outcome := runTool(t, NewSearchTextTool(ws), `{"paths":["a.txt","b.txt"],"query":"hit"}`)
+	data(t, outcome, &got)
+	if got.Complete || got.StopReason == nil || *got.StopReason != "result_bytes" || len(outcome.Data) > MaxResultBytes {
+		t.Fatalf("got %+v, outcome %+v", got, outcome)
+	}
+	var limited searchTextResult
+	data(t, runTool(t, NewSearchTextTool(ws), `{"paths":["b.txt","a.txt"],"query":"hit","max_results":1}`), &limited)
+	if limited.Complete || matchLocations(limited.Matches) != "b.txt:1" || limited.StopReason == nil || *limited.StopReason != "max_results" {
+		t.Fatalf("got %+v", limited)
+	}
+}
