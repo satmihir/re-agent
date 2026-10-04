@@ -96,7 +96,7 @@ func TestRegion_PromptPickerRestoresInputAndInsertsResult(t *testing.T) {
 	term := newTestTerminal(80, 24)
 	term.feed(r.out.(*bytes.Buffer).String())
 	lines := term.lines()
-	if lines[18] != "selected second" || lines[20] != strings.Repeat("─", 80) || lines[21] != "❯" {
+	if lines[r.region.top-2] != "selected second" || lines[r.region.top-1] != strings.Repeat("─", 80) || lines[r.region.top] != "❯" {
 		t.Fatalf("picker return and insertion: %#v", lines)
 	}
 }
@@ -252,7 +252,7 @@ func TestRegion_MultipleInsertedLinesDoNotMovePrompt(t *testing.T) {
 	term := newTestTerminal(24, 8)
 	term.feed(out.String())
 	lines := term.lines()
-	if lines[0] != "first" || lines[1] != "second" || lines[2] != "third" || lines[4] != strings.Repeat("─", 24) || lines[5] != "❯" || term.row != r.top+r.caretRow-1 || term.col != r.caretCol {
+	if lines[1] != "first" || lines[2] != "second" || lines[3] != "third" || lines[4] != strings.Repeat("─", 24) || lines[5] != "❯" || term.row != r.top+r.caretRow-1 || term.col != r.caretCol {
 		t.Fatalf("insertion screen %#v caret %d,%d", lines, term.row, term.col)
 	}
 }
@@ -279,5 +279,41 @@ func TestRegionStatus_ControlCharactersStayOnOneRow(t *testing.T) {
 	rows := regionSubmitted("a\tb", 24, false)
 	if rows[1] != "❯ a⇥b" {
 		t.Fatalf("unsafe submitted tab: %#v", rows)
+	}
+}
+
+func TestRegion_StartsAfterOutputAndMovesOnlyForNewOutput(t *testing.T) {
+	var out bytes.Buffer
+	r := &terminalRegion{out: &out, initialRow: 4}
+	term := newTestTerminal(24, 10)
+	term.feed("\x1b[3;1Hbanner\r\n")
+	rows, row, col := regionInputRows(nil, 0, 24, regionStatus{model: "model"}, false)
+	r.draw(rows, row, col, 24, 10)
+	term.feed(out.String())
+	if got := term.lines(); r.top != 4 || got[2] != "banner" || got[3] != strings.Repeat("─", 24) || got[4] != "❯" || got[7] != "" {
+		t.Fatalf("initial inline region %#v top %d", got, r.top)
+	}
+	out.Reset()
+	r.insert("result")
+	term.feed(out.String())
+	if got := term.lines(); r.top != 5 || got[2] != "banner" || got[3] != "result" || got[4] != strings.Repeat("─", 24) || got[5] != "❯" {
+		t.Fatalf("inserted before inline region %#v top %d", got, r.top)
+	}
+	out.Reset()
+	r.submit(regionSubmitted("hello", 24, false))
+	term.feed(out.String())
+	if got := term.lines(); got[2] != "banner" || got[3] != "result" || got[4] != strings.Repeat("─", 24) || got[5] != "❯ hello" || got[6] != strings.Repeat("─", 24) || term.row != 7 {
+		t.Fatalf("submission left a gap or scrolled: %#v caret %d", got, term.row)
+	}
+}
+
+func TestRegion_OnlyScrollsWhenInlinePaneOverflows(t *testing.T) {
+	for _, tc := range []struct{ row, rows, height, top, newlines int }{
+		{4, 4, 10, 4, 0}, {7, 4, 10, 7, 0}, {9, 4, 10, 7, 3}, {0, 4, 10, 7, 3},
+	} {
+		top, n := regionPlacement(tc.row, tc.rows, tc.height)
+		if top != tc.top || n != tc.newlines {
+			t.Errorf("row %d: top %d newlines %d; want %d %d", tc.row, top, n, tc.top, tc.newlines)
+		}
 	}
 }

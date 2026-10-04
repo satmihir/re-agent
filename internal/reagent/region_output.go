@@ -45,7 +45,21 @@ func (r *terminalRegion) insert(line string) {
 		fmt.Fprintln(r.out, line)
 		return
 	}
-	// v0 §10.2: DECSTBM scrolls only the rows above the pane.
-	fmt.Fprintf(r.out, "\x1b[?2026h\x1b[1;%dr\x1b[%d;1H%s\r\n\x1b[r\x1b[%d;%dH\x1b[?2026l",
-		r.top-1, r.top-1, line, r.top+r.caretRow, r.caretCol+1)
+	// Use empty rows below the pane before scrolling anything into history.
+	available := r.height - (r.top + r.rows - 1)
+	if available > 0 {
+		needed := max(1, (displayWidth(line)+r.width-1)/r.width)
+		move := min(available, needed)
+		oldTop := r.top
+		fmt.Fprintf(r.out, "\x1b[?2026h\x1b[%d;1H\x1b[J", oldTop)
+		r.top += move
+		r.drawLocked(r.visible, r.caretRow, r.caretCol, r.width, r.height)
+		if move == needed {
+			fmt.Fprintf(r.out, "\x1b[?2026h\x1b[%d;1H%s\x1b[%d;%dH\x1b[?2026l", oldTop, line, r.top+r.caretRow, r.caretCol+1)
+			return
+		}
+	}
+	// v0 §10.2: DECSTBM scrolls only the rows above a bottom-anchored pane.
+	fmt.Fprintf(r.out, "\x1b[?2026h\x1b[1;%dr\x1b[%d;1H\r\n\x1b[%d;1H%s\x1b[r\x1b[%d;%dH\x1b[?2026l",
+		r.top-1, r.top-1, r.top-1, line, r.top+r.caretRow, r.caretCol+1)
 }

@@ -233,10 +233,14 @@ func layoutInput(buffer []rune, caret int, prompt string, width int) ([]string, 
 	width = max(2, width)
 	rows := []string{prompt}
 	row, col := 0, displayWidth(prompt)
+	hang := "  "
+	if width <= 4 {
+		hang = ""
+	}
 	if col >= width {
-		rows = append(rows, "")
+		rows = append(rows, hang)
 		row++
-		col = 0
+		col = len(hang)
 	}
 	caretRow, caretCol := row, col
 	for i, r := range buffer {
@@ -252,9 +256,9 @@ func layoutInput(buffer []rune, caret int, prompt string, width int) ([]string, 
 		}
 		cells := runeWidth([]rune(text)[0])
 		if col+cells >= width {
-			rows = append(rows, "")
+			rows = append(rows, hang)
 			row++
-			col = 0
+			col = len(hang)
 		}
 		rows[row] += text
 		col += cells

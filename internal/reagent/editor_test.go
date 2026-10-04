@@ -43,9 +43,9 @@ func TestEditor_Layout(t *testing.T) {
 		row, col             int
 	}{
 		{"ascii", "abc", "> ", 10, 2, []string{"> abc"}, 0, 4},
-		{"boundary", "abcd", "> ", 6, 4, []string{"> abc", "d"}, 1, 1},
+		{"boundary", "abcd", "> ", 6, 4, []string{"> abc", "  d"}, 1, 3},
 		{"wide", "中🙂e\u0301", "> ", 8, 2, []string{"> 中🙂e\u0301"}, 0, 6},
-		{"long word", strings.Repeat("a", 10), "> ", 6, 10, []string{"> aaa", "aaaaa", "aa"}, 2, 2},
+		{"long word", strings.Repeat("a", 10), "> ", 6, 10, []string{"> aaa", "  aaa", "  aaa", "  a"}, 3, 3},
 		{"paste newline", "a\nb", "> ", 8, 2, []string{"> a↵b"}, 0, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,7 +72,7 @@ func TestEditor_ArrowMovesWithinWrappedInputBeforeHistory(t *testing.T) {
 	h := &promptHistory{}
 	h.Add("older")
 	e.apply(inputKey{name: "up"}, h, nil)
-	if e.historyIndex != 0 || e.caret != 2 {
+	if e.historyIndex != 0 || e.caret != 4 {
 		t.Fatalf("up moved to caret %d, history %d", e.caret, e.historyIndex)
 	}
 	e.apply(inputKey{name: "down"}, h, nil)

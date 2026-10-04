@@ -136,7 +136,16 @@ type terminalRegion struct {
 	mu                       *sync.Mutex
 	width, height, top, rows int
 	caretRow, caretCol       int
+	initialRow               int
+	visible                  []string
 	active                   bool
+}
+
+func regionPlacement(row, rows, height int) (top, newlines int) {
+	if row > 0 && row+rows-1 <= height {
+		return row, 0
+	}
+	return height - rows + 1, rows - 1
 }
 
 func (r *terminalRegion) draw(rows []string, row, col, width, height int) {
@@ -158,34 +167,28 @@ func (r *terminalRegion) drawLocked(rows []string, row, col, width, height int) 
 		rows = rows[cut:]
 		row = max(0, row-cut)
 	}
-	top := height - len(rows) + 1
-	if !r.active && r.keys != nil {
-		current := cursorRow(r.fd, r)
-		if current == 0 {
-			current = height
+	top := r.top
+	newlines := 0
+	if !r.active {
+		row := r.initialRow
+		if r.keys != nil {
+			row = cursorRow(r.fd, r)
 		}
-		gap := top - current
-		if gap < 0 {
-			gap = len(rows) - 1
-		}
-		fmt.Fprint(r.out, "\x1b[?2026h")
-		for i := 0; i < gap; i++ {
+		top, newlines = regionPlacement(row, len(rows), height)
+	} else if overflow := top + len(rows) - 1 - height; overflow > 0 {
+		// Growing the pane scrolls only the overflow, preserving output above it.
+		fmt.Fprintf(r.out, "\x1b[?2026h\x1b[%d;1H", height)
+		for i := 0; i < overflow; i++ {
 			fmt.Fprint(r.out, "\r\n")
 		}
-	} else {
-		fmt.Fprint(r.out, "\x1b[?2026h")
+		top -= overflow
 	}
-	if r.active && top < r.top {
-		// Growing the pane scrolls existing output into scrollback instead of
-		// overwriting the rows that used to be above it.
-		fmt.Fprintf(r.out, "\x1b[%d;1H", height)
-		for i := top; i < r.top; i++ {
-			fmt.Fprint(r.out, "\r\n")
-		}
-	} else if r.active && top > r.top {
-		fmt.Fprintf(r.out, "\x1b[%d;1H\x1b[J", r.top)
+	fmt.Fprint(r.out, "\x1b[?2026h")
+	for i := 0; i < newlines; i++ {
+		fmt.Fprint(r.out, "\r\n")
 	}
 	r.top, r.rows, r.active = top, len(rows), true
+	r.visible = append([]string(nil), rows...)
 	fmt.Fprintf(r.out, "\x1b[%d;1H\x1b[J", top)
 	for i, line := range rows {
 		if i > 0 {
