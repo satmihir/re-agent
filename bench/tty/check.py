@@ -138,6 +138,23 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "interrupt-running-command": {
+        # Ctrl-C while a tool command runs cancels the turn and returns to the
+        # prompt; a cancelled exec leaves uncertain effects, so the session blocks.
+        "script": [tool("Sleeping.", "s1", "exec", {"argv": ["sleep", "6"], "cwd": "."}), reply("unused")],
+        "steps": [
+            ("idle", 1.0),
+            ("type", "go"),
+            ("key", "enter"),
+            ("idle", 1.0),
+            ("key", "ctrl-c"),
+            ("wait", "cancelled", 5),
+            ("idle", 0.5),
+            ("show", "Ctrl-C during a running exec"),
+            ("expect", "screen_has", "effects unknown"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "resize-while-typing": {
         "script": [reply("unused")],
         "steps": [
@@ -222,11 +239,26 @@ class Session:
         self.rows, self.cols = rows, cols
 
     def close(self):
+        # Keep reading while the process exits: closing a terminal can wait for
+        # pending output to drain, and a real terminal would read it.
         try:
             os.kill(self.pid, signal.SIGKILL)
-            os.waitpid(self.pid, 0)
         except OSError:
             pass
+        end = time.time() + 5
+        while time.time() < end:
+            try:
+                pid, _ = os.waitpid(self.pid, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if pid:
+                break
+            ready, _, _ = select.select([self.fd], [], [], 0.05)
+            if ready:
+                try:
+                    os.read(self.fd, 65536)
+                except OSError:
+                    pass
         os.close(self.fd)
 
 
