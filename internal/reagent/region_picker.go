@@ -12,7 +12,11 @@ func (r *terminalReader) chooseRegion(config pickerConfig, header string, p pick
 	}
 	redraw()
 	defer func() {
-		if config.fromPrompt {
+		if r.turn != nil {
+			r.region.mu.Lock()
+			r.redrawRegionLocked()
+			r.region.mu.Unlock()
+		} else if config.fromPrompt {
 			rows, row, col := regionInputRows(nil, 0, width, r.regionStatus, r.styled)
 			r.region.draw(rows, row, col, width, height)
 		} else {

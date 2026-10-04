@@ -27,6 +27,8 @@ type Display struct {
 	live      bool
 	tick      time.Duration
 	status    *statusLine
+	region    *terminalRegion
+	input     *terminalReader
 	printed   bool
 	recap     []string
 	readFiles map[[2]string]bool
@@ -38,6 +40,15 @@ type Display struct {
 func NewDisplay(w io.Writer) *Display {
 	styled := styledOutput(w)
 	return &Display{w: w, styled: styled, live: styled && isTerminal(w), tick: 100 * time.Millisecond}
+}
+
+func (d *Display) attachRegion(input *terminalReader) {
+	if d.region == input.region {
+		return
+	}
+	d.region, d.input = input.region, input
+	d.region.mu = &d.mu
+	d.w = &regionOutput{region: d.region, terminal: d.region.out, locked: true}
 }
 
 // modelStarted shows progress while a model request is in flight.
@@ -61,7 +72,10 @@ func (d *Display) toolStarted(call ToolCall) {
 
 // startStatus replaces any existing status and starts its ticker on live displays.
 func (d *Display) startStatus(label string) {
-	if !d.live {
+	d.mu.Lock()
+	show := d.live || (d.region != nil && d.region.active)
+	d.mu.Unlock()
+	if !show {
 		return
 	}
 	d.stopStatus()
@@ -69,6 +83,9 @@ func (d *Display) startStatus(label string) {
 	s.wg.Add(1)
 	d.mu.Lock()
 	d.status = s
+	if d.region != nil && d.region.active {
+		d.drawProgressLocked(s, 0, time.Time{})
+	}
 	d.mu.Unlock()
 	go func() {
 		defer s.wg.Done()
@@ -80,7 +97,7 @@ func (d *Display) startStatus(label string) {
 			case now := <-t.C:
 				d.mu.Lock()
 				if d.status == s {
-					fmt.Fprint(d.w, "\r\x1b[2K"+statusText(frame, s.label, now.Sub(s.started), d.columns()))
+					d.drawProgressLocked(s, frame, now)
 				}
 				d.mu.Unlock()
 				frame++
@@ -105,8 +122,36 @@ func (d *Display) stopStatus() {
 	close(s.stop)
 	s.wg.Wait()
 	d.mu.Lock()
-	fmt.Fprint(d.w, "\r\x1b[2K")
+	if d.region != nil {
+		d.input.regionStatus.progress = ""
+		if d.region.active {
+			d.input.redrawRegionLocked()
+		} else {
+			fmt.Fprint(d.w, "\r\x1b[2K")
+		}
+	} else {
+		fmt.Fprint(d.w, "\r\x1b[2K")
+	}
 	d.mu.Unlock()
+}
+
+func (d *Display) drawProgressLocked(s *statusLine, frame int, now time.Time) {
+	if d.region != nil && d.region.active {
+		elapsed := time.Duration(0)
+		if !now.IsZero() {
+			elapsed = now.Sub(s.started)
+		}
+		text := statusText(frame, s.label, elapsed, max(2, d.region.width-2))
+		if !d.styled {
+			text = strings.TrimSuffix(strings.TrimPrefix(text, ansiDim), ansiReset)
+		}
+		d.input.regionStatus.progress = text
+		d.input.redrawRegionLocked()
+		return
+	}
+	if !now.IsZero() {
+		fmt.Fprint(d.w, "\r\x1b[2K"+statusText(frame, s.label, now.Sub(s.started), d.columns()))
+	}
 }
 
 // statusText formats one dim spinner frame without letting it wrap the terminal.
@@ -128,7 +173,7 @@ func statusText(frame int, label string, elapsed time.Duration, columns int) str
 // eraseStatusLocked clears a live status before ordinary terminal output. The
 // ticker redraws it on its next tick while the operation remains in progress.
 func (d *Display) eraseStatusLocked() {
-	if d.status != nil {
+	if d.status != nil && (d.region == nil || !d.region.active) {
 		fmt.Fprint(d.w, "\r\x1b[2K")
 	}
 }
@@ -193,18 +238,29 @@ func (d *Display) reply(stdout io.Writer, text string, showPlan bool) {
 	// two differ when only stderr is redirected.
 	columns := min(terminalColumns(stdout), maxReplyColumns)
 	styled := styledOutput(stdout)
+	rendered := display(text, styled, columns)
 	if showPlan {
 		if start, end, found := findPlan(text); found {
 			label := "plan"
 			if styled {
 				label = ansiDim + label + ansiReset
 			}
-			fmt.Fprintln(stdout, display(text[:start], styled, columns)+label+"\n"+
-				display(planContent(text[start:end]), styled, columns)+display(text[end:], styled, columns))
-			return
+			rendered = display(text[:start], styled, columns) + label + "\n" +
+				display(planContent(text[start:end]), styled, columns) + display(text[end:], styled, columns)
 		}
 	}
-	fmt.Fprintln(stdout, display(text, styled, columns))
+	if d.region != nil && sameTerminal(stdout, d.region.out) {
+		d.mu.Lock()
+		if d.region.active {
+			for _, line := range strings.Split(rendered, "\n") {
+				d.region.insertLocked(line)
+			}
+			d.mu.Unlock()
+			return
+		}
+		d.mu.Unlock()
+	}
+	fmt.Fprintln(stdout, rendered)
 }
 func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, showRecap bool) {
 	d.mu.Lock()

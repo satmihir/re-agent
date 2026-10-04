@@ -2,9 +2,11 @@ package reagent
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -39,11 +41,11 @@ func TestRegion_InputAndSubmissionOnScreen(t *testing.T) {
 	term := newTestTerminal(24, 10)
 	term.feed(r.out.(*bytes.Buffer).String())
 	lines := term.lines()
-	if lines[6] != strings.Repeat("─", 24) || lines[7] != "❯ hello" || lines[8] != strings.Repeat("─", 24) {
+	if lines[3] != strings.Repeat("─", 24) || lines[4] != "❯ hello" || lines[5] != strings.Repeat("─", 24) || lines[6] != strings.Repeat("─", 24) || lines[7] != "❯" || lines[8] != strings.Repeat("─", 24) {
 		t.Fatalf("framed message: %#v", lines)
 	}
-	if strings.Contains(strings.Join(lines, "|"), "plan mode") {
-		t.Fatalf("status left after submission: %#v", lines)
+	if lines[9] != "  plan mode" {
+		t.Fatalf("persistent status missing after submit: %#v", lines)
 	}
 }
 
@@ -151,6 +153,9 @@ func TestRegion_NoCursorReplyPreservesLastOutput(t *testing.T) {
 	term := newTestTerminal(24, 10)
 	term.feed("\x1b[9;1Hprevious output\r\n")
 	r.draw([]string{regionRule(24, false), "❯ ", regionRule(24, false), "  model"}, 1, 2, 24, 10)
+	if bytes.Contains(out.Bytes(), []byte("\x1b[6n")) {
+		t.Fatal("queried cursor while the terminal was cooked")
+	}
 	term.feed(out.String())
 	lines := term.lines()
 	if lines[5] != "previous output" || lines[6] != strings.Repeat("─", 24) || lines[7] != "❯" {
@@ -198,7 +203,7 @@ func TestRegion_PromptPickerKeepsRawUntilTheNextTurn(t *testing.T) {
 	if _, err := r.Choose(pickerConfig{title: "Model", shortcuts: true, fromPrompt: true}, []choice{{label: "one"}}, 0); err != nil || entered != 1 || restored != 0 {
 		t.Fatalf("picker %v raw %d/%d", err, entered, restored)
 	}
-	if line, err := r.ReadLine(); err != nil || line != "next" || entered != 1 || restored != 1 {
+	if line, err := r.ReadLine(); err != nil || line != "next" || entered != 1 || restored != 0 {
 		t.Fatalf("next turn %q %v raw %d/%d", line, err, entered, restored)
 	}
 }
@@ -315,5 +320,84 @@ func TestRegion_OnlyScrollsWhenInlinePaneOverflows(t *testing.T) {
 		if top != tc.top || n != tc.newlines {
 			t.Errorf("row %d: top %d newlines %d; want %d %d", tc.row, top, n, tc.top, tc.newlines)
 		}
+	}
+}
+
+func TestRegion_TurnStatusAndQueueRows(t *testing.T) {
+	status := regionStatus{model: "scripted", progress: "⠋ waiting for scripted · 1.2s", queued: true}
+	rows, row, col := regionInputRows([]rune("next"), 4, 40, status, false)
+	if rows[1] != "❯ next" || rows[len(rows)-2] != "  ⠋ waiting for scripted · 1.2s" || rows[len(rows)-1] != "  queued" || row != 1 || col != 6 {
+		t.Fatalf("turn region %#v caret %d,%d", rows, row, col)
+	}
+}
+
+func TestRegion_TypeAheadQueuesNextSubmissionAndCtrlCCancels(t *testing.T) {
+	var out bytes.Buffer
+	r := terminalInput(strings.NewReader(""))
+	r.region = &terminalRegion{out: &out, mu: &sync.Mutex{}}
+	r.region.active = true
+	ctx, cancel := context.WithCancel(context.Background())
+	r.turn = &turnInput{editor: &editor{buffer: []rune("next"), caret: 4}, ctx: ctx, cancel: cancel}
+	r.applyTurnKey(inputKey{name: "enter"})
+	if r.turn.queued != "next" || !r.regionStatus.queued {
+		t.Fatalf("queued %q, status %+v", r.turn.queued, r.regionStatus)
+	}
+	r.finishTurnInput()
+	if r.nextSubmission != "next" || r.turn != nil {
+		t.Fatalf("next submission %q, turn %v", r.nextSubmission, r.turn)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	r.turn = &turnInput{editor: &editor{}, ctx: ctx, cancel: cancel}
+	r.applyTurnKey(inputKey{name: "interrupt"})
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("Ctrl-C context: %v", ctx.Err())
+	}
+}
+
+func TestRegion_TurnInputPollQueuesTypedSubmission(t *testing.T) {
+	var out bytes.Buffer
+	r := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("next\r")}})
+	r.region = &terminalRegion{out: &out, mu: &sync.Mutex{}, width: 40, height: 12, active: true}
+	r.regionStatus = regionStatus{model: "scripted"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.turn = &turnInput{editor: &editor{width: 40}, ctx: ctx, cancel: cancel}
+	r.keys.poll = true
+	r.pollTurnInput(ctx)
+	if r.turn.queued != "next" || !r.regionStatus.queued {
+		t.Fatalf("queued %q, status %+v", r.turn.queued, r.regionStatus)
+	}
+}
+
+func TestRegion_TurnStartsAfterTemporaryPickerCollapsedIt(t *testing.T) {
+	var out bytes.Buffer
+	r := terminalInput(strings.NewReader(""))
+	r.region = &terminalRegion{out: &out, mu: &sync.Mutex{}, width: 40, height: 12}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.startTurnInput(ctx, cancel)
+	r.pauseTurnInput()
+	if !r.region.active {
+		t.Fatal("turn did not restore the region")
+	}
+	cancel()
+	r.finishTurnInput()
+}
+
+func TestRegion_LargeTurnReplyKeepsEveryInsertedLine(t *testing.T) {
+	var out bytes.Buffer
+	r := terminalInput(strings.NewReader(""))
+	r.region = &terminalRegion{out: &out, width: 40, height: 12, top: 1, rows: 4, caretRow: 1, caretCol: 2, active: true}
+	r.region.visible = []string{regionRule(40, false), "❯ ", regionRule(40, false), "  model"}
+	writer := &regionOutput{region: r.region}
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(writer, "reply line %02d\n", i)
+	}
+	for i := 0; i < 40; i++ {
+		if !strings.Contains(out.String(), fmt.Sprintf("reply line %02d", i)) {
+			t.Fatalf("lost reply line %d", i)
+		}
+	}
+	if !r.region.active {
+		t.Fatal("large reply displaced the region")
 	}
 }

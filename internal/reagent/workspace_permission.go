@@ -15,6 +15,11 @@ func workspacePermission(ctx context.Context, input lineReader, progress io.Writ
 	if _, noninteractive := input.(*scannerReader); noninteractive {
 		return false, errNotInteractive
 	}
+	if terminal, ok := input.(*terminalReader); ok && terminal.turn != nil {
+		terminal.pauseTurnInput()
+		terminal.discardTurnInput()
+		defer terminal.resumeTurnInput()
+	}
 	fmt.Fprintln(progress, "Allow this location as a workspace?")
 	fmt.Fprintln(progress, "Location: "+strconv.Quote(destination.path))
 	if destination.missing {

@@ -507,7 +507,20 @@ func (c *conversation) commandEdit(ctx context.Context, input lineReader, stdout
 		fmt.Fprintln(stderr, "/edit needs a terminal")
 		return
 	}
+	terminal, hasRegion := input.(*terminalReader)
+	if hasRegion && terminal.region != nil {
+		if err := terminal.handoffRegion(); err != nil {
+			fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
+			return
+		}
+	}
 	text, err := composeInEditor(editorCommand(), c.stdin, c.stdout, c.stderr)
+	if hasRegion && terminal.region != nil {
+		if restoreErr := terminal.restoreRegion(); restoreErr != nil {
+			fmt.Fprintf(stderr, "error: restore chat region: %s\n", sanitize(restoreErr.Error()))
+			return
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
 		return
@@ -524,14 +537,23 @@ func (c *conversation) commandEdit(ctx context.Context, input lineReader, stdout
 // commandShell runs one ! command and adds it to the conversation without
 // starting a turn (v0 §10 amendment of 2026-09-26). Like a turn, it has its
 // own interrupt handler, so Ctrl-C stops the command and not the chat.
-func (c *conversation) commandShell(ctx context.Context, command string, stdout, stderr io.Writer) {
+func (c *conversation) commandShell(ctx context.Context, command string, input lineReader, stdout, stderr io.Writer) {
 	if command == "" {
 		fmt.Fprintln(stderr, "!COMMAND runs COMMAND in the workspace; its output joins the conversation")
 		return
 	}
-	shellCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
+	shellCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if terminal, ok := input.(*terminalReader); ok && terminal.region != nil && terminal.region.active {
+		terminal.startTurnInput(shellCtx, cancel)
+		defer terminal.finishTurnInput()
+	} else {
+		var stop context.CancelFunc
+		shellCtx, stop = signal.NotifyContext(shellCtx, os.Interrupt)
+		defer stop()
+	}
 
+	stdout = promptOutput(input, stdout)
 	live := &lineEnd{w: stdout}
 	record, err := runShellCommand(shellCtx, c.session.cfg.WorkspacePath, command, live)
 	if err != nil {
@@ -671,6 +693,15 @@ func (c *conversation) regionStatus() regionStatus {
 // session (v1 §18.2). Slash commands are local controls; only compaction and submitted turns call the model.
 // A terminal submission may contain a bracketed paste or continued lines.
 func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
+	if terminal, ok := input.(*terminalReader); ok && terminal.region != nil {
+		c.session.display.attachRegion(terminal)
+		stderr = &regionOutput{region: terminal.region, terminal: stderr}
+		if sameTerminal(stdout, terminal.region.out) {
+			stdout = &regionOutput{region: terminal.region, terminal: stdout}
+		}
+		c.progress, c.session.progress = stderr, stderr
+		defer terminal.closeRegion()
+	}
 	c.session.workspaceConsent = func(ctx context.Context, destination workspaceDestination) (bool, error) {
 		if terminal, ok := input.(*terminalReader); ok {
 			terminal.setRegionStatus(c.regionStatus())
@@ -701,7 +732,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 		if terminal, ok := input.(*terminalReader); ok {
 			terminal.setRegionStatus(c.regionStatus())
 			if terminal.region != nil {
-				terminal.region.mu = &c.session.display.mu
+				c.session.display.attachRegion(terminal)
 			}
 		}
 		input.SetPrompt(prompt)
@@ -783,7 +814,7 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 		case command == "/edit":
 			c.commandEdit(ctx, input, stdout, stderr)
 		case strings.HasPrefix(line, "!") && !strings.Contains(line, "\n"):
-			c.commandShell(ctx, strings.TrimSpace(line[1:]), stdout, stderr)
+			c.commandShell(ctx, strings.TrimSpace(line[1:]), input, stdout, stderr)
 		case strings.HasPrefix(line, "/"):
 			message := fmt.Sprintf("unknown command %s;", sanitize(command))
 			if suggestion := commandSuggestion(command); suggestion != "" {
@@ -864,8 +895,15 @@ func (c *conversation) reset() {
 // runTurn runs one turn under its own interrupt handler, so the first Ctrl-C
 // cancels this turn and leaves the session usable (v1 §15.3).
 func (c *conversation) runTurn(ctx context.Context, text string, input lineReader, stdout, stderr io.Writer) {
-	turnCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	signalCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
+	turnCtx, cancel := context.WithCancel(signalCtx)
+	defer cancel()
+	if terminal, ok := input.(*terminalReader); ok && terminal.region != nil {
+		terminal.setRegionStatus(c.regionStatus())
+		terminal.startTurnInput(turnCtx, cancel)
+		defer terminal.finishTurnInput()
+	}
 
 	if c.shouldAutoCompact() {
 		if c.session.store != nil {
@@ -879,7 +917,7 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 				return
 			}
 		}
-		if !c.autoCompact(ctx, stderr) {
+		if !c.autoCompact(turnCtx, stderr) {
 			if c.persistenceErr == nil {
 				c.session.pendingSubmission = nil
 				if err := c.saveCheckpoint(); err != nil {
@@ -935,8 +973,11 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 	if !found {
 		return
 	}
-	// The completed turn no longer needs its interrupt handler while the
-	// picker reads raw keys; a chosen handoff starts its own turn.
+	// A queued submission is not a vote in the plan picker.
+	if terminal, ok := input.(*terminalReader); ok && terminal.region != nil {
+		terminal.finishTurnInput()
+		terminal.queued, terminal.partial, terminal.keys.pending = nil, nil, nil
+	}
 	stop()
 	c.offerPlan(ctx, input, planContent(result.Reply[start:end]), stdout, stderr)
 }

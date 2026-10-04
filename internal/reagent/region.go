@@ -9,11 +9,12 @@ import (
 
 // regionStatus is the single source for the prompt's session row.
 type regionStatus struct {
-	plan, blocked bool
-	model, effort string
-	auto          bool
-	usage         Usage
-	window        int64
+	plan, blocked, queued bool
+	model, effort         string
+	auto                  bool
+	usage                 Usage
+	window                int64
+	progress              string
 }
 
 func regionLabel(s string) string {
@@ -102,7 +103,15 @@ func frameInput(rows []string, row, col, width int, status regionStatus, styled 
 	if width < 20 {
 		return rows, row, col
 	}
-	return append([]string{regionRule(width, styled)}, append(rows, regionRule(width, styled), status.row(width, styled))...), row + 1, col
+	rows = append([]string{regionRule(width, styled)}, rows...)
+	rows = append(rows, regionRule(width, styled), status.row(width, styled))
+	if status.progress != "" {
+		rows = append(rows, "  "+truncateWidth(status.progress, width-2))
+	}
+	if status.queued {
+		rows = append(rows, "  queued")
+	}
+	return rows, row + 1, col
 }
 
 func regionPickerRows(header string, options []choice, selected, width int, status regionStatus, styled bool) []string {
@@ -110,7 +119,15 @@ func regionPickerRows(header string, options []choice, selected, width int, stat
 	if width < 20 {
 		return rows
 	}
-	return append([]string{regionRule(width, styled)}, append(rows, regionRule(width, styled), status.row(width, styled))...)
+	rows = append([]string{regionRule(width, styled)}, rows...)
+	rows = append(rows, regionRule(width, styled), status.row(width, styled))
+	if status.progress != "" {
+		rows = append(rows, "  "+truncateWidth(status.progress, width-2))
+	}
+	if status.queued {
+		rows = append(rows, "  queued")
+	}
+	return rows
 }
 
 func regionSubmitted(message string, width int, styled bool) []string {
@@ -138,6 +155,7 @@ type terminalRegion struct {
 	caretRow, caretCol       int
 	initialRow               int
 	visible                  []string
+	raw                      bool
 	active                   bool
 }
 

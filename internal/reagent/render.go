@@ -76,8 +76,8 @@ const maxReplyColumns = 100
 // terminalColumns reports the width of the terminal w writes to, or 0 when w is
 // not a terminal or its size cannot be read.
 func terminalColumns(w io.Writer) int {
-	file, ok := w.(*os.File)
-	if !ok || !isTerminal(file) {
+	file := terminalFile(w)
+	if file == nil || !isTerminal(file) {
 		return 0
 	}
 	columns, _, err := term.GetSize(int(file.Fd()))
@@ -94,9 +94,21 @@ func styledOutput(w io.Writer) bool {
 
 // isTerminal reports whether a stream is an interactive terminal rather than a
 // pipe, a file, or a buffer.
+func terminalFile(stream any) *os.File {
+	if w, ok := stream.(*regionOutput); ok {
+		if w.terminal != nil {
+			stream = w.terminal
+		} else {
+			stream = w.region.out
+		}
+	}
+	file, _ := stream.(*os.File)
+	return file
+}
+
 func isTerminal(stream any) bool {
-	file, isFile := stream.(*os.File)
-	if !isFile {
+	file := terminalFile(stream)
+	if file == nil {
 		return false
 	}
 	info, err := file.Stat()
