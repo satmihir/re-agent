@@ -49,7 +49,7 @@ type editFileResult struct {
 func (editFileTool) Spec() ToolSpec {
 	return ToolSpec{
 		Name: "edit_file",
-		Description: "Edit a UTF-8 workspace file after reading it; pass its expected_sha256. " +
+		Description: "Edit a UTF-8 workspace file that you have read or written in this conversation. Read it again after changes outside these tools (exec or the user). " +
 			"Use edits for several changes to one file in one call, or old_text/new_text for one. " +
 			"Each old_text must occur exactly once in the original snapshot; matches must not overlap. " +
 			"Use append_text to add to the end (start with a newline if the file does not end with one). " +
@@ -59,7 +59,7 @@ func (editFileTool) Spec() ToolSpec {
   "type": "object",
   "properties": {
     "path": {"type": "string", "description": "Workspace-relative UTF-8 text file to change."},
-    "expected_sha256": {"type": "string", "description": "The digest read_file returned for the whole file."},
+    "expected_sha256": {"type": "string", "description": "Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version."},
     "old_text": {"type": "string", "description": "Single edit: exact text occurring once in the file."},
     "new_text": {"type": "string", "description": "Single edit: replacement text; empty deletes."},
     "edits": {"type": "array", "description": "Several non-overlapping replacements in one call.", "minItems": 1, "items": {
@@ -69,7 +69,7 @@ func (editFileTool) Spec() ToolSpec {
     }},
     "append_text": {"type": "string", "description": "Text added after all replacements; no automatic newline."}
   },
-  "required": ["path", "expected_sha256"],
+  "required": ["path"],
   "additionalProperties": false
 }`),
 		Effect: EffectClassWrite,
@@ -81,11 +81,11 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	if bad := decodeArgs(args, &a); bad != nil {
 		return *bad, nil
 	}
-	if !digestPattern.MatchString(a.ExpectedSHA256) {
-		return failOutcome("invalid_arguments", invalidExpectedDigest), nil
-	}
 	var fields map[string]json.RawMessage
 	json.Unmarshal(args, &fields)
+	if _, supplied := fields["expected_sha256"]; supplied && !digestPattern.MatchString(a.ExpectedSHA256) {
+		return failOutcome("invalid_arguments", invalidExpectedDigest), nil
+	}
 	edits, appendText, bad := a.changes(fields)
 	if bad != nil {
 		return *bad, nil
@@ -105,7 +105,12 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 
 	// One snapshot answers both the digest check and the replacement, so the
 	// bytes compared are exactly the bytes edited (v0 §8 amendment, 2026-09-27).
-	snap, bad := t.ws.checkFileDigest(abs, a.ExpectedSHA256)
+	var snap *snapshot
+	if _, supplied := fields["expected_sha256"]; supplied {
+		snap, bad = t.ws.checkFileDigest(abs, a.ExpectedSHA256)
+	} else {
+		snap, bad = t.ws.checkSeenDigest(abs)
+	}
 	if bad != nil {
 		return *bad, nil
 	}

@@ -38,6 +38,10 @@ func TestModelSwitch_PreservesSourceAndSessionWithoutGeneration(t *testing.T) {
 			)
 			s.planMode, s.blocked, s.compactedPlan = true, "protocol_error", "on"
 			s.seenCalls["old-call"] = true
+			ws := s.cfg.Workspace
+			if ws != nil {
+				ws.seen[filepath.Join(ws.Root(), "evidence.txt")] = digestOf("evidence")
+			}
 			s.lastRequest = Usage{Known: true, InputTokens: 99}
 			usage := Usage{Known: true, InputTokens: 100, OutputTokens: 7}
 			c.usage, c.autoCompactOff = usage, true
@@ -49,6 +53,9 @@ func TestModelSwitch_PreservesSourceAndSessionWithoutGeneration(t *testing.T) {
 			info, _ := findModel(pair[1])
 			if c.session != s || s.ID != id || string(mustJSON(t, s.history)) != before || len(oldModel.requests) != 0 || s.cfg.Registry != registry || s.cfg.ProjectInstructions != &project || c.usage != usage || !s.seenCalls["old-call"] || !s.planMode || s.blocked != "protocol_error" || s.compactedPlan != "on" {
 				t.Fatalf("switch lost source/state: %+v, output %s", s, stderr.String())
+			}
+			if ws != nil && s.cfg.Workspace.seen[filepath.Join(ws.Root(), "evidence.txt")] != digestOf("evidence") {
+				t.Fatal("model switch forgot seen evidence")
 			}
 			if s.cfg.Model != pair[1] || s.cfg.ReasoningEffort != info.Effort || s.lastRequest != (Usage{}) || c.autoCompactOff || s.Turns() != 1 {
 				t.Fatalf("route or observations: %+v", s)

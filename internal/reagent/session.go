@@ -291,6 +291,12 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	}
 	summary := Summary{Text: text, ReplacedEntries: len(s.history), Model: s.cfg.Model}
 	s.history = []Entry{{Kind: EntrySummary, Summary: &summary}}
+	// v0 §8: the compacted conversation no longer contains file evidence.
+	if s.workspace != nil {
+		for _, ws := range s.workspace.handles {
+			ws.forgetSeen()
+		}
+	}
 	s.handoff = nil
 	s.tokensPerByte = 0
 	s.blocked = ""
@@ -316,6 +322,12 @@ func (s *Session) Reset() {
 	s.tokensPerByte = 0
 	s.compactedPlan = ""
 	s.seenCalls = make(map[string]bool)
+	// v0 §8: reset discards the reads that authorized omitted digests.
+	if s.workspace != nil {
+		for _, ws := range s.workspace.handles {
+			ws.forgetSeen()
+		}
+	}
 	s.blocked = ""
 	s.lastTrace = ""
 	s.lastRequest = Usage{}

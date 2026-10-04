@@ -292,9 +292,15 @@ func TestWorkspaceSwitch_IndependentSessionsDoNotShareSelectionOrDigests(t *test
 	if outcome := workspaceTool(t, second, "edit_file", map[string]string{"path": "a.txt", "expected_sha256": digestOf("before"), "old_text": "after", "new_text": "new"}); outcome.Code != "unknown_digest" {
 		t.Fatal(outcome)
 	}
+	if err := os.WriteFile(filepath.Join(target, "a.txt"), []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	first.workspaceConsent = func(context.Context, workspaceDestination) (bool, error) { return true, nil }
 	if outcome := workspaceTool(t, first, "switch_workspace", map[string]string{"path": target}); !outcome.OK {
 		t.Fatal(outcome)
+	}
+	if outcome := workspaceTool(t, first, "edit_file", map[string]string{"path": "a.txt", "old_text": "before", "new_text": "new"}); outcome.Code != "invalid_arguments" || !strings.Contains(outcome.Message, "read the file before changing it") {
+		t.Fatalf("new workspace inherited seen: %+v", outcome)
 	}
 	if second.cfg.WorkspacePath == first.cfg.WorkspacePath || len(second.workspace.approved) != 1 {
 		t.Fatal("sessions shared mutable authority or root")

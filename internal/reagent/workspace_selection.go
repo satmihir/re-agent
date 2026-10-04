@@ -39,7 +39,7 @@ func (s *Session) approvedWorkspacePaths() []string {
 }
 
 func newWorkspaceSelection(ws *Workspace, approved []workspaceDestination) *workspaceSelection {
-	active := &Workspace{root: ws.root, digests: make(map[string]map[string]bool)}
+	active := &Workspace{root: ws.root, digests: make(map[string]map[string]bool), seen: make(map[string]string)}
 	selection := &workspaceSelection{
 		launch: ws.Root(), active: active, approved: make(map[string]workspaceDestination),
 		handles: map[string]*Workspace{active.root: active},
@@ -252,7 +252,7 @@ func (s *Session) selectWorkspace(ctx context.Context, destination workspaceDest
 	}
 	ws := s.workspace.handles[current.path]
 	if ws == nil {
-		ws = &Workspace{root: current.path, digests: make(map[string]map[string]bool)}
+		ws = &Workspace{root: current.path, digests: make(map[string]map[string]bool), seen: make(map[string]string)}
 	}
 	var warnings bytes.Buffer
 	project := loadProjectInstructions(ws, s.cfg.NoProjectInstructions, &warnings)

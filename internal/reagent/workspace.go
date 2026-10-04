@@ -21,6 +21,7 @@ type Workspace struct {
 	root    string
 	mu      sync.Mutex
 	digests map[string]map[string]bool
+	seen    map[string]string
 }
 
 // OpenWorkspace opens an existing directory with a canonical immutable root.
@@ -40,7 +41,7 @@ func OpenWorkspace(path string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace %s is not a directory", root)
 	}
-	return &Workspace{root: root, digests: make(map[string]map[string]bool)}, nil
+	return &Workspace{root: root, digests: make(map[string]map[string]bool), seen: make(map[string]string)}, nil
 }
 
 // Root is the absolute directory, shown to the model as runtime context.
@@ -60,6 +61,14 @@ func (w *Workspace) remember(path, digest string) {
 		w.digests[path] = make(map[string]bool)
 	}
 	w.digests[path][digest] = true
+	w.seen[path] = digest
+}
+
+// v0 §8: a new conversation cannot rely on evidence it no longer contains.
+func (w *Workspace) forgetSeen() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.seen = make(map[string]string)
 }
 
 func (w *Workspace) returned(path, digest string) bool {
