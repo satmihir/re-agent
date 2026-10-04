@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -227,5 +228,25 @@ func TestDisplay_PlainNeverDrawsStatus(t *testing.T) {
 	d.modelFinished()
 	if got := b.String(); got != "" {
 		t.Fatalf("plain display drew status: %q", got)
+	}
+}
+
+func TestDisplay_ProgressUsesRegionStatusWhileTurnRuns(t *testing.T) {
+	var out bytes.Buffer
+	r := terminalInput(strings.NewReader(""))
+	r.region = &terminalRegion{out: &out, mu: &sync.Mutex{}}
+	d := NewDisplay(&out)
+	d.attachRegion(r)
+	r.regionStatus = regionStatus{model: "scripted"}
+	rows, row, col := regionInputRows(nil, 0, 40, r.regionStatus, false)
+	r.region.draw(rows, row, col, 40, 12)
+	d.tick = time.Hour
+	d.startStatus("waiting for scripted · step 1")
+	if !strings.Contains(r.regionStatus.progress, "waiting for scripted") {
+		t.Fatal("progress was not published to the region")
+	}
+	d.stopStatus()
+	if r.regionStatus.progress != "" {
+		t.Fatalf("progress remained after stop: %q", r.regionStatus.progress)
 	}
 }

@@ -156,25 +156,29 @@ func (h *promptHistory) At(i int) string {
 
 // terminalReader owns editing and presentation for terminal input.
 type terminalReader struct {
-	fd           int
-	complete     func(string, int, rune) (string, int, bool)
-	keys         *keyReader
-	enterRaw     func() (func(), error)
-	rawRestore   func()
-	discardInput func() error
-	out          io.Writer
-	styled       bool
-	size         func() (width, height int, err error)
-	width        int // Keep the last successful size for redraws.
-	prompt       string
-	bandPrefix   string
-	history      promptHistory
-	queued       []inputKey
-	partial      []byte
-	pasting      bool
-	region       *terminalRegion
-	regionStatus regionStatus
-	prefix       string
+	fd             int
+	complete       func(string, int, rune) (string, int, bool)
+	keys           *keyReader
+	enterRaw       func() (func(), error)
+	rawRestore     func()
+	discardInput   func() error
+	out            io.Writer
+	styled         bool
+	size           func() (width, height int, err error)
+	width          int // Keep the last successful size for redraws.
+	prompt         string
+	bandPrefix     string
+	history        promptHistory
+	queued         []inputKey
+	partial        []byte
+	pasting        bool
+	region         *terminalRegion
+	regionStatus   regionStatus
+	prefix         string
+	turn           *turnInput
+	nextEditor     *editor
+	nextSubmission string
+	nextEOF        bool
 }
 
 // SetPrompt changes the prompt restored after a continuation read.
@@ -185,7 +189,11 @@ func (r *terminalReader) SetPrompt(p string) {
 // SetBandPrefix records the prompt a submission was typed at, even when that message changes modes.
 func (r *terminalReader) SetBandPrefix(prefix string) { r.bandPrefix = prefix }
 
-func (r *terminalReader) setRegionStatus(status regionStatus) { r.regionStatus = status }
+func (r *terminalReader) setRegionStatus(status regionStatus) {
+	status.progress = r.regionStatus.progress
+	status.queued = r.nextSubmission != "" || (r.turn != nil && r.turn.queued != "")
+	r.regionStatus = status
+}
 
 // v0 §10 amendment (2026-09-26): the prompt and picker share raw-mode entry.
 func (r *terminalReader) rawMode() (func(), error) {
@@ -206,8 +214,8 @@ func (r *terminalReader) releaseRaw() {
 	}
 }
 
-// ReadLine keeps raw mode across a prompt picker, but restores cooked mode
-// before any turn so Ctrl-C still cancels an in-flight request.
+// ReadLine keeps raw mode while the region is active; a turn reads its keys
+// concurrently and delivers Ctrl-C through its cancellation context.
 func (r *terminalReader) ReadLine() (line string, err error) {
 	if r.rawRestore == nil {
 		restore, rawErr := r.rawMode()
@@ -235,10 +243,30 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 		defer fmt.Fprint(r.out, "\x1b[?2004l")
 	}
 
-	r.prefix, r.pasting = "", false
+	r.pasting = false
+	if r.nextEOF {
+		r.nextEOF = false
+		if r.region != nil {
+			r.region.collapse()
+		}
+		return "", io.EOF
+	}
+	if r.nextSubmission != "" {
+		line = r.nextSubmission
+		r.nextSubmission, r.nextEditor, r.prefix = "", nil, ""
+		r.regionStatus.queued = false
+		r.submitRegionLine(line)
+		return line, nil
+	}
+	if r.nextEditor == nil {
+		r.prefix = ""
+	}
 	line, rows, err := r.readPhysicalLine(r.prompt)
 	if err != nil {
 		return "", err
+	}
+	if r.prefix != "" {
+		line, r.prefix = r.prefix+line, ""
 	}
 	for strings.HasSuffix(line, "\\") && !strings.HasSuffix(line, "\\\\") {
 		line = strings.TrimSuffix(line, "\\")
@@ -255,17 +283,8 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 		line += "\n" + next
 	}
 	if r.region != nil {
-		switch {
-		case line == "/model" || line == "/effort":
-			if width, height, err := r.size(); err == nil {
-				inputRows, row, col := regionInputRows(nil, 0, width, r.regionStatus, r.styled)
-				r.region.draw(inputRows, row, col, width, height)
-			}
-		case line != "":
-			r.region.submit(regionSubmitted(line, r.width, r.styled))
-		default:
-			r.region.collapse()
-		}
+		r.prefix = ""
+		r.submitRegionLine(line)
 	} else if r.styled && line != "" {
 		r.drawUserBand(line, rows)
 	}
@@ -371,7 +390,12 @@ func (r *terminalReader) Choose(config pickerConfig, options []choice, current i
 
 // readPhysicalLine redraws relative to the caret, including after a wrap.
 func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
-	e := &editor{width: r.width, prompt: prompt}
+	e := r.nextEditor
+	if e == nil {
+		e = &editor{}
+	}
+	r.nextEditor = nil
+	e.width, e.prompt = r.width, prompt
 	if r.region != nil {
 		e.prompt = regionPrompt(r.regionStatus, r.styled)
 		if r.prefix != "" {
@@ -465,6 +489,10 @@ func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
 					}
 					line := e.value()
 					r.history.Add(string(e.buffer))
+					if r.region != nil {
+						e.replace(nil)
+						r.nextEditor = e
+					}
 					if r.region == nil {
 						if below := rows - 1 - caretRow; below > 0 {
 							fmt.Fprintf(r.out, "\x1b[%dB", below)
@@ -485,6 +513,7 @@ func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
 				case "eof":
 					if r.region != nil {
 						r.region.collapse()
+						r.nextEOF = true
 						return "", rows, io.EOF
 					}
 					fmt.Fprint(r.out, "\r\n")

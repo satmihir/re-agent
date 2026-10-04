@@ -43,7 +43,7 @@ func TestWorkspaceConsent_ChatApprovesWithinTurnAndRetainsGrantAfterReset(t *tes
 			t.Fatalf("missing %q in consent/status", text)
 		}
 	}
-	c.commandShell(context.Background(), "pwd", &out, &progress)
+	c.commandShell(context.Background(), "pwd", input, &out, &progress)
 	last := s.history[len(s.history)-1].Shell
 	if last == nil || last.Workspace != s.cfg.WorkspacePath || strings.TrimSpace(last.Output) != s.cfg.WorkspacePath {
 		t.Fatalf("shell %+v", last)
