@@ -3,8 +3,9 @@
 #   make          build ./reagent
 #   make check    format, vet, and the offline suite; needs no credentials
 #   make live     conformance runs against both providers; reads keys from .env
+#   make tty-check  drive the chat in a pseudo-terminal and check the screen; offline
 
-.PHONY: all build check live
+.PHONY: all build check live tty-check
 
 all: build
 
@@ -26,3 +27,10 @@ live:
 		exit 1; \
 	fi; \
 	REAGENT_LIVE_TESTS=1 go test ./internal/reagent/ -run Live -v -count=1
+
+# Builds a throwaway binary and drives it through bench/tty's scenarios, which
+# exercise the real terminal path that go test cannot: a pty, its buffer and
+# flags, and the cursor-report round trip. Needs python3; no keys or network.
+tty-check:
+	@dir=$$(mktemp -d) && go build -o $$dir/reagent ./cmd/reagent && \
+	python3 bench/tty/check.py $$dir/reagent; status=$$?; rm -rf $$dir; exit $$status
