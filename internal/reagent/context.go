@@ -21,6 +21,7 @@ whose message misled you, a capability you had to work around, a tool
 description or instruction that was unclear, or harness behavior that looks
 wrong. Cite the calls involved. Do not report your own mistakes unless the
 harness made them likely, and do not stop the task to report.
+In particular, if you use exec (a script, sed, cat, grep, or similar) to do something a tool exists for, such as editing, reading, searching, or listing files, report what the tool could not do.
 `
 
 // BuildContext assembles one model request.

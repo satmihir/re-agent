@@ -119,12 +119,30 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 		if len(a.Edits) != 0 {
 			label = fmt.Sprintf("edits[%d]: ", i)
 		}
-		switch occurrences(before, edit.OldText) {
+		lines := matchLines(before, edit.OldText, nil, 10)
+		switch len(lines) {
 		case 0:
-			return failOutcome("edit_not_found", label+"old_text does not occur in the file"), nil
+			message := "old_text does not occur in the file"
+			normalized, offsets := normalizeEditWhitespace(before)
+			query, _ := normalizeEditWhitespace(edit.OldText)
+			near := matchLines(normalized, query, offsets, 5)
+			if len(near) > 0 {
+				message += fmt.Sprintf("; it matches with different whitespace at line %s (read that range again and copy it exactly)", formatLines(near, 5))
+			} else {
+				message += "; read the range again before retrying"
+			}
+			return failOutcome("edit_not_found", label+message), nil
 		case 1:
 		default:
-			return failOutcome("ambiguous_edit", label+"old_text occurs more than once; include enough context to make it unique"), nil
+			count := fmt.Sprintf("%d", len(lines))
+			if len(lines) > 10 {
+				count = "at least 10"
+			}
+			location := "at lines"
+			if len(lines) > 10 {
+				location = "first at lines"
+			}
+			return failOutcome("ambiguous_edit", label+fmt.Sprintf("old_text occurs %s times, %s %s; include enough surrounding text to make it unique", count, location, formatLines(lines, 10))), nil
 		}
 		start := strings.Index(before, edit.OldText)
 		matches = append(matches, match{start, start + len(edit.OldText), i})
@@ -238,19 +256,61 @@ func (a editFileArgs) changes(fields map[string]json.RawMessage) ([]fileEdit, st
 	return edits, appendText, nil
 }
 
-// occurrences counts matches including overlapping ones, so a query like "aa"
-// in "aaa" is reported as ambiguous rather than silently replaced once.
-func occurrences(content, query string) int {
-	count, from := 0, 0
-	for {
+// v0 §8: include overlapping matches, but bound error messages for large files.
+func matchLines(content, query string, offsets []int, limit int) []int {
+	if query == "" {
+		return nil
+	}
+	var lines []int
+	for from := 0; from < len(content); {
 		at := strings.Index(content[from:], query)
 		if at < 0 {
-			return count
+			break
 		}
-		count++
-		if count > 1 {
-			return count
+		start := from + at
+		if offsets != nil {
+			start = offsets[start]
+		}
+		lines = append(lines, strings.Count(content[:from+at], "\n")+1)
+		if offsets != nil {
+			lines[len(lines)-1] = strings.Count(content[:start], "\n") + 1
+		}
+		if len(lines) > limit {
+			break
 		}
 		from += at + 1
 	}
+	return lines
+}
+
+func formatLines(lines []int, limit int) string {
+	parts := make([]string, 0, min(len(lines), limit))
+	for _, line := range lines[:min(len(lines), limit)] {
+		parts = append(parts, fmt.Sprint(line))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// The offsets retain original line positions even when whitespace collapses.
+func normalizeEditWhitespace(text string) (string, []int) {
+	var normalized strings.Builder
+	var offsets []int
+	for i := 0; i < len(text); {
+		if text[i] != ' ' && text[i] != '\t' {
+			normalized.WriteByte(text[i])
+			offsets = append(offsets, i)
+			i++
+			continue
+		}
+		start := i
+		for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
+			i++
+		}
+		if i == len(text) || text[i] == '\n' {
+			continue
+		}
+		normalized.WriteByte(' ')
+		offsets = append(offsets, start)
+	}
+	return normalized.String(), offsets
 }

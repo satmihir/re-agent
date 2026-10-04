@@ -62,6 +62,9 @@ func TestShell_OutputTrimmedToResultBudget(t *testing.T) {
 	if len(encoded) > MaxResultBytes || !got.OutputTruncated || got.OutputBytesSeen != 100000 {
 		t.Fatalf("encoded %d bytes, truncated %v, seen %d", len(encoded), got.OutputTruncated, got.OutputBytesSeen)
 	}
+	if !strings.Contains(got.Output, "bytes omitted") || !strings.HasPrefix(got.Output, "xxxxx") || !strings.HasSuffix(got.Output, "xxxxx") {
+		t.Fatalf("record lost head or tail: %q", got.Output)
+	}
 	// Only the record is bounded; the terminal saw everything.
 	if live.Len() != 100000 {
 		t.Fatalf("live output was %d bytes", live.Len())
@@ -161,5 +164,16 @@ func TestEncodeAnthropic_ShellCommandJoinsTheNextUserMessage(t *testing.T) {
 	// The cache point stays on the last block of the request.
 	if blocks[0].CacheControl != nil || blocks[1].CacheControl == nil {
 		t.Fatalf("cache control on %+v", blocks)
+	}
+}
+
+func TestShell_LongCommandDoesNotHangWhenOutputCannotFit(t *testing.T) {
+	command := "echo out # " + strings.Repeat("x", 40*1024)
+	got, err := runShellCommand(context.Background(), t.TempDir(), command, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.OutputTruncated || got.OutputBytesSeen != 4 || got.Output != "" {
+		t.Fatalf("got output %q, truncated=%v, seen=%d", got.Output, got.OutputTruncated, got.OutputBytesSeen)
 	}
 }

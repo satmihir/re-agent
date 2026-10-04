@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ func (t searchTextTool) withWorkspace(ws *Workspace) Tool {
 
 type searchTextArgs struct {
 	Path       string          `json:"path"`
+	Paths      json.RawMessage `json:"paths"`
 	Query      string          `json:"query"`
 	Regex      json.RawMessage `json:"regex"`
 	MaxResults json.RawMessage `json:"max_results"`
@@ -56,7 +58,7 @@ type searchTextResult struct {
 func (searchTextTool) Spec() ToolSpec {
 	return ToolSpec{
 		Name: "search_text",
-		Description: "Search a workspace file or directory for a literal, case-sensitive string, or with `regex` true, " +
+		Description: "Search one workspace path or up to 20 paths for a literal, case-sensitive string, or with `regex` true, " +
 			"a Go RE2 regular expression matched against each line (use `|` for alternatives and `(?i)` to ignore case). " +
 			"Returns one match per matching line with its path and line number. " +
 			"max_results defaults to as many matches as fit in one result. " +
@@ -65,12 +67,13 @@ func (searchTextTool) Spec() ToolSpec {
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "path": {"type": "string", "description": "Workspace-relative file or directory, or . for the root."},
+    "path": {"type": "string", "description": "One workspace-relative file or directory, or . for the root; use exactly one of path or paths."},
+    "paths": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string"}, "description": "Up to 20 workspace-relative files or directories, searched in order; use exactly one of path or paths."},
     "query": {"type": "string", "description": "Single-line query: a literal string, or a pattern when regex is true."},
     "regex": {"type": "boolean", "description": "Treat query as a regular expression. Defaults to false."},
     "max_results": {"type": "integer", "minimum": 1, "description": "Maximum matching lines. Defaults to as many as fit."}
   },
-  "required": ["path", "query"],
+  "required": ["query"],
   "additionalProperties": false
 }`),
 		Effect: EffectClassRead,
@@ -108,21 +111,68 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 		}
 		match = re.MatchString
 	}
-	abs, bad := t.ws.resolve(a.Path)
-	if bad != nil {
-		return *bad, nil
+	var fields map[string]json.RawMessage
+	json.Unmarshal(args, &fields)
+	_, hasPath := fields["path"]
+	hasPaths := len(a.Paths) != 0
+	if hasPath == hasPaths {
+		return failOutcome("invalid_arguments", "provide exactly one of path or paths"), nil
 	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return *osOutcome(err), nil
+	paths := []string{a.Path}
+	if hasPaths {
+		var raw []json.RawMessage
+		if json.Unmarshal(a.Paths, &raw) != nil || len(raw) == 0 || len(raw) > 20 {
+			return failOutcome("invalid_arguments", "paths must be an array of 1 to 20 strings"), nil
+		}
+		paths = nil
+		for i, item := range raw {
+			var path string
+			if string(item) == "null" || json.Unmarshal(item, &path) != nil {
+				return failOutcome("invalid_arguments", fmt.Sprintf("paths[%d]: path must be a string", i)), nil
+			}
+			paths = append(paths, path)
+		}
+	}
+	// Validate the entire scope before reading any of its files.
+	var targets []string
+	var directories []bool
+	for i, path := range paths {
+		abs, bad := t.ws.resolve(path)
+		if bad != nil {
+			if hasPaths {
+				bad.Message = fmt.Sprintf("paths[%d]: %s", i, bad.Message)
+			}
+			return *bad, nil
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			bad := osOutcome(err)
+			if hasPaths {
+				bad.Message = fmt.Sprintf("paths[%d]: %s", i, bad.Message)
+			}
+			return *bad, nil
+		}
+		targets = append(targets, abs)
+		directories = append(directories, info.IsDir())
 	}
 
-	s := &scan{workspace: t.ws.Root(), match: match, maxResults: maxResults, complete: true}
-	if info.IsDir() {
-		t.walk(abs, s)
-	} else {
-		// An explicitly named file reports why it could not be read, rather
-		// than being silently skipped the way a walked file is (v1 §12.3).
+	s := &scan{workspace: t.ws.Root(), match: match, maxResults: maxResults, complete: true, seen: make(map[string]bool)}
+	for i, abs := range targets {
+		if s.full() {
+			break
+		}
+		if directories[i] {
+			t.walk(abs, s)
+			continue
+		}
+		// Explicitly named files report read errors instead of silent skips (v1 §12.3).
+		canonical, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return *osOutcome(err), nil
+		}
+		if s.alreadySeen(canonical) {
+			continue
+		}
 		snap, bad := readSnapshot(abs)
 		if bad != nil {
 			return *bad, nil
@@ -135,6 +185,12 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 // walk searches a directory tree in name order, skipping what it cannot read
 // and recording that it did so.
 func (t searchTextTool) walk(root string, s *scan) {
+	// WalkDir does not follow directory symlinks; resolve this root only once.
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		s.skip()
+		return
+	}
 	filepath.WalkDir(root, func(abs string, entry fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -151,6 +207,14 @@ func (t searchTextTool) walk(root string, s *scan) {
 		case !entry.Type().IsRegular():
 			// A symlink could point at matching text, and v0 does not follow it.
 			s.skip()
+			return nil
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			s.skip()
+			return nil
+		}
+		if s.alreadySeen(filepath.Join(canonicalRoot, rel)) {
 			return nil
 		}
 		snap, bad := readSnapshot(abs)
@@ -178,6 +242,15 @@ type scan struct {
 	skipped    int
 	complete   bool
 	stopReason string
+	seen       map[string]bool
+}
+
+func (s *scan) alreadySeen(canonical string) bool {
+	if s.seen[canonical] {
+		return true
+	}
+	s.seen[canonical] = true
+	return false
 }
 
 func (s *scan) full() bool {

@@ -43,7 +43,7 @@ func (readFileTool) Spec() ToolSpec {
 	return ToolSpec{
 		Name: "read_file",
 		Description: "Read a range of lines from a UTF-8 workspace file. Lines are one-based. " +
-			"start_line defaults to 1 and max_lines to as many lines as fit in one result; " +
+			"start_line defaults to 1 and max_lines defaults to 250 lines, still trimmed to fit the result; " +
 			"use next_line to continue. Returns the SHA-256 digest of the whole file. " +
 			"Read the relevant range before editing it.",
 		InputSchema: json.RawMessage(`{
@@ -51,7 +51,7 @@ func (readFileTool) Spec() ToolSpec {
   "properties": {
     "path": {"type": "string", "description": "Workspace-relative UTF-8 text file."},
     "start_line": {"type": "integer", "minimum": 1, "description": "One-based first line to read. Defaults to 1."},
-    "max_lines": {"type": "integer", "minimum": 1, "description": "Maximum lines to return. Defaults to as many as fit."}
+    "max_lines": {"type": "integer", "minimum": 1, "description": "Maximum lines to return. Defaults to 250."}
   },
   "required": ["path"],
   "additionalProperties": false
@@ -69,7 +69,7 @@ func (t readFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	if bad != nil {
 		return *bad, nil
 	}
-	maxLines, bad := optionalInt(a.MaxLines, "max_lines", unlimited, 1)
+	maxLines, bad := optionalInt(a.MaxLines, "max_lines", 250, 1)
 	if bad != nil {
 		return *bad, nil
 	}
@@ -91,7 +91,7 @@ func (t readFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 
 	// The evidence this result may carry, before trimming to the byte budget.
 	wanted := snap.lines[min(start-1, total):]
-	if maxLines != unlimited && len(wanted) > maxLines {
+	if len(wanted) > maxLines {
 		wanted = wanted[:maxLines]
 	}
 	build := func(n int) any { return readFileData(t.ws.relative(abs), snap, start, wanted[:n]) }

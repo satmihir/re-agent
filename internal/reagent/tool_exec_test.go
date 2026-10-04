@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // shell builds an argv that runs one POSIX shell command. Tests use /bin/sh
@@ -225,6 +226,9 @@ func TestExec_BoundsCapturedOutput(t *testing.T) {
 	if got.StdoutBytesSeen <= len(got.Stdout) {
 		t.Fatalf("seen %d bytes but kept %d", got.StdoutBytesSeen, len(got.Stdout))
 	}
+	if !strings.Contains(got.Stdout, "bytes omitted") || !strings.HasSuffix(got.Stdout, "0123456789012345678901234567890123456789\n") {
+		t.Fatalf("lost end or omission marker: %q", got.Stdout)
+	}
 	if len(outcome.Data) > MaxResultBytes {
 		t.Fatalf("result is %d bytes, over the budget", len(outcome.Data))
 	}
@@ -398,5 +402,77 @@ func TestExec_TrimsBothStreamsToTheBudget(t *testing.T) {
 	}
 	if len(outcome.Data) > MaxResultBytes {
 		t.Fatalf("result is %d bytes, over the budget", len(outcome.Data))
+	}
+}
+
+func TestExec_CaptureKeepsBothEndsAndValidUTF8(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+		limit             int
+		cut               bool
+	}{
+		{"under limit", "hello", "hello", 8, false},
+		{"over limit", "abcdefghijkl", "abcd\n…[4 bytes omitted]…\nijkl", 8, true},
+		{"rune at both cuts", "a界bXYZc界d", "a\n…[11 bytes omitted]…\nd", 6, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &boundedWriter{limit: tc.limit}
+			for i := 0; i < len(tc.input); i += 2 {
+				p := []byte(tc.input[i:min(i+2, len(tc.input))])
+				if n, err := w.Write(p); err != nil || n != len(p) {
+					t.Fatalf("write: %d, %v", n, err)
+				}
+			}
+			var text string
+			var seen int
+			var cut, replaced bool
+			w.report(&text, &seen, &cut, &replaced)
+			if text != tc.want || seen != len(tc.input) || cut != tc.cut || replaced || !utf8.ValidString(text) {
+				t.Fatalf("text=%q seen=%d cut=%v replaced=%v", text, seen, cut, replaced)
+			}
+		})
+	}
+}
+
+func TestExec_BudgetTrimPreservesEndsAndOmissionCount(t *testing.T) {
+	input := "START" + strings.Repeat("x", 100) + "END"
+	output := middleOutput{head: input}
+	got := output.trim(20)
+	if got != "STARTxxxxx\n…[88 bytes omitted]…\nxxxxxxxEND" {
+		t.Fatalf("first trim: %q", got)
+	}
+	got = output.trim(10)
+	if got != "START\n…[98 bytes omitted]…\nxxEND" {
+		t.Fatalf("second trim: %q", got)
+	}
+}
+
+func TestExec_LargeArgvDoesNotHangWhenStreamsCannotFit(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	script := "echo out; echo err >&2 # " + strings.Repeat("x", 40*1024)
+	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell(script), ".", 10000))
+	var got execResult
+	data(t, outcome, &got)
+	if got.ExitCode == nil || *got.ExitCode != 0 || !got.StdoutTruncated || !got.StderrTruncated || got.StdoutBytesSeen != 4 || got.StderrBytesSeen != 4 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestExec_LiteralMarkerInOutputIsNotParsedAsOmission(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	marker := "\n…[5 bytes omitted]…\n"
+	prefix := "FIRST" + marker + strings.Repeat("x", MaxResultBytes*2)
+	args, err := json.Marshal(map[string]any{"argv": []string{"/bin/sh", "-c", "cat payload"}, "cwd": "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Root(), "payload"), []byte(prefix+"LAST"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome := runTool(t, NewExecTool(ws), string(args))
+	var got execResult
+	data(t, outcome, &got)
+	if !strings.HasPrefix(got.Stdout, "FIRST"+marker) || !strings.HasSuffix(got.Stdout, "LAST") || !got.StdoutTruncated {
+		t.Fatalf("lost literal marker or tail: %q", got.Stdout)
 	}
 }

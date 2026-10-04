@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -156,11 +157,11 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 		Argv: a.Argv, ResolvedExecutable: command.Path, Cwd: a.Cwd,
 		DurationMS: time.Since(started).Milliseconds(), TimeoutMS: timeout.Milliseconds(),
 	}
-	stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
-	stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
+	stdoutText := stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
+	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
 	code, message, effect := classifyRun(parent, deadline, runErr, &result)
-	result.trimToResultBudget(t.ws.Root(), code, message, effect)
+	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText)
 
 	outcome, err := workspaceOutcome(result, t.ws.Root())
 	if err != nil {
@@ -228,7 +229,7 @@ func exitStatus(exitErr *exec.ExitError) (*int, *string) {
 
 // trimToResultBudget shortens captured output until the whole encoded outcome
 // fits, always at a rune boundary and always marking what it cut (v0 §9).
-func (r *execResult) trimToResultBudget(workspace, code, message string, effect EffectState) {
+func (r *execResult) trimToResultBudget(workspace, code, message string, effect EffectState, stdout, stderr *middleOutput) {
 	fits := func() bool {
 		outcome, err := workspaceOutcome(*r, workspace)
 		outcome.OK, outcome.Code, outcome.Message, outcome.Effect = code == "ok", code, message, effect
@@ -237,10 +238,18 @@ func (r *execResult) trimToResultBudget(workspace, code, message string, effect 
 	}
 	for !fits() && (len(r.Stdout) > 0 || len(r.Stderr) > 0) {
 		if len(r.Stdout) >= len(r.Stderr) {
-			r.Stdout = truncateUTF8(r.Stdout, len(r.Stdout)/2)
+			before := len(r.Stdout)
+			r.Stdout = stdout.trim(before / 2)
+			if len(r.Stdout) >= before {
+				r.Stdout = ""
+			}
 			r.StdoutTruncated = true
 		} else {
-			r.Stderr = truncateUTF8(r.Stderr, len(r.Stderr)/2)
+			before := len(r.Stderr)
+			r.Stderr = stderr.trim(before / 2)
+			if len(r.Stderr) >= before {
+				r.Stderr = ""
+			}
 			r.StderrTruncated = true
 		}
 	}
@@ -258,36 +267,101 @@ func childEnvironment() []string {
 	return env
 }
 
-// boundedWriter keeps a prefix of one stream and counts everything it was
-// given. It always accepts the whole write: refusing bytes after the cap would
-// block the command and turn an output limit into a deadlock (v1 §14.4).
+// v0 §9: keep the first and last bytes without blocking a noisy child.
 type boundedWriter struct {
 	mu    sync.Mutex
 	limit int
-	kept  []byte
+	head  []byte
+	tail  []byte
 	seen  int
 }
 
 func (w *boundedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.seen += len(p)
-	if room := w.limit - len(w.kept); room > 0 {
-		w.kept = append(w.kept, p[:min(room, len(p))]...)
+	n := len(p)
+	w.seen += n
+	room := (w.limit+1)/2 - len(w.head)
+	if room > 0 {
+		take := min(room, len(p))
+		w.head = append(w.head, p[:take]...)
+		p = p[take:]
 	}
-	return len(p), nil
+	tailLimit := w.limit / 2
+	if len(p) >= tailLimit {
+		w.tail = append(w.tail[:0], p[len(p)-tailLimit:]...)
+	} else {
+		w.tail = append(w.tail, p...)
+		if extra := len(w.tail) - tailLimit; extra > 0 {
+			copy(w.tail, w.tail[extra:])
+			w.tail = w.tail[:len(w.tail)-extra]
+		}
+	}
+	return n, nil
 }
 
-// report fills in one stream's fields. Output that is not valid UTF-8 is made
-// displayable and flagged, rather than corrupting the result's JSON.
-func (w *boundedWriter) report(text *string, seen *int, truncated, replaced *bool) {
+// The omitted count stays separate from command text, which can contain the marker.
+type middleOutput struct {
+	head, tail string
+	omitted    int
+}
+
+// report fills one stream's fields and retains its pieces for further trimming.
+func (w *boundedWriter) report(text *string, seen *int, truncated, replaced *bool) middleOutput {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	*seen = w.seen
-	*truncated = w.seen > len(w.kept)
-	*text = string(w.kept)
-	if !utf8.Valid(w.kept) {
-		*text = strings.ToValidUTF8(*text, "�")
+	*truncated = w.seen > len(w.head)+len(w.tail)
+	m := middleOutput{head: string(w.head), tail: string(w.tail)}
+	if *truncated {
+		m.omitted = w.seen - len(w.head) - len(w.tail)
+		m.render()
+	}
+	if !utf8.ValidString(m.head) || !utf8.ValidString(m.tail) {
+		m.head = strings.ToValidUTF8(m.head, "�")
+		m.tail = strings.ToValidUTF8(m.tail, "�")
 		*replaced = true
 	}
+	*text = m.render()
+	return m
+}
+
+func (m *middleOutput) render() string {
+	if m.omitted == 0 {
+		return m.head + m.tail
+	}
+	for i := len(m.head) - 1; i >= 0 && i >= len(m.head)-4; i-- {
+		if utf8.RuneStart(m.head[i]) {
+			if !utf8.FullRuneInString(m.head[i:]) {
+				m.omitted += len(m.head) - i
+				m.head = m.head[:i]
+			}
+			break
+		}
+	}
+	for len(m.tail) > 0 && !utf8.RuneStart(m.tail[0]) {
+		m.tail = m.tail[1:]
+		m.omitted++
+	}
+	return m.head + fmt.Sprintf("\n…[%d bytes omitted]…\n", m.omitted) + m.tail
+}
+
+func (m *middleOutput) trim(budget int) string {
+	keep := max(0, budget/2)
+	if m.omitted == 0 {
+		text := m.head + m.tail
+		m.head = text[:min(keep, len(text))]
+		m.tail = text[max(len(m.head), len(text)-keep):]
+		m.omitted = len(text) - len(m.head) - len(m.tail)
+	} else {
+		if len(m.head) > keep {
+			m.omitted += len(m.head) - keep
+			m.head = m.head[:keep]
+		}
+		if len(m.tail) > keep {
+			m.omitted += len(m.tail) - keep
+			m.tail = m.tail[len(m.tail)-keep:]
+		}
+	}
+	return m.render()
 }

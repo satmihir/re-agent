@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -112,7 +113,6 @@ func TestWriteFile_RefusedChangesLeaveWorkspaceAlone(t *testing.T) {
 		{"unknown overwrite", `{"path":"old.txt","content":"new","expected_sha256":"` + badDigest + `"}`, "unknown_digest", ""},
 		{"existing no digest", `{"path":"old.txt","content":"new"}`, "invalid_arguments", "the file exists; read it and pass its sha256 to overwrite it"},
 		{"missing with digest", `{"path":"absent","content":"new","expected_sha256":"` + badDigest + `"}`, "not_found", ""},
-		{"missing parent", `{"path":"missing/new.txt","content":"new"}`, "not_found", ""},
 		{"directory", `{"path":"sub","content":"new"}`, "invalid_arguments", ""},
 		{"withheld", `{"path":".env","content":"new"}`, "invalid_path", ""},
 		{"outside", `{"path":"../outside","content":"new"}`, "invalid_path", ""},
@@ -310,5 +310,71 @@ func TestLoop_ReadOnlyRefusesFileWriters(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(ws.Root(), "new.txt")); !os.IsNotExist(err) {
 		t.Fatalf("read-only created a file: %v", err)
+	}
+}
+
+func TestWriteFile_CreatesMissingParentsAndReportsThem(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewWriteFileTool(ws), `{"path":"outer/inner/new.txt","content":"hello"}`)
+	var got writeFileResult
+	data(t, outcome, &got)
+	if outcome.Effect != EffectApplied || got.Operation != "create" || fileContent(t, ws, "outer/inner/new.txt") != "hello" ||
+		!slices.Equal(got.CreatedDirs, []string{"outer", "outer/inner"}) {
+		t.Fatalf("got %+v, %+v", outcome, got)
+	}
+	for _, name := range got.CreatedDirs {
+		info, err := os.Stat(filepath.Join(ws.Root(), name))
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o755 {
+			t.Fatalf("created dir %s: %v, %v", name, info, err)
+		}
+	}
+	var existing writeFileResult
+	data(t, runTool(t, NewWriteFileTool(ws), `{"path":"outer/another.txt","content":"ok"}`), &existing)
+	if len(existing.CreatedDirs) != 0 {
+		t.Fatalf("reported existing dir as created: %+v", existing)
+	}
+}
+
+func TestWriteFile_RefusesSymlinkedAndWithheldParents(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"real/keep": "ok"})
+	if err := os.Symlink("real", filepath.Join(ws.Root(), "alias")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for _, tc := range []struct{ name, path, code string }{
+		{"symlink with missing parent", "alias/newdir/new.txt", "symlink_target"},
+		{"withheld git", "outer/.git/new.txt", "invalid_path"},
+		{"withheld env", "outer/.env/new.txt", "invalid_path"},
+		{"outside", "../outside/new.txt", "invalid_path"},
+		{"non-directory", "real/keep/new.txt", "io_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := runTool(t, NewWriteFileTool(ws), `{"path":"`+tc.path+`","content":"new"}`)
+			if outcome.Code != tc.code || outcome.Effect != EffectNone {
+				t.Fatalf("got %+v", outcome)
+			}
+			if _, err := os.Lstat(filepath.Join(ws.Root(), "outer")); !os.IsNotExist(err) {
+				t.Fatalf("created a withheld parent: %v", err)
+			}
+		})
+	}
+	if fileContent(t, ws, "real/keep") != "ok" {
+		t.Fatal("symlink target changed")
+	}
+	var created writeFileResult
+	data(t, runTool(t, NewWriteFileTool(ws), `{"path":"alias/new.txt","content":"hi"}`), &created)
+	if fileContent(t, ws, "real/new.txt") != "hi" || len(created.CreatedDirs) != 0 {
+		t.Fatalf("existing symlinked parent should still work: %+v", created)
+	}
+}
+
+func TestWriteFile_FailedCreateRemovesNewEmptyParents(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	tooLong := strings.Repeat("x", 256)
+	outcome := runTool(t, NewWriteFileTool(ws), `{"path":"outer/inner/`+tooLong+`","content":"hello"}`)
+	if outcome.OK || outcome.Effect != EffectNone {
+		t.Fatalf("create unexpectedly succeeded: %+v", outcome)
+	}
+	if _, err := os.Lstat(filepath.Join(ws.Root(), "outer")); !os.IsNotExist(err) {
+		t.Fatalf("failed create left new directories behind: %v", err)
 	}
 }
