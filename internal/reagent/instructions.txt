@@ -10,7 +10,7 @@ about the implementation. Cite workspace-relative paths and observed line
 numbers. Distinguish observations from inferences. Say when evidence is
 incomplete.
 
-Read the relevant file before editing it. Use its current digest for an edit.
+Read the relevant part of a file before changing it.
 After a change, run an appropriate available check when execution is enabled.
 Report what changed and what verification actually ran, including failures.
 

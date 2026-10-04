@@ -468,3 +468,75 @@ func TestEditFile_MatchErrorsNameLinesWithoutChangingBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestEditFile_OmittedDigestFollowsReadAndWrite(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source})
+	readDigest(t, ws, "main.go")
+	for _, args := range []string{
+		`{"path":"main.go","old_text":"timeout = 0","new_text":"timeout = 30"}`,
+		`{"path":"main.go","old_text":"timeout = 30","new_text":"timeout = 60"}`,
+	} {
+		if outcome := runTool(t, NewEditFileTool(ws), args); !outcome.OK {
+			t.Fatalf("edit: %+v", outcome)
+		}
+	}
+	if got := fileContent(t, ws, "main.go"); !strings.Contains(got, "timeout = 60") {
+		t.Fatalf("content: %q", got)
+	}
+}
+
+func TestEditFile_OmittedDigestNeedsReadAndDetectsExternalChange(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"main.go": source})
+	args := `{"path":"main.go","old_text":"timeout = 0","new_text":"timeout = 30"}`
+	if outcome := runTool(t, NewEditFileTool(ws), args); outcome.Code != "invalid_arguments" || !strings.Contains(outcome.Message, "read the file before changing it") || fileContent(t, ws, "main.go") != source {
+		t.Fatalf("unread: %+v", outcome)
+	}
+	readDigest(t, ws, "main.go")
+	changed := strings.Replace(source, "timeout = 0", "timeout = 1", 1)
+	if err := os.WriteFile(filepath.Join(ws.Root(), "main.go"), []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := digestOfFile(t, ws, "main.go")
+	if outcome := runTool(t, NewEditFileTool(ws), args); outcome.Code != "stale_file" || !strings.Contains(outcome.Message, current) || fileContent(t, ws, "main.go") != changed {
+		t.Fatalf("external change: %+v", outcome)
+	}
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+current+`","old_text":"timeout = 1","new_text":"timeout = 30"}`)
+	if !outcome.OK || !strings.Contains(fileContent(t, ws, "main.go"), "timeout = 30") {
+		t.Fatalf("explicit escape hatch: %+v", outcome)
+	}
+}
+
+func TestEditFile_RangedReadEnablesEditsAndAppendWithoutDigest(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "one\ntwo\nthree\n"})
+	outcome := runTool(t, NewReadFileTool(ws), `{"path":"a.txt","start_line":2,"max_lines":1}`)
+	if !outcome.OK {
+		t.Fatalf("ranged read: %+v", outcome)
+	}
+	outcome = runTool(t, NewEditFileTool(ws), `{"path":"a.txt","edits":[{"old_text":"one","new_text":"ONE"},{"old_text":"two","new_text":"TWO"}],"append_text":"four\n"}`)
+	if !outcome.OK || fileContent(t, ws, "a.txt") != "ONE\nTWO\nthree\nfour\n" {
+		t.Fatalf("edits and append: %+v", outcome)
+	}
+	outcome = runTool(t, NewEditFileTool(ws), `{"path":"a.txt","append_text":"five\n"}`)
+	if !outcome.OK || !strings.HasSuffix(fileContent(t, ws, "a.txt"), "five\n") {
+		t.Fatalf("append only: %+v", outcome)
+	}
+}
+
+func TestEditFile_SearchAndListingDoNotAuthorizeOmittedDigest(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "target\n"})
+	for _, call := range []struct {
+		tool Tool
+		args string
+	}{
+		{NewListFilesTool(ws), `{"path":"."}`},
+		{NewSearchTextTool(ws), `{"path":"a.txt","query":"target"}`},
+	} {
+		if outcome := runTool(t, call.tool, call.args); !outcome.OK {
+			t.Fatalf("discovery: %+v", outcome)
+		}
+	}
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","old_text":"target","new_text":"changed"}`)
+	if outcome.Code != "invalid_arguments" || fileContent(t, ws, "a.txt") != "target\n" {
+		t.Fatalf("discovery authorized write: %+v", outcome)
+	}
+}

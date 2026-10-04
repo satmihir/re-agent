@@ -311,3 +311,39 @@ func TestCompact_ShowsProgressWhileSummarizing(t *testing.T) {
 		t.Fatalf("progress: %q", got)
 	}
 }
+
+func TestCompactAndReset_ClearSeenOnlyOnSuccess(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "before"})
+	s := workspaceSession(t, ws.Root(), Mode{}, &compactModel{err: errors.New("unavailable")})
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "earlier"}}}
+	ws = s.cfg.Workspace
+	readDigest(t, ws, "a.txt")
+	check := func(want string) {
+		t.Helper()
+		outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","old_text":"before","new_text":"after"}`)
+		if outcome.Code != want {
+			t.Fatalf("want %s, got %+v", want, outcome)
+		}
+	}
+	result, _, err := s.Compact(context.Background(), "", "failed", filepath.Join(t.TempDir(), "failed.jsonl"))
+	if err != nil || result.Status == StatusCompleted {
+		t.Fatalf("failed compact: %+v, %v", result, err)
+	}
+	check("ok") // Failed compaction retained the read; re-read before the next check.
+	readDigest(t, ws, "a.txt")
+	s.model = &compactModel{replies: []ModelResponse{turn(textBlock("summary"))}}
+	result, _, err = s.Compact(context.Background(), "", "success", filepath.Join(t.TempDir(), "success.jsonl"))
+	if err != nil || result.Status != StatusCompleted {
+		t.Fatalf("successful compact: %+v, %v", result, err)
+	}
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","old_text":"after","new_text":"done"}`)
+	if outcome.Code != "invalid_arguments" {
+		t.Fatalf("after compact: %+v", outcome)
+	}
+	readDigest(t, ws, "a.txt")
+	s.Reset()
+	outcome = runTool(t, NewEditFileTool(ws), `{"path":"a.txt","old_text":"after","new_text":"done"}`)
+	if outcome.Code != "invalid_arguments" {
+		t.Fatalf("after reset: %+v", outcome)
+	}
+}

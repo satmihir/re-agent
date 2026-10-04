@@ -40,8 +40,8 @@ type writeFileArgs struct {
 }
 
 type deleteFileArgs struct {
-	Path           string `json:"path"`
-	ExpectedSHA256 string `json:"expected_sha256"`
+	Path           string          `json:"path"`
+	ExpectedSHA256 json.RawMessage `json:"expected_sha256"`
 }
 
 type writeFileResult struct {
@@ -64,14 +64,14 @@ func (writeFileTool) Spec() ToolSpec {
 		Name: "write_file",
 		Description: "Create a UTF-8 text file, or replace all of an existing file's content. " +
 			"Creating requires the file not to exist; missing parent directories are created. " +
-			"Replacing requires expected_sha256 from the latest read_file of that file. " +
+			"Replacing requires reading or writing that file in this conversation; read it again after changes outside these tools (exec or the user). " +
 			"Prefer edit_file for changes to part of a file. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "path": {"type": "string", "description": "Workspace-relative UTF-8 text file to create or replace."},
     "content": {"type": "string", "description": "Complete new UTF-8 text for the file."},
-    "expected_sha256": {"type": "string", "description": "Digest from read_file, required to replace an existing file; omit to create."}
+    "expected_sha256": {"type": "string", "description": "Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version."}
   },
   "required": ["path", "content"],
   "additionalProperties": false
@@ -83,15 +83,15 @@ func (writeFileTool) Spec() ToolSpec {
 func (deleteFileTool) Spec() ToolSpec {
 	return ToolSpec{
 		Name: "delete_file",
-		Description: "Delete one file. Requires expected_sha256 from the latest read_file of that file. " +
+		Description: "Delete one file read or written in this conversation; read it again after changes outside these tools (exec or the user). " +
 			"Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "path": {"type": "string", "description": "Workspace-relative regular file to delete."},
-    "expected_sha256": {"type": "string", "description": "Digest read_file returned for the whole file."}
+    "expected_sha256": {"type": "string", "description": "Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version."}
   },
-  "required": ["path", "expected_sha256"],
+  "required": ["path"],
   "additionalProperties": false
 }`),
 		Effect: EffectClassWrite,
@@ -123,13 +123,11 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 	if strings.ContainsRune(content, 0) {
 		return failOutcome("binary_file", "content contains NUL bytes"), nil
 	}
-	var expected string
-	hasDigest := len(a.ExpectedSHA256) != 0
-	if hasDigest {
-		if err := json.Unmarshal(a.ExpectedSHA256, &expected); err != nil || !digestPattern.MatchString(expected) {
-			return failOutcome("invalid_arguments", invalidExpectedDigest), nil
-		}
+	expected, bad := expectedDigest(a.ExpectedSHA256)
+	if bad != nil {
+		return *bad, nil
 	}
+	hasDigest := len(a.ExpectedSHA256) != 0
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {
 		return *bad, nil
@@ -162,7 +160,7 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		// v0 §8 amendment: a create must not replace a path that appears mid-call.
 		if err := publishNew(abs, []byte(content)); err != nil {
 			if errors.Is(err, os.ErrExist) {
-				return failOutcome("invalid_arguments", "the file exists; read it and pass its sha256 to overwrite it"), nil
+				return failOutcome("invalid_arguments", "the file exists; read it before changing it"), nil
 			}
 			return *osOutcome(err), nil
 		}
@@ -186,10 +184,12 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 	if bad := fileTarget(info); bad != nil {
 		return *bad, nil
 	}
-	if !hasDigest {
-		return failOutcome("invalid_arguments", "the file exists; read it and pass its sha256 to overwrite it"), nil
+	var snap *snapshot
+	if hasDigest {
+		snap, bad = t.ws.checkFileDigest(abs, expected)
+	} else {
+		snap, bad = t.ws.checkSeenDigest(abs)
 	}
-	snap, bad := t.ws.checkFileDigest(abs, expected)
 	if bad != nil {
 		return *bad, nil
 	}
@@ -263,8 +263,9 @@ func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	if bad := decodeArgs(args, &a); bad != nil {
 		return *bad, nil
 	}
-	if !digestPattern.MatchString(a.ExpectedSHA256) {
-		return failOutcome("invalid_arguments", invalidExpectedDigest), nil
+	expected, bad := expectedDigest(a.ExpectedSHA256)
+	if bad != nil {
+		return *bad, nil
 	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {
@@ -277,13 +278,25 @@ func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	if bad := fileTarget(info); bad != nil {
 		return *bad, nil
 	}
-	snap, bad := t.ws.checkFileDigest(abs, a.ExpectedSHA256)
+	var snap *snapshot
+	if len(a.ExpectedSHA256) != 0 {
+		snap, bad = t.ws.checkFileDigest(abs, expected)
+	} else {
+		snap, bad = t.ws.checkSeenDigest(abs)
+	}
 	if bad != nil {
 		return *bad, nil
+	}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return *osOutcome(err), nil
 	}
 	if err := os.Remove(abs); err != nil {
 		return *osOutcome(err), nil
 	}
+	t.ws.mu.Lock()
+	delete(t.ws.seen, canonical)
+	t.ws.mu.Unlock()
 	return appliedOutcome(deleteFileResult{Operation: "delete", Path: t.ws.relative(abs), BeforeSHA256: snap.sha256}, t.ws.Root())
 }
 
@@ -295,6 +308,39 @@ func fileTarget(info os.FileInfo) *ToolOutcome {
 		return failPtr("invalid_arguments", "path is not a regular file")
 	}
 	return nil
+}
+
+// v0 §8: an omitted digest uses the latest version returned to this conversation.
+func (w *Workspace) checkSeenDigest(abs string) (*snapshot, *ToolOutcome) {
+	snap, bad := readSnapshot(abs)
+	if bad != nil {
+		return nil, bad
+	}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, osOutcome(err)
+	}
+	w.mu.Lock()
+	expected, ok := w.seen[canonical]
+	w.mu.Unlock()
+	if !ok {
+		return nil, failPtr("invalid_arguments", "read the file before changing it (read_file records what you have seen)")
+	}
+	if expected != snap.sha256 {
+		return nil, failPtr("stale_file", "the file has changed since you last read or wrote it (for example through exec); its current digest is "+snap.sha256+". Read the part you will change again, or pass expected_sha256 if you know what changed")
+	}
+	return snap, nil
+}
+
+func expectedDigest(raw json.RawMessage) (string, *ToolOutcome) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	var expected string
+	if json.Unmarshal(raw, &expected) != nil || !digestPattern.MatchString(expected) {
+		return "", failPtr("invalid_arguments", invalidExpectedDigest)
+	}
+	return expected, nil
 }
 
 // v0 §8 amendment (2026-09-27, U3): provenance diagnoses only mismatches;

@@ -111,7 +111,7 @@ func TestWriteFile_RefusedChangesLeaveWorkspaceAlone(t *testing.T) {
 		name, args, code, message string
 	}{
 		{"unknown overwrite", `{"path":"old.txt","content":"new","expected_sha256":"` + badDigest + `"}`, "unknown_digest", ""},
-		{"existing no digest", `{"path":"old.txt","content":"new"}`, "invalid_arguments", "the file exists; read it and pass its sha256 to overwrite it"},
+		{"existing no digest", `{"path":"old.txt","content":"new"}`, "invalid_arguments", "read the file before changing it (read_file records what you have seen)"},
 		{"missing with digest", `{"path":"absent","content":"new","expected_sha256":"` + badDigest + `"}`, "not_found", ""},
 		{"directory", `{"path":"sub","content":"new"}`, "invalid_arguments", ""},
 		{"withheld", `{"path":".env","content":"new"}`, "invalid_path", ""},
@@ -376,5 +376,47 @@ func TestWriteFile_FailedCreateRemovesNewEmptyParents(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(ws.Root(), "outer")); !os.IsNotExist(err) {
 		t.Fatalf("failed create left new directories behind: %v", err)
+	}
+}
+
+func TestWriteFile_OmittedDigestCreateAndOverwrite(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"old.txt": "before"})
+	if outcome := runTool(t, NewWriteFileTool(ws), `{"path":"new.txt","content":"created"}`); !outcome.OK || fileContent(t, ws, "new.txt") != "created" {
+		t.Fatalf("create: %+v", outcome)
+	}
+	if outcome := runTool(t, NewWriteFileTool(ws), `{"path":"old.txt","content":"changed"}`); outcome.Code != "invalid_arguments" || !strings.Contains(outcome.Message, "read the file before changing it") || fileContent(t, ws, "old.txt") != "before" {
+		t.Fatalf("unread overwrite: %+v", outcome)
+	}
+	readDigest(t, ws, "old.txt")
+	if outcome := runTool(t, NewWriteFileTool(ws), `{"path":"old.txt","content":"changed"}`); !outcome.OK || fileContent(t, ws, "old.txt") != "changed" {
+		t.Fatalf("read overwrite: %+v", outcome)
+	}
+	if outcome := runTool(t, NewWriteFileTool(ws), `{"path":"new.txt","content":"again"}`); !outcome.OK || fileContent(t, ws, "new.txt") != "again" {
+		t.Fatalf("create followed by overwrite: %+v", outcome)
+	}
+}
+
+func TestDeleteFile_OmittedDigestForgetsDeletedPath(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "first"})
+	readDigest(t, ws, "a.txt")
+	if outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"a.txt"}`); !outcome.OK {
+		t.Fatalf("delete: %+v", outcome)
+	}
+	if outcome := runTool(t, NewWriteFileTool(ws), `{"path":"a.txt","content":"second"}`); !outcome.OK {
+		t.Fatalf("recreate: %+v", outcome)
+	}
+	// A delete clears authorization even if an external process recreates identical bytes.
+	if outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"a.txt"}`); !outcome.OK {
+		t.Fatalf("delete recreated: %+v", outcome)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Root(), "a.txt"), []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"a.txt"}`); outcome.Code != "invalid_arguments" || !strings.Contains(outcome.Message, "read the file before changing it") {
+		t.Fatalf("unread recreated file: %+v", outcome)
+	}
+	readDigest(t, ws, "a.txt")
+	if outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"a.txt"}`); !outcome.OK {
+		t.Fatalf("read recreated file: %+v", outcome)
 	}
 }
