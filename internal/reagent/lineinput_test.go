@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -285,7 +286,7 @@ func TestTerminalReader_HistoryUsesPhysicalSubmissions(t *testing.T) {
 			t.Fatalf("got %q, %v; want %q", line, err, want)
 		}
 	}
-	want := []string{"a↵b", `c \`, "d"}
+	want := []string{"a\nb", `c \`, "d"}
 	if strings.Join(reader.history.entries, "|") != strings.Join(want, "|") {
 		t.Fatalf("history: %#v, want %#v", reader.history.entries, want)
 	}
@@ -661,5 +662,16 @@ func TestTerminalReader_ConsentDrainFailureRefusesAndRestores(t *testing.T) {
 	}
 	if !restored || reader.out.(*bytes.Buffer).Len() != 0 {
 		t.Fatal("drain failure drew picker or did not restore terminal")
+	}
+}
+
+func TestNewLineReader_CharacterDeviceWithoutTTYUsesScanner(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, ok := newLineReader(f, io.Discard, nil).(*scannerReader); !ok {
+		t.Fatal("non-TTY character device used raw input")
 	}
 }

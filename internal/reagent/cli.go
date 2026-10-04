@@ -338,7 +338,11 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		complete := func(line string, pos int, key rune) (string, int, bool) {
 			return completeLine(line, pos, key, completionCommands(), conversation.completionArguments, commandTakesArgument)
 		}
-		code := chat(ctx, conversation, newLineReader(stdin, stderr, complete), stdout, stderr)
+		input := newLineReader(stdin, stderr, complete)
+		if terminal, ok := input.(*terminalReader); ok && terminal.region != nil {
+			terminal.region.mu = &session.display.mu
+		}
+		code := chat(ctx, conversation, input, stdout, stderr)
 		if conversation.session.store != nil {
 			conversation.session.store.close()
 		}

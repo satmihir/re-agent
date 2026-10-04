@@ -100,3 +100,35 @@ func TestEditor_DrawWithoutScrollingOnEveryKey(t *testing.T) {
 		t.Fatalf("screen: %#v", lines)
 	}
 }
+
+func TestEditor_LiteralReturnArrowIsNotAPasteNewline(t *testing.T) {
+	r := terminalInput(strings.NewReader("literal ↵\r\x1b[200~a\rb\x1b[201~\r\x1b[A\x1b[A\r"))
+	if line, err := r.ReadLine(); err != nil || line != "literal ↵" {
+		t.Fatalf("literal: %q %v", line, err)
+	}
+	if line, err := r.ReadLine(); err != nil || line != "a\nb" {
+		t.Fatalf("paste: %q %v", line, err)
+	}
+	if got := r.history.At(0); got != "a\nb" {
+		t.Fatalf("history: %q", got)
+	}
+	if line, err := r.ReadLine(); err != nil || line != "literal ↵" {
+		t.Fatalf("recall: %q %v", line, err)
+	}
+}
+
+func TestEditor_PastedTabDoesNotComplete(t *testing.T) {
+	r := terminalInput(strings.NewReader("\x1b[200~/mo\tdel\x1b[201~\r"))
+	r.complete = func(string, int, rune) (string, int, bool) {
+		t.Fatal("completion ran during paste")
+		return "", 0, false
+	}
+	line, err := r.ReadLine()
+	if err != nil || line != "/mo\tdel" {
+		t.Fatalf("paste: %q %v", line, err)
+	}
+	rows, _, _ := layoutInput([]rune(line), len([]rune(line)), "> ", 80)
+	if !strings.Contains(rows[0], "⇥") {
+		t.Fatalf("tab not displayed visibly: %#v", rows)
+	}
+}

@@ -1,7 +1,6 @@
 package reagent
 
 import (
-	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -55,17 +54,21 @@ func decodeInputKeys(chunk []byte) ([]inputKey, []byte) {
 				case keyDown:
 					name = "down"
 				}
-				if name != "" {
-					keys = append(keys, inputKey{name: name})
+				if name == "" {
+					name = "unknown"
 				}
+				keys = append(keys, inputKey{name: name})
 				chunk = chunk[i+1:]
 				continue
 			}
 			name := map[byte]string{'b': "word-left", 'B': "word-left", 'f': "word-right", 'F': "word-right"}[chunk[1]]
 			if name != "" {
 				keys = append(keys, inputKey{name: name})
+				chunk = chunk[2:]
+			} else {
+				keys = append(keys, inputKey{name: "escape"})
+				chunk = chunk[1:]
 			}
-			chunk = chunk[2:]
 			continue
 		}
 		if chunk[0] >= utf8.RuneSelf && !utf8.FullRune(chunk) {
@@ -244,6 +247,9 @@ func layoutInput(buffer []rune, caret int, prompt string, width int) ([]string, 
 		if r == '\n' {
 			text = "↵"
 		}
+		if r == '\t' {
+			text = "⇥"
+		}
 		cells := runeWidth([]rune(text)[0])
 		if col+cells >= width {
 			rows = append(rows, "")
@@ -259,4 +265,4 @@ func layoutInput(buffer []rune, caret int, prompt string, width int) ([]string, 
 	return rows, caretRow, caretCol
 }
 
-func (e *editor) value() string { return strings.ReplaceAll(string(e.buffer), "↵", "\n") }
+func (e *editor) value() string { return string(e.buffer) }

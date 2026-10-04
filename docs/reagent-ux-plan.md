@@ -56,7 +56,7 @@ While reading a submission on a styled terminal, draw the region:
 
 - **Status row:** one line built from one status struct (`regionStatus`: plan mode, model, effort, Auto on, context % when the window and usage are known). Plan mode keeps PM3's teal (the prompt glyph and the `plan mode` label). Truncate to the width; omit parts that do not fit from the right.
 - **Submit:** the region collapses, and the submitted message is left in scrollback as a framed block — rule, the text, rule — replacing the grey band (`drawUserBand`, `writeUserBand`). `NO_COLOR` uses plain rules.
-- **Pickers** (`/model`, `/effort`, plan handoff, workspace consent) render inside the region in place of the input rows, keeping their existing key rules, and restore the input on close.
+- **Pickers** opened from the prompt (`/model`, `/effort`) replace the input rows in its region and return to the prompt on close. Pickers opened outside a prompt (plan handoff, workspace consent) draw a temporary rule/picker/rule/status region, then collapse it completely, leaving only the existing one-line result. Their key rules are unchanged (consent drains pending input, defaults to Deny, and has no shortcuts; plan handoff accepts only ↑/↓/Enter). Restoring persistent input during a turn belongs to UX3.
 - **Resize** while typing redraws the region at the new size.
 - Minimum width: below 20 columns, draw no rules or status row, only the input.
 - v0 §10.2 and §10.3 are edited in place: the editor is re-agent's own, `x/term` is used for raw mode and size, and the region's rules.

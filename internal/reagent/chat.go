@@ -92,6 +92,7 @@ func (c *conversation) available() map[string]bool {
 // commandModel lists the catalog, or switches to one of its entries.
 // v0 §10 amendment (2026-10-02): software-only historical text handoffs.
 func (c *conversation) commandModel(ctx context.Context, argument string, input lineReader, stderr io.Writer) {
+	stderr = promptOutput(input, stderr)
 	if c.scripted != nil {
 		fmt.Fprintln(stderr, "a scripted run replays recorded responses, so it has no model to choose")
 		return
@@ -119,7 +120,7 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 			// v0 §10 amendment (2026-10-02): no summary request is needed.
 			title += " · carries text; /model N fresh discards"
 		}
-		index, err := input.Choose(pickerConfig{title: title, shortcuts: true}, modelChoices(c.session.cfg.Model, c.available()), current)
+		index, err := input.Choose(pickerConfig{title: title, shortcuts: true, fromPrompt: true}, modelChoices(c.session.cfg.Model, c.available()), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
 			fmt.Fprintln(stderr, renderModels(c.session.cfg.Model, c.available()))
@@ -148,6 +149,10 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 		return
 	}
 
+	if terminal, ok := input.(*terminalReader); ok && terminal.region != nil {
+		terminal.region.collapse()
+		terminal.releaseRaw()
+	}
 	switchCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	handoff, err := c.transitionModel(switchCtx, info, fresh)
@@ -215,6 +220,7 @@ func (c *conversation) switchTo(info modelInfo) {
 // conversation survives, because effort is a request parameter rather than
 // part of the transcript.
 func (c *conversation) commandEffort(argument string, input lineReader, stderr io.Writer) {
+	stderr = promptOutput(input, stderr)
 	if c.scripted != nil {
 		fmt.Fprintln(stderr, "a scripted run sends no requests, so reasoning effort has no effect")
 		return
@@ -241,7 +247,7 @@ func (c *conversation) commandEffort(argument string, input lineReader, stderr i
 				break
 			}
 		}
-		index, err := input.Choose(pickerConfig{title: "Select reasoning effort", shortcuts: true}, effortChoices(info, c.session.cfg.ReasoningEffort), current)
+		index, err := input.Choose(pickerConfig{title: "Select reasoning effort", shortcuts: true, fromPrompt: true}, effortChoices(info, c.session.cfg.ReasoningEffort), current)
 		switch {
 		case errors.Is(err, errNotInteractive):
 			fmt.Fprintln(stderr, renderEfforts(info, c.session.cfg.ReasoningEffort))
@@ -652,16 +658,32 @@ func planSwitchLine(on, styled bool) string {
 	return ansiDim + text + ansiReset
 }
 
+func (c *conversation) regionStatus() regionStatus {
+	status := regionStatus{plan: c.session.planMode, blocked: c.session.blocked != "", model: c.session.cfg.Model, effort: c.session.cfg.ReasoningEffort,
+		usage: c.session.lastRequest, window: contextWindow(c.session.cfg.Model)}
+	if c.session.auto != nil {
+		status.auto = c.session.auto.enabled
+	}
+	return status
+}
+
 // chat runs a conversation: one submission per line, each its own run of one
 // session (v1 §18.2). Slash commands are local controls; only compaction and submitted turns call the model.
 // A terminal submission may contain a bracketed paste or continued lines.
 func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr io.Writer) int {
 	c.session.workspaceConsent = func(ctx context.Context, destination workspaceDestination) (bool, error) {
+		if terminal, ok := input.(*terminalReader); ok {
+			terminal.setRegionStatus(c.regionStatus())
+		}
 		return workspacePermission(ctx, input, stderr, c.session.cfg, c.session.planMode, destination)
 	}
 	var interrupted time.Time
 	for {
 		if c.persistenceErr != nil {
+			if terminal, ok := input.(*terminalReader); ok && terminal.region != nil {
+				terminal.region.collapse()
+				terminal.releaseRaw()
+			}
 			fmt.Fprintf(stderr, "error: session checkpoint failed: %v; stop using this chat\n", c.persistenceErr)
 			return exitRunFail
 		}
@@ -675,6 +697,12 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 		}
 		if c.session.blocked != "" {
 			prompt = "(blocked) " + prompt
+		}
+		if terminal, ok := input.(*terminalReader); ok {
+			terminal.setRegionStatus(c.regionStatus())
+			if terminal.region != nil {
+				terminal.region.mu = &c.session.display.mu
+			}
 		}
 		input.SetPrompt(prompt)
 		input.SetBandPrefix(bandPrefix)
@@ -920,6 +948,9 @@ func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan str
 		{label: "Implement fresh", detail: "starts a new session holding only the plan"},
 		{label: "Keep planning"},
 	}
+	if terminal, ok := input.(*terminalReader); ok {
+		terminal.setRegionStatus(c.regionStatus())
+	}
 	index, err := input.Choose(pickerConfig{title: planPickerTitle, cancelLabel: "keep planning"}, options, 2)
 	switch {
 	case errors.Is(err, errNotInteractive):
@@ -945,7 +976,9 @@ func (c *conversation) offerPlan(ctx context.Context, input lineReader, plan str
 			return
 		}
 		fmt.Fprintln(stderr, planSwitchLine(false, styledOutput(stderr)))
-		if styledOutput(stderr) {
+		if terminal, ok := input.(*terminalReader); ok && terminal.region != nil {
+			writeUserFrame(stderr, "Implement the plan.", terminal.region.width, terminal.styled)
+		} else if styledOutput(stderr) {
 			width := terminalColumns(stderr)
 			if width < 2 {
 				width = 80
