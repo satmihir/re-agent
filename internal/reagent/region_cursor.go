@@ -11,6 +11,9 @@ import (
 // cursorRow asks the terminal once per activation. Unrelated type-ahead is kept
 // for the editor; a terminal that does not answer within 100 ms is not trusted.
 func cursorRow(fd int, out *terminalRegion) int {
+	if !out.raw {
+		return 0
+	}
 	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFL, 0)
 	if errno != 0 || syscall.SetNonblock(fd, true) != nil {
 		return 0

@@ -155,6 +155,7 @@ type terminalRegion struct {
 	caretRow, caretCol       int
 	initialRow               int
 	visible                  []string
+	raw                      bool
 	active                   bool
 }
 

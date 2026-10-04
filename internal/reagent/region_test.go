@@ -153,6 +153,9 @@ func TestRegion_NoCursorReplyPreservesLastOutput(t *testing.T) {
 	term := newTestTerminal(24, 10)
 	term.feed("\x1b[9;1Hprevious output\r\n")
 	r.draw([]string{regionRule(24, false), "❯ ", regionRule(24, false), "  model"}, 1, 2, 24, 10)
+	if bytes.Contains(out.Bytes(), []byte("\x1b[6n")) {
+		t.Fatal("queried cursor while the terminal was cooked")
+	}
 	term.feed(out.String())
 	lines := term.lines()
 	if lines[5] != "previous output" || lines[6] != strings.Repeat("─", 24) || lines[7] != "❯" {

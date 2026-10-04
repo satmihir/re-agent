@@ -204,14 +204,29 @@ func (r *terminalReader) setRegionStatus(status regionStatus) {
 
 // v0 §10 amendment (2026-09-26): the prompt and picker share raw-mode entry.
 func (r *terminalReader) rawMode() (func(), error) {
+	var restore func()
 	if r.enterRaw != nil {
-		return r.enterRaw()
+		var err error
+		restore, err = r.enterRaw()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		state, err := term.MakeRaw(r.fd)
+		if err != nil {
+			return nil, err
+		}
+		restore = func() { _ = term.Restore(r.fd, state) }
 	}
-	state, err := term.MakeRaw(r.fd)
-	if err != nil {
-		return nil, err
+	if r.region != nil {
+		r.region.raw = true
 	}
-	return func() { _ = term.Restore(r.fd, state) }, nil
+	return func() {
+		restore()
+		if r.region != nil {
+			r.region.raw = false
+		}
+	}, nil
 }
 
 func (r *terminalReader) releaseRaw() {

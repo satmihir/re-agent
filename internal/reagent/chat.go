@@ -513,13 +513,14 @@ func (c *conversation) commandEdit(ctx context.Context, input lineReader, stdout
 			fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
 			return
 		}
-		defer func() {
-			if err := terminal.restoreRegion(); err != nil {
-				fmt.Fprintf(stderr, "error: restore chat region: %s\n", sanitize(err.Error()))
-			}
-		}()
 	}
 	text, err := composeInEditor(editorCommand(), c.stdin, c.stdout, c.stderr)
+	if hasRegion && terminal.region != nil {
+		if restoreErr := terminal.restoreRegion(); restoreErr != nil {
+			fmt.Fprintf(stderr, "error: restore chat region: %s\n", sanitize(restoreErr.Error()))
+			return
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", sanitize(err.Error()))
 		return
