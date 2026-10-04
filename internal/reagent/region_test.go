@@ -379,3 +379,22 @@ func TestRegion_TurnStartsAfterTemporaryPickerCollapsedIt(t *testing.T) {
 	cancel()
 	r.finishTurnInput()
 }
+
+func TestRegion_LargeTurnReplyKeepsEveryInsertedLine(t *testing.T) {
+	var out bytes.Buffer
+	r := terminalInput(strings.NewReader(""))
+	r.region = &terminalRegion{out: &out, width: 40, height: 12, top: 1, rows: 4, caretRow: 1, caretCol: 2, active: true}
+	r.region.visible = []string{regionRule(40, false), "❯ ", regionRule(40, false), "  model"}
+	writer := &regionOutput{region: r.region}
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(writer, "reply line %02d\n", i)
+	}
+	for i := 0; i < 40; i++ {
+		if !strings.Contains(out.String(), fmt.Sprintf("reply line %02d", i)) {
+			t.Fatalf("lost reply line %d", i)
+		}
+	}
+	if !r.region.active {
+		t.Fatal("large reply displaced the region")
+	}
+}

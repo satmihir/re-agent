@@ -196,6 +196,10 @@ func (r *terminalReader) closeRegion() {
 	r.pauseTurnInput()
 	r.region.collapse()
 	r.releaseRaw()
+	if r.tty != nil {
+		_ = r.tty.Close()
+		r.tty = nil
+	}
 }
 
 func (r *terminalReader) showEmptyRegion() {

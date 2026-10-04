@@ -31,8 +31,14 @@ func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int,
 		reader := &terminalReader{fd: int(f.Fd()), keys: keys, prompt: "> ", complete: complete,
 			out: stderr, styled: styledOutput(stderr), size: func() (int, int, error) { return term.GetSize(int(f.Fd())) }}
 		if output, ok := stderr.(*os.File); ok && term.IsTerminal(int(output.Fd())) && os.Getenv("TERM") != "dumb" {
-			reader.region = &terminalRegion{out: stderr, fd: reader.fd, keys: keys}
-			keys.inner, keys.poll = pollingReader{fd: reader.fd}, true
+			// A separate open file description keeps input polling flags off stdout/stderr.
+			if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+				reader.tty = tty
+				reader.fd = int(tty.Fd())
+				reader.size = func() (int, int, error) { return term.GetSize(reader.fd) }
+				reader.region = &terminalRegion{out: stderr, fd: reader.fd, keys: keys}
+				keys.inner, keys.poll = pollingReader{fd: reader.fd}, true
+			}
 		}
 		reader.discardInput = func() error { return discardTerminalInput(reader.fd) }
 		return reader
@@ -157,6 +163,7 @@ func (h *promptHistory) At(i int) string {
 // terminalReader owns editing and presentation for terminal input.
 type terminalReader struct {
 	fd             int
+	tty            *os.File
 	complete       func(string, int, rune) (string, int, bool)
 	keys           *keyReader
 	enterRaw       func() (func(), error)
