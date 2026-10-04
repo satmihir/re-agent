@@ -442,6 +442,10 @@ def run_task(name, binary, base, seed_remote, out, model_args, script=None):
         failure = f"checker error: {exc}"
     summary = {"task": name, "passed": failure is None, "failure": failure, "exit": result.returncode,
                "wall_s": round(elapsed, 1), **summarize(trace)}
+    # A provider failure says nothing about the model's git work; report it apart.
+    summary["provider_error"] = summary["status"] == "provider_error"
+    if summary["provider_error"]:
+        summary["failure"] = "provider error: " + result.stderr.strip().split("\n")[-2].strip()
     with open(os.path.join(out, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
     return summary
@@ -452,13 +456,16 @@ def report(rows):
            f"{'input':>8} {'uncached':>8} {'output':>7} {'model s':>7} {'wall s':>6}"
     print(head)
     for r in rows:
-        print(f"{r['task']:24} {'yes' if r['passed'] else 'NO':>4} {r['turns']:>5} {r['tool_calls']:>5} "
+        verdict = "err" if r.get("provider_error") else "yes" if r["passed"] else "NO"
+        print(f"{r['task']:24} {verdict:>4} {r['turns']:>5} {r['tool_calls']:>5} "
               f"{r['git_calls']:>4} {r['multi_call_turns']:>5} {r['failed_calls']:>4} {r['input_tokens']:>8} "
               f"{r['uncached_input_tokens']:>8} {r['output_tokens']:>7} {r['model_ms'] / 1000:>7.1f} {r['wall_s']:>6}")
     n = len(rows)
     if n > 1:
         total = lambda k: sum(r[k] for r in rows)
-        print(f"{'total (' + str(sum(r['passed'] for r in rows)) + '/' + str(n) + ' passed)':24} {'':>4} "
+        errors = sum(bool(r.get("provider_error")) for r in rows)
+        label = f"total ({sum(r['passed'] for r in rows)}/{n - errors} passed" + (f", {errors} err)" if errors else ")")
+        print(f"{label:24} {'':>4} "
               f"{total('turns'):>5} {total('tool_calls'):>5} {total('git_calls'):>4} {total('multi_call_turns'):>5} "
               f"{total('failed_calls'):>4} {total('input_tokens'):>8} {total('uncached_input_tokens'):>8} "
               f"{total('output_tokens'):>7} {total('model_ms') / 1000:>7.1f} {round(total('wall_s'), 1):>6}")
