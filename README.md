@@ -14,16 +14,39 @@
 
 re:agent is a coding agent harness in Go. It builds each model request, reads
 what the model asks for, runs only the tools you granted, feeds the results
-back, and repeats. The whole agent is one package of about 7,000 lines, with
-one dependency (`golang.org/x/term`). Every request it sends and every reply
-it gets is recorded on disk, so you can see exactly what happened and why.
+back, and repeats. The whole agent is one package of about 13,000 lines, plus
+16,000 lines of tests, with one dependency (`golang.org/x/term`). Every request
+it sends and every reply it gets is recorded on disk, so you can see exactly
+what happened and why.
 
 ## Built with itself
 
-re:agent is developed mostly by re:agent. **21 of its first 33 merged pull
-requests were opened by re:agent, working on its own code.** They include most
-of the chat interface, all seven benchmark fixes, the file tools, and the
-model picker.
+re:agent is developed mostly by re:agent. **50 of its 77 merged pull requests
+were opened by re:agent, working on its own code**, in the twelve days from
+the first PR (September 23 to October 4, 2026). Ten of the other 27 are the
+plans and docs it worked from.
+
+| As of PR #89 | By re:agent | Share |
+| --- | --- | ---: |
+| Merged pull requests | 50 of 77 | 65% |
+| Lines added across merged PRs | 22,000 of 28,800 | 76% |
+| Agent code on `main` today (Go, excluding tests) | 8,100 of 13,100 lines | 62% |
+| Tests on `main` today | 10,600 of 16,100 lines | 66% |
+
+Its PRs include most of the chat interface, plan mode, manual and automatic
+compaction, session resume, workspace switching, the experimental Auto model
+routing, the file tools (including multi-edit), and the framed chat input. The
+largest are Auto routing (#69, +2,640 lines), workspace switching (#63,
++2,527), and the chat input region (#85, +1,631).
+
+PRs opened by each model: GPT-6 Sol (25), GPT-6.1 Sol (9), GPT-6 Luna (7),
+GPT-5.6 Terra (6), GPT-5.6 Luna (2), and Claude Sonnet 5.5 (1).
+
+PRs are counted by matching each merged PR against the `gh pr create` calls in
+re:agent's own traces, which also record the model. Code shares come from
+`git blame` on `main`. A line counts as re:agent's when it comes from a commit
+in one of its PRs. The roughly 3,300 lines of Go written before the PR
+workflow began count as not re:agent's.
 
 The loop:
 
@@ -34,10 +57,13 @@ The loop:
 4. re:agent reads the comments, fixes them, and pushes.
 5. A human merges.
 
-Its own session traces feed back into the plan. The current roadmap,
-[`docs/reagent-usage-fixes-plan.md`](docs/reagent-usage-fixes-plan.md), came
+Its own session traces feed back into the plans.
+[`docs/reagent-usage-fixes-plan.md`](docs/reagent-usage-fixes-plan.md) came
 from reading 41 real sessions for the places the harness got in the model's
 way.
+[`docs/reagent-tool-fixes-plan.md`](docs/reagent-tool-fixes-plan.md) came from
+the places it worked around its own tools, such as editing files with Python
+scripts instead of `edit_file`.
 
 ## Quick start
 
