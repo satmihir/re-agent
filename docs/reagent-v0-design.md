@@ -66,7 +66,7 @@ Read files through a limit-plus-one reader. Adopt v1 §11.3's text, digest, line
 |---|---|---|
 | `list_files` | §12.1 | `path` required; `offset` default 0; omitted `limit` = as many as fit |
 | `read_file` | §12.2 | `path` required; `start_line` default 1; omitted `max_lines` = 250, still fit to result budget |
-| `search_text` | §12.3 | `query` and exactly one of `path` or `paths` (1–20 strings) required; search in path order, deduplicating files across overlapping paths with one shared result budget and `max_results`; literal case-sensitive by default; `regex: true` uses Go RE2 per line (reject non-compiling, empty-matching, or null); omitted `max_results` = as many as fit |
+| `search_text` | §12.3 | `query` and exactly one of `path` or `paths` (1–20 strings) required; search in path order, deduplicating files across overlapping paths with one shared result budget and `max_results`; literal case-sensitive by default; `regex: true` uses Go RE2 per line (reject non-compiling, empty-matching, or null); omitted `max_results` = as many as fit; a literal query containing `\|` that matches nothing says so in the outcome message and suggests `regex: true` |
 
 Counts are positive when given, offsets nonnegative. An oversized search match is shortened with `preview_truncated`; a byte-limited or skipping search reports `complete: false`. Descriptions state the v0 defaults and claim no v1 maxima.
 

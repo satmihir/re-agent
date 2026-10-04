@@ -362,3 +362,21 @@ func TestSearchText_SymlinkedParentAndWalkedFileDoNotDuplicate(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// A literal "|" that finds nothing explains itself; any other search is silent.
+func TestSearchText_LiteralPipeWithNoMatchesSuggestsRegex(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "writeUserBand()\n| a | b |\n"})
+	for _, tc := range []struct{ name, args, message string }{
+		{"literal pipe, no match", `{"path":".","query":"writeUserBand|drawUserBand"}`, literalPipeHint},
+		{"literal pipe, match", `{"path":".","query":"| a |"}`, ""},
+		{"regex pipe", `{"path":".","query":"nothing|absent","regex":true}`, ""},
+		{"literal, no pipe", `{"path":".","query":"absent"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := runTool(t, NewSearchTextTool(ws), tc.args)
+			if !outcome.OK || outcome.Message != tc.message {
+				t.Fatalf("got %+v, want message %q", outcome, tc.message)
+			}
+		})
+	}
+}

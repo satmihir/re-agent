@@ -179,8 +179,16 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 		}
 		s.scanFile(t.ws.relative(abs), snap)
 	}
-	return s.outcome()
+	outcome, err := s.outcome()
+	// v0 §5: a literal "|" that finds nothing was meant as alternatives every
+	// time it occurred in real use; say why, without changing the search.
+	if err == nil && !regex && len(s.matches) == 0 && strings.Contains(a.Query, "|") {
+		outcome.Message = literalPipeHint
+	}
+	return outcome, err
 }
+
+const literalPipeHint = `no matches; the query contains "|" but regex is false, so it was searched literally; set regex: true to search alternatives`
 
 // walk searches a directory tree in name order, skipping what it cannot read
 // and recording that it did so.
