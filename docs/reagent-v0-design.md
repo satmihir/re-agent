@@ -203,7 +203,7 @@ The v1 §5.1 interface separates orchestration from model I/O; it is not a provi
 
 The v0 milestones (mechanical loop, read tools, visible context, live model, one edit, run a check) are complete; further work follows the plan or prompt in hand.
 
-`go test ./...` is offline: scripted models, `httptest` servers, temporary directories. A test that reaches the internet is a bug. Adapter tests compare preview bytes with live-path bytes and cover retry, nonretryable failure, timeouts, native continuation and incomplete output. `make check` runs gofmt, vet and tests. `make live` runs the opt-in live conformance tests per provider whose key is present; live Jev tests need `REAGENT_JEV_LIVE_TESTS=1` and human approval each time. Never claim a live run that did not happen.
+`go test ./...` is offline: scripted models, `httptest` servers, temporary directories. A test that reaches the internet is a bug. Adapter tests compare preview bytes with live-path bytes and cover retry, nonretryable failure, timeouts, native continuation and incomplete output. `make check` runs gofmt, vet and tests. `make tty-check` drives the built binary through `bench/tty`'s scenarios in a pseudo-terminal with an independent emulator, checking screens and that output arrives whole; it is offline and required evidence for terminal input or display changes. `make live` runs the opt-in live conformance tests per provider whose key is present; live Jev tests need `REAGENT_JEV_LIVE_TESTS=1` and human approval each time. Never claim a live run that did not happen.
 
 ## 14. Explicitly deferred work
 

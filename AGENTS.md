@@ -97,6 +97,12 @@ beats completeness. When in doubt, write less.
 - Before reporting done, run and paste real output from:
   `go build ./... && go vet ./... && go test ./...`
   `make check` runs the same gate plus gofmt.
+- A change to terminal input or display (the chat prompt, region, pickers,
+  activity, reply rendering) also runs `make tty-check`, which drives the real
+  binary in a pseudo-terminal, and pastes its screens and verdict. Add a
+  scenario to `bench/tty/check.py` for new terminal behavior. Go tests with an
+  in-process fake terminal do not exercise file descriptors, the pty buffer,
+  or real concurrency, so they are not enough on their own.
 - Report what works, what was tested, what was not, and any deviation from the
   design. Never claim a live run happened if it did not.
 - Do not commit, push, add CI, linters, Makefiles, or tooling unless asked.

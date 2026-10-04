@@ -437,6 +437,7 @@ bad invocation.
 ```bash
 make check    # gofmt, vet, and the full test suite, offline, with no keys
 make live     # two real API round trips; reads keys from .env and spends tokens
+make tty-check  # drive the chat in a pseudo-terminal and check the screen; offline, needs python3
 ```
 
 GitHub Actions builds, vets, and runs the offline suite with coverage on pushes
