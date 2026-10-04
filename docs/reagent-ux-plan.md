@@ -10,9 +10,9 @@ An earlier session tried drawing the frame around `x/term`'s line editor and rev
 
 This is Codex's TUI design in miniature (`codex-rs/tui/src`: `custom_terminal.rs` inline viewport, `insert_history.rs` scroll-region insertion, `bottom_pane/textarea.rs` editor, `bottom_pane/footer.rs` status rows). It does not use the alternate screen; scrollback stays the terminal's.
 
-**The region** is N rows at the bottom of the output: top rule, input rows, bottom rule, status rows. re:agent draws all of it and redraws all of it on any change (no cell diffing at this size). It remembers how many rows it drew and where the caret is, so a redraw is: move to the region's top, clear to end of screen, draw, put the cursor at the caret. Wrap each redraw in a synchronized update (`ESC[?2026h` … `ESC[?2026l`; terminals without it ignore it).
+**The region** starts at the cursor after the existing output, not necessarily at the screen bottom: top rule, input rows, bottom rule, status rows. It moves down as output is inserted or the input grows; only when it runs out of screen rows does it scroll. re:agent redraws all of it on any change (no cell diffing at this size). It remembers its top and the caret, so a redraw is: move to the region's top, clear to end of screen, draw, put the cursor at the caret. Wrap each redraw in a synchronized update (`ESC[?2026h` … `ESC[?2026l`; terminals without it ignore it).
 
-**Insertion above.** Output produced while the region is shown — replies, activity, notes, summaries, `!` output — goes into scrollback above the region without moving it: set the scroll region to the rows above the region (`ESC[1;<top-1>r`), move to its last row, write the lines with `\r\n`, reset the scroll region (`ESC[r`), restore the caret. If the region is not yet at the bottom of the screen, first push it down by the needed rows. This needs the region's absolute row: query the cursor position (`ESC[6n`, reply `ESC[row;colR` read in raw mode) when the region is first drawn; if no reply arrives within 100 ms, assume the region is bottom-anchored and move it there.
+**Insertion above.** Output produced while the region is shown — replies, activity, notes, summaries, `!` output — goes above the region. First move the region down into available screen rows by the rows needed for the new output. Once at the screen bottom, set the scroll region to the rows above it (`ESC[1;<top-1>r`), move to its last row, write the lines with `\r\n`, reset the scroll region (`ESC[r`), restore the caret. Query the cursor position (`ESC[6n`, reply `ESC[row;colR` read in raw mode) when the region is first drawn; if no reply arrives within 100 ms, assume the region is bottom-anchored and move it there.
 
 **One owner.** While the region is active, every write to the terminal goes through it, under the display's existing mutex. That includes the reply: when stdout is the same terminal as stderr, the reply is inserted through the region; when stdout is redirected, it is written to stdout exactly as today.
 
@@ -36,7 +36,7 @@ Replace `term.Terminal` in `lineinput.go` with an editor re:agent owns, keeping 
 
 - **State:** a buffer of runes (may contain newlines from paste), a caret index, the history cursor, and a kill buffer for Ctrl-K/U/W → Ctrl-Y.
 - **Keys:** printable input, Enter, Backspace, Delete, ←/→, Home/End and Ctrl-A/E, Alt-←/→ and Alt-B/F (word), Ctrl-K/U/W/Y, ↑/↓ (history at first/last row, otherwise move between rows), Tab (existing `completeLine`), Ctrl-C/Ctrl-D (existing rules), bracketed paste (existing `keyReader` markers). Reuse the picker's key decoder (`decodeKeys`) and extend it rather than writing a second one.
-- **Layout** is a pure function: `(buffer, caret, prompt, width) → rows []string, caretRow, caretCol`, wrapping by `displayWidth`/`runeWidth` from `render.go`, so wide characters and combining marks place the caret correctly.
+- **Layout** is a pure function: `(buffer, caret, prompt, width) → rows []string, caretRow, caretCol`, wrapping by `displayWidth`/`runeWidth` from `render.go` with a two-space hanging indent, so wide characters and combining marks place the caret correctly.
 - **Drawing** for this milestone: redraw the prompt rows relative to the caret (the same mechanism UX2's region uses, with no rules or status rows yet).
 - Pasted newlines stay in the buffer and display as `↵` as today.
 
@@ -56,7 +56,7 @@ While reading a submission on a styled terminal, draw the region:
 
 - **Status row:** one line built from one status struct (`regionStatus`: plan mode, model, effort, Auto on, context % when the window and usage are known). Plan mode keeps PM3's teal (the prompt glyph and the `plan mode` label). Truncate to the width; omit parts that do not fit from the right.
 - **Submit:** the region collapses, and the submitted message is left in scrollback as a framed block — rule, the text, rule — replacing the grey band (`drawUserBand`, `writeUserBand`). `NO_COLOR` uses plain rules.
-- **Pickers** (`/model`, `/effort`, plan handoff, workspace consent) render inside the region in place of the input rows, keeping their existing key rules, and restore the input on close.
+- **Pickers** opened from the prompt (`/model`, `/effort`) replace the input rows in its region and return to the prompt on close. Pickers opened outside a prompt (plan handoff, workspace consent) draw a temporary rule/picker/rule/status region, then collapse it completely, leaving only the existing one-line result. Their key rules are unchanged (consent drains pending input, defaults to Deny, and has no shortcuts; plan handoff accepts only ↑/↓/Enter). Restoring persistent input during a turn belongs to UX3.
 - **Resize** while typing redraws the region at the new size.
 - Minimum width: below 20 columns, draw no rules or status row, only the input.
 - v0 §10.2 and §10.3 are edited in place: the editor is re-agent's own, `x/term` is used for raw mode and size, and the region's rules.

@@ -16,6 +16,7 @@ type pickerConfig struct {
 	title, cancelLabel string
 	shortcuts          bool
 	freshInput         bool
+	fromPrompt         bool
 }
 
 type key int
@@ -55,39 +56,39 @@ func decodeKey(chunk []byte) key {
 	return keyUnknown
 }
 
-// v0 §10 amendment (2026-09-26): a terminal read may contain several keys.
-// Consume unknown escape sequences as a unit so their digits cannot select a row.
-// Without shortcuts, unknown keys are returned so typed feedback cancels the picker.
+// decodeKeys applies picker rules to the same decoded keys the editor consumes.
+// Unknown escape sequences remain units so their digits cannot select a row.
 func decodeKeys(chunk []byte, shortcuts bool) []key {
+	input, rest := decodeInputKeys(chunk)
 	var keys []key
-	for i := 0; i < len(chunk); {
-		if chunk[i] == '\x1b' && i+1 < len(chunk) && (chunk[i+1] == '[' || chunk[i+1] == 'O') {
-			if i+3 <= len(chunk) {
-				if k := decodeKey(chunk[i : i+3]); k != keyUnknown {
-					keys = append(keys, k)
-					i += 3
-					continue
-				}
-			}
-			i += 2
-			for i < len(chunk) {
-				b := chunk[i]
-				i++
-				if b >= 0x40 && b <= 0x7e {
-					break
-				}
-			}
+	for _, k := range input {
+		switch k.name {
+		case "up":
+			keys = append(keys, keyUp)
+		case "down":
+			keys = append(keys, keyDown)
+		case "enter":
+			keys = append(keys, keyEnter)
+		case "escape", "interrupt", "eof":
+			keys = append(keys, keyCancel)
+		default:
 			if !shortcuts {
 				keys = append(keys, keyUnknown)
+				continue
 			}
-			continue
+			if k.text != 0 {
+				if choice := decodeKey([]byte(string(k.text))); choice != keyUnknown {
+					keys = append(keys, choice)
+				}
+			}
 		}
-		if !shortcuts && (chunk[i] == 'j' || chunk[i] == 'k' || chunk[i] == 'q' || (chunk[i] >= '1' && chunk[i] <= '9')) {
+	}
+	if len(rest) > 0 {
+		if string(rest) == "\x1b" {
+			keys = append(keys, keyCancel)
+		} else if !shortcuts {
 			keys = append(keys, keyUnknown)
-		} else if k := decodeKey(chunk[i : i+1]); k != keyUnknown || !shortcuts {
-			keys = append(keys, k)
 		}
-		i++
 	}
 	return keys
 }

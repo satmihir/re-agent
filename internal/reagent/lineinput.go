@@ -26,13 +26,14 @@ type lineReader interface {
 
 // newLineReader picks terminal editing only for an interactive file.
 func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int, rune) (string, int, bool)) lineReader {
-	if f, ok := stdin.(*os.File); ok && isTerminal(stdin) {
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		keys := &keyReader{inner: f}
-		terminal := term.NewTerminal(terminalIO{Reader: keys, Writer: stderr}, "> ")
-		terminal.AutoCompleteCallback = complete
-		reader := &terminalReader{fd: int(f.Fd()), terminal: terminal, keys: keys, prompt: "> ",
+		reader := &terminalReader{fd: int(f.Fd()), keys: keys, prompt: "> ", complete: complete,
 			out: stderr, styled: styledOutput(stderr), size: func() (int, int, error) { return term.GetSize(int(f.Fd())) }}
-		terminal.History = &reader.history
+		if output, ok := stderr.(*os.File); ok && term.IsTerminal(int(output.Fd())) && os.Getenv("TERM") != "dumb" {
+			reader.region = &terminalRegion{out: stderr, fd: reader.fd, keys: keys}
+			keys.inner, keys.poll = pollingReader{fd: reader.fd}, true
+		}
 		reader.discardInput = func() error { return discardTerminalInput(reader.fd) }
 		return reader
 	}
@@ -41,25 +42,17 @@ func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int,
 	return &scannerReader{scanner: s}
 }
 
-// terminalIO joins terminal input with stderr, where x/term writes its prompt
-// and echo alongside the other harness diagnostics.
-type terminalIO struct {
-	io.Reader
-	io.Writer
-}
-
-// keyReader makes bracketed pastes one editable submission and translates
-// embedded newlines to the visible return-arrow character. Outside a paste,
-// newline also means Enter: type-ahead was typed while cooked mode was active
-// and therefore arrives as newline rather than raw-mode carriage return.
+// keyReader makes bracketed pastes one editable submission and normalizes
+// pasted CRLF to one newline. Outside a paste,
+// newline also means Enter: type-ahead may arrive from cooked mode.
 type keyReader struct {
-	inner      io.Reader
-	pending    []byte
-	hold       []byte
-	paste      bool
-	lastCR     bool
-	interrupts int
-	err        error
+	inner   io.Reader
+	poll    bool
+	pending []byte
+	hold    []byte
+	paste   bool
+	lastCR  bool
+	err     error
 }
 
 var pasteStart = []byte("\x1b[200~")
@@ -80,6 +73,9 @@ func (r *keyReader) Read(b []byte) (int, error) {
 			r.consume(false)
 		}
 		if n == 0 && err == nil && len(r.pending) == 0 {
+			if r.poll {
+				return 0, nil
+			}
 			continue
 		}
 	}
@@ -114,18 +110,13 @@ func (r *keyReader) consume(final bool) {
 
 		c := r.hold[0]
 		r.hold = r.hold[1:]
-		if c == 3 && !r.paste {
-			r.pending = append(r.pending, 5, 21, 13)
-			r.interrupts++
-			r.lastCR = false
-			continue
-		}
+
 		if c == '\n' && r.lastCR {
 			r.lastCR = false
 			continue
 		}
 		if r.paste && (c == '\r' || c == '\n') {
-			r.pending = append(r.pending, []byte("↵")...)
+			r.pending = append(r.pending, '\n')
 			r.lastCR = c == '\r'
 			continue
 		}
@@ -137,8 +128,7 @@ func (r *keyReader) consume(final bool) {
 	}
 }
 
-// promptHistory keeps the prompt's in-memory history. x/term adds completed
-// physical lines; this implementation only decides which lines it retains.
+// promptHistory keeps completed physical lines in memory.
 type promptHistory struct {
 	entries []string
 	max     int
@@ -164,32 +154,38 @@ func (h *promptHistory) At(i int) string {
 	return h.entries[len(h.entries)-1-i]
 }
 
-// terminalReader owns the terminal-specific state for one prompt. keys tracks
-// transformed input and prompt remembers the prompt to restore after a
-// continuation read.
+// terminalReader owns editing and presentation for terminal input.
 type terminalReader struct {
 	fd           int
-	terminal     *term.Terminal
+	complete     func(string, int, rune) (string, int, bool)
 	keys         *keyReader
 	enterRaw     func() (func(), error)
+	rawRestore   func()
 	discardInput func() error
 	out          io.Writer
 	styled       bool
 	size         func() (width, height int, err error)
-	width        int // x/term starts at 80; keep the last successful size for redraws.
+	width        int // Keep the last successful size for redraws.
 	prompt       string
 	bandPrefix   string
 	history      promptHistory
+	queued       []inputKey
+	partial      []byte
+	pasting      bool
+	region       *terminalRegion
+	regionStatus regionStatus
+	prefix       string
 }
 
 // SetPrompt changes the prompt restored after a continuation read.
 func (r *terminalReader) SetPrompt(p string) {
 	r.prompt = p
-	r.terminal.SetPrompt(p)
 }
 
 // SetBandPrefix records the prompt a submission was typed at, even when that message changes modes.
 func (r *terminalReader) SetBandPrefix(prefix string) { r.bandPrefix = prefix }
+
+func (r *terminalReader) setRegionStatus(status regionStatus) { r.regionStatus = status }
 
 // v0 §10 amendment (2026-09-26): the prompt and picker share raw-mode entry.
 func (r *terminalReader) rawMode() (func(), error) {
@@ -203,36 +199,52 @@ func (r *terminalReader) rawMode() (func(), error) {
 	return func() { _ = term.Restore(r.fd, state) }, nil
 }
 
-// ReadLine enters raw mode only while it reads a submission. During a turn the
-// terminal stays cooked, so Ctrl-C continues to raise SIGINT and cancel that
-// turn, and type-ahead still arrives as newline. At an idle prompt keyReader
-// translates Ctrl-C into errInterrupted instead of ending the conversation.
-func (r *terminalReader) ReadLine() (line string, err error) {
-	restore, err := r.rawMode()
-	if err != nil {
-		return "", err
+func (r *terminalReader) releaseRaw() {
+	if r.rawRestore != nil {
+		r.rawRestore()
+		r.rawRestore = nil
 	}
-	defer restore()
-	// v0 §10 amendment (2026-09-26): x/term otherwise edits at 80 columns.
+}
+
+// ReadLine keeps raw mode across a prompt picker, but restores cooked mode
+// before any turn so Ctrl-C still cancels an in-flight request.
+func (r *terminalReader) ReadLine() (line string, err error) {
+	if r.rawRestore == nil {
+		restore, rawErr := r.rawMode()
+		if rawErr != nil {
+			return "", rawErr
+		}
+		r.rawRestore = restore
+	}
+	defer func() {
+		if r.region == nil || !r.region.active {
+			r.releaseRaw()
+		}
+	}()
 	if r.width == 0 {
 		r.width = 80
 	}
 	if width, height, sizeErr := r.size(); sizeErr == nil && width > 0 && height > 0 {
-		if r.terminal.SetSize(width, height) == nil {
-			r.width = width
-		}
+		r.width = width
 	}
-	r.terminal.SetBracketedPasteMode(true)
-	defer r.terminal.SetBracketedPasteMode(false)
-	defer r.terminal.SetPrompt(r.prompt)
+	if r.region != nil {
+		r.region.control("\x1b[?2004h")
+		defer r.region.control("\x1b[?2004l")
+	} else {
+		fmt.Fprint(r.out, "\x1b[?2004h")
+		defer fmt.Fprint(r.out, "\x1b[?2004l")
+	}
 
+	r.prefix, r.pasting = "", false
 	line, rows, err := r.readPhysicalLine(r.prompt)
 	if err != nil {
 		return "", err
 	}
 	for strings.HasSuffix(line, "\\") && !strings.HasSuffix(line, "\\\\") {
 		line = strings.TrimSuffix(line, "\\")
-		r.terminal.SetPrompt("… ")
+		if r.region != nil {
+			r.prefix = line + "\n"
+		}
 		var next string
 		var nextRows int
 		next, nextRows, err = r.readPhysicalLine("… ")
@@ -242,7 +254,19 @@ func (r *terminalReader) ReadLine() (line string, err error) {
 		rows += nextRows
 		line += "\n" + next
 	}
-	if r.styled && line != "" {
+	if r.region != nil {
+		switch {
+		case line == "/model" || line == "/effort":
+			if width, height, err := r.size(); err == nil {
+				inputRows, row, col := regionInputRows(nil, 0, width, r.regionStatus, r.styled)
+				r.region.draw(inputRows, row, col, width, height)
+			}
+		case line != "":
+			r.region.submit(regionSubmitted(line, r.width, r.styled))
+		default:
+			r.region.collapse()
+		}
+	} else if r.styled && line != "" {
 		r.drawUserBand(line, rows)
 	}
 	return line, nil
@@ -255,11 +279,13 @@ func (r *terminalReader) Choose(config pickerConfig, options []choice, current i
 	if err != nil || width < 2 || height < len(options)+2 || len(options) == 0 {
 		return 0, errNotInteractive
 	}
-	restore, err := r.rawMode()
-	if err != nil {
-		return 0, err
+	if r.rawRestore == nil {
+		restore, rawErr := r.rawMode()
+		if rawErr != nil {
+			return 0, rawErr
+		}
+		defer restore()
 	}
-	defer restore()
 	// v0 §10 amendment (2026-09-30): consent accepts only keys received after this boundary.
 	if config.freshInput {
 		if r.discardInput == nil {
@@ -269,14 +295,8 @@ func (r *terminalReader) Choose(config pickerConfig, options []choice, current i
 			return 0, err
 		}
 		r.keys.pending, r.keys.hold = nil, nil
-		r.keys.paste, r.keys.lastCR, r.keys.interrupts, r.keys.err = false, false, 0, nil
-		// x/term may also have read ahead into the next prompt; keep editing settings, not buffered input.
-		complete := r.terminal.AutoCompleteCallback
-		r.terminal = term.NewTerminal(terminalIO{Reader: r.keys, Writer: r.out}, r.prompt)
-		r.terminal.AutoCompleteCallback, r.terminal.History = complete, &r.history
-		if err := r.terminal.SetSize(width, height); err != nil {
-			return 0, err
-		}
+		r.keys.paste, r.keys.lastCR, r.keys.err = false, false, nil
+		r.queued, r.partial = nil, nil
 	}
 
 	cursor := current
@@ -301,6 +321,12 @@ func (r *terminalReader) Choose(config pickerConfig, options []choice, current i
 		}
 	}
 	header = truncateWidth(header, width-1)
+	if r.region != nil {
+		if width >= 20 && height < len(options)+5 {
+			return 0, errNotInteractive
+		}
+		return r.chooseRegion(config, header, p, width, height)
+	}
 	rows := len(options) + 1
 	fmt.Fprint(r.out, "\x1b[?25l")
 	defer func() {
@@ -343,22 +369,131 @@ func (r *terminalReader) Choose(config pickerConfig, options []choice, current i
 	}
 }
 
-// readPhysicalLine counts the echo before converting pasted ↵ to newlines.
-// x/term owns history, so the normalized submission is not added again.
+// readPhysicalLine redraws relative to the caret, including after a wrap.
 func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
-	line, err := r.terminal.ReadLine()
-	if err == term.ErrPasteIndicator {
-		err = nil
+	e := &editor{width: r.width, prompt: prompt}
+	if r.region != nil {
+		e.prompt = regionPrompt(r.regionStatus, r.styled)
+		if r.prefix != "" {
+			e.prompt = "  "
+		}
 	}
-	if err != nil {
-		return "", 0, err
+	rows, caretRow := 0, 0
+	redraw := func() {
+		if r.region != nil {
+			if width, height, err := r.size(); err == nil && width > 0 && height > 0 {
+				r.width = width
+				e.width = width
+				var lines []string
+				var row, col int
+				if r.prefix == "" {
+					lines, row, col = regionInputRows(e.buffer, e.caret, width, r.regionStatus, r.styled)
+				} else {
+					lines, row, col = regionContinuationRows(r.prefix, e.buffer, e.caret, width, r.regionStatus, r.styled)
+				}
+				r.region.draw(lines, row, col, width, height)
+			}
+			return
+		}
+		lines, atRow, atCol := layoutInput(e.buffer, e.caret, prompt, r.width)
+		if rows > 0 {
+			if caretRow > 0 {
+				fmt.Fprintf(r.out, "\x1b[%dA", caretRow)
+			}
+			fmt.Fprint(r.out, "\r\x1b[J")
+		}
+		for i, line := range lines {
+			if i > 0 {
+				fmt.Fprint(r.out, "\r\n")
+			}
+			fmt.Fprint(r.out, line)
+		}
+		if above := len(lines) - 1 - atRow; above > 0 {
+			fmt.Fprintf(r.out, "\x1b[%dA", above)
+		}
+		fmt.Fprint(r.out, "\r")
+		if atCol > 0 {
+			fmt.Fprintf(r.out, "\x1b[%dC", atCol)
+		}
+		rows, caretRow = len(lines), atRow
 	}
-	if line == "" && r.keys.interrupts > 0 {
-		r.keys.interrupts--
-		return "", 0, errInterrupted
+	redraw()
+	for {
+		if len(r.queued) == 0 {
+			var chunk [256]byte
+			n, err := r.keys.Read(chunk[:])
+			keys, rest := decodeInputKeys(append(r.partial, chunk[:n]...))
+			r.partial = append([]byte(nil), rest...)
+			r.queued = keys
+			if err != nil && len(keys) == 0 {
+				if r.region != nil {
+					r.region.collapse()
+				}
+				return "", rows, err
+			}
+		}
+		if len(r.queued) == 0 {
+			if r.region != nil && r.keys.poll {
+				if width, height, err := r.size(); err == nil && (width != r.region.width || height != r.region.height) {
+					redraw()
+				}
+			}
+			continue
+		}
+		for len(r.queued) > 0 {
+			k := r.queued[0]
+			r.queued = r.queued[1:]
+			if k.name == "paste-start" {
+				r.pasting = true
+				continue
+			}
+			if k.name == "paste-end" {
+				r.pasting = false
+				continue
+			}
+			if r.pasting && k.name == "enter" {
+				k = inputKey{text: '\n'}
+			}
+			if r.pasting && k.name == "tab" {
+				k = inputKey{text: '\t'}
+			}
+			if action := e.apply(k, &r.history, r.complete); action != "" {
+				switch action {
+				case "enter":
+					if r.region == nil {
+						redraw()
+					}
+					line := e.value()
+					r.history.Add(string(e.buffer))
+					if r.region == nil {
+						if below := rows - 1 - caretRow; below > 0 {
+							fmt.Fprintf(r.out, "\x1b[%dB", below)
+						}
+						fmt.Fprint(r.out, "\r\n")
+					}
+					return line, rows, nil
+				case "interrupt":
+					if r.region != nil {
+						r.region.collapse()
+						return "", rows, errInterrupted
+					}
+					if caretRow > 0 {
+						fmt.Fprintf(r.out, "\x1b[%dA", caretRow)
+					}
+					fmt.Fprint(r.out, "\r\x1b[J")
+					return "", rows, errInterrupted
+				case "eof":
+					if r.region != nil {
+						r.region.collapse()
+						return "", rows, io.EOF
+					}
+					fmt.Fprint(r.out, "\r\n")
+					return "", rows, io.EOF
+				}
+			}
+		}
+		redraw()
 	}
-	rows := (displayWidth(prompt)+displayWidth(line))/r.width + 1
-	return strings.ReplaceAll(line, "↵", "\n"), rows, nil
 }
 
 // v0 §10 amendment (2026-09-26): redraw from the echoed rows rather than a

@@ -4,23 +4,20 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
-
-	"golang.org/x/term"
 )
 
 func terminalInput(input io.Reader) *terminalReader {
 	keys := &keyReader{inner: input}
 	out := &bytes.Buffer{}
-	terminal := term.NewTerminal(terminalIO{Reader: keys, Writer: out}, "> ")
-	reader := &terminalReader{terminal: terminal, keys: keys, prompt: "> ", out: out,
+	reader := &terminalReader{keys: keys, prompt: "> ", out: out,
 		size: func() (int, int, error) { return 80, 24, nil }, enterRaw: func() (func(), error) {
 			return func() {}, nil
 		}}
-	terminal.History = &reader.history
 	reader.discardInput = func() error {
 		if pending, ok := input.(*strings.Reader); ok {
 			_, err := pending.Seek(0, io.SeekEnd)
@@ -289,7 +286,7 @@ func TestTerminalReader_HistoryUsesPhysicalSubmissions(t *testing.T) {
 			t.Fatalf("got %q, %v; want %q", line, err, want)
 		}
 	}
-	want := []string{"a↵b", `c \`, "d"}
+	want := []string{"a\nb", `c \`, "d"}
 	if strings.Join(reader.history.entries, "|") != strings.Join(want, "|") {
 		t.Fatalf("history: %#v, want %#v", reader.history.entries, want)
 	}
@@ -398,7 +395,8 @@ func TestTerminalReader_BandWrapsLongMessages(t *testing.T) {
 	if _, err := reader.ReadLine(); err != nil {
 		t.Fatal(err)
 	}
-	band := strings.Split(reader.out.(*bytes.Buffer).String(), "\x1b[J")[1]
+	parts := strings.Split(reader.out.(*bytes.Buffer).String(), "\x1b[J")
+	band := parts[len(parts)-1]
 	band = strings.TrimSuffix(band, "\x1b[?2004l")
 	rows := strings.Split(strings.TrimSuffix(band, "\r\n"), "\r\n")
 	if len(rows) < 2 || !strings.HasPrefix(rows[0], ansiUserBand+"> ") || !strings.HasPrefix(rows[1], ansiUserBand+"  ") {
@@ -429,7 +427,7 @@ func TestTerminalReader_NoBandWhenPlainOrEmpty(t *testing.T) {
 			if err != tc.wantErr {
 				t.Fatalf("got %v, want %v", err, tc.wantErr)
 			}
-			if got := reader.out.(*bytes.Buffer).String(); strings.Contains(got, ansiUserBand) || strings.Contains(got, "\x1b[J") {
+			if got := reader.out.(*bytes.Buffer).String(); strings.Contains(got, ansiUserBand) {
 				t.Fatalf("unexpected band in %q", got)
 			}
 		})
@@ -636,7 +634,7 @@ func TestTerminalReader_ConsentDrainPrecedesDrawAndKeepsFreshKeys(t *testing.T) 
 
 func TestTerminalReader_ConsentDropsPromptReadAheadAndRetainsEditing(t *testing.T) {
 	reader := terminalInput(&pickerKeys{chunks: [][]byte{[]byte("work\rqueued\r"), []byte("\r"), []byte("fresh\r")}})
-	reader.terminal.AutoCompleteCallback = func(line string, pos int, key rune) (string, int, bool) { return line, pos, false }
+	reader.complete = func(line string, pos int, key rune) (string, int, bool) { return line, pos, false }
 	if line, err := reader.ReadLine(); err != nil || line != "work" {
 		t.Fatalf("first prompt %q %v", line, err)
 	}
@@ -645,7 +643,7 @@ func TestTerminalReader_ConsentDropsPromptReadAheadAndRetainsEditing(t *testing.
 	if err != nil || index != 1 {
 		t.Fatalf("picker %d %v", index, err)
 	}
-	if reader.terminal.AutoCompleteCallback == nil || reader.terminal.History != &reader.history {
+	if reader.complete == nil || reader.history.At(0) != "work" {
 		t.Fatal("consent discarded editing settings")
 	}
 	if line, err := reader.ReadLine(); err != nil || line != "fresh" {
@@ -664,5 +662,16 @@ func TestTerminalReader_ConsentDrainFailureRefusesAndRestores(t *testing.T) {
 	}
 	if !restored || reader.out.(*bytes.Buffer).Len() != 0 {
 		t.Fatal("drain failure drew picker or did not restore terminal")
+	}
+}
+
+func TestNewLineReader_CharacterDeviceWithoutTTYUsesScanner(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, ok := newLineReader(f, io.Discard, nil).(*scannerReader); !ok {
+		t.Fatal("non-TTY character device used raw input")
 	}
 }
