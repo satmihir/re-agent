@@ -108,7 +108,7 @@ func TestEditFile_MalformedDigest(t *testing.T) {
 			outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+digest+
 				`","old_text":"timeout","new_text":"delay"}`)
 			if outcome.OK || outcome.Code != "invalid_arguments" || outcome.Effect != EffectNone ||
-				outcome.Message != "expected_sha256 must be the 64-character digest read_file returned" {
+				outcome.Message != "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote" {
 				t.Fatalf("got %+v", outcome)
 			}
 		})

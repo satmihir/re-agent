@@ -119,9 +119,9 @@ func TestWriteFile_RefusedChangesLeaveWorkspaceAlone(t *testing.T) {
 		{"too large", `{"path":"big.txt","content":"` + strings.Repeat("x", MaxFileBytes+1) + `"}`, "file_too_large", ""},
 		{"invalid utf8", "{\"path\":\"bad.txt\",\"content\":\"" + string([]byte{0xff}) + "\"}", "invalid_utf8", ""},
 		{"nul", `{"path":"nul.txt","content":"a\u0000b"}`, "binary_file", ""},
-		{"null digest", `{"path":"new.txt","content":"x","expected_sha256":null}`, "invalid_arguments", "expected_sha256 must be the 64-character digest read_file returned"},
-		{"short digest", `{"path":"old.txt","content":"x","expected_sha256":"` + strings.Repeat("a", 63) + `"}`, "invalid_arguments", "expected_sha256 must be the 64-character digest read_file returned"},
-		{"uppercase digest", `{"path":"old.txt","content":"x","expected_sha256":"` + strings.Repeat("A", 64) + `"}`, "invalid_arguments", "expected_sha256 must be the 64-character digest read_file returned"},
+		{"null digest", `{"path":"new.txt","content":"x","expected_sha256":null}`, "invalid_arguments", "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote"},
+		{"short digest", `{"path":"old.txt","content":"x","expected_sha256":"` + strings.Repeat("a", 63) + `"}`, "invalid_arguments", "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote"},
+		{"uppercase digest", `{"path":"old.txt","content":"x","expected_sha256":"` + strings.Repeat("A", 64) + `"}`, "invalid_arguments", "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote"},
 		{"null content", `{"path":"new.txt","content":null}`, "invalid_arguments", ""},
 		{"missing content", `{"path":"new.txt"}`, "invalid_arguments", ""},
 		{"unknown field", `{"path":"new.txt","content":"x","force":true}`, "invalid_arguments", ""},
@@ -205,7 +205,7 @@ func TestDeleteFile_MalformedDigestMessage(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"old.txt": "old"})
 	outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"old.txt","expected_sha256":"`+strings.Repeat("a", 63)+`"}`)
 	if outcome.OK || outcome.Code != "invalid_arguments" || outcome.Effect != EffectNone ||
-		outcome.Message != "expected_sha256 must be the 64-character digest read_file returned" {
+		outcome.Message != "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote" {
 		t.Fatalf("got %+v", outcome)
 	}
 }
@@ -418,5 +418,29 @@ func TestDeleteFile_OmittedDigestForgetsDeletedPath(t *testing.T) {
 	readDigest(t, ws, "a.txt")
 	if outcome := runTool(t, NewDeleteFileTool(ws), `{"path":"a.txt"}`); !outcome.OK {
 		t.Fatalf("read recreated file: %+v", outcome)
+	}
+}
+
+func TestFileWriters_NullAndEmptyDigestAreNotOmission(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool func(*Workspace) Tool
+		args string
+	}{
+		{"edit null", NewEditFileTool, `{"path":"a.txt","old_text":"old","new_text":"new","expected_sha256":null}`},
+		{"edit empty", NewEditFileTool, `{"path":"a.txt","old_text":"old","new_text":"new","expected_sha256":""}`},
+		{"write null", NewWriteFileTool, `{"path":"a.txt","content":"new","expected_sha256":null}`},
+		{"write empty", NewWriteFileTool, `{"path":"a.txt","content":"new","expected_sha256":""}`},
+		{"delete null", NewDeleteFileTool, `{"path":"a.txt","expected_sha256":null}`},
+		{"delete empty", NewDeleteFileTool, `{"path":"a.txt","expected_sha256":""}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"a.txt": "old"})
+			readDigest(t, ws, "a.txt")
+			outcome := runTool(t, tc.tool(ws), tc.args)
+			if outcome.Code != "invalid_arguments" || outcome.Message != "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote" || fileContent(t, ws, "a.txt") != "old" {
+				t.Fatalf("got %+v", outcome)
+			}
+		})
 	}
 }

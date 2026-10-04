@@ -15,7 +15,7 @@ import (
 type writeFileTool struct{ ws *Workspace }
 type deleteFileTool struct{ ws *Workspace }
 
-const invalidExpectedDigest = "expected_sha256 must be the 64-character digest read_file returned"
+const invalidExpectedDigest = "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote"
 
 // NewWriteFileTool returns the whole-file creation and replacement tool.
 func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws} }
