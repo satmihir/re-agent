@@ -284,7 +284,6 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			session.auto.enabled = saved.AutoEnabled
 			session.auto.usage, session.auto.attempts = saved.AutoUsage, saved.AutoAttempts
 		}
-		autoDisclosure(stderr, session.auto)
 	}
 	endpoint := ""
 	if options.script == "" && proxy.serves(provider) {

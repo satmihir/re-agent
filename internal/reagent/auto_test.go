@@ -602,3 +602,19 @@ func TestAuto_DefaultOffAndNoKeyCLIStayOffline(t *testing.T) {
 		}
 	}
 }
+
+func TestAuto_CLIStartsWithoutRoutingBanner(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "")
+	t.Setenv("REAGENT_MODEL", "")
+	api := newFakeAPI(t, okReply(streamedTextReply()))
+	t.Setenv(proxyProviderVariable, openaiName)
+	t.Setenv(proxyURLVariable, api.server.URL)
+	var out, errs bytes.Buffer
+	args := []string{"run", "--auto", "--workspace", t.TempDir(), "--no-project-instructions", "--trace-file", filepath.Join(t.TempDir(), "events.jsonl"), "Report a version"}
+	if code := Main(context.Background(), args, strings.NewReader(""), &out, &errs); code != exitOK {
+		t.Fatalf("CLI: %d, %s", code, errs.String())
+	}
+	if !strings.Contains(errs.String(), "re:agent") || strings.Contains(errs.String(), "auto on:") || strings.Contains(errs.String(), "auto fallback:") || strings.Contains(errs.String(), "auto scope:") || strings.Contains(errs.String(), "TYPESAFE_API_KEY is not set") {
+		t.Fatalf("unexpected startup banner: %s", errs.String())
+	}
+}

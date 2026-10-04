@@ -157,7 +157,7 @@ There is no truncation or automatic summary request: if it cannot fit, the
 switch offers `/compact` then retry `/model`, or `fresh` to discard explicitly.
 The next user message and later growth can still exceed limits. `/context` measures
 the outgoing view; `/trace` shows switch validation metadata until the next run.
-### Auto routing (experiment)
+### Auto routing
 
 Auto is **off by default**. A TypeSafe key by itself does not enable it or make
 routing calls. With provider credentials and `TYPESAFE_API_KEY` exported in your
@@ -176,7 +176,7 @@ and high effort** when supported and usable with the process's OpenAI
 credentials or proxy:
 six default pairs, selected in one joint Jev decision. Low targets clear mechanical
 work, medium bounded multi-step reasoning, and high difficult diagnosis and subtle
-invariants. These are experimental rubrics, not measured capability rankings;
+invariants. These are routing heuristics, not measured capability rankings;
 Luna/high is not assumed to outrank Sol/low. The configured fallback is retained
 and deduplicated; a different configured model also contributes its high pair
 when supported (at most eight pairs). A sole candidate or missing TypeSafe key
@@ -190,7 +190,8 @@ manual pair as fallback, and `/auto off` pins the current model/effort. Successf
 explicit `/model` or `/effort` selection also exits Auto; rejection or picker
 cancellation does not. `/reset` retains the Auto setting but starts fresh accounting.
 
-Enabling Auto discloses the endpoint `https://api.typesafe.ai/v1/systemone` and
+Auto sends routing data to `https://api.typesafe.ai/v1/systemone`; `/auto on`
+shows this disclosure in chat. `--auto` does not add a startup banner. This is
 what leaves the machine: TypeSafe receives the full effective root `AGENTS.md`,
 every summary and the latest user request in full, earlier user requests, the
 latest complete plan, and selected recent assistant/tool/shell evidence with
@@ -213,7 +214,7 @@ failure. Jev is asked for the cheapest allowed pair that can do the next
 segment well. Admitted pairs form a cost ladder: Luna, then Sol, then any other
 configured model, with each model's efforts in catalog order. This is not a
 capability ranking. Auto selects the first pair whose cumulative Jev
-probability reaches 0.80 (experimental, to be tuned from traces); confidence
+probability reaches 0.80 (a heuristic, not a calibrated quality claim); confidence
 is recorded but does not gate selection. Fallback applies only without a valid
 decision: the configured pair at turn start, the current pair mid-run. Fewer
 than two eligible routes means no Jev call. Tool failure prompts reconsideration,

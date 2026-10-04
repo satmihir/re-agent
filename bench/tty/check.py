@@ -2,9 +2,10 @@
 
     python3 bench/tty/check.py BINARY [SCENARIO ...]
 
-`make tty-check` builds the binary and runs every scenario. Each one starts
-`reagent chat --scripted` in a pty of a fixed size, types into it, answers the
-terminal queries a real terminal would, and interprets the output with an
+`make tty-check` builds the binary and runs every scenario. Most start
+`reagent chat --scripted`; Auto startup uses an offline proxy without making
+requests. Each runs in a pty of a fixed size, answers the terminal queries a
+real terminal would, and interprets the output with an
 independent emulator (vt.py). Screens marked `show` are printed so a reviewer
 can see them; `expect` steps fail the run.
 
@@ -59,6 +60,16 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "auto-startup": {
+        "auto": True,
+        "steps": [
+            ("idle", 1.0),
+            ("show", "Auto startup without routing banner"),
+            ("expect", "screen_has", "re:agent"),
+            ("expect", "all_lack", ["auto on:", "auto fallback:", "auto scope:", "TYPESAFE_API_KEY is not set"]),
+            ("expect", "status_row_last"),
+        ],
+    },
     "fresh-prompt": {
         "script": [reply("hi")],
         "steps": [
@@ -248,7 +259,12 @@ class Session:
             env = dict(os.environ, TERM="xterm-256color")
             env.pop("NO_COLOR", None)
             env.update(extra_env or {})
-            os.execve(binary, [binary, "chat", "--scripted", script_path, "--workspace", workspace], env)
+            args = [binary, "chat", "--workspace", workspace]
+            if script_path is None:
+                args += ["--auto", "--no-project-instructions"]
+            else:
+                args += ["--scripted", script_path]
+            os.execve(binary, args, env)
         self.alive = True
 
     def pump(self, seconds):
@@ -362,6 +378,12 @@ def check_all_lines(s, lines):
     return None
 
 
+def check_all_lack(s, lines):
+    seen = s.term.text()
+    found = [line for line in lines if any(line in row for row in seen)]
+    return "unexpected startup text: %s" % found if found else None
+
+
 def check_rule_width(s, width):
     widths = {len(line) for line in s.term.screen() if line and set(line) == {RULE}}
     return None if widths == {width} else "rule widths on screen: %s, want %d" % (sorted(widths), width)
@@ -377,6 +399,7 @@ CHECKS = {
     "screen_has": check_screen_has,
     "screen_lacks": check_screen_lacks,
     "all_lines": check_all_lines,
+    "all_lack": check_all_lack,
     "rule_width": check_rule_width,
     "no_rules": check_no_rules,
 }
@@ -391,10 +414,15 @@ def show(s, label):
 
 def run(binary, name, scenario, workspace):
     failures = []
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        json.dump(scenario["script"], f)
-        script_path = f.name
+    script_path = None
+    if "script" in scenario:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(scenario["script"], f)
+            script_path = f.name
     extra_env = {}
+    if scenario.get("auto"):
+        extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL="http://127.0.0.1:1/v1/responses",
+                         TYPESAFE_API_KEY="", REAGENT_MODEL="")
     editor_path = None
     if "editor" in scenario:
         editor_path = os.path.join(workspace, "tty-editor")
@@ -430,7 +458,7 @@ def run(binary, name, scenario, workspace):
                 break
     finally:
         s.close()
-        os.unlink(script_path)
+        if script_path is not None: os.unlink(script_path)
         if editor_path is not None: os.unlink(editor_path)
     try:
         bytes(s.raw).decode("utf-8")
