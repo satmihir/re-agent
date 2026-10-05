@@ -533,3 +533,21 @@ func TestExec_ChainRejectsAnEmptyStep(t *testing.T) {
 		t.Fatalf("got %+v", outcome)
 	}
 }
+
+func TestExec_StringArgvExplainsTheShape(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	for _, args := range []string{
+		`{"argv":"git","then":[["git","status"]],"cwd":"."}`,
+		`{"argv":"git status","cwd":"."}`,
+	} {
+		outcome := runTool(t, NewExecTool(ws), args)
+		if outcome.OK || outcome.Code != "invalid_arguments" || !strings.Contains(outcome.Message, `["git","fetch","origin"]`) {
+			t.Fatalf("%s: got %+v", args, outcome)
+		}
+	}
+	// Other decoding failures keep the decoder's own message.
+	outcome := runTool(t, NewExecTool(ws), `{"argv":["true"],"cwd":".","shell":true}`)
+	if !strings.Contains(outcome.Message, "unknown field") {
+		t.Fatalf("got %+v", outcome)
+	}
+}
