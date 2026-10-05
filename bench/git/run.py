@@ -9,6 +9,7 @@ the stub's pull requests. The run's trace is summarized next to the result.
 From the repository root, with provider credentials or API_PROXY_URL set:
 
     python3 bench/git/run.py --label NAME [--ref REF] [--model M] [--effort E] [--repeat N] [TASK ...]
+    python3 bench/git/run.py --agent codex --label NAME --model M [--effort E] [--repeat N] [TASK ...]
     python3 bench/git/run.py --self-test
 
 With no task names, every task runs. --ref builds re:agent from that commit
@@ -17,11 +18,21 @@ Results go to bench/out/git-NAME/. --self-test calls no provider. It replays
 each task's reference solution through --scripted, first one command per turn
 and then all commands in one turn. Both must pass and be counted correctly, and
 a run that does nothing must fail every task.
+
+--agent codex runs the same tasks with the Codex CLI (codex exec --json, which
+the Codex SDK wraps) through API_PROXY_URL, for comparison. Codex keeps its
+sandbox. It may write the clone, its .git, the bare origin, and the fixture's
+HOME, and it is never asked for approval. It gets its own CODEX_HOME, no
+AGENTS.md, and its model metadata from ~/.codex/models_cache.json. Turns come
+from the rollout's token counts. Codex does not report model time, so only
+wall time is shown for it.
 """
 
 import argparse
+import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -384,9 +395,17 @@ def is_git(argv):
     return name in ("git", "gh")
 
 
+GIT_WORD = re.compile(r"""(?:^|[;&|(]|\s-l?c\s+['"]?|['"])\s*(?:git|gh)\s""")
+
+
+def git_invocations(command):
+    """How many git or gh commands a command line runs, counting each one in a shell chain."""
+    return len(GIT_WORD.findall(command))
+
+
 def summarize(trace_path):
     """Turns, calls, tokens, and model time from one run's trace."""
-    s = {"turns": 0, "tool_calls": 0, "git_calls": 0, "other_calls": 0, "multi_call_turns": 0,
+    s = {"turns": 0, "tool_calls": 0, "git_calls": 0, "git_invocations": 0, "other_calls": 0, "multi_call_turns": 0,
          "failed_calls": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0,
          "reasoning_tokens": 0, "model_ms": 0, "status": None, "commands": []}
     with open(trace_path) as f:
@@ -402,14 +421,19 @@ def summarize(trace_path):
             elif kind == "tool.finished":
                 s["tool_calls"] += 1
                 outcome = data.get("outcome") or {}
-                argv = (outcome.get("data") or {}).get("argv") or []
-                if data.get("name") == "exec" and is_git(argv):
+                result = outcome.get("data") or {}
+                # A chained exec reports each step that ran under steps.
+                steps = [step.get("argv") or [] for step in result.get("steps") or []] or [result.get("argv") or []]
+                command = " && ".join(" ".join(argv) for argv in steps)
+                count = sum(git_invocations(" ".join(argv)) for argv in steps) if data.get("name") == "exec" else 0
+                if count:
                     s["git_calls"] += 1
-                    s["commands"].append(" ".join(argv)[:120])
+                    s["git_invocations"] += count
+                    s["commands"].append(command[:240])
                 else:
                     s["other_calls"] += 1
                     s["commands"].append(data.get("name"))
-                exit_code = (outcome.get("data") or {}).get("exit_code")
+                exit_code = result.get("exit_code")
                 s["failed_calls"] += not outcome.get("ok", False) or exit_code not in (0, None)
             elif kind == "api.attempt.finished":
                 s["model_ms"] += data.get("duration_ms") or 0
@@ -419,46 +443,140 @@ def summarize(trace_path):
     return s
 
 
-def run_task(name, binary, base, seed_remote, out, model_args, script=None):
-    setup, prompt, check, *_ = TASKS[name]
-    fx = Fixture(base, seed_remote)
-    setup(fx)
-    os.makedirs(out, exist_ok=True)
+def run_reagent(fx, prompt, out, binary, model_args, script=None):
     trace = os.path.join(out, "events.jsonl")
     args = [binary, "run", "--workspace", fx.work, "--no-project-instructions",
             "--max-steps", "40", "--trace-file", trace, *model_args]
     if script:
         args += ["--scripted", script]
-    started = time.time()
     result = subprocess.run([*args, prompt], cwd=fx.work, env=fx.env(), capture_output=True, text=True)
+    summary = summarize(trace)
+    summary["provider_error"] = summary["status"] == "provider_error"
+    return result, result.stdout, summary
+
+
+def codex_catalog(model, path):
+    """Codex's own metadata for the model, from the catalog the Codex CLI caches."""
+    with open(os.path.expanduser("~/.codex/models_cache.json")) as f:
+        models = [m for m in json.load(f)["models"] if m.get("slug") == model]
+    if not models:
+        sys.exit(f"{model} is not in ~/.codex/models_cache.json; run the Codex CLI once to refresh it")
+    with open(path, "w") as f:
+        json.dump({"models": models}, f)
+
+
+def run_codex(fx, prompt, out, model, effort):
+    proxy = os.environ.get("API_PROXY_URL", "")
+    if not proxy.endswith("/responses"):
+        sys.exit("--agent codex needs API_PROXY_URL set to a .../v1/responses endpoint")
+    home = os.path.join(fx.home, ".codex")
+    os.makedirs(home)
+    catalog = os.path.join(home, "models.json")
+    codex_catalog(model, catalog)
+    args = ["codex", "exec", "--json", "--ignore-user-config", "--skip-git-repo-check",
+            "-s", "workspace-write", "--add-dir", os.path.join(fx.work, ".git"),
+            "--add-dir", fx.remote, "--add-dir", fx.home,
+            "-C", fx.work, "-m", model,
+            "-c", 'approval_policy="never"', "-c", "project_doc_max_bytes=0",
+            "-c", f'model_catalog_json="{catalog}"',
+            "-c", 'model_provider="bench"', "-c", 'model_providers.bench.name="bench proxy"',
+            "-c", f'model_providers.bench.base_url="{proxy[:-len("/responses")]}"',
+            "-c", 'model_providers.bench.wire_api="responses"']
+    if effort:
+        args += ["-c", f'model_reasoning_effort="{effort}"']
+    result = subprocess.run([*args, prompt], cwd=fx.work, env={**fx.env(), "CODEX_HOME": home},
+                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    with open(os.path.join(out, "events.jsonl"), "w") as f:
+        f.write(result.stdout)
+    rollouts = glob.glob(os.path.join(home, "sessions", "**", "rollout-*.jsonl"), recursive=True)
+    if rollouts:
+        shutil.copy(rollouts[0], os.path.join(out, "rollout.jsonl"))
+    reply, summary = summarize_codex(result.stdout, rollouts[0] if rollouts else None)
+    return result, reply, summary
+
+
+def summarize_codex(events, rollout):
+    """The same counts as summarize, from codex exec --json events and the session rollout."""
+    s = {"turns": 0, "tool_calls": 0, "git_calls": 0, "git_invocations": 0, "other_calls": 0,
+         "multi_call_turns": 0, "failed_calls": 0, "input_tokens": 0, "cached_input_tokens": 0,
+         "output_tokens": 0, "reasoning_tokens": 0, "model_ms": 0, "status": "completed", "commands": [],
+         "provider_error": False}
+    reply = ""
+    for line in events.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        item = event.get("item") or {}
+        if event["type"] == "item.completed" and item.get("type") == "agent_message":
+            reply = item.get("text", "")
+        elif event["type"] == "item.completed" and item.get("type") not in ("reasoning", "error", "todo_list"):
+            s["tool_calls"] += 1
+            command = item.get("command") or item.get("type")
+            count = git_invocations(command) if item.get("type") == "command_execution" else 0
+            s["git_calls"] += count > 0
+            s["git_invocations"] += count
+            s["other_calls"] += count == 0
+            s["commands"].append(command[:160])
+            s["failed_calls"] += item.get("status") == "failed" or item.get("exit_code") not in (0, None)
+        elif event["type"] == "turn.completed":
+            usage = event.get("usage") or {}
+            for key, source in (("input_tokens", "input_tokens"), ("cached_input_tokens", "cached_input_tokens"),
+                                ("output_tokens", "output_tokens"), ("reasoning_tokens", "reasoning_output_tokens")):
+                s[key] += usage.get(source, 0)
+        elif event["type"] in ("turn.failed", "error"):
+            s["status"] = "error"
+            s["provider_error"] = "overloaded" in json.dumps(event) or "stream" in json.dumps(event)
+    calls = 0
+    for line in open(rollout) if rollout else []:
+        entry = json.loads(line)
+        payload = entry.get("payload") or {}
+        if entry.get("type") == "response_item" and payload.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
+            calls += 1
+        elif entry.get("type") == "event_msg" and payload.get("type") == "token_count" and payload.get("info"):
+            s["turns"] += 1
+            s["multi_call_turns"] += calls > 1
+            calls = 0
+    s["uncached_input_tokens"] = s["input_tokens"] - s["cached_input_tokens"]
+    return reply, s
+
+
+def run_task(name, base, seed_remote, out, launch):
+    """Sets up the task, runs one agent through launch(fx, prompt, out), and checks the result."""
+    setup, prompt, check, *_ = TASKS[name]
+    fx = Fixture(base, seed_remote)
+    setup(fx)
+    os.makedirs(out, exist_ok=True)
+    started = time.time()
+    result, reply, metrics = launch(fx, prompt, out)
     elapsed = time.time() - started
     with open(os.path.join(out, "reply.md"), "w") as f:
-        f.write(result.stdout)
+        f.write(reply)
     with open(os.path.join(out, "progress.txt"), "w") as f:
         f.write(result.stderr)
     try:
-        failure = check(fx, result.stdout)
+        failure = check(fx, reply)
     except RuntimeError as exc:
         failure = f"checker error: {exc}"
     summary = {"task": name, "passed": failure is None, "failure": failure, "exit": result.returncode,
-               "wall_s": round(elapsed, 1), **summarize(trace)}
+               "wall_s": round(elapsed, 1), **metrics}
     # A provider failure says nothing about the model's git work; report it apart.
-    summary["provider_error"] = summary["status"] == "provider_error"
     if summary["provider_error"]:
-        summary["failure"] = "provider error: " + result.stderr.strip().split("\n")[-2].strip()
+        lines = result.stderr.strip().split("\n")
+        summary["failure"] = "provider error: " + (lines[-2] if len(lines) > 1 else lines[-1]).strip()
     with open(os.path.join(out, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
     return summary
 
 
 def report(rows):
-    head = f"{'task':24} {'pass':>4} {'turns':>5} {'calls':>5} {'git':>4} {'multi':>5} {'fail':>4} " \
+    head = f"{'task':24} {'pass':>4} {'turns':>5} {'calls':>5} {'git':>4} {'cmds':>4} {'multi':>5} {'fail':>4} " \
            f"{'input':>8} {'uncached':>8} {'output':>7} {'model s':>7} {'wall s':>6}"
     print(head)
     for r in rows:
         verdict = "err" if r.get("provider_error") else "yes" if r["passed"] else "NO"
         print(f"{r['task']:24} {verdict:>4} {r['turns']:>5} {r['tool_calls']:>5} "
-              f"{r['git_calls']:>4} {r['multi_call_turns']:>5} {r['failed_calls']:>4} {r['input_tokens']:>8} "
+              f"{r['git_calls']:>4} {r['git_invocations']:>4} {r['multi_call_turns']:>5} {r['failed_calls']:>4} {r['input_tokens']:>8} "
               f"{r['uncached_input_tokens']:>8} {r['output_tokens']:>7} {r['model_ms'] / 1000:>7.1f} {r['wall_s']:>6}")
     n = len(rows)
     if n > 1:
@@ -466,7 +584,8 @@ def report(rows):
         errors = sum(bool(r.get("provider_error")) for r in rows)
         label = f"total ({sum(r['passed'] for r in rows)}/{n - errors} passed" + (f", {errors} err)" if errors else ")")
         print(f"{label:24} {'':>4} "
-              f"{total('turns'):>5} {total('tool_calls'):>5} {total('git_calls'):>4} {total('multi_call_turns'):>5} "
+              f"{total('turns'):>5} {total('tool_calls'):>5} {total('git_calls'):>4} {total('git_invocations'):>4} "
+              f"{total('multi_call_turns'):>5} "
               f"{total('failed_calls'):>4} {total('input_tokens'):>8} {total('uncached_input_tokens'):>8} "
               f"{total('output_tokens'):>7} {total('model_ms') / 1000:>7.1f} {round(total('wall_s'), 1):>6}")
     for r in rows:
@@ -498,7 +617,8 @@ def self_test(binary, tmp, seed_remote):
             base = tempfile.mkdtemp(dir=tmp)
             script = os.path.join(base, "script.json")
             write_script(script, steps, reply if mode != "nothing" else "Done.")
-            r = run_task(name, binary, base, seed_remote, os.path.join(base, "out"), [], script)
+            r = run_task(name, base, seed_remote, os.path.join(base, "out"),
+                         lambda fx, prompt, out: run_reagent(fx, prompt, out, binary, [], script))
             want_turns = len(steps) + 1
             if mode == "nothing":
                 if r["passed"]:
@@ -523,36 +643,44 @@ def main():
     parser.add_argument("--effort", help="reasoning effort to request")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--agent", choices=("reagent", "codex"), default="reagent")
     args = parser.parse_args()
     unknown = [t for t in args.tasks if t not in TASKS]
     if unknown:
         parser.error(f"unknown tasks {unknown}; known: {', '.join(TASKS)}")
     if not args.self_test and not args.label:
         parser.error("--label is required unless --self-test")
+    if args.agent == "codex" and (args.self_test or args.ref or not args.model):
+        parser.error("--agent codex needs --model and takes neither --ref nor --self-test")
 
     tmp = tempfile.mkdtemp(prefix="reagent-git-bench-")
     try:
-        binary = os.path.join(tmp, "reagent")
-        built = build(args.ref, binary)
         seed_remote = seed(tmp)
-        if args.self_test:
-            sys.exit(0 if self_test(binary, tmp, seed_remote) else 1)
-        model_args = (["--model", args.model] if args.model else []) + \
-                     (["--reasoning-effort", args.effort] if args.effort else [])
+        if args.agent == "codex":
+            built = subprocess.run(["codex", "--version"], capture_output=True, text=True).stdout.strip()
+            launch = lambda fx, prompt, out: run_codex(fx, prompt, out, args.model, args.effort)
+        else:
+            binary = os.path.join(tmp, "reagent")
+            built = "re:agent " + build(args.ref, binary)
+            if args.self_test:
+                sys.exit(0 if self_test(binary, tmp, seed_remote) else 1)
+            model_args = (["--model", args.model] if args.model else []) + \
+                         (["--reasoning-effort", args.effort] if args.effort else [])
+            launch = lambda fx, prompt, out: run_reagent(fx, prompt, out, binary, model_args)
         out_root = os.path.join(ROOT, "bench", "out", "git-" + args.label)
         rows = []
         for i in range(1, args.repeat + 1):
             for name in args.tasks or list(TASKS):
                 out = os.path.join(out_root, f"r{i}", name)
-                r = run_task(name, binary, tempfile.mkdtemp(dir=tmp), seed_remote, out, model_args)
+                r = run_task(name, tempfile.mkdtemp(dir=tmp), seed_remote, out, launch)
                 r["repeat"] = i
                 rows.append(r)
                 print(f"{name} r{i}: {'pass' if r['passed'] else 'FAIL'}, {r['turns']} turns", file=sys.stderr)
-        meta = {"label": args.label, "reagent": built, "pin": PIN, "model": args.model, "effort": args.effort,
+        meta = {"label": args.label, "agent": built, "pin": PIN, "model": args.model, "effort": args.effort,
                 "repeat": args.repeat}
         with open(os.path.join(out_root, "results.json"), "w") as f:
             json.dump({"meta": meta, "runs": rows}, f, indent=2)
-        print(f"re:agent {built}, model {args.model or 'default'}, effort {args.effort or 'default'}")
+        print(f"{built}, model {args.model or 'default'}, effort {args.effort or 'default'}")
         report(rows)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
