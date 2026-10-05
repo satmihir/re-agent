@@ -10,6 +10,7 @@ From the repository root, with provider credentials or API_PROXY_URL set:
 
     python3 bench/git/run.py --label NAME [--ref REF] [--model M] [--effort E] [--repeat N] [TASK ...]
     python3 bench/git/run.py --agent codex --label NAME --model M [--effort E] [--repeat N] [TASK ...]
+    python3 bench/git/run.py --agent claude --label NAME --model M [--effort E] [--repeat N] [TASK ...]
     python3 bench/git/run.py --self-test
 
 With no task names, every task runs. --ref builds re:agent from that commit
@@ -26,6 +27,13 @@ HOME, and it is never asked for approval. It gets its own CODEX_HOME, no
 AGENTS.md, and its model metadata from ~/.codex/models_cache.json. Turns come
 from the rollout's token counts. Codex does not report model time, so only
 wall time is shown for it.
+
+--agent claude runs them with Claude Code (claude --bare -p, stream-json),
+with ANTHROPIC_API_KEY from the environment. --bare skips CLAUDE.md, hooks,
+plugins, and memory, and CLAUDE_CONFIG_DIR is the fixture's. Nothing is
+bypassed. In dontAsk mode only Bash(git *), Bash(gh *), and the file tools
+are allowed, and any other command is refused and counted as denied. Turns
+are distinct assistant messages. Model time is Claude Code's API duration.
 """
 
 import argparse
@@ -541,6 +549,75 @@ def summarize_codex(events, rollout):
     return reply, s
 
 
+CLAUDE_TOOLS = ["Bash(git *)", "Bash(gh *)", "Read", "Edit", "Write", "Glob", "Grep"]
+
+
+def run_claude(fx, prompt, out, model, effort):
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        sys.exit("--agent claude needs ANTHROPIC_API_KEY")
+    config = os.path.join(fx.home, ".claude")
+    os.makedirs(config)
+    args = ["claude", "--bare", "-p", "--output-format", "stream-json", "--verbose", "--model", model,
+            "--no-session-persistence", "--tools", "Bash,Read,Edit,Write,Glob,Grep",
+            "--permission-mode", "dontAsk", "--add-dir", fx.remote, "--allowedTools", *CLAUDE_TOOLS]
+    if effort:
+        args += ["--effort", effort]
+    # The prompt goes on stdin: --allowedTools would take a trailing argument as a tool.
+    result = subprocess.run(args, cwd=fx.work, env={**fx.env(), "CLAUDE_CONFIG_DIR": config},
+                            input=prompt, capture_output=True, text=True)
+    with open(os.path.join(out, "events.jsonl"), "w") as f:
+        f.write(result.stdout)
+    reply, summary = summarize_claude(result.stdout)
+    return result, reply, summary
+
+
+def summarize_claude(events):
+    """The same counts as summarize, from Claude Code's stream-json events."""
+    s = {"turns": 0, "tool_calls": 0, "git_calls": 0, "git_invocations": 0, "other_calls": 0,
+         "multi_call_turns": 0, "failed_calls": 0, "denied_calls": 0, "input_tokens": 0,
+         "cached_input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0, "model_ms": 0,
+         "status": "error", "commands": [], "provider_error": False}
+    reply, calls_by_message = "", {}
+    for line in events.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("type") == "assistant":
+            message = event.get("message") or {}
+            calls = calls_by_message.setdefault(message.get("id"), [])
+            for block in message.get("content") or []:
+                if block.get("type") != "tool_use":
+                    continue
+                calls.append(block)
+                s["tool_calls"] += 1
+                command = (block.get("input") or {}).get("command", "") if block.get("name") == "Bash" else ""
+                count = git_invocations(command)
+                s["git_calls"] += count > 0
+                s["git_invocations"] += count
+                s["other_calls"] += count == 0
+                s["commands"].append(command[:240] if command else block.get("name"))
+        elif event.get("type") == "user":
+            for block in (event.get("message") or {}).get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error"):
+                    s["failed_calls"] += 1
+        elif event.get("type") == "result":
+            usage = event.get("usage") or {}
+            s["cached_input_tokens"] = usage.get("cache_read_input_tokens", 0)
+            s["input_tokens"] = usage.get("input_tokens", 0) + s["cached_input_tokens"] + \
+                usage.get("cache_creation_input_tokens", 0)
+            s["output_tokens"] = usage.get("output_tokens", 0)
+            s["model_ms"] = event.get("duration_api_ms") or 0
+            s["denied_calls"] = len(event.get("permission_denials") or [])
+            s["status"] = "completed" if not event.get("is_error") else event.get("subtype", "error")
+            s["provider_error"] = bool(event.get("is_error")) and "overloaded" in json.dumps(event).lower()
+            reply = event.get("result") or ""
+    s["turns"] = len(calls_by_message)
+    s["multi_call_turns"] = sum(len(calls) > 1 for calls in calls_by_message.values())
+    s["uncached_input_tokens"] = s["input_tokens"] - s["cached_input_tokens"]
+    return reply, s
+
+
 def run_task(name, base, seed_remote, out, launch):
     """Sets up the task, runs one agent through launch(fx, prompt, out), and checks the result."""
     setup, prompt, check, *_ = TASKS[name]
@@ -643,15 +720,15 @@ def main():
     parser.add_argument("--effort", help="reasoning effort to request")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--agent", choices=("reagent", "codex"), default="reagent")
+    parser.add_argument("--agent", choices=("reagent", "codex", "claude"), default="reagent")
     args = parser.parse_args()
     unknown = [t for t in args.tasks if t not in TASKS]
     if unknown:
         parser.error(f"unknown tasks {unknown}; known: {', '.join(TASKS)}")
     if not args.self_test and not args.label:
         parser.error("--label is required unless --self-test")
-    if args.agent == "codex" and (args.self_test or args.ref or not args.model):
-        parser.error("--agent codex needs --model and takes neither --ref nor --self-test")
+    if args.agent != "reagent" and (args.self_test or args.ref or not args.model):
+        parser.error(f"--agent {args.agent} needs --model and takes neither --ref nor --self-test")
 
     tmp = tempfile.mkdtemp(prefix="reagent-git-bench-")
     try:
@@ -659,6 +736,9 @@ def main():
         if args.agent == "codex":
             built = subprocess.run(["codex", "--version"], capture_output=True, text=True).stdout.strip()
             launch = lambda fx, prompt, out: run_codex(fx, prompt, out, args.model, args.effort)
+        elif args.agent == "claude":
+            built = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout.strip()
+            launch = lambda fx, prompt, out: run_claude(fx, prompt, out, args.model, args.effort)
         else:
             binary = os.path.join(tmp, "reagent")
             built = "re:agent " + build(args.ref, binary)
