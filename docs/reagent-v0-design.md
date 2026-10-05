@@ -125,6 +125,8 @@ Explicit `argv`, required `cwd` (an existing workspace-relative directory, `.` f
 
 A nonzero exit is an ordinary error observation. A timeout, a user cancellation of a started command, or an inherited-pipe wait failure reports `effect: unknown` and stops the run (§3); never report it as clean, and never claim descendants were killed.
 
+Optional `then` chains up to 7 more argument vectors, run in order in the same `cwd`, each only if the one before it succeeded, like `&&`; there is still no shell. Each command gets its own timeout and an equal share of `MaxResultBytes`. The data lists every step that ran as `steps` and the skipped vectors as `not_run`; the outcome takes the last step's code, its message names the failing step, and the effect is the strongest any step had. The fixed instructions show one `then` example.
+
 ## 10. CLI and chat
 
 ### 10.1 Commands and flags

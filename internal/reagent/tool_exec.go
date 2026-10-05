@@ -54,6 +54,7 @@ func (t execTool) withWorkspace(ws *Workspace) Tool {
 
 type execArgs struct {
 	Argv      []string        `json:"argv"`
+	Then      [][]string      `json:"then"`
 	Cwd       string          `json:"cwd"`
 	TimeoutMS json.RawMessage `json:"timeout_ms"`
 }
@@ -82,6 +83,8 @@ func (execTool) Spec() ToolSpec {
 		Description: "Run a foreground command given as an explicit argument vector, in a workspace " +
 			"directory. No shell is inserted, so arguments are passed literally; invoke a shell " +
 			"explicitly if you need one. Captures bounded stdout and stderr and the exit status. " +
+			"To run dependent commands in one call, put the first in argv and the rest in then: " +
+			"each runs only if the one before it succeeded, like && in a shell, and every step is reported. " +
 			"Commands run with the host user's authority and may read, write, and use the network. " +
 			"A command that times out leaves uncertain effects and ends the run. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
@@ -89,8 +92,11 @@ func (execTool) Spec() ToolSpec {
   "properties": {
     "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1,
              "description": "Executable followed by its literal arguments."},
+    "then": {"type": "array", "maxItems": 7,
+             "items": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+             "description": "Further argument vectors to run in order after argv, in the same cwd, each only if the previous command exited successfully."},
     "cwd": {"type": "string", "description": "Existing workspace-relative directory, or . for the root."},
-    "timeout_ms": {"type": "integer", "minimum": 1, "description": "Milliseconds the command may run. Defaults to 120000; values below 10000 are raised to 10000."}
+    "timeout_ms": {"type": "integer", "minimum": 1, "description": "Milliseconds each command may run. Defaults to 120000; values below 10000 are raised to 10000."}
   },
   "required": ["argv", "cwd"],
   "additionalProperties": false
@@ -112,13 +118,17 @@ func (t execTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcom
 	if timeout < t.minTimeout {
 		timeout = t.minTimeout
 	}
-	switch {
-	case len(a.Argv) == 0 || a.Argv[0] == "":
-		return failOutcome("invalid_arguments", "argv must start with an executable"), nil
+	if len(a.Then) > 7 {
+		return failOutcome("invalid_arguments", "then holds at most 7 commands"), nil
 	}
-	for _, argument := range a.Argv {
-		if strings.ContainsRune(argument, 0) {
-			return failOutcome("invalid_arguments", "argv elements must not contain NUL bytes"), nil
+	for _, argv := range append([][]string{a.Argv}, a.Then...) {
+		if len(argv) == 0 || argv[0] == "" {
+			return failOutcome("invalid_arguments", "every command must start with an executable"), nil
+		}
+		for _, argument := range argv {
+			if strings.ContainsRune(argument, 0) {
+				return failOutcome("invalid_arguments", "argument vectors must not contain NUL bytes"), nil
+			}
 		}
 	}
 	dir, bad := t.ws.resolve(a.Cwd)
@@ -130,11 +140,59 @@ func (t execTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcom
 	} else if !info.IsDir() {
 		return failOutcome("not_directory", "cwd is not a directory"), nil
 	}
-	return t.run(ctx, a, dir, timeout)
+	if len(a.Then) > 0 {
+		return t.runChain(ctx, a, dir, timeout)
+	}
+	return t.run(ctx, a, dir, timeout, MaxResultBytes)
+}
+
+// execChainResult reports a chain: every step that ran, and the commands a
+// failed step kept from running.
+type execChainResult struct {
+	Steps  []json.RawMessage `json:"steps"`
+	NotRun [][]string        `json:"not_run,omitempty"`
+}
+
+// runChain runs argv and then each command in then, in order, each only if the
+// one before it succeeded, the way && does in a shell (v0 §9). Each step keeps
+// its share of the result budget, so the whole report still fits.
+func (t execTool) runChain(ctx context.Context, a execArgs, dir string, timeout time.Duration) (ToolOutcome, error) {
+	commands := append([][]string{a.Argv}, a.Then...)
+	budget := (MaxResultBytes - 1024) / len(commands)
+	var chain execChainResult
+	var last ToolOutcome
+	effect, truncated := EffectNone, false
+	for i, argv := range commands {
+		step, err := t.run(ctx, execArgs{Argv: argv, Cwd: a.Cwd}, dir, timeout, budget)
+		if err != nil {
+			return ToolOutcome{}, err
+		}
+		chain.Steps = append(chain.Steps, step.Data)
+		truncated = truncated || step.Truncated
+		if step.Effect == EffectUnknown || (step.Effect == EffectApplied && effect == EffectNone) {
+			effect = step.Effect
+		}
+		last = step
+		if !step.OK {
+			chain.NotRun = commands[i+1:]
+			last.Message = fmt.Sprintf("step %d of %d: %s", i+1, len(commands), step.Message)
+			if len(chain.NotRun) > 0 {
+				last.Message += fmt.Sprintf("; the %d after it did not run", len(chain.NotRun))
+			}
+			break
+		}
+	}
+	outcome, err := workspaceOutcome(chain, t.ws.Root())
+	if err != nil {
+		return ToolOutcome{}, err
+	}
+	outcome.OK, outcome.Code, outcome.Message = last.OK, last.Code, last.Message
+	outcome.Effect, outcome.Truncated = effect, truncated
+	return outcome, nil
 }
 
 // run starts the command and turns whatever happened into one observation.
-func (t execTool) run(parent context.Context, a execArgs, dir string, timeout time.Duration) (ToolOutcome, error) {
+func (t execTool) run(parent context.Context, a execArgs, dir string, timeout time.Duration, budget int) (ToolOutcome, error) {
 	deadline, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
@@ -161,7 +219,7 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
 	code, message, effect := classifyRun(parent, deadline, runErr, &result)
-	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText)
+	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText, budget)
 
 	outcome, err := workspaceOutcome(result, t.ws.Root())
 	if err != nil {
@@ -229,12 +287,12 @@ func exitStatus(exitErr *exec.ExitError) (*int, *string) {
 
 // trimToResultBudget shortens captured output until the whole encoded outcome
 // fits, always at a rune boundary and always marking what it cut (v0 §9).
-func (r *execResult) trimToResultBudget(workspace, code, message string, effect EffectState, stdout, stderr *middleOutput) {
+func (r *execResult) trimToResultBudget(workspace, code, message string, effect EffectState, stdout, stderr *middleOutput, budget int) {
 	fits := func() bool {
 		outcome, err := workspaceOutcome(*r, workspace)
 		outcome.OK, outcome.Code, outcome.Message, outcome.Effect = code == "ok", code, message, effect
 		outcome.Truncated = r.StdoutTruncated || r.StderrTruncated
-		return err == nil && encodedSize(outcome) <= MaxResultBytes
+		return err == nil && encodedSize(outcome) <= budget
 	}
 	for !fits() && (len(r.Stdout) > 0 || len(r.Stderr) > 0) {
 		if len(r.Stdout) >= len(r.Stderr) {

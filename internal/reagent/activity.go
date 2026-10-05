@@ -118,6 +118,22 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 			return a
 		}
 		a.target = commandText(args)
+		// A chain reports its last step's exit, its total time, and where it stopped.
+		var chain execChainResult
+		stoppedAt := ""
+		if len(args.Then) > 0 && json.Unmarshal(outcome.Data, &chain) == nil && len(chain.Steps) > 0 {
+			var total int64
+			for _, step := range chain.Steps {
+				result = execResult{}
+				if json.Unmarshal(step, &result) == nil {
+					total += result.DurationMS
+				}
+			}
+			result.DurationMS = total
+			if len(chain.NotRun) > 0 {
+				stoppedAt = fmt.Sprintf(" at step %d of %d", len(chain.Steps), len(chain.Steps)+len(chain.NotRun))
+			}
+		}
 		d := formatElapsed(time.Duration(result.DurationMS) * time.Millisecond)
 		switch outcome.Code {
 		case "timeout":
@@ -130,6 +146,7 @@ func describeActivity(call ToolCall, outcome ToolOutcome) activity {
 			} else if result.ExitCode != nil {
 				a.result = fmt.Sprintf("exit %d in %s", *result.ExitCode, d)
 			}
+			a.result += stoppedAt
 		}
 	case "switch_workspace":
 		var result workspaceSwitchResult
@@ -382,6 +399,9 @@ func commandText(a execArgs) string {
 		parts[i] = s
 	}
 	text := strings.Join(parts, " ")
+	for _, argv := range a.Then {
+		text += " && " + commandText(execArgs{Argv: argv})
+	}
 	if a.Cwd != "" && a.Cwd != "." {
 		text += " in " + oneRow(a.Cwd)
 	}
