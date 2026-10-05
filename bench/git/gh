@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""A stand-in for the GitHub CLI, for the git benchmark.
+
+It covers the pull request commands a coding agent commonly runs, keeps pull
+requests in $HOME/.bench-gh/state.json, and logs every invocation to
+$HOME/.bench-gh/log.jsonl so the benchmark can check what was asked for.
+Nothing leaves the machine: the head and base of a pull request are read from
+the clone's origin, which is a local bare repository.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+DIR = os.path.join(os.environ["HOME"], ".bench-gh")
+STATE = os.path.join(DIR, "state.json")
+REPO = "bench/re-agent"
+
+
+def load():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"next": 101, "prs": []}
+
+
+def save(state):
+    with open(STATE, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True, text=True)
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def options(args, flags, valued):
+    """Splits args into positionals and {flag: value}; aliases map to one name."""
+    positional, found, i = [], {}, 0
+    while i < len(args):
+        arg = args[i]
+        name, _, inline = arg.partition("=")
+        if name in valued:
+            found[valued[name]] = inline if inline else (args[i + 1] if i + 1 < len(args) else "")
+            i += 1 if inline else 2
+            continue
+        if arg in flags:
+            found[flags[arg]] = True
+        elif arg.startswith("-"):
+            fail(f"unknown flag: {arg}")
+        else:
+            positional.append(arg)
+        i += 1
+    return positional, found
+
+
+def body_of(found):
+    if "body_file" in found:
+        path = found["body_file"]
+        return sys.stdin.read() if path == "-" else open(path).read()
+    return found.get("body")
+
+
+def url(number):
+    return f"https://github.com/{REPO}/pull/{number}"
+
+
+def current_branch():
+    return git("branch", "--show-current").stdout.strip()
+
+
+def find(state, selector):
+    """A pull request by number, URL, or head branch; the current branch by default."""
+    selector = selector or current_branch()
+    for pr in state["prs"]:
+        if selector in (str(pr["number"]), url(pr["number"]), pr["head"]):
+            return pr
+    fail(f'no pull requests found for branch "{selector}"' if not selector.isdigit()
+         else f"GraphQL: Could not resolve to a PullRequest with the number of {selector}.")
+
+
+def view_fields(pr):
+    return {
+        "number": pr["number"], "title": pr["title"], "body": pr["body"], "state": pr["state"],
+        "url": url(pr["number"]), "headRefName": pr["head"], "baseRefName": pr["base"],
+        "isDraft": pr.get("draft", False), "author": {"login": "bench"},
+        "comments": [{"author": {"login": c["author"]}, "body": c["body"]} for c in pr["comments"]],
+        "reviews": [], "reviewDecision": "", "mergeable": "MERGEABLE", "statusCheckRollup": [],
+    }
+
+
+def emit_json(value, fields, jq):
+    if fields:
+        keep = fields.split(",")
+        value = [{k: v[k] for k in keep if k in v} for v in value] if isinstance(value, list) \
+            else {k: value[k] for k in keep if k in value}
+    text = json.dumps(value)
+    if jq:
+        result = subprocess.run(["jq", "-r", jq], input=text, capture_output=True, text=True)
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        sys.exit(result.returncode)
+    print(text)
+
+
+def remote_sha(branch):
+    line = git("ls-remote", "--heads", "origin", branch).stdout.split()
+    return line[0] if line else None
+
+
+def pr_create(args):
+    _, o = options(args, {"--fill": "fill", "-f": "fill", "--draft": "draft", "-d": "draft"},
+                   {"--title": "title", "-t": "title", "--body": "body", "-b": "body",
+                    "--body-file": "body_file", "-F": "body_file", "--base": "base", "-B": "base",
+                    "--head": "head", "-H": "head", "--repo": "repo", "-R": "repo"})
+    head = o.get("head") or current_branch()
+    base = o.get("base") or "main"
+    head_sha, base_sha = remote_sha(head), remote_sha(base)
+    if head_sha is None:
+        fail(f"aborted: you must first push the current branch to a remote, or use the --head flag")
+    origin = git("remote", "get-url", "origin").stdout.strip()
+    ahead = subprocess.run(["git", "-C", origin, "rev-list", "--count", f"{base_sha}..{head_sha}"],
+                           capture_output=True, text=True).stdout.strip()
+    if ahead == "0":
+        fail(f"pull request create failed: GraphQL: No commits between {base} and {head} (createPullRequest)")
+    title, body = o.get("title"), body_of(o)
+    if o.get("fill"):
+        subject = git("log", "-1", "--format=%s", head_sha).stdout.strip()
+        title = title or subject
+        body = body if body is not None else git("log", "-1", "--format=%b", head_sha).stdout.strip()
+    if not title or body is None:
+        fail("must provide `--title` and `--body` (or `--fill` or `--fill-first` or `--fillverbose`) when not running interactively")
+    state = load()
+    for pr in state["prs"]:
+        if pr["head"] == head and pr["state"] == "OPEN":
+            fail(f'a pull request for branch "{head}" into branch "{base}" already exists:\n{url(pr["number"])}')
+    number = state["next"]
+    state["next"] += 1
+    state["prs"].append({"number": number, "title": title, "body": body, "head": head, "base": base,
+                         "state": "OPEN", "draft": bool(o.get("draft")), "comments": []})
+    save(state)
+    print(url(number))
+
+
+def pr_view(args):
+    positional, o = options(args, {"--comments": "comments", "-c": "comments", "--web": "web"},
+                            {"--json": "json", "--jq": "jq", "-q": "jq", "--repo": "repo", "-R": "repo"})
+    pr = find(load(), positional[0] if positional else None)
+    if "json" in o:
+        emit_json(view_fields(pr), o["json"], o.get("jq"))
+        return
+    print(f"{pr['title']} #{pr['number']}")
+    print(f"{pr['state'].capitalize()} • bench wants to merge into {pr['base']} from {pr['head']}")
+    print()
+    print(pr["body"] or "No description provided")
+    print()
+    if pr["comments"] and o.get("comments"):
+        for c in pr["comments"]:
+            print(f"{c['author']} commented\n  {c['body']}\n")
+    elif pr["comments"]:
+        print(f"———————— Not showing {len(pr['comments'])} comments ————————")
+        print("Use --comments to view the full conversation")
+    print(f"View this pull request on GitHub: {url(pr['number'])}")
+
+
+def pr_list(args):
+    _, o = options(args, {}, {"--json": "json", "--jq": "jq", "-q": "jq", "--state": "state", "-s": "state",
+                              "--head": "head", "-H": "head", "--base": "base", "-B": "base",
+                              "--limit": "limit", "-L": "limit", "--repo": "repo", "-R": "repo"})
+    prs = [p for p in load()["prs"]
+           if o.get("state", "open").upper() in ("ALL", p["state"])
+           and o.get("head", p["head"]) == p["head"] and o.get("base", p["base"]) == p["base"]]
+    if "json" in o:
+        emit_json([view_fields(p) for p in prs], o["json"], o.get("jq"))
+        return
+    for p in prs:
+        print(f"{p['number']}\t{p['title']}\t{p['head']}\t{p['state']}")
+
+
+def pr_comment(args):
+    positional, o = options(args, {}, {"--body": "body", "-b": "body", "--body-file": "body_file",
+                                       "-F": "body_file", "--repo": "repo", "-R": "repo"})
+    body = body_of(o)
+    if not body:
+        fail("must provide `--body` or `--body-file` when not running interactively")
+    state = load()
+    pr = find(state, positional[0] if positional else None)
+    pr["comments"].append({"author": "bench", "body": body})
+    save(state)
+    print(f"{url(pr['number'])}#issuecomment-{len(pr['comments'])}")
+
+
+def pr_edit(args):
+    positional, o = options(args, {}, {"--title": "title", "-t": "title", "--body": "body", "-b": "body",
+                                       "--body-file": "body_file", "-F": "body_file", "--base": "base",
+                                       "-B": "base", "--repo": "repo", "-R": "repo"})
+    state = load()
+    pr = find(state, positional[0] if positional else None)
+    for key in ("title", "base"):
+        if key in o:
+            pr[key] = o[key]
+    if body_of(o) is not None:
+        pr["body"] = body_of(o)
+    save(state)
+    print(url(pr["number"]))
+
+
+def pr_checks(args):
+    positional, _ = options(args, {"--watch": "watch"}, {"--repo": "repo", "-R": "repo"})
+    pr = find(load(), positional[0] if positional else None)
+    print(f"no checks reported on the '{pr['head']}' branch")
+
+
+def pr_diff(args):
+    positional, _ = options(args, {"--name-only": "names"}, {"--repo": "repo", "-R": "repo"})
+    pr = find(load(), positional[0] if positional else None)
+    origin = git("remote", "get-url", "origin").stdout.strip()
+    flag = ["--name-only"] if "--name-only" in args else []
+    result = subprocess.run(["git", "-C", origin, "diff", *flag, f"{pr['base']}...{pr['head']}"],
+                            capture_output=True, text=True)
+    sys.stdout.write(result.stdout)
+
+
+def pr_status(args):
+    _, o = options(args, {}, {"--json": "json", "--jq": "jq", "-q": "jq", "--repo": "repo", "-R": "repo"})
+    branch = current_branch()
+    prs = [p for p in load()["prs"] if p["head"] == branch and p["state"] == "OPEN"]
+    if "json" in o:
+        emit_json({"currentBranch": view_fields(prs[0]) if prs else None, "createdBy": [], "needsReview": []},
+                  None, o.get("jq"))
+        return
+    print(f"Relevant pull requests in {REPO}\n\nCurrent branch")
+    print(f"  #{prs[0]['number']}  {prs[0]['title']} [{branch}]" if prs else f"  There is no pull request associated with [{branch}]")
+
+
+def api(args):
+    """GET of a pull request's issue comments, review comments, or reviews."""
+    positional, o = options(args, {"--paginate": "paginate"}, {"--jq": "jq", "-q": "jq", "--method": "method",
+                                                              "-X": "method"})
+    parts = positional[0].strip("/").split("/") if positional else []
+    if o.get("method", "GET") != "GET" or len(parts) != 6 or parts[:3] != ["repos", *REPO.split("/")]:
+        fail(f"gh api {' '.join(args)}: not supported by the benchmark's gh stub")
+    pr = find(load(), parts[4])
+    if parts[3] == "issues" and parts[5] == "comments":
+        value = [{"user": {"login": c["author"]}, "body": c["body"]} for c in pr["comments"]]
+    elif parts[3] == "pulls" and parts[5] in ("comments", "reviews"):
+        value = []
+    else:
+        fail(f"gh api {positional[0]}: not supported by the benchmark's gh stub")
+    emit_json(value, None, o.get("jq"))
+
+
+def main(argv):
+    os.makedirs(DIR, exist_ok=True)
+    code = 0
+    try:
+        dispatch(argv)
+    except SystemExit as exit:
+        code = exit.code or 0
+    with open(os.path.join(DIR, "log.jsonl"), "a") as log:
+        log.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "exit": code}) + "\n")
+    sys.exit(code)
+
+
+def dispatch(argv):
+    if argv[:1] in (["--version"], ["version"]):
+        print("gh version 2.62.0 (2026-09-01)\nhttps://github.com/cli/cli/releases/tag/v2.62.0")
+        return
+    if argv[:2] == ["auth", "status"]:
+        print("github.com\n  ✓ Logged in to github.com account bench (keyring)", file=sys.stderr)
+        return
+    if argv[:2] == ["repo", "view"]:
+        print(f"name:\t{REPO}\ndescription:\tbenchmark fixture")
+        return
+    if argv[:1] == ["api"]:
+        api(argv[1:])
+        return
+    commands = {"create": pr_create, "view": pr_view, "list": pr_list, "comment": pr_comment,
+                "edit": pr_edit, "checks": pr_checks, "diff": pr_diff, "status": pr_status}
+    if len(argv) >= 2 and argv[0] == "pr" and argv[1] in commands:
+        commands[argv[1]](argv[2:])
+        return
+    fail(f"gh {' '.join(argv[:2])}: not supported by the benchmark's gh stub")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
