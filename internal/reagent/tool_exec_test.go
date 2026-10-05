@@ -476,3 +476,60 @@ func TestExec_LiteralMarkerInOutputIsNotParsedAsOmission(t *testing.T) {
 		t.Fatalf("lost literal marker or tail: %q", got.Stdout)
 	}
 }
+
+func TestExec_ChainRunsEachStepInOrder(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewExecTool(ws),
+		`{"argv":["/bin/sh","-c","echo one > log"],"then":[["/bin/sh","-c","echo two >> log"],["cat","log"]],"cwd":"."}`)
+	if !outcome.OK || outcome.Effect != EffectApplied {
+		t.Fatalf("got %+v", outcome)
+	}
+	var got execChainResult
+	data(t, outcome, &got)
+	if len(got.Steps) != 3 || len(got.NotRun) != 0 {
+		t.Fatalf("got %+v", got)
+	}
+	var last execResult
+	if err := json.Unmarshal(got.Steps[2], &last); err != nil || last.Stdout != "one\ntwo\n" {
+		t.Fatalf("got %+v, %v", last, err)
+	}
+}
+
+func TestExec_ChainStopsAtTheFirstFailure(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewExecTool(ws),
+		`{"argv":["/bin/sh","-c","touch first"],"then":[["/bin/sh","-c","exit 4"],["touch","never"]],"cwd":"."}`)
+	if outcome.OK || outcome.Code != "command_failed" || outcome.Effect != EffectApplied {
+		t.Fatalf("got %+v", outcome)
+	}
+	if !strings.Contains(outcome.Message, "step 2 of 3") || !strings.Contains(outcome.Message, "1 after it did not run") {
+		t.Fatalf("got message %q", outcome.Message)
+	}
+	var got execChainResult
+	if err := json.Unmarshal(outcome.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Steps) != 2 || len(got.NotRun) != 1 || got.NotRun[0][1] != "never" {
+		t.Fatalf("got %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Root(), "never")); !os.IsNotExist(err) {
+		t.Fatalf("a step after the failure ran: %v", err)
+	}
+}
+
+func TestExec_ChainFitsTheResultBudget(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	loud := `["/bin/sh","-c","head -c 100000 /dev/zero | tr '\\0' x"]`
+	outcome := runTool(t, NewExecTool(ws), `{"argv":`+loud+`,"then":[`+loud+`,`+loud+`],"cwd":"."}`)
+	if !outcome.OK || !outcome.Truncated || encodedSize(outcome) > MaxResultBytes {
+		t.Fatalf("ok %v truncated %v size %d", outcome.OK, outcome.Truncated, encodedSize(outcome))
+	}
+}
+
+func TestExec_ChainRejectsAnEmptyStep(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewExecTool(ws), `{"argv":["true"],"then":[[]],"cwd":"."}`)
+	if outcome.OK || outcome.Code != "invalid_arguments" {
+		t.Fatalf("got %+v", outcome)
+	}
+}

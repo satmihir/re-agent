@@ -157,6 +157,27 @@ func TestActivity_ExecFailureAndTimeout(t *testing.T) {
 	}
 }
 
+func TestActivity_ExecChain(t *testing.T) {
+	call := ToolCall{Name: "exec", Arguments: `{"argv":["git","add","a b"],"then":[["git","commit","-m","x"],["git","push"]],"cwd":"."}`}
+	tests := []struct {
+		name    string
+		outcome ToolOutcome
+		want    string
+	}{
+		{"all steps", ToolOutcome{OK: true, Code: "ok", Data: []byte(`{"steps":[{"exit_code":0,"duration_ms":100},{"exit_code":0,"duration_ms":200},{"exit_code":0,"duration_ms":1200}]}`)},
+			"  ✓ exec git add 'a b' && git commit -m x && git push → exit 0 in 1.5s\n"},
+		{"stopped", ToolOutcome{Code: "command_failed", Data: []byte(`{"steps":[{"exit_code":0,"duration_ms":100},{"exit_code":1,"duration_ms":200}],"not_run":[["git","push"]]}`)},
+			"  ✗ exec git add 'a b' && git commit -m x && git push → exit 1 in 0.3s at step 2 of 3\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := describeActivity(call, test.outcome).render(false, 0); got != test.want {
+				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestActivity_CommandQuoting(t *testing.T) {
 	got := commandText(execArgs{Argv: []string{"sh", "a b", "it's", "", "plain"}, Cwd: "sub dir"})
 	want := "sh 'a b' 'it'\\''s' '' plain in sub dir"

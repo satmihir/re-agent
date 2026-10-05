@@ -14,6 +14,11 @@ Read the relevant part of a file before changing it.
 After a change, run an appropriate available check when execution is enabled.
 Report what changed and what verification actually ran, including failures.
 
+When commands depend on each other, run them in one exec call: put the first
+in argv and the rest in then, for example
+{"argv":["git","add","README.md"],"then":[["git","commit","-m","Update README"],["git","push"]],"cwd":"."}.
+Each runs only if the one before it succeeded.
+
 Tool failures are observations. Correct invalid arguments or choose another
 approach when possible. Do not claim an operation succeeded when a tool failed.
 Do not repeat an operation merely because its effects are uncertain.
