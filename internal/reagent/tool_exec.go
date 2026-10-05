@@ -83,18 +83,20 @@ func (execTool) Spec() ToolSpec {
 		Description: "Run a foreground command given as an explicit argument vector, in a workspace " +
 			"directory. No shell is inserted, so arguments are passed literally; invoke a shell " +
 			"explicitly if you need one. Captures bounded stdout and stderr and the exit status. " +
-			"To run dependent commands in one call, put the first in argv and the rest in then: " +
-			"each runs only if the one before it succeeded, like && in a shell, and every step is reported. " +
+			"To run dependent commands in one call, put the first command's whole argument vector in argv " +
+			"and the commands after it in then, for example argv [\"git\",\"add\",\"a.txt\"] and then " +
+			"[[\"git\",\"commit\",\"-m\",\"Add a\"]]: each runs only if the one before it succeeded, " +
+			"like && in a shell, and every step is reported. " +
 			"Commands run with the host user's authority and may read, write, and use the network. " +
 			"A command that times out leaves uncertain effects and ends the run. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1,
-             "description": "Executable followed by its literal arguments."},
+             "description": "The first or only command: its executable followed by its literal arguments, such as [\"git\",\"status\"]. Always an array, also when then is given."},
     "then": {"type": "array", "maxItems": 7,
              "items": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-             "description": "Further argument vectors to run in order after argv, in the same cwd, each only if the previous command exited successfully."},
+             "description": "Commands to run after argv, each an argument vector like argv, in order and in the same cwd, each only if the previous command exited successfully."},
     "cwd": {"type": "string", "description": "Existing workspace-relative directory, or . for the root."},
     "timeout_ms": {"type": "integer", "minimum": 1, "description": "Milliseconds each command may run. Defaults to 120000; values below 10000 are raised to 10000."}
   },
@@ -108,7 +110,7 @@ func (execTool) Spec() ToolSpec {
 func (t execTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcome, error) {
 	var a execArgs
 	if bad := decodeArgs(args, &a); bad != nil {
-		return *bad, nil
+		return argvHint(args, *bad), nil
 	}
 	timeoutMS, bad := optionalInt(a.TimeoutMS, "timeout_ms", int(defaultExecTimeout/time.Millisecond), 1)
 	if bad != nil {
@@ -144,6 +146,19 @@ func (t execTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcom
 		return t.runChain(ctx, a, dir, timeout)
 	}
 	return t.run(ctx, a, dir, timeout, MaxResultBytes)
+}
+
+// argvHint replaces the decoder's message when argv is not an array: a model
+// that reads argv as the program and then as its commands sends "argv":"git".
+func argvHint(args json.RawMessage, bad ToolOutcome) ToolOutcome {
+	var raw struct {
+		Argv json.RawMessage `json:"argv"`
+	}
+	if json.Unmarshal(args, &raw) != nil || len(raw.Argv) == 0 || raw.Argv[0] == '[' {
+		return bad
+	}
+	return failOutcome("invalid_arguments", `argv must be an array holding the first command's executable `+
+		`and arguments, such as ["git","fetch","origin"]; then holds only the commands after it`)
 }
 
 // execChainResult reports a chain: every step that ran, and the commands a
