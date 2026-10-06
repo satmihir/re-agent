@@ -131,7 +131,11 @@ func (t gitDoTool) Spec() ToolSpec {
     "commit": {"type": "string", "description": "Commit to revert, as a hash or ref."}`
 	description := "Carry out a routine git or pull request outcome in one call and get back proof: " +
 		"the commands that ran and checks of the result, such as the remote tip matching HEAD and the pull request existing. " +
-		"Prefer it to exec for these outcomes, and pass the commit message, pull request title and body you want. " +
+		"Prefer it to exec for these outcomes. It reads the repository itself before acting (branch, upstream, changed files, " +
+		"recent commits, the branch's pull request) and declines when the outcome does not fit, so call it directly " +
+		"instead of running status, diff or log first. Pass the commit message, pull request title and body when you " +
+		"already know what changed; otherwise omit them and they are derived from the changed files. " +
+		"For a revert, pass commit if you know it; otherwise describe the commit in intent. " +
 		"Do any other work, such as editing code, first. A request it cannot do safely comes back declined with the reason; " +
 		"then use exec. Outcomes:" + menu.String()
 	var schema string
