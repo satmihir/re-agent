@@ -102,14 +102,6 @@ func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute)
 	if err := ctx.Err(); err != nil {
 		return decision, err
 	}
-	if strings.TrimSpace(j.key) == "" || strings.ContainsAny(j.key, "\r\n") {
-		return decision, fmt.Errorf("TYPESAFE_API_KEY is missing or invalid")
-	}
-	// Endpoint errors deliberately omit URL text, which could itself contain credentials.
-	endpoint, err := url.Parse(j.endpoint)
-	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") {
-		return decision, fmt.Errorf("invalid Jev endpoint")
-	}
 	body, err := encodeJevRequest(state, routes)
 	decision.RequestBytes = len(body)
 	decision.RequestSHA256 = fmt.Sprintf("%x", sha256.Sum256(body))
@@ -120,50 +112,10 @@ func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute)
 	for _, route := range routes {
 		criteria[route.ID] = route.Description
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	decoded, err := j.post(ctx, body, &decision)
 	if err != nil {
-		return decision, fmt.Errorf("prepare Jev request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+j.key)
-	decision.Attempted = true
-	response, err := j.client.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
-			return decision, fmt.Errorf("Jev request: %w", ctx.Err())
-		}
-		return decision, fmt.Errorf("send Jev request: %w", err)
-	}
-	defer response.Body.Close()
-	decision.HTTPStatus = response.StatusCode
-	// v0 §10 amendment (2026-10-02): one attempt, no response-body diagnostics.
-	if response.StatusCode != http.StatusOK {
-		return decision, fmt.Errorf("Jev returned HTTP %d", response.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, jevMaxResponseBytes+1))
-	if err != nil {
-		if ctx.Err() != nil {
-			return decision, fmt.Errorf("read Jev response: %w", ctx.Err())
-		}
-		return decision, fmt.Errorf("read Jev response: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
 		return decision, err
 	}
-	if len(raw) > jevMaxResponseBytes {
-		return decision, fmt.Errorf("Jev response exceeds the %d byte limit", jevMaxResponseBytes)
-	}
-	var decoded jevResponse
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return decision, fmt.Errorf("invalid Jev response JSON")
-	}
-	if decoded.Model == jevModel {
-		decision.Model = decoded.Model
-	}
-	if decoded.Usage == nil || decoded.Usage.InputTokens == nil || decoded.Usage.OutputTokens == nil || *decoded.Usage.InputTokens < 0 || *decoded.Usage.OutputTokens < 0 {
-		return decision, fmt.Errorf("invalid or missing Jev usage")
-	}
-	decision.Usage = Usage{Known: true, InputTokens: *decoded.Usage.InputTokens, OutputTokens: *decoded.Usage.OutputTokens}
 	answer, found := decoded.Answers["route"]
 	if decoded.Model != jevModel || len(decoded.Answers) != 1 || !found || answer.Type != "choice" || criteria[answer.Choice] == "" || answer.Confidence == nil || !jevProbability(*answer.Confidence) || len(answer.Probabilities) != len(criteria) {
 		return decision, fmt.Errorf("invalid Jev version or Choice answer")
@@ -190,6 +142,107 @@ func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute)
 	}
 	decision.Route, decision.Confidence, decision.Probabilities = answer.Choice, *answer.Confidence, probabilities
 	return decision, nil
+}
+
+// post sends one encoded request and returns its decoded, usage-checked
+// response. decision records what was attempted, for the trace.
+func (j *jevClient) post(ctx context.Context, body []byte, decision *jevDecision) (decoded jevResponse, err error) {
+	if strings.TrimSpace(j.key) == "" || strings.ContainsAny(j.key, "\r\n") {
+		return decoded, fmt.Errorf("TYPESAFE_API_KEY is missing or invalid")
+	}
+	// Endpoint errors deliberately omit URL text, which could itself contain credentials.
+	endpoint, err := url.Parse(j.endpoint)
+	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") {
+		return decoded, fmt.Errorf("invalid Jev endpoint")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return decoded, fmt.Errorf("prepare Jev request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+j.key)
+	decision.Attempted = true
+	response, err := j.client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return decoded, fmt.Errorf("Jev request: %w", ctx.Err())
+		}
+		return decoded, fmt.Errorf("send Jev request: %w", err)
+	}
+	defer response.Body.Close()
+	decision.HTTPStatus = response.StatusCode
+	// v0 §10 amendment (2026-10-02): one attempt, no response-body diagnostics.
+	if response.StatusCode != http.StatusOK {
+		return decoded, fmt.Errorf("Jev returned HTTP %d", response.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, jevMaxResponseBytes+1))
+	if err != nil {
+		if ctx.Err() != nil {
+			return decoded, fmt.Errorf("read Jev response: %w", ctx.Err())
+		}
+		return decoded, fmt.Errorf("read Jev response: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return decoded, err
+	}
+	if len(raw) > jevMaxResponseBytes {
+		return decoded, fmt.Errorf("Jev response exceeds the %d byte limit", jevMaxResponseBytes)
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return decoded, fmt.Errorf("invalid Jev response JSON")
+	}
+	if decoded.Model == jevModel {
+		decision.Model = decoded.Model
+	}
+	if decoded.Usage == nil || decoded.Usage.InputTokens == nil || decoded.Usage.OutputTokens == nil || *decoded.Usage.InputTokens < 0 || *decoded.Usage.OutputTokens < 0 {
+		return decoded, fmt.Errorf("invalid or missing Jev usage")
+	}
+	decision.Usage = Usage{Known: true, InputTokens: *decoded.Usage.InputTokens, OutputTokens: *decoded.Usage.OutputTokens}
+	return decoded, nil
+}
+
+// choose asks Jev several choice questions about one state at once. It is
+// git_do's use of Jev, kept apart from routing's single question.
+func (j *jevClient) choose(ctx context.Context, state string, questions map[string]jevQuestion) (_ map[string]jevAnswer, decision jevDecision, _ error) {
+	started := time.Now()
+	defer func() { decision.DurationMS = time.Since(started).Milliseconds() }()
+	ctx, cancel := context.WithTimeout(ctx, jevDeadline)
+	defer cancel()
+	body, err := json.Marshal(jevRequest{State: state, Model: jevModel, Questions: questions})
+	if err != nil {
+		return nil, decision, err
+	}
+	decision.RequestBytes = len(body)
+	if len(body) > jevMaxRequestBytes {
+		return nil, decision, fmt.Errorf("Jev request exceeds the %d byte limit", jevMaxRequestBytes)
+	}
+	decoded, err := j.post(ctx, body, &decision)
+	if err != nil {
+		return nil, decision, err
+	}
+	if decoded.Model != jevModel || len(decoded.Answers) != len(questions) {
+		return nil, decision, fmt.Errorf("invalid Jev version or answers")
+	}
+	for name, question := range questions {
+		answer, found := decoded.Answers[name]
+		if !found || answer.Type != "choice" || question.Criteria[answer.Choice] == "" || len(answer.Probabilities) != len(question.Criteria) {
+			return nil, decision, fmt.Errorf("invalid Jev answer to %s", name)
+		}
+		sum := 0.0
+		for id := range question.Criteria {
+			p := answer.Probabilities[id]
+			if p == nil || !jevProbability(*p) {
+				return nil, decision, fmt.Errorf("invalid Jev probabilities for %s", name)
+			}
+			sum += *p
+		}
+		// Jev rounds each probability to hundredths, so the sum may be off by
+		// up to half a hundredth per choice.
+		if math.Abs(sum-1) > 0.005*float64(len(question.Criteria))+1e-9 {
+			return nil, decision, fmt.Errorf("Jev probabilities for %s do not sum to one", name)
+		}
+	}
+	return decoded.Answers, decision, nil
 }
 
 func jevProbability(value float64) bool {

@@ -161,6 +161,21 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if options.reportFriction {
 		tools = append(tools, NewReportFrictionTool())
 	}
+	// Experimental: --git-do jev lets Jev pick a git recipe from an English
+	// request; --git-do recipe has the model name it.
+	switch options.gitDo {
+	case "":
+	case "jev":
+		key := os.Getenv("TYPESAFE_API_KEY")
+		if strings.TrimSpace(key) == "" {
+			return usage(stderr, command, "--git-do jev needs TYPESAFE_API_KEY")
+		}
+		tools = append(tools, NewGitDoTool(ws, newJevClient(key, "", nil)))
+	case "recipe":
+		tools = append(tools, NewGitDoTool(ws, nil))
+	default:
+		return usage(stderr, command, "--git-do must be jev or recipe")
+	}
 	if options.script != "" {
 		// The fake tool rides along with a script so orchestration can be
 		// exercised without touching the workspace (v0 §10).
@@ -375,11 +390,11 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 }
 
 type options struct {
-	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir, resume string
-	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction              bool
-	auto                                                                                   bool
-	maxSteps, maxToolCalls                                                                 int
-	allowedWorkspaces                                                                      []string
+	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir, resume, gitDo string
+	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction                     bool
+	auto                                                                                          bool
+	maxSteps, maxToolCalls                                                                        int
+	allowedWorkspaces                                                                             []string
 }
 
 func defineFlags(fs *flag.FlagSet) *options {
@@ -397,6 +412,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")
+	fs.StringVar(&o.gitDo, "git-do", "", "experimental: offer git_do, with recipes picked by jev or named by the model (recipe)")
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
 	fs.StringVar(&o.traceDir, "trace-dir", "", "write each turn's trace under this directory")
@@ -418,6 +434,7 @@ var runFlagGroups = []flagGroup{
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-file", "report-friction"}},
+	{"Experimental", []string{"git-do"}},
 	{"Offline", []string{"show-context", "scripted"}},
 }
 
@@ -428,6 +445,7 @@ var chatFlagGroups = []flagGroup{
 	{"Budgets", []string{"max-steps", "max-tool-calls"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir", "report-friction"}},
+	{"Experimental", []string{"git-do"}},
 	{"Resume", []string{"resume"}},
 	{"Offline", []string{"scripted"}},
 }

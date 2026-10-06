@@ -7,7 +7,7 @@
 
 A small agent whose every decision can be read in its code and its actual model requests. Go, direct provider HTTP (no SDK, no agent framework, no Codex wrapper — final), native function tools, locally owned complete history with provider-native items preserved, sequential dispatch, a pure context builder, and JSONL traces of exact request/response bytes.
 
-One executable: `run` (one task) and `chat` (a conversation). Tools: three read tools, three file writers, `exec`, two workspace tools, and an optional friction reporter. A scripted model and a fake `echo` tool exercise orchestration without a key. No service, plugin system, or extensibility framework.
+One executable: `run` (one task) and `chat` (a conversation). Tools: three read tools, three file writers, `exec`, two workspace tools, an optional friction reporter, and the experimental `git_do`. A scripted model and a fake `echo` tool exercise orchestration without a key. No service, plugin system, or extensibility framework.
 
 ## 2. Structure and adopted contracts
 
@@ -133,9 +133,9 @@ Optional `then` chains up to 7 more argument vectors, run in order in the same `
 
 `reagent run [flags] "prompt"`, `reagent chat [flags]`, `reagent help [run|chat]`, `reagent version`. A flag after a `run` prompt is refused; `--` passes flag-like text.
 
-Shared flags: `--provider` (inferred from the model name; a contradiction is a startup error), `--model`, `--reasoning-effort`, `--auto`, `--workspace`, `--allow-workspace PATH` (repeatable), `--read-only`, `--plan`, `--no-project-instructions`, `--max-steps`, `--max-tool-calls`, `--recap`, `--report-friction`, `--scripted FILE`. `run` only: `--prompt-file PATH|-` (one prompt source; only the final newline is removed), `--show-context`, `--trace-file`. `chat` only: `--trace-dir`.
+Shared flags: `--provider` (inferred from the model name; a contradiction is a startup error), `--model`, `--reasoning-effort`, `--auto`, `--workspace`, `--allow-workspace PATH` (repeatable), `--read-only`, `--plan`, `--no-project-instructions`, `--max-steps`, `--max-tool-calls`, `--recap`, `--report-friction`, `--git-do jev|recipe`, `--scripted FILE`. `run` only: `--prompt-file PATH|-` (one prompt source; only the final newline is removed), `--show-context`, `--trace-file`. `chat` only: `--trace-dir`.
 
-Environment: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (read for any non-preview run, since chat can change provider; each is sent only in its own provider's header, never to a proxy), `API_PROXY_URL`/`API_PROXY_PROVIDER`, `TYPESAFE_API_KEY` (read only when Auto is on), `REAGENT_MODEL`, `NO_COLOR`. The binary never reads `.env`; `make live` sources it for the opt-in live tests only.
+Environment: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (read for any non-preview run, since chat can change provider; each is sent only in its own provider's header, never to a proxy), `API_PROXY_URL`/`API_PROXY_PROVIDER`, `TYPESAFE_API_KEY` (read only when Auto or `--git-do jev` is on), `REAGENT_MODEL`, `NO_COLOR`. The binary never reads `.env`; `make live` sources it for the opt-in live tests only.
 
 `--scripted FILE` replays a JSON array of normalized responses through the real dispatcher, registers `echo`, needs no key, and excludes `--provider`, `--model`, `--auto` and `--show-context`. Running out of responses is a protocol error.
 
@@ -192,6 +192,16 @@ Optional, off by default: `--auto` or `/auto on`. `/auto off` or an explicit mod
 **Amendment (2026-10-02):** Live `chat` shows an ID; `--resume ID` restores private, versioned checkpoints of exact history (native items included) and continuation state. This overrides v1's durable-resume exclusion (lines 110, 435) **for chat only**, without automatic recovery or effect reconciliation. Checkpoint atomically at submission, accepted response, tool intent/result, terminal outcome and local changes; a failed write stops work. Traces remain best effort. Resume retries nothing: in-flight tools have **unknown effects**, unstarted calls were **not executed**, and interrupted requests have no invented reply. Explain and await new input.
 
 Require an exact ID and fresh credentials; reject missing, corrupt, unsupported, open or incompatible sessions (except `--recap`/`--trace-dir`). Resume at the launch workspace without extra approvals. Scripted chats have no ID; `/reset` and fresh model switches issue new IDs, preserving old checkpoints. No listing.
+
+### 10.9 Experimental `git_do`
+
+`--git-do jev|recipe` registers `git_do` (exec class, so read-only and plan mode withhold it); off by default and not saved for `--resume`. It carries out one of twelve fixed git recipes and returns proof: `status`, `explain_branch`, `pr_status`, `commit`, `split_commits`, `amend`, `commit_push`, `ship_pr`, `follow_up_pr`, `new_branch`, `rebase_push`, `revert_pr`. Optional arguments: `message`, `title`, `body`, `branch`, `pr`, `commit`.
+
+A call snapshots the root with git and `gh` (branch, default branch from `origin/HEAD`, upstream and divergence, up to 50 changed paths, 8 recent commits, the branch's pull request) and removes the recipes that state does not allow. With `recipe`, the model names one and a disallowed one is declined. With `jev`, the model sends `intent` in English and one Jev request asks two choice questions: the outcome among the allowed recipes plus `none`, and whether the request also asks for non-git work. `none`, non-git work, a Jev failure, or an outcome probability under 0.7 for `status`, `explain_branch` and `pr_status`, or under 0.9 for any recipe that changes the repository, declines. A branch name missing from `branch` is read from `intent`; a revert without `commit` asks Jev to choose among the recent commits, needing 0.9.
+
+A recipe runs commands in the root with the exec environment, each with a 60-second timeout, and stops at the first failure. It never touches the default branch on the remote: pushes are `-u origin <branch>` or `--force-with-lease`, a branch is created only if `git check-ref-format --branch` accepts it and it does not exist, and a conflicting rebase is aborted. Afterwards it checks its result (remote tip equals HEAD, pull request open from the branch, clean tree, commit counts) and reports `done`, `unverified`, `declined`, `failed`, or `timeout`, with every command, its exit code and the last 1,500 bytes of its output. Effect is none when nothing ran, applied when commands ran, and unknown on a timeout, which stops the run as in §9. Jev calls and tokens are reported in the result, not as generative usage.
+
+`make git-do-eval` scores the recipe choice on 68 fixed requests (users' own wording, agent-style, mixed with non-git work, unsafe) against live Jev, and fails if any wrong recipe would run.
 
 ## 11. Design fork: native versus prompt-defined tools
 
