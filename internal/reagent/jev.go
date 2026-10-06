@@ -236,7 +236,9 @@ func (j *jevClient) choose(ctx context.Context, state string, questions map[stri
 			}
 			sum += *p
 		}
-		if math.Abs(sum-1) > 1e-6 {
+		// Jev rounds each probability to hundredths, so the sum may be off by
+		// up to half a hundredth per choice.
+		if math.Abs(sum-1) > 0.005*float64(len(question.Criteria))+1e-9 {
 			return nil, decision, fmt.Errorf("Jev probabilities for %s do not sum to one", name)
 		}
 	}

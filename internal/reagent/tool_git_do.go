@@ -22,10 +22,13 @@ import (
 // at its first failed command, and then checks the result (v0 §10.9).
 
 const (
-	gitDoThreshold   = 0.7
-	gitDoStepTimeout = 60 * time.Second
-	gitDoStepOutput  = 1500
-	gitDoReadOutput  = 16 << 10
+	// A recipe that changes the repository needs more certainty than one
+	// that only reads it: a wrong push or rebase is published.
+	gitDoReadThreshold   = 0.7
+	gitDoChangeThreshold = 0.9
+	gitDoStepTimeout     = 60 * time.Second
+	gitDoStepOutput      = 1500
+	gitDoReadOutput      = 16 << 10
 )
 
 type gitDoRecipe struct {
@@ -196,6 +199,14 @@ func (t gitDoTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 	return outcome, nil
 }
 
+func gitDoThresholdFor(recipe string) float64 {
+	switch recipe {
+	case "status", "explain_branch", "pr_status":
+		return gitDoReadThreshold
+	}
+	return gitDoChangeThreshold
+}
+
 func gitDoFind(name string) *gitDoRecipe {
 	for i := range gitDoRecipes {
 		if gitDoRecipes[i].name == name {
@@ -259,7 +270,7 @@ func (r *gitDoRun) carryOut(jev *jevClient) gitDoResult {
 			result.Status, result.Reason = "declined", "not a git-only outcome these recipes cover; use exec"
 			return result
 		}
-		if confidence < gitDoThreshold {
+		if confidence < gitDoThresholdFor(choice) {
 			result.Status, result.Reason = "declined", fmt.Sprintf("unsure which outcome is meant (%s at %.2f); use exec or say it more plainly", choice, confidence)
 			return result
 		}
@@ -783,7 +794,7 @@ func (r *gitDoRun) revertPR() (string, []gitDoCheck, error) {
 			return "", nil, gitDoDecline{"Jev could not pick the commit: " + err.Error()}
 		}
 		answer := answers["target"]
-		if answer.Choice == "none" || *answer.Probabilities[answer.Choice] < gitDoThreshold {
+		if answer.Choice == "none" || *answer.Probabilities[answer.Choice] < gitDoChangeThreshold {
 			return "", nil, gitDoDecline{"cannot tell which commit to revert; pass it as commit"}
 		}
 		target = answer.Choice

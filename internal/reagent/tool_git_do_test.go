@@ -1,6 +1,7 @@
 package reagent
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -235,9 +236,10 @@ func TestGitDo_JevPicksAFeasibleRecipe(t *testing.T) {
 
 func TestGitDo_JevDeclines(t *testing.T) {
 	for name, answers := range map[string]map[string][2]any{
-		"more than git":  {"outcome": {"commit", 0.99}, "scope": {"more", 0.8}},
-		"none":           {"outcome": {"none", 0.9}, "scope": {"git_only", 0.9}},
-		"low confidence": {"outcome": {"commit", 0.5}, "scope": {"git_only", 0.9}},
+		"more than git":    {"outcome": {"commit", 0.99}, "scope": {"more", 0.8}},
+		"none":             {"outcome": {"none", 0.9}, "scope": {"git_only", 0.9}},
+		"low confidence":   {"outcome": {"commit", 0.5}, "scope": {"git_only", 0.9}},
+		"change under 0.9": {"outcome": {"commit", 0.85}, "scope": {"git_only", 0.9}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ws := gitDoRepo(t)
@@ -275,5 +277,20 @@ func TestGitDo_BranchNameFromTheRequest(t *testing.T) {
 		if got := run.requestedBranch(); got != want {
 			t.Fatalf("%q: got %q, want %q", intent, got, want)
 		}
+	}
+}
+
+func TestJevChoose_AcceptsRoundedProbabilities(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		third, rest := 0.33, 0.0
+		_ = json.NewEncoder(w).Encode(jevResponse{Model: jevModel, Usage: &jevUsage{new(int64), new(int64)},
+			Answers: map[string]jevAnswer{"q": {Type: "choice", Choice: "a", Confidence: &third,
+				Probabilities: map[string]*float64{"a": &third, "b": &third, "c": &third, "d": &rest}}}})
+	}))
+	defer server.Close()
+	jev := newJevClient("k", server.URL, server.Client())
+	questions := map[string]jevQuestion{"q": {Type: "choice", Criteria: map[string]string{"a": "A", "b": "B", "c": "C", "d": "D"}}}
+	if _, _, err := jev.choose(context.Background(), "state", questions); err != nil {
+		t.Fatalf("a sum of 0.99 from rounding was refused: %v", err)
 	}
 }
