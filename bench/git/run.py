@@ -434,6 +434,12 @@ def summarize(trace_path):
                 steps = [step.get("argv") or [] for step in result.get("steps") or []] or [result.get("argv") or []]
                 command = " && ".join(" ".join(argv) for argv in steps)
                 count = sum(git_invocations(" ".join(argv)) for argv in steps) if data.get("name") == "exec" else 0
+                if data.get("name") == "git_do":
+                    # git_do reports the commands its recipe ran.
+                    steps = [step.get("argv") or [] for step in result.get("steps") or []]
+                    command = "git_do " + (result.get("recipe") or "?") + " [" + result.get("status", "") + "]: " + \
+                        " && ".join(" ".join(argv) for argv in steps)
+                    count = max(1, len(steps))
                 if count:
                     s["git_calls"] += 1
                     s["git_invocations"] += count
@@ -451,10 +457,10 @@ def summarize(trace_path):
     return s
 
 
-def run_reagent(fx, prompt, out, binary, model_args, script=None):
+def run_reagent(fx, prompt, out, binary, model_args, script=None, extra=()):
     trace = os.path.join(out, "events.jsonl")
     args = [binary, "run", "--workspace", fx.work, "--no-project-instructions",
-            "--max-steps", "40", "--trace-file", trace, *model_args]
+            "--max-steps", "40", "--trace-file", trace, *model_args, *extra]
     if script:
         args += ["--scripted", script]
     result = subprocess.run([*args, prompt], cwd=fx.work, env=fx.env(), capture_output=True, text=True)
@@ -721,6 +727,7 @@ def main():
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--agent", choices=("reagent", "codex", "claude"), default="reagent")
+    parser.add_argument("--reagent-args", default="", help="extra re:agent run flags, such as \"--git-do jev\"")
     args = parser.parse_args()
     unknown = [t for t in args.tasks if t not in TASKS]
     if unknown:
@@ -746,7 +753,8 @@ def main():
                 sys.exit(0 if self_test(binary, tmp, seed_remote) else 1)
             model_args = (["--model", args.model] if args.model else []) + \
                          (["--reasoning-effort", args.effort] if args.effort else [])
-            launch = lambda fx, prompt, out: run_reagent(fx, prompt, out, binary, model_args)
+            extra = args.reagent_args.split()
+            launch = lambda fx, prompt, out: run_reagent(fx, prompt, out, binary, model_args, extra=extra)
         out_root = os.path.join(ROOT, "bench", "out", "git-" + args.label)
         rows = []
         for i in range(1, args.repeat + 1):
