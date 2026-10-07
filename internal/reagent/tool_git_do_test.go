@@ -44,16 +44,19 @@ func gitDoRepo(t *testing.T) *Workspace {
 	bin := filepath.Join(base, "bin")
 	state := filepath.Join(base, "pr_head")
 	stub := `#!/bin/sh
+# One pull request, kept as its head branch and its state.
 state='` + state + `'
 case "$1 $2" in
 "pr create")
   while [ $# -gt 0 ]; do [ "$1" = "--head" ] && echo "$2" > "$state"; shift; done
+  echo OPEN > "$state.state"
   echo https://example.com/pull/1 ;;
 "pr view")
   [ -f "$state" ] || { echo "no pull requests found" >&2; exit 1; }
-  head=$(cat "$state")
+  head=$(cat "$state"); pr_state=$(cat "$state.state" 2>/dev/null || echo OPEN)
+  oid=$(git rev-parse "refs/remotes/origin/$head" 2>/dev/null)
   case "$*" in *--jq*) echo https://example.com/pull/1 ;;
-  *) echo "{\"number\":1,\"url\":\"https://example.com/pull/1\",\"headRefName\":\"$head\",\"comments\":[]}" ;; esac ;;
+  *) echo "{\"number\":1,\"url\":\"https://example.com/pull/1\",\"headRefName\":\"$head\",\"state\":\"$pr_state\",\"headRefOid\":\"$oid\",\"comments\":[]}" ;; esac ;;
 "pr comment") echo commented ;;
 *) echo "unsupported" >&2; exit 1 ;;
 esac
@@ -291,5 +294,109 @@ func TestJevChoose_AcceptsRoundedProbabilities(t *testing.T) {
 	questions := map[string]jevQuestion{"q": {Type: "choice", Criteria: map[string]string{"a": "A", "b": "B", "c": "C", "d": "D"}}}
 	if _, _, err := jev.choose(context.Background(), "state", questions); err != nil {
 		t.Fatalf("a sum of 0.99 from rounding was refused: %v", err)
+	}
+}
+
+// gitDoMergedBranch leaves the clone on feat/done, whose pull request #1 is
+// merged into origin's main, with README.md changed again.
+func gitDoMergedBranch(t *testing.T, ws *Workspace) {
+	t.Helper()
+	git := func(argv ...string) {
+		t.Helper()
+		command := exec.Command("git", argv...)
+		command.Dir = ws.Root()
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", argv, err, out)
+		}
+	}
+	git("switch", "-q", "-c", "feat/done")
+	if err := os.WriteFile(filepath.Join(ws.Root(), "README.md"), []byte("hello\ndone\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("commit", "-q", "-am", "Done")
+	git("push", "-q", "-u", "origin", "feat/done")
+	git("push", "-q", "origin", "feat/done:main")
+	base := filepath.Dir(ws.Root())
+	if err := os.WriteFile(filepath.Join(base, "pr_head"), []byte("feat/done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "pr_head.state"), []byte("MERGED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Root(), "README.md"), []byte("hello\ndone\nnext\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGitDo_MergedPullRequestIsNotTheBranchs(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoMergedBranch(t, ws)
+	run := &gitDoRun{ctx: context.Background(), dir: ws.Root(), result: &gitDoResult{}}
+	run.snapshot()
+	allowed := run.feasible()
+	if run.state.PullRequest != nil || run.state.FinishedPR == nil || run.state.FinishedState != "merged" {
+		t.Fatalf("state %+v", run.state)
+	}
+	if allowed["follow_up_pr"] || !allowed["ship_pr"] || !allowed["pr_status"] {
+		t.Fatalf("allowed %v", allowed)
+	}
+}
+
+func TestGitDo_ShipAfterAMergedPullRequestStartsFromMain(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoMergedBranch(t, ws)
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"ship_pr","branch":"feat/next","message":"Next"}`)
+	result := gitDoData(t, outcome)
+	if !outcome.OK || result.Status != "done" {
+		t.Fatalf("got %+v / %+v", outcome, result)
+	}
+	var argv []string
+	for _, step := range result.Steps {
+		argv = append(argv, strings.Join(step.Argv, " "))
+	}
+	if argv[0] != "git fetch -q origin" || argv[1] != "git switch -q -c feat/next --no-track origin/main" {
+		t.Fatalf("steps:\n%s", strings.Join(argv, "\n"))
+	}
+	// The new branch is main plus the one new change, not the finished branch's history.
+	count := exec.Command("git", "rev-list", "--count", "origin/main..feat/next")
+	count.Dir = ws.Root()
+	if out, err := count.Output(); err != nil || strings.TrimSpace(string(out)) != "1" {
+		t.Fatalf("feat/next is %q commits past main: %v", out, err)
+	}
+}
+
+func TestGitDo_ShipDeclinesCommitsAfterAMergedPullRequest(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoMergedBranch(t, ws)
+	commit := exec.Command("git", "commit", "-q", "-am", "After the merge")
+	commit.Dir = ws.Root()
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"ship_pr","branch":"feat/next"}`)
+	if outcome.Code != "declined" || !strings.Contains(outcome.Message, "does not have") || outcome.Effect != EffectNone {
+		t.Fatalf("got %+v", outcome)
+	}
+}
+
+func TestGitDo_ShipCommittedWorkWithoutAMessage(t *testing.T) {
+	ws := gitDoRepo(t)
+	git := func(argv ...string) {
+		t.Helper()
+		command := exec.Command("git", argv...)
+		command.Dir = ws.Root()
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", argv, err, out)
+		}
+	}
+	git("switch", "-q", "-c", "feat/ready")
+	if err := os.WriteFile(filepath.Join(ws.Root(), "README.md"), []byte("ready\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("commit", "-q", "-am", "Ready")
+	// Committed work, nothing uncommitted, no message: this used to panic.
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"ship_pr"}`)
+	if !outcome.OK {
+		t.Fatalf("got %+v", outcome)
 	}
 }

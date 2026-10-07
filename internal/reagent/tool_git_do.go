@@ -45,7 +45,7 @@ var gitDoRecipes = []gitDoRecipe{
 	{"split_commits", "Commit the current changes as several commits, one per changed file, without pushing.", (*gitDoRun).splitCommits},
 	{"amend", "Add the current changes to the last commit, which has not been pushed.", (*gitDoRun).amend},
 	{"commit_push", "Commit any current changes on the current branch and push the branch, without opening a pull request.", (*gitDoRun).commitPush},
-	{"ship_pr", "Open a new pull request for the current work: commit any changes, push, and create the pull request, starting a new branch first when on the default branch.", (*gitDoRun).shipPR},
+	{"ship_pr", "Open a new pull request for the current work: commit any changes, push, and create the pull request, starting a new branch first when on the default branch or when the current branch's pull request is already merged or closed.", (*gitDoRun).shipPR},
 	{"follow_up_pr", "Commit the current changes, push them to the branch of an existing pull request, and reply on that pull request.", (*gitDoRun).followUpPR},
 	{"new_branch", "Create and switch to a new branch starting from the latest default branch, fetching first.", (*gitDoRun).newBranch},
 	{"rebase_push", "Rebase the current branch onto the latest default branch and update its remote branch.", (*gitDoRun).rebasePush},
@@ -244,6 +244,11 @@ type gitDoState struct {
 	Recent         []string `json:"recent_commits"`
 	PullRequest    *int     `json:"pull_request,omitempty"`
 	PRReviewThread int      `json:"pull_request_comments,omitempty"`
+	// A merged or closed pull request from this branch: the branch's work is
+	// done, so new changes need a new branch.
+	FinishedPR    *int   `json:"finished_pull_request,omitempty"`
+	FinishedState string `json:"finished_pull_request_state,omitempty"`
+	finishedHead  string
 }
 
 type gitDoDecline struct{ reason string }
@@ -418,13 +423,21 @@ func (r *gitDoRun) snapshot() {
 	if log, ok := r.quiet("git", "log", "-8", "--format=%h %s"); ok && log != "" {
 		s.Recent = strings.Split(log, "\n")
 	}
-	if view, ok := r.quiet("gh", "pr", "view", "--json", "number,comments"); ok {
+	// gh reports the branch's latest pull request in any state; only an open
+	// one is the branch's pull request.
+	if view, ok := r.quiet("gh", "pr", "view", "--json", "number,state,comments,headRefOid"); ok {
 		var pr struct {
 			Number   int               `json:"number"`
+			State    string            `json:"state"`
 			Comments []json.RawMessage `json:"comments"`
+			Head     string            `json:"headRefOid"`
 		}
 		if json.Unmarshal([]byte(view), &pr) == nil && pr.Number > 0 {
-			s.PullRequest, s.PRReviewThread = &pr.Number, len(pr.Comments)
+			if pr.State == "OPEN" {
+				s.PullRequest, s.PRReviewThread = &pr.Number, len(pr.Comments)
+			} else {
+				s.FinishedPR, s.FinishedState, s.finishedHead = &pr.Number, strings.ToLower(pr.State), pr.Head
+			}
 		}
 	}
 }
@@ -453,6 +466,9 @@ func (r *gitDoRun) feasible() map[string]bool {
 	if s.PullRequest != nil || r.pr > 0 {
 		allowed["pr_status"], allowed["follow_up_pr"] = true, true
 	}
+	if s.FinishedPR != nil {
+		allowed["pr_status"] = true
+	}
 	if changed {
 		allowed["commit"] = true
 		allowed["amend"] = unpushed
@@ -474,7 +490,14 @@ func (r *gitDoRun) message(files []string) string {
 	for i, f := range files {
 		names[i] = path.Base(f)
 	}
-	if len(names) == 1 {
+	switch len(names) {
+	case 0:
+		// Nothing to commit: the name only seeds a branch name.
+		if subject, _ := r.quiet("git", "log", "-1", "--format=%s"); subject != "" {
+			return subject
+		}
+		return "update"
+	case 1:
 		return "Update " + names[0]
 	}
 	return "Update " + strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
@@ -683,12 +706,36 @@ func (r *gitDoRun) createPR(branch string) error {
 func (r *gitDoRun) shipPR() (string, []gitDoCheck, error) {
 	branch := r.state.Branch
 	message := r.message(r.state.Changed)
-	if branch == r.state.Default || branch == "" {
+	fresh := branch == r.state.Default || branch == ""
+	// A branch whose pull request is merged or closed is finished: its new
+	// changes start over on a branch from the latest default branch (v0 §10.9).
+	finished := r.state.FinishedPR
+	if finished != nil {
+		head, _ := r.quiet("git", "rev-parse", "HEAD")
+		if head != r.state.finishedHead {
+			return "", nil, gitDoDecline{fmt.Sprintf("%s has commits that pull request #%d (%s) does not have; ship them with exec",
+				branch, *finished, r.state.FinishedState)}
+		}
+		if len(r.state.Changed) == 0 {
+			return "", nil, gitDoDecline{fmt.Sprintf("nothing new since pull request #%d (%s)", *finished, r.state.FinishedState)}
+		}
+		fresh = true
+	}
+	if fresh {
 		name, err := r.newBranchName(message)
 		if err != nil {
 			return "", nil, err
 		}
-		if _, err := r.step("git", "switch", "-q", "-c", name); err != nil {
+		argv := []string{"git", "switch", "-q", "-c", name}
+		if finished != nil {
+			// The uncommitted changes come along; git refuses, changing
+			// nothing, if they conflict with the latest default branch.
+			if _, err := r.step("git", "fetch", "-q", "origin"); err != nil {
+				return "", nil, err
+			}
+			argv = append(argv, "--no-track", "origin/"+r.state.Default)
+		}
+		if _, err := r.step(argv...); err != nil {
 			return "", nil, err
 		}
 		branch = name
@@ -711,9 +758,13 @@ func (r *gitDoRun) followUpPR() (string, []gitDoCheck, error) {
 	if number == 0 && r.state.PullRequest != nil {
 		number = *r.state.PullRequest
 	}
-	view, _ := r.quiet("gh", "pr", "view", strconv.Itoa(number), "--json", "headRefName")
+	view, _ := r.quiet("gh", "pr", "view", strconv.Itoa(number), "--json", "headRefName,state")
 	var pr struct {
-		Head string `json:"headRefName"`
+		Head  string `json:"headRefName"`
+		State string `json:"state"`
+	}
+	if json.Unmarshal([]byte(view), &pr) == nil && pr.State != "" && pr.State != "OPEN" {
+		return "", nil, gitDoDecline{fmt.Sprintf("pull request #%d is %s; open a new one instead", number, strings.ToLower(pr.State))}
 	}
 	if json.Unmarshal([]byte(view), &pr) != nil || pr.Head != r.state.Branch {
 		return "", nil, gitDoDecline{fmt.Sprintf("pull request #%d is not from the current branch %s", number, r.state.Branch)}
@@ -753,7 +804,8 @@ func (r *gitDoRun) newBranch() (string, []gitDoCheck, error) {
 		return "", nil, err
 	}
 	base := "origin/" + r.state.Default
-	if _, err := r.step("git", "switch", "-q", "-c", name, base); err != nil {
+	// No upstream: the new branch is not main's, and its first push sets one.
+	if _, err := r.step("git", "switch", "-q", "-c", name, "--no-track", base); err != nil {
 		return "", nil, err
 	}
 	tip, _ := r.quiet("git", "rev-parse", base)
