@@ -134,7 +134,7 @@ func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute)
 		sum += *probability
 		probabilities[id] = *probability
 	}
-	if math.Abs(sum-1) > 1e-6 {
+	if !jevProbabilitySum(sum, len(criteria)) {
 		return decision, fmt.Errorf("Jev probabilities do not sum to one")
 	}
 	if err := ctx.Err(); err != nil {
@@ -236,9 +236,7 @@ func (j *jevClient) choose(ctx context.Context, state string, questions map[stri
 			}
 			sum += *p
 		}
-		// Jev rounds each probability to hundredths, so the sum may be off by
-		// up to half a hundredth per choice.
-		if math.Abs(sum-1) > 0.005*float64(len(question.Criteria))+1e-9 {
+		if !jevProbabilitySum(sum, len(question.Criteria)) {
 			return nil, decision, fmt.Errorf("Jev probabilities for %s do not sum to one", name)
 		}
 	}
@@ -247,6 +245,11 @@ func (j *jevClient) choose(ctx context.Context, state string, questions map[stri
 
 func jevProbability(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 1
+}
+
+// Jev rounds each probability to hundredths, allowing half a hundredth per choice.
+func jevProbabilitySum(sum float64, choices int) bool {
+	return math.Abs(sum-1) <= 0.005*float64(choices)+1e-9
 }
 
 // encodeJevRequest lets packet construction check the exact final wire bound.
