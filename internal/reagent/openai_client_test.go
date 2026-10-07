@@ -50,7 +50,15 @@ func newFakeAPI(t *testing.T, replies ...apiReply) *fakeAPI {
 			return
 		}
 		reply := api.replies[index]
-		time.Sleep(reply.delay)
+		if reply.delay > 0 {
+			timer := time.NewTimer(reply.delay)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		for name, value := range reply.header {
 			w.Header().Set(name, value)
 		}
@@ -289,8 +297,10 @@ func assertSequentialBatchTrace(t *testing.T, path string, ids ...string) {
 }
 
 func TestOpenAI_RetriesOnceThenSucceeds(t *testing.T) {
+	t.Parallel()
 	for name, status := range map[string]int{"rate limited": 429, "server fault": 503} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			api := newFakeAPI(t,
 				apiReply{status: status, body: `{"error":{"message":"try again"}}`},
 				okReply(textReply))

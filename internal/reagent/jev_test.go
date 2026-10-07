@@ -203,6 +203,8 @@ func TestJev_RefusesRedirectWithoutChangingInjectedClient(t *testing.T) {
 }
 
 func TestJev_CancellationAndWholeResponseDeadline(t *testing.T) {
+	t.Parallel()
+	const testDeadline = 100 * time.Millisecond
 	api := newFakeAPI(t, okReply(jevReply))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -213,6 +215,7 @@ func TestJev_CancellationAndWholeResponseDeadline(t *testing.T) {
 
 	for _, bodyStall := range []bool{false, true} {
 		t.Run(fmt.Sprint(bodyStall), func(t *testing.T) {
+			t.Parallel()
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
@@ -220,12 +223,17 @@ func TestJev_CancellationAndWholeResponseDeadline(t *testing.T) {
 					w.WriteHeader(http.StatusOK)
 					w.(http.Flusher).Flush()
 				}
-				time.Sleep(jevDeadline + 50*time.Millisecond)
+				time.Sleep(testDeadline + 50*time.Millisecond)
 			}))
 			defer server.Close()
 			started := time.Now()
-			decision, err := newJevClient("fake", server.URL, server.Client()).decide(context.Background(), "synthetic task", jevTestRoutes())
-			if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 1 || decision.Route != "" || decision.Usage.Known || time.Since(started) > jevDeadline+time.Second {
+			client := newJevClient("fake", server.URL, server.Client())
+			if client.deadline != jevDeadline {
+				t.Fatalf("default deadline %v, want %v", client.deadline, jevDeadline)
+			}
+			client.deadline = testDeadline
+			decision, err := client.decide(context.Background(), "synthetic task", jevTestRoutes())
+			if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 1 || decision.Route != "" || decision.Usage.Known || time.Since(started) > testDeadline+time.Second {
 				t.Fatalf("unbounded or retried operation: %+v, %v", decision, err)
 			}
 		})

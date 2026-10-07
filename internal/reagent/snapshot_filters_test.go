@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 )
 
 func TestSnapshot_CleanFilterCannotRunInRestrictedSwitchedWorkspace(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		mode Mode
@@ -19,6 +21,7 @@ func TestSnapshot_CleanFilterCannotRunInRestrictedSwitchedWorkspace(t *testing.T
 		{"read-only", Mode{ReadOnly: true}, false}, {"plan", Mode{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			target := filepath.Join(root, "vendor", "lib")
 			if err := os.MkdirAll(target, 0o700); err != nil {
@@ -175,50 +178,54 @@ func TestSnapshot_RefOnlyUnbornDetachedAndUnavailableGit(t *testing.T) {
 }
 
 func TestSnapshot_PolicyTracksLaunchRootAndPlanToggles(t *testing.T) {
+	t.Parallel()
 	for _, readOnly := range []bool{false, true} {
-		root, target := t.TempDir(), t.TempDir()
-		for _, path := range []string{root, target} {
-			workspaceGit(t, path, "init", "--template="+t.TempDir(), "-b", "main")
-		}
-		model := &compactModel{replies: []ModelResponse{turn(textBlock("launch")), turn(textBlock("selected")), turn(textBlock("planning")), turn(textBlock("plan ended")), turn(textBlock("returned"))}}
-		s := workspaceSession(t, root, Mode{ReadOnly: readOnly}, model)
-		s.planMode = true
-		turnNumber := 0
-		turnSnapshot := func() workspaceState {
-			turnNumber++
-			if result, err := s.Turn(context.Background(), "turn", NewID(), filepath.Join(t.TempDir(), "events.jsonl")); err != nil || result.Status != StatusCompleted {
-				t.Fatalf("%+v %v", result, err)
+		t.Run(fmt.Sprint(readOnly), func(t *testing.T) {
+			t.Parallel()
+			root, target := t.TempDir(), t.TempDir()
+			for _, path := range []string{root, target} {
+				workspaceGit(t, path, "init", "--template="+t.TempDir(), "-b", "main")
 			}
-			var state workspaceState
-			if err := json.Unmarshal(model.requests[turnNumber-1].History[len(model.requests[turnNumber-1].History)-1].User.Workspace, &state); err != nil {
-				t.Fatal(err)
+			model := &compactModel{replies: []ModelResponse{turn(textBlock("launch")), turn(textBlock("selected")), turn(textBlock("planning")), turn(textBlock("plan ended")), turn(textBlock("returned"))}}
+			s := workspaceSession(t, root, Mode{ReadOnly: readOnly}, model)
+			s.planMode = true
+			turnNumber := 0
+			turnSnapshot := func() workspaceState {
+				turnNumber++
+				if result, err := s.Turn(context.Background(), "turn", NewID(), filepath.Join(t.TempDir(), "events.jsonl")); err != nil || result.Status != StatusCompleted {
+					t.Fatalf("%+v %v", result, err)
+				}
+				var state workspaceState
+				if err := json.Unmarshal(model.requests[turnNumber-1].History[len(model.requests[turnNumber-1].History)-1].User.Workspace, &state); err != nil {
+					t.Fatal(err)
+				}
+				return state
 			}
-			return state
-		}
-		if state := turnSnapshot(); state.Counts != "" || state.Git.Staged == nil {
-			t.Fatal("launch-root exception changed")
-		}
-		s.planMode = false
-		s.workspaceConsent = func(context.Context, workspaceDestination) (bool, error) { return true, nil }
-		if outcome := workspaceTool(t, s, "switch_workspace", map[string]string{"path": target}); !outcome.OK {
-			t.Fatal(outcome)
-		}
-		if state := turnSnapshot(); (state.Counts != "") != readOnly {
-			t.Fatal("unrestricted selected-root counts changed")
-		}
-		s.planMode = true
-		if state := turnSnapshot(); state.Counts == "" || state.Git.Staged != nil {
-			t.Fatal("plan toggle did not restrict snapshot")
-		}
-		s.planMode = false
-		if state := turnSnapshot(); (state.Counts != "") != readOnly {
-			t.Fatal("plan ended marker incorrectly restored launch authority")
-		}
-		if outcome := workspaceTool(t, s, "switch_workspace", map[string]string{"path": root}); !outcome.OK {
-			t.Fatal(outcome)
-		}
-		if state := turnSnapshot(); state.Counts != "" || state.Git.Staged == nil {
-			t.Fatal("return to launch did not restore full snapshot")
-		}
+			if state := turnSnapshot(); state.Counts != "" || state.Git.Staged == nil {
+				t.Fatal("launch-root exception changed")
+			}
+			s.planMode = false
+			s.workspaceConsent = func(context.Context, workspaceDestination) (bool, error) { return true, nil }
+			if outcome := workspaceTool(t, s, "switch_workspace", map[string]string{"path": target}); !outcome.OK {
+				t.Fatal(outcome)
+			}
+			if state := turnSnapshot(); (state.Counts != "") != readOnly {
+				t.Fatal("unrestricted selected-root counts changed")
+			}
+			s.planMode = true
+			if state := turnSnapshot(); state.Counts == "" || state.Git.Staged != nil {
+				t.Fatal("plan toggle did not restrict snapshot")
+			}
+			s.planMode = false
+			if state := turnSnapshot(); (state.Counts != "") != readOnly {
+				t.Fatal("plan ended marker incorrectly restored launch authority")
+			}
+			if outcome := workspaceTool(t, s, "switch_workspace", map[string]string{"path": root}); !outcome.OK {
+				t.Fatal(outcome)
+			}
+			if state := turnSnapshot(); state.Counts != "" || state.Git.Staged == nil {
+				t.Fatal("return to launch did not restore full snapshot")
+			}
+		})
 	}
 }

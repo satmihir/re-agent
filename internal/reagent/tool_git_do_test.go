@@ -120,13 +120,31 @@ func TestGitDo_RecipeShipsAPullRequestWithProof(t *testing.T) {
 	}
 }
 
-func TestGitDo_RecipeTheStateDoesNotAllowIsDeclined(t *testing.T) {
+func TestGitDo_DeclinesWithoutRunningARecipe(t *testing.T) {
 	ws := gitDoRepo(t)
-	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"follow_up_pr"}`)
-	result := gitDoData(t, outcome)
-	if outcome.OK || outcome.Code != "declined" || outcome.Effect != EffectNone || len(result.Steps) != 0 {
-		t.Fatalf("got %+v / %+v", outcome, result)
-	}
+	t.Run("infeasible recipe", func(t *testing.T) {
+		outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"follow_up_pr"}`)
+		result := gitDoData(t, outcome)
+		if outcome.OK || outcome.Code != "declined" || outcome.Effect != EffectNone || len(result.Steps) != 0 {
+			t.Fatalf("got %+v / %+v", outcome, result)
+		}
+	})
+	t.Run("invalid branch", func(t *testing.T) {
+		outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"new_branch","branch":"bad..name"}`)
+		if outcome.Code != "declined" || outcome.Effect != EffectNone || !strings.Contains(outcome.Message, "not a valid branch name") {
+			t.Fatalf("got %+v", outcome)
+		}
+	})
+	t.Run("Jev failure", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer server.Close()
+		outcome := runTool(t, NewGitDoTool(ws, newJevClient("k", server.URL, server.Client())), `{"intent":"show status"}`)
+		if outcome.Code != "declined" || outcome.Effect != EffectNone || !strings.Contains(outcome.Message, "Jev could not decide") {
+			t.Fatalf("got %+v", outcome)
+		}
+	})
 }
 
 func TestGitDo_FailedStepStopsTheRecipe(t *testing.T) {
@@ -147,16 +165,9 @@ func TestGitDo_FailedStepStopsTheRecipe(t *testing.T) {
 	}
 }
 
-func TestGitDo_InvalidBranchIsDeclined(t *testing.T) {
-	ws := gitDoRepo(t)
-	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"new_branch","branch":"bad..name"}`)
-	if outcome.Code != "declined" || !strings.Contains(outcome.Message, "not a valid branch name") {
-		t.Fatalf("got %+v", outcome)
-	}
-}
-
 func TestGitDo_ArgumentsMatchTheMode(t *testing.T) {
-	ws := gitDoRepo(t)
+	t.Parallel()
+	ws := testWorkspace(t, nil)
 	for _, c := range []struct {
 		tool Tool
 		args string
@@ -235,6 +246,10 @@ func TestGitDo_JevPicksAFeasibleRecipe(t *testing.T) {
 }
 
 func TestGitDo_JevDeclines(t *testing.T) {
+	ws := gitDoRepo(t)
+	if err := os.WriteFile(filepath.Join(ws.Root(), "README.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for name, answers := range map[string]map[string][2]any{
 		"more than git":    {"outcome": {"commit", 0.99}, "scope": {"more", 0.8}},
 		"none":             {"outcome": {"none", 0.9}, "scope": {"git_only", 0.9}},
@@ -242,27 +257,11 @@ func TestGitDo_JevDeclines(t *testing.T) {
 		"change under 0.9": {"outcome": {"commit", 0.85}, "scope": {"git_only", 0.9}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ws := gitDoRepo(t)
-			if err := os.WriteFile(filepath.Join(ws.Root(), "README.md"), []byte("changed\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
 			outcome := runTool(t, NewGitDoTool(ws, fakeJev(t, answers, nil)), `{"intent":"implement it and commit"}`)
 			if outcome.Code != "declined" || outcome.Effect != EffectNone {
 				t.Fatalf("got %+v", outcome)
 			}
 		})
-	}
-}
-
-func TestGitDo_JevFailureDeclines(t *testing.T) {
-	ws := gitDoRepo(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer server.Close()
-	outcome := runTool(t, NewGitDoTool(ws, newJevClient("k", server.URL, server.Client())), `{"intent":"show status"}`)
-	if outcome.Code != "declined" || !strings.Contains(outcome.Message, "Jev could not decide") {
-		t.Fatalf("got %+v", outcome)
 	}
 }
 

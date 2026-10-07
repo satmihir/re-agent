@@ -281,6 +281,7 @@ func TestAnthropic_OverflowDetailIsBounded(t *testing.T) {
 }
 
 func TestAnthropic_RetriesOnOverloadThenSucceeds(t *testing.T) {
+	t.Parallel()
 	api := newFakeAPI(t,
 		apiReply{status: 529, body: `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`},
 		okReply(anthropicTextReply))
