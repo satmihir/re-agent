@@ -102,6 +102,25 @@ func TestJev_InvalidArgumentsNeverSend(t *testing.T) {
 	}
 }
 
+func TestJev_DecideAcceptsRoundedProbabilities(t *testing.T) {
+	for _, test := range []struct {
+		name, fast, capable, high string
+	}{
+		{"sum 0.99", "0.33", "0.33", "0.33"},
+		{"sum 1.01", "0.34", "0.34", "0.33"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reply := fmt.Sprintf(`{"model":"jev-1.13.0","answers":{"route":{"type":"choice","choice":"fast","confidence":0.33,"probabilities":{"fast":%s,"capable":%s,"high":%s}}},"usage":{"input_tokens":1,"output_tokens":1}}`, test.fast, test.capable, test.high)
+			api := newFakeAPI(t, okReply(reply))
+			routes := append(jevTestRoutes(), jevRoute{ID: "high", Model: "gpt-6-sol", Effort: "high", Description: "Difficult reasoning."})
+			decision, err := newJevClient("fake", api.server.URL, api.server.Client()).decide(context.Background(), "synthetic task", routes)
+			if err != nil || decision.Route != "fast" || len(decision.Probabilities) != 3 || decision.Probabilities["high"] != 0.33 {
+				t.Fatalf("rounded decision: %+v, %v", decision, err)
+			}
+		})
+	}
+}
+
 func TestJev_ModelWithoutEffortOmitsItFromPair(t *testing.T) {
 	api := newFakeAPI(t, okReply(jevReply))
 	routes := jevTestRoutes()
