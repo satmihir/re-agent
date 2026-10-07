@@ -72,6 +72,7 @@ func TestShell_OutputTrimmedToResultBudget(t *testing.T) {
 }
 
 func TestShell_CancelRecordsInterrupted(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	started := time.Now()
@@ -87,6 +88,7 @@ func TestShell_CancelRecordsInterrupted(t *testing.T) {
 // A background job that keeps the output open does not make the command
 // itself look unfinished.
 func TestShell_BackgroundJobDoesNotHoldTheCommand(t *testing.T) {
+	t.Parallel()
 	got, err := runShellCommand(context.Background(), t.TempDir(), "(sleep 3 &); echo started", &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)

@@ -166,6 +166,7 @@ func TestExec_MissingExecutableAppliesNothing(t *testing.T) {
 // The central honesty rule: a timed-out command may have changed anything, and
 // the outcome says so rather than implying a clean state (v0 §9).
 func TestExec_TimeoutLeavesUncertainEffects(t *testing.T) {
+	t.Parallel()
 	ws := testWorkspace(t, nil)
 	outcome := runTool(t, execTool{ws: ws}, execArgsJSON(shell("touch marker; sleep 30"), ".", 300))
 
@@ -271,6 +272,7 @@ func TestExec_InvalidArguments(t *testing.T) {
 }
 
 func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
+	t.Parallel()
 	ws := testWorkspace(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -291,6 +293,7 @@ func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
 // An uncertain effect stops the run: no further tool runs, and no next model
 // step. This is v0's one uncertain-effect rule (v0 §9).
 func TestLoop_UncertainEffectStopsTheRun(t *testing.T) {
+	t.Parallel()
 	ws := testWorkspace(t, nil)
 	runs := 0
 	registry, err := NewRegistry(Mode{},

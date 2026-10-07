@@ -79,6 +79,7 @@ type jevDecision struct {
 type jevClient struct {
 	key, endpoint string
 	client        *http.Client
+	deadline      time.Duration
 }
 
 func newJevClient(key, endpoint string, client *http.Client) *jevClient {
@@ -91,13 +92,13 @@ func newJevClient(key, endpoint string, client *http.Client) *jevClient {
 	// Redirects must not forward the key, even when a caller supplies the client.
 	copy := *client
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &jevClient{key: key, endpoint: endpoint, client: &copy}
+	return &jevClient{key: key, endpoint: endpoint, client: &copy, deadline: jevDeadline}
 }
 
 func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute) (decision jevDecision, err error) {
 	started := time.Now()
 	defer func() { decision.DurationMS = time.Since(started).Milliseconds() }()
-	ctx, cancel := context.WithTimeout(ctx, jevDeadline)
+	ctx, cancel := context.WithTimeout(ctx, j.deadline)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return decision, err
@@ -206,7 +207,7 @@ func (j *jevClient) post(ctx context.Context, body []byte, decision *jevDecision
 func (j *jevClient) choose(ctx context.Context, state string, questions map[string]jevQuestion) (_ map[string]jevAnswer, decision jevDecision, _ error) {
 	started := time.Now()
 	defer func() { decision.DurationMS = time.Since(started).Milliseconds() }()
-	ctx, cancel := context.WithTimeout(ctx, jevDeadline)
+	ctx, cancel := context.WithTimeout(ctx, j.deadline)
 	defer cancel()
 	body, err := json.Marshal(jevRequest{State: state, Model: jevModel, Questions: questions})
 	if err != nil {

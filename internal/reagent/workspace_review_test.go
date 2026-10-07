@@ -63,6 +63,7 @@ func TestWorkspaceReview_WithheldNamesIgnoreCase(t *testing.T) {
 }
 
 func TestWorkspaceReview_SwitchDoesNotRunFSMonitor(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		mode Mode
@@ -71,6 +72,7 @@ func TestWorkspaceReview_SwitchDoesNotRunFSMonitor(t *testing.T) {
 		{"read-only", Mode{ReadOnly: true}, false}, {"plan", Mode{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			target := filepath.Join(root, "vendor", "lib")
 			if err := os.MkdirAll(target, 0o700); err != nil {
