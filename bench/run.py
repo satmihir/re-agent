@@ -11,6 +11,19 @@ proxy. re:agent runs inside a container, where localhost is the container
 itself, so a localhost proxy URL reaches it as host.docker.internal:
 
     python bench/run.py --label NAME [--ref REF] [--model M] [--effort E] [--repeat N] [INSTANCE_ID ...]
+    python bench/run.py --agent codex --codex-dir DIR --label NAME [--model M] [--effort E] ...
+
+--agent codex runs the Codex CLI in the same containers instead, for
+comparison: DIR holds a static Linux build of Codex for the Docker kernel's
+architecture (bin/codex and bin/codex-code-mode-host from the @openai/codex
+npm package's linux build, a static codex-path/rg, and its package.json).
+Codex's code-mode host does not survive emulation, so on an arm64 host use
+the linux-arm64 build; the amd64 images still run it natively. It needs API_PROXY_URL, gets its own CODEX_HOME with the
+model's metadata from ~/.codex/models_cache.json, reads no AGENTS.md, and
+runs without its sandbox: the disposable container is the sandbox, as it is
+for re:agent. Turns, calls, and tokens come from its exec events and rollout.
+--max-steps 0 and --max-tool-calls 0 lift re:agent's budgets so the two
+agents run under the same --task-timeout.
 
 With no instance ids, every task in bench/tasks.txt runs. --ref builds re:agent
 from that commit instead of the working tree, which is how two versions are
@@ -21,6 +34,8 @@ the swebench package.
 
 import argparse
 import collections
+import glob
+import importlib.util
 import json
 import os
 import re
@@ -72,9 +87,17 @@ def read_tasks():
         return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
 
+def docker_arch():
+    """The Docker kernel's architecture. Static binaries for it run natively even
+    in the amd64 task images, which an arm64 host otherwise emulates."""
+    arch = subprocess.run(["docker", "info", "--format", "{{.Architecture}}"],
+                          capture_output=True, text=True).stdout.strip()
+    return {"aarch64": "arm64", "arm64": "arm64"}.get(arch, "amd64")
+
+
 def build(ref, binary):
     """Builds re:agent for the containers, from a commit or the working tree."""
-    env = {**os.environ, "GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0"}
+    env = {**os.environ, "GOOS": "linux", "GOARCH": docker_arch(), "CGO_ENABLED": "0"}
     if ref is None:
         sh("go", "build", "-o", binary, "./cmd/reagent", cwd=ROOT, env=env)
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
@@ -90,7 +113,52 @@ def build(ref, binary):
         sh("git", "worktree", "remove", "--force", source, cwd=ROOT)
 
 
-def run_task(task, binary, model, effort, out):
+def codex_catalog(model, path):
+    """Codex's own metadata for the model, from the catalog the Codex CLI caches."""
+    with open(os.path.expanduser("~/.codex/models_cache.json")) as f:
+        models = [m for m in json.load(f)["models"] if m.get("slug") == model]
+    if not models:
+        sys.exit(f"{model} is not in ~/.codex/models_cache.json; run the Codex CLI once to refresh it")
+    with open(path, "w") as f:
+        json.dump({"models": models}, f)
+
+
+def codex_command(model, effort, prompt):
+    """codex exec inside the container, through the proxy, with no sandbox of its own."""
+    base = container_proxy_url(os.environ["API_PROXY_URL"])
+    if not base.endswith("/responses"):
+        sys.exit("--agent codex needs API_PROXY_URL set to a .../v1/responses endpoint")
+    base = base[:-len("/responses")]
+    command = ["env", "CODEX_HOME=/root/.codex-bench", "PATH=/opt/codex/bin:/opt/codex/codex-path:" + PATH,
+               "codex", "exec", "--json", "--ignore-user-config", "--skip-git-repo-check",
+               "--dangerously-bypass-approvals-and-sandbox", "-C", "/testbed", "-m", model,
+               "-c", "project_doc_max_bytes=0", "-c", 'model_catalog_json="/root/.codex-bench/models.json"',
+               "-c", 'model_provider="bench"', "-c", 'model_providers.bench.name="bench proxy"',
+               "-c", f'model_providers.bench.base_url="{base}"', "-c", 'model_providers.bench.wire_api="responses"']
+    if effort:
+        command += ["-c", f'model_reasoning_effort="{effort}"']
+    return command + [prompt]
+
+
+def summarize_codex(out):
+    """The git benchmark's Codex accounting, reused on this task's events and rollout."""
+    spec = importlib.util.spec_from_file_location("git_bench", os.path.join(BENCH, "git", "run.py"))
+    git_bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(git_bench)
+    with open(os.path.join(out, "events.jsonl")) as f:
+        events = f.read()
+    rollouts = glob.glob(os.path.join(out, "codex-home", "sessions", "**", "rollout-*.jsonl"), recursive=True)
+    _, s = git_bench.summarize_codex(events, rollouts[0] if rollouts else None)
+    calls = collections.Counter()
+    for command in s["commands"]:
+        calls["exec" if command.startswith("/bin/") or " -lc " in command else command] += 1
+    return {"status": s["status"], "steps": s["turns"], "tool_calls": s["tool_calls"],
+            "input_tokens": s["input_tokens"], "cached_input_tokens": s["cached_input_tokens"],
+            "output_tokens": s["output_tokens"], "reasoning_tokens": s["reasoning_tokens"],
+            "failed_calls": s["failed_calls"], "calls_by_tool": dict(calls)}
+
+
+def run_task(task, binary, model, effort, out, agent="reagent", codex_dir=None, limits=(50, 50), timeout=1800):
     """Runs one task in a fresh container and keeps its reply, trace, and diff."""
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(BENCH, "prompt.txt")) as f:
@@ -98,26 +166,44 @@ def run_task(task, binary, model, effort, out):
     with open(os.path.join(out, "prompt.md"), "w") as f:
         f.write(prompt)
 
-    name = "reagent-bench-" + task["instance_id"].replace("__", "-")
+    # Unique per run, so passes running side by side never remove each other's containers.
+    label = os.path.basename(os.path.dirname(out))
+    name = re.sub(r"[^a-zA-Z0-9_.-]", "-", f"bench-{agent}-{label}-" + task["instance_id"].replace("__", "-"))
     subprocess.run(["docker", "rm", "-f", name], capture_output=True)
     sh("docker", "run", "-d", "--platform", "linux/amd64", "--name", name, task["image"],
        "sleep", "infinity", stdout=subprocess.DEVNULL)
     try:
-        sh("docker", "cp", binary, f"{name}:/usr/local/bin/reagent")
         sh("docker", "cp", os.path.join(out, "prompt.md"), f"{name}:/tmp/prompt.md")
+        if agent == "codex":
+            sh("docker", "cp", codex_dir, f"{name}:/opt/codex")
+            sh("docker", "exec", name, "mkdir", "-p", "/root/.codex-bench")
+            catalog = os.path.join(out, "models.json")
+            codex_catalog(model, catalog)
+            sh("docker", "cp", catalog, f"{name}:/root/.codex-bench/models.json")
+            command = ["docker", "exec", "-w", "/testbed", name, *codex_command(model, effort, prompt)]
+        else:
+            sh("docker", "cp", binary, f"{name}:/usr/local/bin/reagent")
+            command = ["docker", "exec", "-e", "OPENAI_API_KEY", *proxy_env(), "-e", "API_PROXY_PROVIDER",
+                       "-e", "PATH=" + PATH, "-w", "/testbed", name,
+                       "reagent", "run", "--model", model, "--reasoning-effort", effort, "--workspace", "/testbed",
+                       "--max-steps", str(limits[0]), "--max-tool-calls", str(limits[1]),
+                       "--trace-file", "/tmp/events.jsonl", "--prompt-file", "/tmp/prompt.md"]
         started = time.time()
-        with open(os.path.join(out, "reply.md"), "w") as reply, open(os.path.join(out, "progress.txt"), "w") as progress:
-            code = subprocess.run(
-                ["docker", "exec", "-e", "OPENAI_API_KEY", *proxy_env(), "-e", "API_PROXY_PROVIDER",
-                 "-e", "PATH=" + PATH, "-w", "/testbed", name,
-                 "reagent", "run", "--model", model, "--reasoning-effort", effort, "--workspace", "/testbed",
-                 "--allow-write", "--allow-exec",
-                 "--max-steps", str(MAX_STEPS), "--max-tool-calls", str(MAX_TOOL_CALLS),
-                 "--trace-file", "/tmp/events.jsonl", "--prompt-file", "/tmp/prompt.md"],
-                stdout=reply, stderr=progress).returncode
+        # Codex writes its JSON events to stdout; re:agent writes its reply there.
+        stdout_name = "events.jsonl" if agent == "codex" else "reply.md"
+        with open(os.path.join(out, stdout_name), "w") as stdout, open(os.path.join(out, "progress.txt"), "w") as progress:
+            try:
+                code = subprocess.run(command, stdout=stdout, stderr=progress, stdin=subprocess.DEVNULL,
+                                      timeout=timeout).returncode
+            except subprocess.TimeoutExpired:
+                code = "timeout"
         elapsed = time.time() - started
-        subprocess.run(["docker", "cp", f"{name}:/tmp/events.jsonl", os.path.join(out, "events.jsonl")],
-                       capture_output=True)
+        if agent == "codex":
+            subprocess.run(["docker", "cp", f"{name}:/root/.codex-bench", os.path.join(out, "codex-home")],
+                           capture_output=True)
+        else:
+            subprocess.run(["docker", "cp", f"{name}:/tmp/events.jsonl", os.path.join(out, "events.jsonl")],
+                           capture_output=True)
         diff = subprocess.run(["docker", "exec", name, "git", "-C", "/testbed", "diff"],
                               capture_output=True, text=True, check=True).stdout
     finally:
@@ -282,7 +368,7 @@ def summarize_trace(path):
     return summary
 
 
-def score(predictions, label, out):
+def score(predictions, label, out, agent="reagent"):
     """Scores every non-empty patch with the official harness."""
     ids = [p["instance_id"] for p in predictions if p["model_patch"]]
     if not ids:
@@ -293,11 +379,12 @@ def score(predictions, label, out):
             f.write(json.dumps(p) + "\n")
     sh(sys.executable, "-m", "swebench.harness.run_evaluation", "-d", DATASET, "-p", path,
        "-i", *ids, "-id", label, "--max_workers", "1", "--report_dir", out, cwd=out)
-    with open(os.path.join(out, f"reagent.{label}.json")) as f:
+    with open(os.path.join(out, f"{agent}.{label}.json")) as f:
         return set(json.load(f).get("resolved_ids", []))
 
 
-def run_label(label, ids, rows, binary, model, effort, commit, show_label):
+def run_label(label, ids, rows, binary, model, effort, commit, show_label, agent="reagent", codex_dir=None,
+              limits=(MAX_STEPS, MAX_TOOL_CALLS), timeout=1800):
     """Runs and scores one labeled pass over the requested tasks."""
     out = os.path.join(BENCH, "out", label)
     os.makedirs(out, exist_ok=True)
@@ -306,20 +393,21 @@ def run_label(label, ids, rows, binary, model, effort, commit, show_label):
     for instance_id in ids:
         print(f"== {prefix}{instance_id}", flush=True)
         task_out = os.path.join(out, instance_id)
-        ran = run_task(rows[instance_id], binary, model, effort, task_out)
+        ran = run_task(rows[instance_id], binary, model, effort, task_out, agent, codex_dir, limits, timeout)
+        summary = summarize_codex(task_out) if agent == "codex" else summarize_trace(os.path.join(task_out, "events.jsonl"))
         results[instance_id] = {"exit_code": ran["exit_code"], "seconds": ran["seconds"],
-                                "patch_lines": ran["patch"].count("\n"),
-                                **summarize_trace(os.path.join(task_out, "events.jsonl"))}
-        predictions.append({"instance_id": instance_id, "model_name_or_path": "reagent",
+                                "patch_lines": ran["patch"].count("\n"), **summary}
+        predictions.append({"instance_id": instance_id, "model_name_or_path": agent,
                             "model_patch": ran["patch"]})
         print(json.dumps(results[instance_id], indent=2), flush=True)
 
-    resolved = score(predictions, label, out)
+    resolved = score(predictions, label, out, agent)
     for instance_id, result in results.items():
         result["resolved"] = instance_id in resolved
     with open(os.path.join(out, "summary.json"), "w") as f:
-        json.dump({"label": label, "commit": commit, "model": model, "effort": effort,
-                   "max_steps": MAX_STEPS, "max_tool_calls": MAX_TOOL_CALLS, "tasks": results}, f, indent=2)
+        json.dump({"label": label, "agent": agent, "commit": commit, "model": model, "effort": effort,
+                   "max_steps": limits[0], "max_tool_calls": limits[1], "task_timeout": timeout,
+                   "tasks": results}, f, indent=2)
     print(f"resolved {len(resolved)} of {len(ids)}; summary in {os.path.relpath(out, ROOT)}/summary.json")
 
 
@@ -334,8 +422,15 @@ def main():
                         help="reasoning effort to request; auto uses re:agent's catalog default for the model")
     parser.add_argument("--repeat", type=positive_int, default=1, metavar="N",
                         help="run the task list N times (default: 1)")
+    parser.add_argument("--agent", choices=("reagent", "codex"), default="reagent")
+    parser.add_argument("--codex-dir", help="Codex's unpacked Linux x86-64 build, for --agent codex")
+    parser.add_argument("--max-steps", type=int, default=MAX_STEPS, help="re:agent's step budget; 0 lifts it")
+    parser.add_argument("--max-tool-calls", type=int, default=MAX_TOOL_CALLS, help="re:agent's tool-call budget; 0 lifts it")
+    parser.add_argument("--task-timeout", type=positive_int, default=1800, metavar="SECONDS",
+                        help="wall-clock limit for one task (default: 1800)")
     parser.add_argument("ids", nargs="*", help="instance ids; defaults to bench/tasks.txt")
-    args = parser.parse_args()
+    # Intermixed, so instance ids may follow the options.
+    args = parser.parse_intermixed_args()
     if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("API_PROXY_URL"):
         sys.exit("set OPENAI_API_KEY, or API_PROXY_URL and API_PROXY_PROVIDER")
 
@@ -352,9 +447,20 @@ def main():
     build_out = os.path.join(BENCH, "out", labels[0])
     os.makedirs(build_out, exist_ok=True)
     binary = os.path.join(build_out, "reagent")
-    commit = build(args.ref, binary)
+    if args.agent == "codex":
+        if not args.codex_dir or not os.path.exists(os.path.join(args.codex_dir, "bin", "codex")):
+            sys.exit("--agent codex needs --codex-dir with bin/codex")
+        package = os.path.join(args.codex_dir, "package.json")
+        try:
+            with open(package) as f:
+                commit = "codex " + json.load(f)["version"]
+        except (OSError, ValueError, KeyError):
+            commit = "codex"
+    else:
+        commit = build(args.ref, binary)
     for label in labels:
-        run_label(label, ids, rows, binary, args.model, args.effort, commit, len(labels) > 1)
+        run_label(label, ids, rows, binary, args.model, args.effort, commit, len(labels) > 1, args.agent,
+                  args.codex_dir, (args.max_steps, args.max_tool_calls), args.task_timeout)
 
 
 if __name__ == "__main__":
