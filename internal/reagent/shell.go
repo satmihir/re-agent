@@ -43,7 +43,7 @@ func runShellCommand(ctx context.Context, dir, command string, live io.Writer) (
 	if runErr != nil && !errors.As(runErr, &exitErr) && !errors.Is(runErr, exec.ErrWaitDelay) {
 		return ShellCommand{}, runErr
 	}
-	record.ExitCode, record.Signal = exitStatus(exitErr)
+	record.ExitCode, record.Signal = exitStatus(process.ProcessState)
 	outputText := captured.report(&record.Output, &record.OutputBytesSeen, &record.OutputTruncated, &record.EncodingReplaced)
 	record.trimToResultBudget(&outputText)
 	return record, nil

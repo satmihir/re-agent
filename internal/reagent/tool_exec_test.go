@@ -163,6 +163,21 @@ func TestExec_MissingExecutableAppliesNothing(t *testing.T) {
 	}
 }
 
+func TestExec_ProcessStartFailureAppliesNothing(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"not-executable": "no"})
+	outcome := runTool(t, NewExecTool(ws), `{"argv":["./not-executable"],"cwd":"."}`)
+	if outcome.Code != "process_start_failed" || outcome.Effect != EffectNone {
+		t.Fatalf("got %s (%s) effect=%s", outcome.Code, outcome.Message, outcome.Effect)
+	}
+	var got execResult
+	if err := json.Unmarshal(outcome.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ExitCode != nil || got.Signal != nil {
+		t.Fatalf("process never started: %+v", got)
+	}
+}
+
 // The central honesty rule: a timed-out command may have changed anything, and
 // the outcome says so rather than implying a clean state (v0 §9).
 func TestExec_TimeoutLeavesUncertainEffects(t *testing.T) {
@@ -183,6 +198,46 @@ func TestExec_TimeoutLeavesUncertainEffects(t *testing.T) {
 	}
 	if got.TerminationReason == nil || *got.TerminationReason != "timeout" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestExec_InheritedPipeWaitFailureIsNotStartFailure(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	// The shell exits successfully, while its child holds stdout open and plans a later write.
+	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell("(sleep 2; touch late) & exit 0"), ".", 5000))
+	var got execResult
+	if err := json.Unmarshal(outcome.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Effect != EffectUnknown || outcome.OK || outcome.Code == "process_start_failed" {
+		t.Fatalf("got code=%s effect=%s data=%+v", outcome.Code, outcome.Effect, got)
+	}
+	if got.ExitCode == nil || *got.ExitCode != 0 || !got.StdoutTruncated || !got.StderrTruncated {
+		t.Fatalf("the shell exited but output was incomplete: %+v", got)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
+		t.Fatalf("descendant survived wait failure: %v", err)
+	}
+}
+
+func TestLoop_InheritedPipeWaitFailureStopsTheRun(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	runs := 0
+	registry, err := NewRegistry(Mode{}, execTool{ws: ws}, countingTool{runs: &runs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Model: "test", Registry: registry, WorkspacePath: ws.Root(), MaxSteps: 20, MaxToolCalls: 40}
+	run, result := runScript(t, cfg,
+		turn(callBlock("call_1", "exec", execArgsJSON(shell("sleep 2 & exit 0"), ".", 5000)),
+			callBlock("call_2", "counter", `{}`)),
+		turn(textBlock("unreached")))
+	if result.Status != StatusEffectUnknown || result.Steps != 1 || runs != 0 {
+		t.Fatalf("status=%s steps=%d subsequent calls=%d", result.Status, result.Steps, runs)
+	}
+	if got := results(run); len(got) != 2 || got[1].Outcome.Code != "not_executed" {
+		t.Fatalf("unexpected results: %+v", got)
 	}
 }
 
@@ -271,6 +326,21 @@ func TestExec_InvalidArguments(t *testing.T) {
 	}
 }
 
+func TestExec_TimeoutStopsDescendantDelayedMutation(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, execTool{ws: ws}, execArgsJSON(shell("touch started; (sleep 1; touch late) & sleep 30"), ".", 300))
+	if outcome.Code != "timeout" || outcome.Effect != EffectUnknown {
+		t.Fatalf("got %s (%s) effect=%s", outcome.Code, outcome.Message, outcome.Effect)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Root(), "started")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
+		t.Fatalf("descendant survived timeout: %v", err)
+	}
+}
+
 func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
 	t.Parallel()
 	ws := testWorkspace(t, nil)
@@ -281,12 +351,23 @@ func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
 	}()
 
 	outcome, err := NewExecTool(ws).Execute(ctx,
-		json.RawMessage(execArgsJSON(shell("sleep 30"), ".", 20000)))
+		json.RawMessage(execArgsJSON(shell("(sleep 1; touch late) & sleep 30"), ".", 130000)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if outcome.Code != "cancelled" || outcome.Effect != EffectUnknown {
 		t.Fatalf("got %s (%s) effect=%s", outcome.Code, outcome.Message, outcome.Effect)
+	}
+	var got execResult
+	if err := json.Unmarshal(outcome.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TimeoutMS != 130000 {
+		t.Fatalf("explicit long timeout was capped: %+v", got)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
+		t.Fatalf("descendant survived cancellation: %v", err)
 	}
 }
 
