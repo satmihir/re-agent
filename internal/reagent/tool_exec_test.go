@@ -212,12 +212,38 @@ func TestExec_InheritedPipeWaitFailureIsNotStartFailure(t *testing.T) {
 	if outcome.Effect != EffectUnknown || outcome.OK || outcome.Code == "process_start_failed" {
 		t.Fatalf("got code=%s effect=%s data=%+v", outcome.Code, outcome.Effect, got)
 	}
-	if got.ExitCode == nil || *got.ExitCode != 0 || !got.StdoutTruncated || !got.StderrTruncated {
-		t.Fatalf("the shell exited but output was incomplete: %+v", got)
+	if got.ExitCode == nil || *got.ExitCode != 0 || !got.OutputMayBeIncomplete || got.StdoutTruncated || got.StderrTruncated {
+		t.Fatalf("the shell exited but output may be incomplete without byte trimming: %+v", got)
 	}
 	time.Sleep(1200 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
 		t.Fatalf("descendant survived wait failure: %v", err)
+	}
+}
+
+func TestExec_NonzeroExitWithInheritedPipeLeavesUncertainEffects(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell("(sleep 2; touch late) & exit 3"), ".", 5000))
+	var got execResult
+	if err := json.Unmarshal(outcome.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Code != "descendant_unresolved" || outcome.Effect != EffectUnknown || got.ExitCode == nil || *got.ExitCode != 3 || !got.OutputMayBeIncomplete || got.StdoutTruncated || got.StderrTruncated {
+		t.Fatalf("nonzero leader with live group: code=%s effect=%s data=%+v", outcome.Code, outcome.Effect, got)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
+		t.Fatalf("descendant survived a nonzero exit: %v", err)
+	}
+}
+
+func TestExec_CleanExitWithRedirectedBackgroundChildRemainsOrdinary(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell("sleep 0.3 >/dev/null 2>&1 & exit 0"), ".", 5000))
+	var got execResult
+	data(t, outcome, &got)
+	if outcome.Effect != EffectApplied || got.OutputMayBeIncomplete || got.StdoutTruncated || got.StderrTruncated {
+		t.Fatalf("clean exit with no held pipes: code=%s effect=%s data=%+v", outcome.Code, outcome.Effect, got)
 	}
 }
 

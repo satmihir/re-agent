@@ -60,21 +60,22 @@ type execArgs struct {
 }
 
 type execResult struct {
-	Argv               []string `json:"argv"`
-	ResolvedExecutable string   `json:"resolved_executable"`
-	Cwd                string   `json:"cwd"`
-	ExitCode           *int     `json:"exit_code"`
-	Signal             *string  `json:"signal"`
-	Stdout             string   `json:"stdout"`
-	Stderr             string   `json:"stderr"`
-	StdoutBytesSeen    int      `json:"stdout_bytes_seen"`
-	StderrBytesSeen    int      `json:"stderr_bytes_seen"`
-	StdoutTruncated    bool     `json:"stdout_truncated"`
-	StderrTruncated    bool     `json:"stderr_truncated"`
-	EncodingReplaced   bool     `json:"encoding_replaced"`
-	DurationMS         int64    `json:"duration_ms"`
-	TimeoutMS          int64    `json:"timeout_ms"`
-	TerminationReason  *string  `json:"termination_reason"`
+	Argv                  []string `json:"argv"`
+	ResolvedExecutable    string   `json:"resolved_executable"`
+	Cwd                   string   `json:"cwd"`
+	ExitCode              *int     `json:"exit_code"`
+	Signal                *string  `json:"signal"`
+	Stdout                string   `json:"stdout"`
+	Stderr                string   `json:"stderr"`
+	StdoutBytesSeen       int      `json:"stdout_bytes_seen"`
+	StderrBytesSeen       int      `json:"stderr_bytes_seen"`
+	StdoutTruncated       bool     `json:"stdout_truncated"`
+	StderrTruncated       bool     `json:"stderr_truncated"`
+	OutputMayBeIncomplete bool     `json:"output_may_be_incomplete"`
+	EncodingReplaced      bool     `json:"encoding_replaced"`
+	DurationMS            int64    `json:"duration_ms"`
+	TimeoutMS             int64    `json:"timeout_ms"`
+	TerminationReason     *string  `json:"termination_reason"`
 }
 
 func (execTool) Spec() ToolSpec {
@@ -232,9 +233,18 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	started := time.Now()
 	runErr := command.Run()
 	var exitErr *exec.ExitError
-	if command.Process != nil && runErr != nil && !errors.As(runErr, &exitErr) {
-		// A post-start wait/capture failure must not leave group members running.
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	groupRemaining := false
+	if command.Process != nil {
+		switch {
+		case errors.As(runErr, &exitErr):
+			// WaitDelay can close inherited pipes yet return ExitError instead.
+			groupRemaining = syscall.Kill(-command.Process.Pid, 0) == nil
+			if groupRemaining {
+				_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+			}
+		case runErr != nil:
+			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		}
 	}
 
 	result := execResult{
@@ -244,10 +254,8 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	stdoutText := stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
 	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
-	code, message, effect := classifyRun(parent, deadline, runErr, command.Process != nil, command.ProcessState, &result)
-	if errors.Is(runErr, exec.ErrWaitDelay) {
-		result.StdoutTruncated, result.StderrTruncated = true, true
-	}
+	code, message, effect := classifyRun(parent, deadline, runErr, command.Process != nil, groupRemaining, command.ProcessState, &result)
+	result.OutputMayBeIncomplete = groupRemaining || errors.Is(runErr, exec.ErrWaitDelay)
 	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText, budget)
 
 	outcome, err := workspaceOutcome(result, t.ws.Root())
@@ -273,7 +281,7 @@ func terminateExecGroup(pid int) {
 
 // classifyRun uses actual start and wait state: a post-start I/O failure
 // cannot be mistaken for a no-effect failure to start (v0 §9).
-func classifyRun(parent, deadline context.Context, runErr error, started bool, state *os.ProcessState, result *execResult) (string, string, EffectState) {
+func classifyRun(parent, deadline context.Context, runErr error, started, groupRemaining bool, state *os.ProcessState, result *execResult) (string, string, EffectState) {
 	if !started {
 		if errors.Is(runErr, exec.ErrNotFound) {
 			return "executable_not_found", "no such executable on PATH: " + result.Argv[0], EffectNone
@@ -297,6 +305,8 @@ func classifyRun(parent, deadline context.Context, runErr error, started bool, s
 		return "timeout", "the command exceeded its timeout; its effects are unknown", EffectUnknown
 	case errors.Is(runErr, exec.ErrWaitDelay):
 		return "output_wait_failed", "a descendant held a command output pipe open; output and effects are uncertain", EffectUnknown
+	case groupRemaining:
+		return "descendant_unresolved", "the command exited but descendants remained; output and effects may be incomplete", EffectUnknown
 	case runErr != nil:
 		var exitErr *exec.ExitError
 		if !errors.As(runErr, &exitErr) {
