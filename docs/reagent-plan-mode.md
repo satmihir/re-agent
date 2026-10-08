@@ -1,6 +1,6 @@
 # re:agent — Plan Mode
 
-Status: PM1 merged in #40 and PM2 in #41. PM3 in review in #45.
+Status: PM1 merged in #40, PM2 in #41, and PM3 in #45.
 
 Plan mode is a chat mode in which re:agent explores and plans but changes nothing, until the user says to go ahead. This document specifies it in three milestones, for re:agent to implement one per session with a human reviewing each. The notes for the implementing agent in `docs/reagent-usage-fixes-plan.md` §5 apply here unchanged: its baselines, request comparisons, and report template.
 

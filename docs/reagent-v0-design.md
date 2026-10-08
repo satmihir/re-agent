@@ -27,7 +27,7 @@ Omit exhibits, replay metadata, schema/prompt version bookkeeping and accounting
 
 ## 3. Invariants and loop
 
-Adopt v1 §6.3 invariants I01–I12, I15 and I17 unchanged; tests cite their IDs. `completed` means the model gave a final reply, not that the task succeeded; every summary keeps that distinction.
+Adopt v1 §6.3 invariants I01–I12, I15 and I17 unchanged; tests cite their IDs. `completed` means the model gave a final reply, not that the task succeeded; every summary keeps that distinction. A task is **verified** only when its required checks passed on the stated revision and snapshot, required independent findings were resolved, and no required evidence is missing or skipped; otherwise report the blocker without changing the Run status.
 
 | Deferred | v0 treatment | Restored by |
 |---|---|---|
@@ -159,7 +159,7 @@ Commands: `/plan [text]`, `/model [model] [fresh]`, `/effort [n|name]`, `/auto [
 
 ### 10.4 Context, compaction and model switches
 
-The catalog's context window gives `/status` and `/context` a meter: the last attempted request's input tokens as a share of the window. After a turn at ≥ 60%, chat suggests `/compact`; at ≥ 80% the next message first compacts automatically (never mid-turn, blocked, empty, scripted or with an unknown window). An automatic failure sends the message anyway and disarms auto-compaction until a successful `/compact`, `/reset` or model switch; cancellation stops the message. A session blocked by any `limit_exceeded` is offered only `/reset`, since after a real overflow a compaction request cannot fit; `/compact` remains allowed.
+The catalog's context window gives `/status` and `/context` a meter: the last attempted request's input tokens as a share of the window. After a turn at ≥ 60%, chat suggests `/compact`; at ≥ 80% the next message first compacts automatically (this between-turn trigger never fires mid-turn, blocked, empty, scripted or with an unknown window). An automatic failure sends the message anyway and disarms auto-compaction until a successful `/compact`, `/reset` or model switch; cancellation stops the message. A session blocked by any `limit_exceeded` is offered only `/reset`, since after a real overflow a compaction request cannot fit; `/compact` remains allowed.
 
 **`/compact [-v] [focus]`** (not in a scripted chat) sends one request: unchanged instructions and tools, the current history view, and a temporary user entry with the embedded handoff prompt (plus `Focus:`). The reply must be text only and nonblank. Success replaces the whole history with one summary entry (text, replaced count, model), keeps session ID, seen call IDs and plan mode, clears blocking and the last-request meter, and is sent as user text with a fixed preamble. Any failure leaves the session unchanged. Each attempt has its own trace; the spinner shows progress.
 

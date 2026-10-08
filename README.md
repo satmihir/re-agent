@@ -477,9 +477,10 @@ to appear.
 A test that reaches the internet is a bug. [`AGENTS.md`](AGENTS.md) holds the
 house rules for any agent working here, re:agent included.
 
-**Not yet:** subagents, retrieval, and a sandbox.
+**Not yet:** fresh child runs, within-run continuation, retrieval, and a sandbox.
 A completed run means the model gave a final answer, not that the task was
-done right.
+done right. See the [autonomous tasks plan](docs/reagent-autonomous-tasks-plan.md)
+for proposed longer-task capabilities.
 
 ## License
 
