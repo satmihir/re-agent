@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -215,12 +216,25 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	stdout := &boundedWriter{limit: MaxResultBytes}
 	stderr := &boundedWriter{limit: MaxResultBytes}
 
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		return ToolOutcome{}, fmt.Errorf("create stdout pipe: %w", err)
+	}
+	defer stdoutRead.Close()
+	defer stdoutWrite.Close()
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		return ToolOutcome{}, fmt.Errorf("create stderr pipe: %w", err)
+	}
+	defer stderrRead.Close()
+	defer stderrWrite.Close()
+
 	command := exec.CommandContext(deadline, a.Argv[0], a.Argv[1:]...)
 	command.Dir = dir
 	command.Env = childEnvironment()
 	command.Stdin = bytes.NewReader(nil)
-	command.Stdout = stdout
-	command.Stderr = stderr
+	command.Stdout = stdoutWrite
+	command.Stderr = stderrWrite
 	// v0 §9: descendants in this process group must not outlive cancellation.
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = func() error {
@@ -231,18 +245,43 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	command.WaitDelay = time.Second
 
 	started := time.Now()
-	runErr := command.Run()
-	var exitErr *exec.ExitError
-	groupRemaining := false
-	if command.Process != nil {
-		switch {
-		case errors.As(runErr, &exitErr):
-			// WaitDelay can close inherited pipes yet return ExitError instead.
-			groupRemaining = syscall.Kill(-command.Process.Pid, 0) == nil
-			if groupRemaining {
-				_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-			}
-		case runErr != nil:
+	startErr := command.Start()
+	if startErr == nil {
+		// Our copies of the write ends must close before EOF can be observed.
+		stdoutWrite.Close()
+		stderrWrite.Close()
+	}
+	var stdoutErr, stderrErr error
+	var readers sync.WaitGroup
+	if startErr == nil {
+		readers.Add(2)
+		go func() {
+			defer readers.Done()
+			_, stdoutErr = io.Copy(stdout, stdoutRead)
+		}()
+		go func() {
+			defer readers.Done()
+			_, stderrErr = io.Copy(stderr, stderrRead)
+		}()
+	}
+	runErr := startErr
+	outputIncomplete := false
+	if startErr == nil {
+		runErr = command.Wait()
+		// v0 §9: only a reader still waiting for EOF reveals a held pipe;
+		// process-group probes mistake unreaped Linux zombies for live children.
+		pipeDeadline := time.Now().Add(time.Second)
+		if stdoutRead.SetReadDeadline(pipeDeadline) != nil {
+			outputIncomplete = true
+			stdoutRead.Close()
+		}
+		if stderrRead.SetReadDeadline(pipeDeadline) != nil {
+			outputIncomplete = true
+			stderrRead.Close()
+		}
+		readers.Wait()
+		outputIncomplete = outputIncomplete || stdoutErr != nil || stderrErr != nil
+		if outputIncomplete {
 			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 		}
 	}
@@ -254,8 +293,8 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	stdoutText := stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
 	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
-	code, message, effect := classifyRun(parent, deadline, runErr, command.Process != nil, groupRemaining, command.ProcessState, &result)
-	result.OutputMayBeIncomplete = groupRemaining || errors.Is(runErr, exec.ErrWaitDelay)
+	code, message, effect := classifyRun(parent, deadline, runErr, command.Process != nil, outputIncomplete, command.ProcessState, &result)
+	result.OutputMayBeIncomplete = outputIncomplete
 	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText, budget)
 
 	outcome, err := workspaceOutcome(result, t.ws.Root())
@@ -281,7 +320,7 @@ func terminateExecGroup(pid int) {
 
 // classifyRun uses actual start and wait state: a post-start I/O failure
 // cannot be mistaken for a no-effect failure to start (v0 §9).
-func classifyRun(parent, deadline context.Context, runErr error, started, groupRemaining bool, state *os.ProcessState, result *execResult) (string, string, EffectState) {
+func classifyRun(parent, deadline context.Context, runErr error, started, outputIncomplete bool, state *os.ProcessState, result *execResult) (string, string, EffectState) {
 	if !started {
 		if errors.Is(runErr, exec.ErrNotFound) {
 			return "executable_not_found", "no such executable on PATH: " + result.Argv[0], EffectNone
@@ -303,10 +342,8 @@ func classifyRun(parent, deadline context.Context, runErr error, started, groupR
 		reason := "timeout"
 		result.TerminationReason = &reason
 		return "timeout", "the command exceeded its timeout; its effects are unknown", EffectUnknown
-	case errors.Is(runErr, exec.ErrWaitDelay):
-		return "output_wait_failed", "a descendant held a command output pipe open; output and effects are uncertain", EffectUnknown
-	case groupRemaining:
-		return "descendant_unresolved", "the command exited but descendants remained; output and effects may be incomplete", EffectUnknown
+	case outputIncomplete:
+		return "output_wait_failed", "a command output pipe did not reach EOF; output and effects are uncertain", EffectUnknown
 	case runErr != nil:
 		var exitErr *exec.ExitError
 		if !errors.As(runErr, &exitErr) {

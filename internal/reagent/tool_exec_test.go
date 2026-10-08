@@ -228,12 +228,30 @@ func TestExec_NonzeroExitWithInheritedPipeLeavesUncertainEffects(t *testing.T) {
 	if err := json.Unmarshal(outcome.Data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if outcome.Code != "descendant_unresolved" || outcome.Effect != EffectUnknown || got.ExitCode == nil || *got.ExitCode != 3 || !got.OutputMayBeIncomplete || got.StdoutTruncated || got.StderrTruncated {
+	if outcome.Code != "output_wait_failed" || outcome.Effect != EffectUnknown || got.ExitCode == nil || *got.ExitCode != 3 || !got.OutputMayBeIncomplete || got.StdoutTruncated || got.StderrTruncated {
 		t.Fatalf("nonzero leader with live group: code=%s effect=%s data=%+v", outcome.Code, outcome.Effect, got)
 	}
 	time.Sleep(1200 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
 		t.Fatalf("descendant survived a nonzero exit: %v", err)
+	}
+}
+
+func TestExec_NonzeroExitAfterFinishedBackgroundChildIsOrdinary(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	for _, script := range []string{"true & exit 1", "(exit 0) & exit 1"} {
+		t.Run(script, func(t *testing.T) {
+			for i := 0; i < 10; i++ {
+				outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell(script), ".", 5000))
+				var got execResult
+				if err := json.Unmarshal(outcome.Data, &got); err != nil {
+					t.Fatal(err)
+				}
+				if outcome.Code != "command_failed" || outcome.Effect != EffectApplied || got.OutputMayBeIncomplete || got.ExitCode == nil || *got.ExitCode != 1 {
+					t.Fatalf("iteration %d: code=%s effect=%s data=%+v", i, outcome.Code, outcome.Effect, got)
+				}
+			}
+		})
 	}
 }
 
