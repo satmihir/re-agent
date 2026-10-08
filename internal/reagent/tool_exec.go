@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -60,21 +61,22 @@ type execArgs struct {
 }
 
 type execResult struct {
-	Argv               []string `json:"argv"`
-	ResolvedExecutable string   `json:"resolved_executable"`
-	Cwd                string   `json:"cwd"`
-	ExitCode           *int     `json:"exit_code"`
-	Signal             *string  `json:"signal"`
-	Stdout             string   `json:"stdout"`
-	Stderr             string   `json:"stderr"`
-	StdoutBytesSeen    int      `json:"stdout_bytes_seen"`
-	StderrBytesSeen    int      `json:"stderr_bytes_seen"`
-	StdoutTruncated    bool     `json:"stdout_truncated"`
-	StderrTruncated    bool     `json:"stderr_truncated"`
-	EncodingReplaced   bool     `json:"encoding_replaced"`
-	DurationMS         int64    `json:"duration_ms"`
-	TimeoutMS          int64    `json:"timeout_ms"`
-	TerminationReason  *string  `json:"termination_reason"`
+	Argv                  []string `json:"argv"`
+	ResolvedExecutable    string   `json:"resolved_executable"`
+	Cwd                   string   `json:"cwd"`
+	ExitCode              *int     `json:"exit_code"`
+	Signal                *string  `json:"signal"`
+	Stdout                string   `json:"stdout"`
+	Stderr                string   `json:"stderr"`
+	StdoutBytesSeen       int      `json:"stdout_bytes_seen"`
+	StderrBytesSeen       int      `json:"stderr_bytes_seen"`
+	StdoutTruncated       bool     `json:"stdout_truncated"`
+	StderrTruncated       bool     `json:"stderr_truncated"`
+	OutputMayBeIncomplete bool     `json:"output_may_be_incomplete"`
+	EncodingReplaced      bool     `json:"encoding_replaced"`
+	DurationMS            int64    `json:"duration_ms"`
+	TimeoutMS             int64    `json:"timeout_ms"`
+	TerminationReason     *string  `json:"termination_reason"`
 }
 
 func (execTool) Spec() ToolSpec {
@@ -214,18 +216,76 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	stdout := &boundedWriter{limit: MaxResultBytes}
 	stderr := &boundedWriter{limit: MaxResultBytes}
 
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		return ToolOutcome{}, fmt.Errorf("create stdout pipe: %w", err)
+	}
+	defer stdoutRead.Close()
+	defer stdoutWrite.Close()
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		return ToolOutcome{}, fmt.Errorf("create stderr pipe: %w", err)
+	}
+	defer stderrRead.Close()
+	defer stderrWrite.Close()
+
 	command := exec.CommandContext(deadline, a.Argv[0], a.Argv[1:]...)
 	command.Dir = dir
 	command.Env = childEnvironment()
 	command.Stdin = bytes.NewReader(nil)
-	command.Stdout = stdout
-	command.Stderr = stderr
-	// Without this, an inherited pipe held open by a surviving descendant can
-	// leave the wait unbounded (v0 §9).
+	command.Stdout = stdoutWrite
+	command.Stderr = stderrWrite
+	// v0 §9: descendants in this process group must not outlive cancellation.
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		terminateExecGroup(command.Process.Pid)
+		return nil
+	}
+	// Bound inherited-pipe waits even if a descendant has left the group.
 	command.WaitDelay = time.Second
 
 	started := time.Now()
-	runErr := command.Run()
+	startErr := command.Start()
+	if startErr == nil {
+		// Our copies of the write ends must close before EOF can be observed.
+		stdoutWrite.Close()
+		stderrWrite.Close()
+	}
+	var stdoutErr, stderrErr error
+	var readers sync.WaitGroup
+	if startErr == nil {
+		readers.Add(2)
+		go func() {
+			defer readers.Done()
+			_, stdoutErr = io.Copy(stdout, stdoutRead)
+		}()
+		go func() {
+			defer readers.Done()
+			_, stderrErr = io.Copy(stderr, stderrRead)
+		}()
+	}
+	runErr := startErr
+	outputIncomplete := false
+	if startErr == nil {
+		runErr = command.Wait()
+		// v0 §9: only a reader still waiting for EOF reveals a held pipe;
+		// process-group probes mistake unreaped Linux zombies for live children.
+		pipeDeadline := time.Now().Add(time.Second)
+		if stdoutRead.SetReadDeadline(pipeDeadline) != nil {
+			outputIncomplete = true
+			stdoutRead.Close()
+		}
+		if stderrRead.SetReadDeadline(pipeDeadline) != nil {
+			outputIncomplete = true
+			stderrRead.Close()
+		}
+		readers.Wait()
+		outputIncomplete = outputIncomplete || stdoutErr != nil || stderrErr != nil
+		if outputIncomplete {
+			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		}
+	}
+
 	result := execResult{
 		Argv: a.Argv, ResolvedExecutable: command.Path, Cwd: a.Cwd,
 		DurationMS: time.Since(started).Milliseconds(), TimeoutMS: timeout.Milliseconds(),
@@ -233,7 +293,8 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	stdoutText := stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
 	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
-	code, message, effect := classifyRun(parent, deadline, runErr, &result)
+	code, message, effect := classifyRun(parent, deadline, runErr, command.Process != nil, outputIncomplete, command.ProcessState, &result)
+	result.OutputMayBeIncomplete = outputIncomplete
 	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText, budget)
 
 	outcome, err := workspaceOutcome(result, t.ws.Root())
@@ -248,25 +309,30 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	return outcome, nil
 }
 
-// classifyRun decides what the runtime actually knows (v1 §14.5). A command
-// that never started changed nothing; one that started and was cut short may
-// have changed anything, and saying so is the point.
-func classifyRun(parent, deadline context.Context, runErr error, result *execResult) (string, string, EffectState) {
-	var exitErr *exec.ExitError
-	switch {
-	case errors.Is(runErr, exec.ErrNotFound):
-		return "executable_not_found", "no such executable on PATH: " + result.Argv[0], EffectNone
-	case runErr != nil && !errors.As(runErr, &exitErr):
+// terminateExecGroup bounds cleanup even when a child ignores TERM.
+func terminateExecGroup(pid int) {
+	if syscall.Kill(-pid, syscall.SIGTERM) != nil {
+		return
+	}
+	time.Sleep(200 * time.Millisecond)
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+}
+
+// classifyRun uses actual start and wait state: a post-start I/O failure
+// cannot be mistaken for a no-effect failure to start (v0 §9).
+func classifyRun(parent, deadline context.Context, runErr error, started, outputIncomplete bool, state *os.ProcessState, result *execResult) (string, string, EffectState) {
+	if !started {
+		if errors.Is(runErr, exec.ErrNotFound) {
+			return "executable_not_found", "no such executable on PATH: " + result.Argv[0], EffectNone
+		}
 		if parent.Err() != nil {
-			return "cancelled", "the run was cancelled while the command was starting", EffectNone
+			return "cancelled", "the run was cancelled before the command started", EffectNone
 		}
 		return "process_start_failed", runErr.Error(), EffectNone
 	}
 
-	result.ExitCode, result.Signal = exitStatus(exitErr)
-
-	// Checked before the deadline, because a cancelled run is cancelled even
-	// though its derived deadline also reports an error (v1 §15.3).
+	result.ExitCode, result.Signal = exitStatus(state)
+	// Cancellation takes precedence over the derived timeout (v1 §15.3).
 	switch {
 	case parent.Err() != nil:
 		reason := "cancelled"
@@ -276,22 +342,24 @@ func classifyRun(parent, deadline context.Context, runErr error, result *execRes
 		reason := "timeout"
 		result.TerminationReason = &reason
 		return "timeout", "the command exceeded its timeout; its effects are unknown", EffectUnknown
-	case exitErr != nil:
-		// A completed failure is an ordinary observation: the model can read
-		// the output and choose what to do next.
+	case outputIncomplete:
+		return "output_wait_failed", "a command output pipe did not reach EOF; output and effects are uncertain", EffectUnknown
+	case runErr != nil:
+		var exitErr *exec.ExitError
+		if !errors.As(runErr, &exitErr) {
+			return "command_wait_failed", runErr.Error(), EffectUnknown
+		}
 		return "command_failed", "the command exited with a failure status", EffectApplied
 	}
 	return "ok", "", EffectApplied
 }
 
-// exitStatus reads how a started process ended: an exit code, or the signal
-// that killed it. A nil error is a clean exit.
-func exitStatus(exitErr *exec.ExitError) (*int, *string) {
-	if exitErr == nil {
-		zero := 0
-		return &zero, nil
+// exitStatus reads the observed process state, including a successful exit
+// followed by an output wait error.
+func exitStatus(state *os.ProcessState) (*int, *string) {
+	if state == nil {
+		return nil, nil
 	}
-	state := exitErr.ProcessState
 	if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 		name := status.Signal().String()
 		return nil, &name
