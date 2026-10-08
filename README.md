@@ -479,17 +479,8 @@ house rules for any agent working here, re:agent included.
 
 **Not yet:** fresh child runs, within-run continuation, retrieval, and a sandbox.
 A completed run means the model gave a final answer, not that the task was
-done right. For an explicitly authorized multi-stage repository task, describe
-its objective, preserved behavior, scope, permitted actions, required phases,
-checks and stopping conditions in the prompt; ordinary small tasks do not need
-this ceremony. Record source-grounded requirements and tests, checkpoints, any
-independent review findings and their dispositions, and checks tied to exact
-revisions. Failed or skipped required checks, missing evidence or unresolved
-blocking findings mean the task is not verified. The governing contract is in
-[`docs/reagent-v0-design.md`](docs/reagent-v0-design.md) §3; the Rust challenge's
-specific scope is in [`docs/reagent-rust-challenge.md`](docs/reagent-rust-challenge.md).
-The fresh-review and in-run continuation runtime capabilities are planned,
-not yet implemented.
+done right. See the [autonomous tasks plan](docs/reagent-autonomous-tasks-plan.md)
+for proposed longer-task capabilities.
 
 ## License
 
