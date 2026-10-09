@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -189,7 +190,7 @@ func TestEditFile_NoOpEditRejected(t *testing.T) {
 	outcome := runTool(t, NewEditFileTool(ws), `{"path":"main.go","expected_sha256":"`+before+
 		`","old_text":"timeout","new_text":"timeout"}`)
 	if outcome.OK || outcome.Code != "invalid_arguments" || outcome.Effect != EffectNone ||
-		outcome.Message != "old_text and new_text are the same, so the edit changes nothing" {
+		outcome.Message != "every edit changes nothing" {
 		t.Fatalf("got %+v", outcome)
 	}
 	if digestOfFile(t, ws, "main.go") != before {
@@ -381,7 +382,6 @@ func TestEditFile_MultiEditFailuresAreAtomic(t *testing.T) {
 		{"null edits", "abcde", `"edits":null`, "invalid_arguments", "edits"},
 		{"null old", "abcde", `"old_text":null,"new_text":"x"`, "invalid_arguments", "old_text"},
 		{"both forms with empty old", "abcde", `"old_text":"","new_text":"x","edits":[{"old_text":"a","new_text":"b"}]`, "invalid_arguments", "edits[0]"},
-		{"identity", "abcde", `"edits":[{"old_text":"a","new_text":"b"},{"old_text":"c","new_text":"c"}]`, "invalid_arguments", "edits[1]"},
 		{"empty anchor", "abcde", `"edits":[{"old_text":"a","new_text":"b"},{"old_text":"","new_text":"c"}]`, "invalid_arguments", "edits[1]"},
 		{"missing new", "abcde", `"edits":[{"old_text":"a"}]`, "invalid_arguments", "edits[0]"},
 		{"unknown nested", "abcde", `"edits":[{"old_text":"a","new_text":"b","extra":1}]`, "invalid_arguments", "extra"},
@@ -401,6 +401,63 @@ func TestEditFile_MultiEditFailuresAreAtomic(t *testing.T) {
 			}
 			if fileContent(t, ws, "a.txt") != tc.content || digestOfFile(t, ws, "a.txt") != before {
 				t.Fatal("rejected edit changed bytes")
+			}
+		})
+	}
+}
+
+func TestEditFile_SkipsMatchedIdentityInMixedBatch(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"a.txt": "one two three"})
+	outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+readDigest(t, ws, "a.txt")+`","edits":[{"old_text":"one","new_text":"ONE"},{"old_text":"two","new_text":"two"},{"old_text":"three","new_text":"THREE"}]}`)
+	var got editFileResult
+	data(t, outcome, &got)
+	if content := fileContent(t, ws, "a.txt"); content != "ONE two THREE" || got.Edits != 2 || !reflect.DeepEqual(got.EditCounts, []int{1, 0, 1}) || !reflect.DeepEqual(got.SkippedEdits, []string{"edits[1] changed nothing and was skipped"}) {
+		t.Fatalf("result %+v, content %q", got, content)
+	}
+}
+
+func TestEditFile_IdentityMustMatchUniquelyAndCannotStandAlone(t *testing.T) {
+	for _, tc := range []struct{ name, content, change, code string }{
+		{"all identity", "one two", `"edits":[{"old_text":"one","new_text":"one"},{"old_text":"two","new_text":"two"}]`, "invalid_arguments"},
+		{"missing identity", "one two", `"edits":[{"old_text":"one","new_text":"ONE"},{"old_text":"absent","new_text":"absent"}]`, "edit_not_found"},
+		{"ambiguous identity", "one two two", `"edits":[{"old_text":"one","new_text":"ONE"},{"old_text":"two","new_text":"two"}]`, "ambiguous_edit"},
+		{"ambiguous identity with replace all", "one two two", `"edits":[{"old_text":"one","new_text":"ONE"},{"old_text":"two","new_text":"two","replace_all":true}]`, "ambiguous_edit"},
+		{"identity overlaps change", "abc", `"edits":[{"old_text":"abc","new_text":"abc"},{"old_text":"b","new_text":"B"}]`, "invalid_arguments"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"a.txt": tc.content})
+			outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+readDigest(t, ws, "a.txt")+`",`+tc.change+`}`)
+			if outcome.Code != tc.code || outcome.Effect != EffectNone || fileContent(t, ws, "a.txt") != tc.content {
+				t.Fatalf("got %+v, content %q", outcome, fileContent(t, ws, "a.txt"))
+			}
+		})
+	}
+}
+
+func TestEditFile_ReplaceAllCountsAndBatchOverlap(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, change, want, code string
+		counts                            []int
+	}{
+		{"four identical lines", "func f()\nfunc f()\nfunc f()\nfunc f()\n", `"edits":[{"old_text":"func f()","new_text":"func f(x int)","replace_all":true}]`, strings.Repeat("func f(x int)\n", 4), "", []int{4}},
+		{"non-overlapping occurrences", "aaa", `"edits":[{"old_text":"aa","new_text":"b","replace_all":true}]`, "ba", "", []int{1}},
+		{"zero matches", "abc", `"edits":[{"old_text":"missing","new_text":"x","replace_all":true}]`, "abc", "edit_not_found", nil},
+		{"overlap with other edit", "foo foo", `"edits":[{"old_text":"foo","new_text":"bar","replace_all":true},{"old_text":"o ","new_text":"x"}]`, "foo foo", "invalid_arguments", nil},
+		{"invalid boolean", "abc", `"edits":[{"old_text":"a","new_text":"b","replace_all":null}]`, "abc", "invalid_arguments", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := testWorkspace(t, map[string]string{"a.txt": tc.content})
+			outcome := runTool(t, NewEditFileTool(ws), `{"path":"a.txt","expected_sha256":"`+readDigest(t, ws, "a.txt")+`",`+tc.change+`}`)
+			if tc.code != "" {
+				if outcome.Code != tc.code || outcome.Effect != EffectNone || fileContent(t, ws, "a.txt") != tc.content {
+					t.Fatalf("got %+v, content %q", outcome, fileContent(t, ws, "a.txt"))
+				}
+				return
+			}
+			var got editFileResult
+			data(t, outcome, &got)
+			if content := fileContent(t, ws, "a.txt"); content != tc.want || got.Edits != tc.counts[0] || !reflect.DeepEqual(got.EditCounts, tc.counts) {
+				t.Fatalf("result %+v, content %q", got, content)
 			}
 		})
 	}
@@ -435,10 +492,10 @@ func TestEditFile_MatchErrorsNameLinesWithoutChangingBytes(t *testing.T) {
 		name, content, old, code, message string
 		multi                             bool
 	}{
-		{"two matches", "aa\naa\n", "aa", "ambiguous_edit", "old_text occurs 2 times, at lines 1, 2; include enough surrounding text to make it unique", false},
-		{"three matches", "aa\naa\naa\n", "aa", "ambiguous_edit", "old_text occurs 3 times, at lines 1, 2, 3; include enough surrounding text to make it unique", false},
-		{"twelve matches", strings.Repeat("aa\n", 12), "aa", "ambiguous_edit", "old_text occurs at least 10 times, first at lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; include enough surrounding text to make it unique", false},
-		{"overlapping matches", "aaa\n", "aa", "ambiguous_edit", "old_text occurs 2 times, at lines 1, 1; include enough surrounding text to make it unique", false},
+		{"two matches", "aa\naa\n", "aa", "ambiguous_edit", "old_text occurs 2 times, at lines 1, 2; include enough surrounding text to make it unique or set replace_all if every occurrence should change", false},
+		{"three matches", "aa\naa\naa\n", "aa", "ambiguous_edit", "old_text occurs 3 times, at lines 1, 2, 3; include enough surrounding text to make it unique or set replace_all if every occurrence should change", false},
+		{"twelve matches", strings.Repeat("aa\n", 12), "aa", "ambiguous_edit", "old_text occurs at least 10 times, first at lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10; include enough surrounding text to make it unique or set replace_all if every occurrence should change", false},
+		{"overlapping matches", "aaa\n", "aa", "ambiguous_edit", "old_text occurs 2 times, at lines 1, 1; include enough surrounding text to make it unique or set replace_all if every occurrence should change", false},
 		{"tab difference", "first\nvalue\t= 1\n", "value = 1", "edit_not_found", "old_text does not occur in the file; it matches with different whitespace at line 2 (read that range again and copy it exactly)", false},
 		{"trailing spaces", "first\nvalue  \n", "value\n", "edit_not_found", "old_text does not occur in the file; it matches with different whitespace at line 2 (read that range again and copy it exactly)", false},
 		{"five line cap", strings.Repeat("value\t= 1\n", 7), "value = 1", "edit_not_found", "old_text does not occur in the file; it matches with different whitespace at line 1, 2, 3, 4, 5 (read that range again and copy it exactly)", false},

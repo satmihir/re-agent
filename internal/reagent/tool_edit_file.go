@@ -31,19 +31,22 @@ type editFileArgs struct {
 }
 
 type fileEdit struct {
-	OldText string `json:"old_text"`
-	NewText string `json:"new_text"`
+	OldText    string `json:"old_text"`
+	NewText    string `json:"new_text"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
 type editFileResult struct {
-	Operation     string `json:"operation"`
-	Path          string `json:"path"`
-	Changed       bool   `json:"changed"`
-	BeforeSHA256  string `json:"before_sha256"`
-	AfterSHA256   string `json:"after_sha256"`
-	SizeBytes     int    `json:"size_bytes"`
-	Edits         int    `json:"edits,omitempty"`
-	AppendedBytes int    `json:"appended_bytes,omitempty"`
+	Operation     string   `json:"operation"`
+	Path          string   `json:"path"`
+	Changed       bool     `json:"changed"`
+	BeforeSHA256  string   `json:"before_sha256"`
+	AfterSHA256   string   `json:"after_sha256"`
+	SizeBytes     int      `json:"size_bytes"`
+	Edits         int      `json:"edits,omitempty"`
+	EditCounts    []int    `json:"edit_counts,omitempty"`
+	SkippedEdits  []string `json:"skipped_edits,omitempty"`
+	AppendedBytes int      `json:"appended_bytes,omitempty"`
 }
 
 func (editFileTool) Spec() ToolSpec {
@@ -51,7 +54,8 @@ func (editFileTool) Spec() ToolSpec {
 		Name: "edit_file",
 		Description: "Edit a UTF-8 workspace file that you have read or written in this conversation. Read it again after changes outside these tools (exec or the user). " +
 			"Use edits for several changes to one file in one call, or old_text/new_text for one. " +
-			"Each old_text must occur exactly once in the original snapshot; matches must not overlap. " +
+			"Each old_text must occur exactly once in the original snapshot unless its edit sets replace_all to replace every non-overlapping occurrence (at least one required). Matches across edits must not overlap. " +
+			"An identity edit is checked for a unique match and skipped; all-identity calls are invalid. The result reports replacement counts per edit and skipped edits. " +
 			"Use append_text to add to the end (start with a newline if the file does not end with one). " +
 			"No change publishes on failure. Never edit files through exec scripts: only edit_file checks " +
 			"the digest and matches. Empty new_text deletes a match. Cannot create or delete files; unavailable in read-only mode.",
@@ -64,7 +68,7 @@ func (editFileTool) Spec() ToolSpec {
     "new_text": {"type": "string", "description": "Single edit: replacement text; empty deletes."},
     "edits": {"type": "array", "description": "Several non-overlapping replacements in one call.", "minItems": 1, "items": {
       "type": "object", "properties": {
-        "old_text": {"type": "string"}, "new_text": {"type": "string"}
+        "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean", "description": "Replace every non-overlapping occurrence of old_text."}
       }, "required": ["old_text", "new_text"], "additionalProperties": false
     }},
     "append_text": {"type": "string", "description": "Text added after all replacements; no automatic newline."}
@@ -139,6 +143,9 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 			return failOutcome("edit_not_found", label+message), nil
 		case 1:
 		default:
+			if edit.ReplaceAll && edit.OldText != edit.NewText {
+				break
+			}
 			count := fmt.Sprintf("%d", len(lines))
 			if len(lines) > 10 {
 				count = "at least 10"
@@ -147,12 +154,32 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 			if len(lines) > 10 {
 				location = "first at lines"
 			}
-			return failOutcome("ambiguous_edit", label+fmt.Sprintf("old_text occurs %s times, %s %s; include enough surrounding text to make it unique", count, location, formatLines(lines, 10))), nil
+			return failOutcome("ambiguous_edit", label+fmt.Sprintf("old_text occurs %s times, %s %s; include enough surrounding text to make it unique or set replace_all if every occurrence should change", count, location, formatLines(lines, 10))), nil
 		}
-		start := strings.Index(before, edit.OldText)
-		matches = append(matches, match{start, start + len(edit.OldText), i})
+		for from := 0; ; {
+			at := strings.Index(before[from:], edit.OldText)
+			if at < 0 {
+				break
+			}
+			start := from + at
+			matches = append(matches, match{start, start + len(edit.OldText), i})
+			if !edit.ReplaceAll {
+				break
+			}
+			from = start + len(edit.OldText)
+		}
 	}
 	sort.Slice(matches, func(i, j int) bool { return matches[i].start < matches[j].start })
+	counts := make([]int, len(edits))
+	var skipped []string
+	for i, edit := range edits {
+		if edit.OldText == edit.NewText {
+			skipped = append(skipped, fmt.Sprintf("edits[%d] changed nothing and was skipped", i))
+		}
+	}
+	if len(edits) > 0 && len(skipped) == len(edits) {
+		return failOutcome("invalid_arguments", "every edit changes nothing"), nil
+	}
 	var builder strings.Builder
 	from := 0
 	for j, m := range matches {
@@ -161,6 +188,9 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 		}
 		builder.WriteString(before[from:m.start])
 		builder.WriteString(edits[m.index].NewText)
+		if edits[m.index].OldText != edits[m.index].NewText {
+			counts[m.index]++
+		}
 		from = m.end
 	}
 	builder.WriteString(before[from:])
@@ -182,10 +212,14 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 		return *osOutcome(err), nil
 	}
 
+	replacements := 0
+	for _, count := range counts {
+		replacements += count
+	}
 	result := editFileResult{
 		Operation: "update", Path: path, Changed: true,
 		BeforeSHA256: snap.sha256, AfterSHA256: digestOf(after), SizeBytes: len(after),
-		Edits: len(edits), AppendedBytes: len(appendText),
+		Edits: replacements, EditCounts: counts, SkippedEdits: skipped, AppendedBytes: len(appendText),
 	}
 	outcome, err := workspaceOutcome(result, t.ws.Root())
 	if err != nil {
@@ -222,7 +256,7 @@ func (a editFileArgs) changes(fields map[string]json.RawMessage) ([]fileEdit, st
 		if string(fields["old_text"]) == "null" || string(fields["new_text"]) == "null" {
 			return nil, "", failPtr("invalid_arguments", "old_text and new_text must be strings")
 		}
-		edits = append(edits, fileEdit{a.OldText, a.NewText})
+		edits = append(edits, fileEdit{OldText: a.OldText, NewText: a.NewText})
 	} else if multi {
 		var items []json.RawMessage
 		if json.Unmarshal(a.Edits, &items) != nil || len(items) == 0 {
@@ -230,8 +264,9 @@ func (a editFileArgs) changes(fields map[string]json.RawMessage) ([]fileEdit, st
 		}
 		for i, item := range items {
 			var raw struct {
-				OldText json.RawMessage `json:"old_text"`
-				NewText json.RawMessage `json:"new_text"`
+				OldText    json.RawMessage `json:"old_text"`
+				NewText    json.RawMessage `json:"new_text"`
+				ReplaceAll json.RawMessage `json:"replace_all"`
 			}
 			if bad := decodeArgs(item, &raw); bad != nil {
 				return nil, "", failPtr("invalid_arguments", fmt.Sprintf("edits[%d]: %s", i, bad.Message))
@@ -243,6 +278,9 @@ func (a editFileArgs) changes(fields map[string]json.RawMessage) ([]fileEdit, st
 			if json.Unmarshal(raw.OldText, &edit.OldText) != nil || json.Unmarshal(raw.NewText, &edit.NewText) != nil || string(raw.OldText) == "null" || string(raw.NewText) == "null" {
 				return nil, "", failPtr("invalid_arguments", fmt.Sprintf("edits[%d]: old_text and new_text must be strings", i))
 			}
+			if len(raw.ReplaceAll) != 0 && (json.Unmarshal(raw.ReplaceAll, &edit.ReplaceAll) != nil || string(raw.ReplaceAll) == "null") {
+				return nil, "", failPtr("invalid_arguments", fmt.Sprintf("edits[%d]: replace_all must be a boolean", i))
+			}
 			edits = append(edits, edit)
 		}
 	}
@@ -253,9 +291,6 @@ func (a editFileArgs) changes(fields map[string]json.RawMessage) ([]fileEdit, st
 		}
 		if edit.OldText == "" {
 			return nil, "", failPtr("invalid_arguments", prefix+"old_text must not be empty")
-		}
-		if edit.OldText == edit.NewText {
-			return nil, "", failPtr("invalid_arguments", prefix+"old_text and new_text are the same, so the edit changes nothing")
 		}
 	}
 	return edits, appendText, nil
