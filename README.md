@@ -477,8 +477,9 @@ Pages with **GitHub Actions** as its build and deployment source for the badge
 to appear.
 
 A test that reaches the internet is a bug. For evaluated repository changes,
-use the optional [discovery and offline comparison procedure](docs/reagent-requirement-discovery.md).
-It does not run untrusted candidate code. [`AGENTS.md`](AGENTS.md) holds the
+use the optional [discovery and offline comparison procedure](docs/reagent-requirement-discovery.md)
+and [tests-first review workflow](docs/reagent-task-workflow.md). Neither runs
+untrusted candidate code. [`AGENTS.md`](AGENTS.md) holds the
 house rules for any agent working here, re:agent included.
 
 **Not yet:** retrieval and a sandbox. Fresh child runs and within-run continuation are opt-in.
