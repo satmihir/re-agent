@@ -14,13 +14,17 @@ const summaryPreamble = "Summary of the conversation so far, written when it was
 
 // compactRequest adds a temporary user entry without changing the session history.
 func compactRequest(s *Session, focus, runID string) ModelRequest {
+	return summaryRequest(s.cfg, RequestScope{SessionID: s.ID, RunID: runID, Step: 1}, s.requestHistory(), focus)
+}
+
+func summaryRequest(cfg Config, scope RequestScope, accepted []Entry, focus string) ModelRequest {
 	prompt := compactPrompt
 	if focus = strings.TrimSpace(focus); focus != "" {
 		prompt = strings.TrimSuffix(prompt, "\n") + "\n\nFocus: " + focus
 	}
-	history := append([]Entry(nil), s.requestHistory()...)
+	history := append([]Entry(nil), accepted...)
 	history = append(history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}})
-	return BuildContext(s.cfg, RequestScope{SessionID: s.ID, RunID: runID, Step: 1}, history)
+	return BuildContext(cfg, scope, history)
 }
 
 // compactText accepts only a text-only response and preserves block order.

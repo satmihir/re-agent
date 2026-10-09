@@ -56,12 +56,16 @@ type Run struct {
 	routingStep, routingEntries, routingSwitchStep, routingSwitches int
 	routingOff                                                      bool
 	routingPostSwitch                                               bool
+	// v0 §10.4: the submitted task survives lossy in-run summaries.
+	task        *UserTurn
+	window      int64
+	compactions int
 }
 
 func newRun(session *Session, runID string) *Run {
 	return &Run{
 		session: session, cfg: session.cfg, model: session.model, trace: session.trace,
-		runID: runID, usage: Usage{Known: true},
+		runID: runID, usage: Usage{Known: true}, window: contextWindow(session.cfg.Model),
 	}
 }
 
@@ -95,7 +99,8 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"tools":               r.cfg.Registry.Specs(),
 		"initial_history":     s.history,
 	})
-	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}})
+	r.task = &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}
+	s.history = append(s.history, Entry{Kind: EntryUser, User: r.task})
 	s.pendingSubmission = nil
 	if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 		return r.persistenceFailure(err)
@@ -107,16 +112,23 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.finish(StatusCancelled, "cancelled before the next model request", "")
 		}
 
+		previousModel := r.cfg.Model
 		if err := r.routeNext(ctx); err != nil {
 			r.resumable = true
 			return r.finish(StatusCancelled, "cancelled during routing", "")
 		}
 		r.cfg, r.model = s.cfg, s.model // v0 §10 amendment (2026-10-02): commit the next segment together.
+		if r.cfg.Model != previousModel {
+			r.window = contextWindow(r.cfg.Model)
+		}
+		if status, reason := r.compactWithinRun(ctx); status != "" {
+			return r.finish(status, reason, "")
+		}
 		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 			return r.persistenceFailure(err)
 		}
 		r.steps++
-		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
+		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, r.requestHistory())
 		r.trace.Write("model.requested", r.steps, req)
 
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)

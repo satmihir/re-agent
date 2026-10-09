@@ -1,6 +1,6 @@
 # Autonomous repository tasks — plan for #47–#50
 
-This plan describes proposed capabilities, **not current v0 behavior**. `docs/reagent-v0-design.md` states what is implemented; it still excludes child runs, within-Run continuation and process groups. Implement each issue separately, then amend the governing v0 section in place when that capability lands. Where the change reverses v1 §2.2's subagent or automatic-compaction exclusions, say so explicitly in v0; #50 similarly updates v0 §9 and §14's process-group exclusion. No workflow DSL, general sandbox or Rust-specific mode.
+This plan records issue scope, **not current v0 behavior**. `docs/reagent-v0-design.md` states what is implemented: #50's exec process-group handling is in §9, and within-Run continuation is specified in §10.4 for #49. Child runs remain excluded. Implement each issue separately, amending the governing v0 section in place when the capability lands. Where a change reverses v1 §2.2's subagent or automatic-compaction exclusions, say so explicitly in v0. No workflow DSL, general sandbox or Rust-specific mode.
 
 ## #47: lightweight task contract
 
