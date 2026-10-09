@@ -21,12 +21,16 @@ func readEvents(t *testing.T, path string) []event {
 
 	var events []event
 	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 4096), 2*MaxRequestBytes)
 	for scan.Scan() {
 		var e event
 		if err := json.Unmarshal(scan.Bytes(), &e); err != nil {
 			t.Fatalf("line is not valid JSON: %v", err)
 		}
 		events = append(events, e)
+	}
+	if err := scan.Err(); err != nil {
+		t.Fatalf("read trace: %v", err)
 	}
 	return events
 }

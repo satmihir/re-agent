@@ -78,7 +78,7 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		Launch: launch, Active: s.cfg.WorkspacePath, ReadOnly: s.cfg.Registry.Mode().ReadOnly,
 		Plan: s.planMode, NoProjectInstructions: s.cfg.NoProjectInstructions,
 		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
-		MaxToolCalls: s.cfg.MaxToolCalls, ReportFriction: s.cfg.ReportFriction,
+		MaxToolCalls: s.cfg.MaxToolCalls, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact,
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
 		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
 		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
@@ -120,6 +120,7 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.blocked, s.lastTrace, s.lastRequest = cp.Blocked, cp.LastTrace, cp.LastRequest
 	s.tokensPerByte, s.checkpointUsage = cp.TokensPerByte, cp.Usage
 	s.checkpointAutoCompactOff = cp.AutoCompactOff
+	s.cfg.InRunCompact = cp.InRunCompact
 	s.launchInstructions = cp.LaunchInstructions
 	if cp.Active == cp.Launch {
 		s.launchInstructions = cp.ProjectInstructions

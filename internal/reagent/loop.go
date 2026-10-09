@@ -25,6 +25,7 @@ type Config struct {
 	ProjectInstructions *string
 	MaxSteps            int
 	MaxToolCalls        int
+	InRunCompact        bool
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -56,12 +57,17 @@ type Run struct {
 	routingStep, routingEntries, routingSwitchStep, routingSwitches int
 	routingOff                                                      bool
 	routingPostSwitch                                               bool
+	// v0 §10.4: the submitted task survives lossy in-run summaries.
+	task        *UserTurn
+	window      int64
+	compactions int
+	compactOff  bool
 }
 
 func newRun(session *Session, runID string) *Run {
 	return &Run{
 		session: session, cfg: session.cfg, model: session.model, trace: session.trace,
-		runID: runID, usage: Usage{Known: true},
+		runID: runID, usage: Usage{Known: true}, window: contextWindow(session.cfg.Model),
 	}
 }
 
@@ -90,12 +96,14 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"approved_workspaces": s.approvedWorkspacePaths(),
 		"max_steps":           r.cfg.MaxSteps,
 		"max_tool_calls":      r.cfg.MaxToolCalls,
+		"in_run_compact":      r.cfg.InRunCompact,
 		"prompt":              prompt,
 		"instructions":        instructions(r.cfg),
 		"tools":               r.cfg.Registry.Specs(),
 		"initial_history":     s.history,
 	})
-	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}})
+	r.task = &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}
+	s.history = append(s.history, Entry{Kind: EntryUser, User: r.task})
 	s.pendingSubmission = nil
 	if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 		return r.persistenceFailure(err)
@@ -107,11 +115,18 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.finish(StatusCancelled, "cancelled before the next model request", "")
 		}
 
+		previousModel := r.cfg.Model
 		if err := r.routeNext(ctx); err != nil {
 			r.resumable = true
 			return r.finish(StatusCancelled, "cancelled during routing", "")
 		}
 		r.cfg, r.model = s.cfg, s.model // v0 §10 amendment (2026-10-02): commit the next segment together.
+		if r.cfg.Model != previousModel {
+			r.window = contextWindow(r.cfg.Model)
+		}
+		if status, reason := r.compactWithinRun(ctx); status != "" {
+			return r.finish(status, reason, "")
+		}
 		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 			return r.persistenceFailure(err)
 		}

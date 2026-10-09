@@ -453,6 +453,7 @@ cite them by section, for example `// v0 §6.2`.
 | `--report-friction` | Opt in to trace-only harness reports on `run` or `chat`; off by default. |
 | `--git-do jev\|recipe` | Experimental: offer `git_do`, which carries out a routine git outcome with a fixed recipe and returns proof. `jev` has Jev pick the recipe from the model's English request and needs `TYPESAFE_API_KEY`; `recipe` has the model name it. Off by default. |
 | `--max-steps`, `--max-tool-calls` | Optional budgets per run or chat turn. Both default to `0` (unlimited); positive values set limits. |
+| `--in-run-compact` | Opt in to bounded summaries inside a long run; off by default, including chat. The 40% trigger uses a conservative 1.5× estimate, so it may fire at roughly 27% of measured usage. If skipped, ordinary requests proceed without a new limit. Unknown windows and an overflowing first request cannot be rescued. |
 | `--scripted FILE` | Replay recorded model responses instead of calling a provider. |
 
 To route OpenAI requests through a proxy that speaks the Responses API, set

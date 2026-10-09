@@ -782,3 +782,38 @@ func TestMain_PromptSourceErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestMain_InRunCompactIsExplicitAndTraced(t *testing.T) {
+	replies, err := json.Marshal([]ModelResponse{turn(textBlock("done"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "script.json")
+	if err := os.WriteFile(script, replies, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default_off", true: "opted_in"}[enabled], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "trace.jsonl")
+			args := []string{"run", "--workspace", t.TempDir(), "--scripted", script, "--trace-file", path}
+			if enabled {
+				args = append(args, "--in-run-compact")
+			}
+			args = append(args, "task")
+			var out, errs bytes.Buffer
+			if code := Main(context.Background(), args, strings.NewReader(""), &out, &errs); code != exitOK || out.String() != "done\n" {
+				t.Fatalf("exit %d; out=%q err=%q", code, out.String(), errs.String())
+			}
+			started := readEvents(t, path)[0]
+			if started.Type != "run.started" || started.Data.(map[string]any)["in_run_compact"] != enabled {
+				t.Fatalf("launch option not carried into the run: %+v", started)
+			}
+		})
+	}
+	for _, command := range []string{"run", "chat"} {
+		var out, errs bytes.Buffer
+		if code := Main(context.Background(), []string{"help", command}, strings.NewReader(""), &out, &errs); code != exitOK || !strings.Contains(out.String(), "--in-run-compact") {
+			t.Fatalf("%s help: %s %s", command, out.String(), errs.String())
+		}
+	}
+}
