@@ -13,6 +13,10 @@ type Session struct {
 	ID               string
 	cfg              Config
 	model            Model
+	childModel       func(string, *Trace) Model
+	currentRun       *Run
+	isChild          bool
+	childBudget      *childState
 	trace            *Trace
 	display          *Display
 	progress         io.Writer
@@ -78,7 +82,7 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		Launch: launch, Active: s.cfg.WorkspacePath, ReadOnly: s.cfg.Registry.Mode().ReadOnly,
 		Plan: s.planMode, NoProjectInstructions: s.cfg.NoProjectInstructions,
 		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
-		MaxToolCalls: s.cfg.MaxToolCalls, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact,
+		MaxToolCalls: s.cfg.MaxToolCalls, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, ChildRuns: s.cfg.ChildRuns,
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
 		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
 		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
@@ -121,6 +125,7 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.tokensPerByte, s.checkpointUsage = cp.TokensPerByte, cp.Usage
 	s.checkpointAutoCompactOff = cp.AutoCompactOff
 	s.cfg.InRunCompact = cp.InRunCompact
+	s.cfg.ChildRuns = cp.ChildRuns
 	s.launchInstructions = cp.LaunchInstructions
 	if cp.Active == cp.Launch {
 		s.launchInstructions = cp.ProjectInstructions

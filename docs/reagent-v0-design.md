@@ -38,11 +38,15 @@ Adopt v1 §6.3 invariants I01–I12, I15 and I17 unchanged; tests cite their IDs
 
 Never execute an accepted call twice. No automatic tool retry.
 
-The loop is one function. Budgets are `max_steps` and `max_tool_calls`; both default to unlimited (0). A positive value keeps v1 §7.4's whole-batch and follow-up-step reservation; invalid or denied calls consume the call budget; negative is invalid. HTTP attempts are counted but are not a budget. No response call cap, run deadline or token budget.
+The loop is one function. Budgets are `max_steps` and `max_tool_calls`; both default to unlimited (0). A positive value keeps v1 §7.4's whole-batch and follow-up-step reservation; invalid or denied calls consume the call budget; negative is invalid. HTTP attempts are counted but are not a budget for ordinary runs. No ordinary response call cap, run deadline or token budget. §3's opt-in child bounds are the narrow exception.
 
 Stop reasons stay distinct (I11): completed, refused, cancelled, provider error, incomplete response, protocol error, limit exceeded (budget exhaustion, request size, context overflow, each with its own reason), effect unknown, tool internal error, persistence error (§10.8). Malformed arguments in a valid call envelope are an observation; an incomplete response or duplicate call ID is a protocol stop.
 
 **Session and Run.** A Session holds what outlives a run: fixed configuration, accepted transcript, every accepted call ID (I04 spans the session), workspace grants. A Run holds its ID, counters, effects and trace. Only `completed` and `refused` runs leave the session continuable (v1 §7.5), with one exception: a run that stops with `provider_error` or `cancelled` at a model request, during routing, or before the next request leaves the transcript where that request was built from, so it is marked `resumable` and the next message continues. Every other outcome blocks until `/reset` or a successful `/compact`. `/reset` discards history, seen call IDs, blocking, the meter, the admission rate and usage, and keeps the current model and effort, workspace selection and grants, plan mode and the Auto setting; it never rewrites the old transcript.
+
+**Fresh-context children.** `--child-runs` is off by default, retained on chat resume and fresh model switches, and registers one synchronous read-class `child_run` tool. One parent Run may start at most four one-level children; each gets a fresh Session/Run with six steps, twelve calls, and only read tools over an explicit frozen UTF-8 snapshot. Snapshot manifests contain 1–20 workspace-relative paths with exact SHA-256 digests, at most 4 MiB total; the first accepted capture returns an ID that later children in that Run may reuse to see identical bytes. A child receives fixed embedded/project rules, its own read-only runtime, and exactly one user entry with kind (review or research), task, specification and manifest identity, never the parent transcript, workspace observation, provider-native items, compaction summary, author rationale, siblings, or traces. The child has no workspace switching, exec, writing, Git, routing, compaction or delegation; it cannot expand the parent's mode, plan setting or grants. Files are staged in a private temporary directory and removed after the child exits. Credentials stay in the adapter. Child counts and results are observations, not verified approval.
+
+A parent Run shares an aggregate child allowance of 24 steps, 48 calls, 48 actual HTTP attempts and ten minutes from the first child launch. Admission also stops after 200,000 reported input-plus-output tokens; usage is reported separately and unknown remains unknown. This is not a hard token or cost cap: a reply may exceed the threshold before usage is received. Child attempts are admitted at the transport send boundary; unsuccessful children and denied calls do not reset allowances. A completed child must return one text-only strict JSON report with nonblank summary (≤4 KiB), at most 20 bounded findings (severity, location, description), and verdict `concerns`, `no_findings`, or `inconclusive`. Missing/malformed reports, refusal, failure, cancellation, exhaustion and cleanup failure are not approval. The result includes status/reason, report validity, snapshot and child Session/Run/trace IDs, steps/calls/attempts and usage. Cancellation propagates without restarting work. Runtime `completed` still does not imply task success.
 
 ## 4. Byte limits and file access
 
@@ -101,9 +105,13 @@ Arguments: typed decoding of exactly one JSON object, required fields, unknown-f
 
 At most two HTTP attempts per step. Retry only 429 and 5xx, after a fixed cancellable 500 ms, with the identical body. Transport/read errors, timeouts, other statuses, incomplete or invalid output, and in-stream errors (including overloads) stop the call. Every attempt is traced. The loop never adds another retry.
 
+Children build their first request from only the child user entry and fixed instructions; their own read-only snapshot workspace and project rules are fixed at launch. No parent state is projected into a child model request (§3).
+
 ## 7. JSONL trace
 
 Adopt v1 §§16.2 and 16.4: exact prepared request bytes and exact response bytes, as JSON strings; a non-UTF-8 response is stored with replacement and `body_utf8_replaced: true`. One file per run (or per compaction or switch attempt) under the v1 §16.1 location; `--trace-file` (run) or `--trace-dir` (chat) override it. Files are created exclusively, directories 0700 and files 0600: traces hold prompts and file contents. Creation or write failure warns once and the run continues (I13 deferred).
+
+Each child has a separate best-effort run trace. The parent trace carries the child tool arguments and bounded outcome, never a child history or the child's API request bytes.
 
 Events: `run.started` (resolved nonsecret options, instructions, prompt, tools, the `initial_history` it began from, `build`, active workspace), `model.requested`, `model.accepted`/`model.failed`, `api.attempt.started`/`finished`, `tool.started` (only immediately before a real implementation runs) and `tool.finished`, `run.finished` (with `resumable` when set), `compaction.requested`/`finished`/`failed`, `model.switch.requested`/`finished`/`failed`, and `auto.route`. Tool outcomes, shell records and effect records carry their workspace. No credentials, no child environment, no duplicate copy of the transcript in switch or routing events. Read traces with `jq`; there is no trace reader.
 
@@ -133,11 +141,11 @@ Optional `then` chains up to 7 more argument vectors, run in order in the same `
 
 `reagent run [flags] "prompt"`, `reagent chat [flags]`, `reagent help [run|chat]`, `reagent version`. A flag after a `run` prompt is refused; `--` passes flag-like text.
 
-Shared flags: `--provider` (inferred from the model name; a contradiction is a startup error), `--model`, `--reasoning-effort`, `--auto`, `--workspace`, `--allow-workspace PATH` (repeatable), `--read-only`, `--plan`, `--no-project-instructions`, `--max-steps`, `--max-tool-calls`, `--in-run-compact`, `--recap`, `--report-friction`, `--git-do jev|recipe`, `--scripted FILE`. `run` only: `--prompt-file PATH|-` (one prompt source; only the final newline is removed), `--show-context`, `--trace-file`. `chat` only: `--trace-dir`.
+Shared flags: `--provider` (inferred from the model name; a contradiction is a startup error), `--model`, `--reasoning-effort`, `--auto`, `--workspace`, `--allow-workspace PATH` (repeatable), `--read-only`, `--plan`, `--no-project-instructions`, `--max-steps`, `--max-tool-calls`, `--in-run-compact`, `--child-runs`, `--recap`, `--report-friction`, `--git-do jev|recipe`, `--scripted FILE`. `run` only: `--prompt-file PATH|-` (one prompt source; only the final newline is removed), `--show-context`, `--trace-file`. `chat` only: `--trace-dir`.
 
 Environment: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (read for any non-preview run, since chat can change provider; each is sent only in its own provider's header, never to a proxy), `API_PROXY_URL`/`API_PROXY_PROVIDER`, `TYPESAFE_API_KEY` (read only when Auto or `--git-do jev` is on), `REAGENT_MODEL`, `NO_COLOR`. The binary never reads `.env`; `make live` sources it for the opt-in live tests only.
 
-`--scripted FILE` replays a JSON array of normalized responses through the real dispatcher, registers `echo`, needs no key, and excludes `--provider`, `--model`, `--auto` and `--show-context`. Running out of responses is a protocol error.
+`--scripted FILE` replays a JSON array of normalized responses through the real dispatcher, registers `echo`, needs no key, and excludes `--provider`, `--model`, `--auto`, `--show-context` and `--child-runs`. Running out of responses is a protocol error.
 
 Exit codes: 0 completed or preview; 1 noncompleted run or runtime error; 2 invalid CLI, configuration or input. A trace failure never changes the exit code.
 
@@ -222,6 +230,8 @@ The v0 milestones (mechanical loop, read tools, visible context, live model, one
 `go test ./...` is offline: scripted models, `httptest` servers, temporary directories. A test that reaches the internet is a bug. Adapter tests compare preview bytes with live-path bytes and cover retry, nonretryable failure, timeouts, native continuation and incomplete output. `make check` runs gofmt, vet and tests. `make tty-check` drives the built binary through `bench/tty`'s scenarios in a pseudo-terminal with an independent emulator, checking screens and that output arrives whole; it is offline and required evidence for terminal input or display changes. `make live` runs the opt-in live conformance tests per provider whose key is present; live Jev tests need `REAGENT_JEV_LIVE_TESTS=1` and human approval each time. Never claim a live run that did not happen.
 
 ## 14. Explicitly deferred work
+
+§3's synchronous read-only child runs override v1 §2.2's subagent exclusion only at this boundary. Executable review and a sandbox/container manager remain excluded; a disposable directory alone does not confine `exec`.
 
 | Exclusion | v1 restoration point |
 |---|---|

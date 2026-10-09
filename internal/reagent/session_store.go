@@ -33,6 +33,7 @@ type chatCheckpoint struct {
 	MaxSteps              int             `json:"max_steps"`
 	MaxToolCalls          int             `json:"max_tool_calls"`
 	InRunCompact          bool            `json:"in_run_compact"`
+	ChildRuns             bool            `json:"child_runs"`
 	ReportFriction        bool            `json:"report_friction"`
 	Auto                  bool            `json:"auto"`
 	AutoEnabled           bool            `json:"auto_enabled"`

@@ -118,6 +118,9 @@ func (t *transport) call(ctx context.Context, step int, body []byte, headers map
 		status, raw, err := t.send(ctx, attempt, step, body, headers)
 		switch {
 		case err != nil:
+			if modelErr, ok := err.(*ModelError); ok {
+				return 0, nil, modelErr
+			}
 			if ctx.Err() != nil {
 				return 0, nil, &ModelError{Status: StatusCancelled, Message: "cancelled during a model request"}
 			}
@@ -135,6 +138,12 @@ func (t *transport) call(ctx context.Context, step int, body []byte, headers map
 // send performs one HTTP transmission and records its exact request and
 // response bytes before anything interprets them.
 func (t *transport) send(ctx context.Context, attempt, step int, body []byte, headers map[string]string) (int, []byte, error) {
+	if ctx.Err() != nil {
+		return 0, nil, ctx.Err()
+	}
+	if meter, ok := ctx.Value(childAttemptKey{}).(*childState); ok && !meter.admitAttempt() {
+		return 0, nil, &ModelError{Status: StatusLimitExceeded, Message: "aggregate child HTTP attempts exhausted"}
+	}
 	digest := sha256.Sum256(body)
 	t.trace.Write("api.attempt.started", step, map[string]any{
 		"attempt":        attempt,
