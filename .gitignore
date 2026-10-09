@@ -39,3 +39,6 @@ go.work.sum
 
 # Benchmark output
 /bench/out/
+
+# Python bytecode
+__pycache__/

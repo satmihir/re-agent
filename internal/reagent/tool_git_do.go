@@ -456,7 +456,11 @@ func (r *gitDoRun) snapshot() {
 	// Not trimmed: the first line's leading space is part of its status code.
 	porcelain, _, _ := r.exec([]string{"git", "status", "--porcelain"})
 	for _, line := range strings.Split(porcelain, "\n") {
-		if len(line) > 3 && len(s.Changed) < 50 {
+		if len(line) <= 3 {
+			continue
+		}
+		s.ChangedCount++
+		if len(s.Changed) < 50 {
 			s.Changed = append(s.Changed, line[3:])
 		}
 	}
@@ -486,8 +490,9 @@ func (r *gitDoRun) snapshot() {
 func (r *gitDoRun) decisionSnapshot() gitDoState {
 	s := r.state
 	if len(s.Changed) > 12 {
-		s.ChangedCount = len(s.Changed)
 		s.Changed = s.Changed[:12]
+	} else {
+		s.ChangedCount = 0
 	}
 	s.Recent = append([]string(nil), s.Recent...)
 	for i, line := range s.Recent {

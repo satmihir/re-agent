@@ -295,7 +295,7 @@ func TestGitDo_JevSnapshotStaysSmallWithManyChanges(t *testing.T) {
 			t.Fatalf("commit: %v: %s", err, out)
 		}
 	}
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 120; i++ {
 		name := filepath.Join(ws.Root(), fmt.Sprintf("changed-path-with-a-realistic-name-%02d.txt", i))
 		if err := os.WriteFile(name, []byte("changed\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -309,8 +309,8 @@ func TestGitDo_JevSnapshotStaysSmallWithManyChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("50 paths, 8 long subjects: decision added bytes: %d", len(encoded)+len(`,"decision":`))
-	if !outcome.OK || len(encoded)+len(`,"decision":`) >= 2048 || len(decision.Snapshot.Changed) != 12 || decision.Snapshot.ChangedCount != 50 {
+	t.Logf("120 paths, 8 long subjects: decision added bytes: %d", len(encoded)+len(`,"decision":`))
+	if !outcome.OK || len(encoded)+len(`,"decision":`) >= 2048 || len(decision.Snapshot.Changed) != 12 || decision.Snapshot.ChangedCount != 120 {
 		t.Fatalf("result %v; decision %s", outcome.Code, encoded)
 	}
 	snapshot, err := json.Marshal(decision.Snapshot)
