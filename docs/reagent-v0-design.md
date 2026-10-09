@@ -113,7 +113,7 @@ Adopt v1 §§16.2 and 16.4: exact prepared request bytes and exact response byte
 
 Each child has a separate best-effort run trace. The parent trace carries the child tool arguments and bounded outcome, never a child history or the child's API request bytes.
 
-Events: `run.started` (resolved nonsecret options, instructions, prompt, tools, the `initial_history` it began from, `build`, active workspace), `model.requested`, `model.accepted`/`model.failed`, `api.attempt.started`/`finished`, `tool.started` (only immediately before a real implementation runs) and `tool.finished`, `run.finished` (with `resumable` when set), `compaction.requested`/`finished`/`failed`, `model.switch.requested`/`finished`/`failed`, and `auto.route`. Tool outcomes, shell records and effect records carry their workspace. No credentials, no child environment, no duplicate copy of the transcript in switch or routing events. Read traces with `jq`; there is no trace reader.
+Events: `run.started` (resolved nonsecret options, instructions, prompt, tools, the `initial_history` it began from, `build`, active workspace), `model.requested`, `model.accepted`/`model.failed`, `api.attempt.started`/`finished`, `tool.started` (only immediately before a real implementation runs) and `tool.finished`, `run.finished` (with `resumable` when set), `compaction.requested`/`finished`/`failed`, `model.switch.requested`/`finished`/`failed`, and `auto.route`. Tool outcomes, shell records and effect records carry their workspace. No credentials, no child environment, no duplicate copy of the transcript in switch or routing events. The emitted fields and jq recipes are in `docs/reagent-trace-format.md`. Read traces with `jq`; there is no trace reader.
 
 ## 8. File writers
 

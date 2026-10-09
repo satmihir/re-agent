@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -75,5 +77,43 @@ func TestTrace_WriteFailureWarnsAndRunContinues(t *testing.T) {
 	}
 	if !strings.Contains(warnings.String(), "tracing disabled") {
 		t.Fatalf("no warning was printed: %q", warnings.String())
+	}
+}
+
+// v0 §7: every literal event emitted by the harness needs a documented data shape.
+func TestTrace_WrittenEventTypesDocumented(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate trace test source")
+	}
+	root := filepath.Join(filepath.Dir(file), "../..")
+	doc, err := os.ReadFile(filepath.Join(root, "docs/reagent-trace-format.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "internal/reagent/*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := regexp.MustCompile(`\.Write\("([a-z]+(?:\.[a-z]+)+)"`)
+	found := make(map[string]bool)
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range written.FindAllSubmatch(source, -1) {
+			kind := string(match[1])
+			found[kind] = true
+			if !strings.Contains(string(doc), "| `"+kind+"` |") {
+				t.Errorf("%s writes undocumented event %s", filepath.Base(path), kind)
+			}
+		}
+	}
+	if len(found) == 0 {
+		t.Fatal("found no event writers")
 	}
 }
