@@ -223,6 +223,39 @@ var gitDoEvalCases = []struct {
 	{"agent", "Move my uncommitted changes onto a new branch from the latest main and open a pull request.", "merged_dirty", []string{"ship_pr"}},
 	{"agent", "Commit these changes and open a PR.", "merged_dirty", []string{"ship_pr"}},
 	{"agent", "Push the fix to the pull request.", "merged_dirty", []string{"none"}},
+	// Finished work: the action requested now is only git, regardless of the noun "fix".
+	{"finished", "commit the fix and push", "feature_dirty", []string{"commit_push"}},
+	{"finished", "Commit this fix, push and open a PR", "feature_dirty", []string{"ship_pr"}},
+	{"finished", "commit the changes that fix the review comments, push and open a PR", "feature_dirty", []string{"ship_pr"}},
+	{"finished", "commit the changes that fix the flaky test and push to the pull request", "feature_dirty_pr", []string{"commit_push", "follow_up_pr"}},
+	{"finished", "push the fix and reply on the PR", "feature_dirty_pr", []string{"follow_up_pr"}},
+	{"finished", "commit and push the fix + reply on the pull request", "feature_dirty_pr", []string{"follow_up_pr"}},
+	{"finished", "commit the typo fix and push", "feature_dirty", []string{"commit_push"}},
+	{"finished", "commit the changes that edit the README and push", "feature_dirty", []string{"commit_push"}},
+	// Fresh mixed requests differ in wording from the earlier hand-written examples.
+	{"probe_mixed", "add a README section on --git-do, commit and ship a PR", "feature_dirty", []string{"none"}},
+	{"probe_mixed", "figure out why CI is red, fix it and push the branch", "feature_dirty", []string{"none"}},
+	{"probe_mixed", "follow_up_pr: address the review comments, commit and push to the PR", "feature_dirty_pr", []string{"none"}},
+	{"probe_mixed", "address the review comments, then commit and push to the PR", "feature_dirty_pr", []string{"none"}},
+	{"probe_mixed", "write a new test for this bug, commit and open a PR", "feature_dirty", []string{"none"}},
+	{"probe_mixed", "investigate the flaky build and post the fix on the PR", "feature_dirty_pr", []string{"none"}},
+	{"probe_mixed", "update the design document, then push the branch", "feature_dirty", []string{"none"}},
+	{"probe_mixed", "run the failing suite again, correct the bug, and open a PR", "feature_dirty", []string{"none"}},
+	{"probe_mixed", "make the implementation work before committing it", "feature_dirty", []string{"none"}},
+	{"probe_mixed", "review the issue and code the solution, then publish a PR", "feature_dirty", []string{"none"}},
+	// The name must not prime Jev; compare the semantic request instead.
+	{"prefix", "rebase_push: push my local commits to the remote branch", "feature_ahead", []string{"commit_push"}},
+	{"prefix", "amend: commit these changes as a new commit", "local_dirty", []string{"commit"}},
+	{"prefix", "rebase_push: commit these review fixes and push them to the pull request", "feature_dirty_pr", []string{"commit_push", "follow_up_pr"}},
+	{"prefix", "commit_push: commit these changes, push the branch and open a pull request for review", "feature_dirty", []string{"ship_pr"}},
+	{"prefix", "commit: push my latest committed work to the branch", "feature_ahead", []string{"commit_push"}},
+	{"prefix", "ship_pr: summarize what this branch changes", "feature_ahead", []string{"explain_branch"}},
+	{"prefix", "new_branch: show comments on pull request #12", "feature_dirty_pr", []string{"pr_status"}},
+	{"prefix", "revert_pr: discard my uncommitted edits", "feature_dirty", []string{"none"}},
+	{"prefix", "commit_push: commit these changes and push the branch", "feature_dirty", []string{"commit_push"}},
+	{"prefix", "ship_pr: commit this change and open a pull request", "feature_dirty", []string{"ship_pr"}},
+	{"prefix", "follow_up_pr: commit my completed review changes, push and reply on PR #12", "feature_dirty_pr", []string{"follow_up_pr"}},
+	{"prefix", "rebase_push: rebase the branch on the latest main and update the remote", "feature_ahead", []string{"rebase_push"}},
 }
 
 type gitDoEvalCase struct {
@@ -394,11 +427,11 @@ func gitDoEvalFinding(key string, c gitDoEvalCase, repeat int, result gitDoResul
 			choice = result.Recipe
 		}
 		threshold := result.Decision.Threshold
-		if result.Recipe == "more" {
+		if result.Decision.DeclinedBy == "scope" {
 			threshold = gitDoThresholdFor(choice)
 			if result.Decision.NamedRecipe != "" {
 				threshold = gitDoDisagreeThreshold
-				if result.Decision.NamedAgreed != nil && *result.Decision.NamedAgreed {
+				if result.Decision.NamedAgreed != nil && *result.Decision.NamedAgreed && choice != "rebase_push" && choice != "revert_pr" {
 					threshold = gitDoReadThreshold
 				}
 			}
