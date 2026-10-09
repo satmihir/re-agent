@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "required_families": ["native_roundtrip", "cancelled_call"],
+  "cases": [
+    {"id": "native", "family": "native_roundtrip", "input": {"argv": ["native"], "stdin_b64": "", "files": []}, "watch": ["output.txt"], "require_native": true, "normalize_stderr_workspace": false},
+    {"id": "cancel", "family": "cancelled_call", "input": {"argv": ["cancel"], "stdin_b64": "", "files": []}, "watch": ["output.txt"], "normalize_stderr_workspace": false}
+  ]
+}

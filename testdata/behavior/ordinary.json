@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "required_families": ["read_range", "invalid_range"],
+  "cases": [
+    {"id": "range", "family": "read_range", "input": {"argv": ["range"], "stdin_b64": "", "files": [{"path": "a.txt", "content_b64": "b25lCnR3bwo="}]}, "watch": ["result.txt"], "normalize_stderr_workspace": true},
+    {"id": "past_end", "family": "invalid_range", "input": {"argv": ["past_end"], "stdin_b64": "", "files": [{"path": "a.txt", "content_b64": "b25lCnR3bwo="}]}, "watch": ["result.txt"], "normalize_stderr_workspace": false}
+  ]
+}

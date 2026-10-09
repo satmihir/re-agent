@@ -229,6 +229,8 @@ The v0 milestones (mechanical loop, read tools, visible context, live model, one
 
 `go test ./...` is offline: scripted models, `httptest` servers, temporary directories. A test that reaches the internet is a bug. Adapter tests compare preview bytes with live-path bytes and cover retry, nonretryable failure, timeouts, native continuation and incomplete output. `make check` runs gofmt, vet and tests. `make tty-check` drives the built binary through `bench/tty`'s scenarios in a pseudo-terminal with an independent emulator, checking screens and that output arrives whole; it is offline and required evidence for terminal input or display changes. `make live` runs the opt-in live conformance tests per provider whose key is present; live Jev tests need `REAGENT_JEV_LIVE_TESTS=1` and human approval each time. Never claim a live run that did not happen.
 
+For evaluated repository tasks, `docs/reagent-requirement-discovery.md` defines optional discovery and a small external, offline observation comparator. Reference build/test evidence and evaluator cases live outside candidate-writable output; a missing or failed reference check invalidates evaluation. This narrows §14's evaluation exclusion for comparison of already captured records only. It adds no production tool, candidate-execution sandbox, model-generated requirement map, or general task runner. `completed` remains an observation, not verification (§3).
+
 ## 14. Explicitly deferred work
 
 §3's synchronous read-only child runs override v1 §2.2's subagent exclusion only at this boundary. Executable review and a sandbox/container manager remain excluded; a disposable directory alone does not confine `exec`.
@@ -237,7 +239,7 @@ The v0 milestones (mechanical loop, read tools, visible context, live model, one
 |---|---|
 | Offline replay | §17 |
 | Exhibits | §8.3 |
-| Evaluation fixture and runner | §21 |
+| General evaluation fixture and candidate task runner beyond §13's offline comparator | §21 |
 | Exit codes beyond 0, 1, 2 | §18.4 |
 | Strict-schema nullable convention | §10.1 |
 | Trace inspection command | §16.6 |

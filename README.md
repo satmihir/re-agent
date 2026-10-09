@@ -475,7 +475,9 @@ to `main`, the workflow publishes the coverage badge to GitHub Pages; enable
 Pages with **GitHub Actions** as its build and deployment source for the badge
 to appear.
 
-A test that reaches the internet is a bug. [`AGENTS.md`](AGENTS.md) holds the
+A test that reaches the internet is a bug. For evaluated repository changes,
+use the optional [discovery and offline comparison procedure](docs/reagent-requirement-discovery.md).
+It does not run untrusted candidate code. [`AGENTS.md`](AGENTS.md) holds the
 house rules for any agent working here, re:agent included.
 
 **Not yet:** fresh child runs, within-run continuation, retrieval, and a sandbox.
