@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -104,6 +105,12 @@ func TestGitDo_RecipeShipsAPullRequestWithProof(t *testing.T) {
 	if !outcome.OK || result.Status != "done" || outcome.Effect != EffectApplied || result.ChosenBy != "model" {
 		t.Fatalf("got %+v / %+v", outcome, result)
 	}
+	if result.Decision.ChosenBy != "model" || result.Decision.Threshold != 0 || result.Decision.Probabilities != nil || result.Decision.Snapshot.Branch != "main" || !reflect.DeepEqual(result.Decision.Snapshot.Changed, []string{"README.md"}) {
+		t.Fatalf("decision %+v", result.Decision)
+	}
+	if len(result.Decision.Offered) == 0 {
+		t.Fatalf("missing offered recipes: %+v", result.Decision)
+	}
 	var argv []string
 	for _, step := range result.Steps {
 		argv = append(argv, strings.Join(step.Argv, " "))
@@ -192,12 +199,15 @@ func TestGitDo_ArgumentsMatchTheMode(t *testing.T) {
 
 // fakeJev answers every question with the given choice and probability, and
 // records the criteria it was offered.
-func fakeJev(t *testing.T, answers map[string][2]any, offered *map[string]map[string]string) *jevClient {
+func fakeJev(t *testing.T, answers map[string][2]any, offered *map[string]map[string]string, states ...*string) *jevClient {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request jevRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
+		}
+		if len(states) > 0 {
+			*states[0] = request.State
 		}
 		response := jevResponse{Model: jevModel, Answers: map[string]jevAnswer{}, Usage: &jevUsage{new(int64), new(int64)}}
 		if offered != nil {
@@ -231,11 +241,38 @@ func TestGitDo_JevPicksAFeasibleRecipe(t *testing.T) {
 		t.Fatal(err)
 	}
 	var offered map[string]map[string]string
-	jev := fakeJev(t, map[string][2]any{"outcome": {"commit", 0.95}, "scope": {"git_only", 0.9}}, &offered)
+	var sent string
+	jev := fakeJev(t, map[string][2]any{"outcome": {"commit", 0.95}, "scope": {"git_only", 0.9}}, &offered, &sent)
 	outcome := runTool(t, NewGitDoTool(ws, jev), `{"intent":"commit my change","message":"Change README"}`)
 	result := gitDoData(t, outcome)
 	if !outcome.OK || result.Recipe != "commit" || result.ChosenBy != "jev" || result.JevCalls != 1 {
 		t.Fatalf("got %+v / %+v", outcome, result)
+	}
+	snapshot, err := json.Marshal(result.Decision.Snapshot)
+	if err != nil || sent != "Request: commit my change\nRepository: "+string(snapshot) {
+		t.Fatalf("Jev received %q; decision snapshot %s: %v", sent, snapshot, err)
+	}
+	if result.Decision.Threshold != 0.9 || result.Decision.DeclinedBy != "" || result.Decision.ChosenBy != "" || result.Decision.Probabilities["outcome"]["commit"] != 0.95 || result.Decision.Probabilities["scope"]["git_only"] != 0.9 {
+		t.Fatalf("decision %+v", result.Decision)
+	}
+	if len(result.Decision.Offered) != len(offered["outcome"]) {
+		t.Fatalf("offered %v / %+v", offered, result.Decision)
+	}
+	for _, name := range result.Decision.Offered {
+		if _, ok := offered["outcome"][name]; !ok {
+			t.Fatalf("%s not sent to Jev", name)
+		}
+	}
+	if len(result.Decision.Probabilities["outcome"]) != len(offered["outcome"]) {
+		t.Fatalf("missing probabilities: %+v", result.Decision)
+	}
+	encoded, err := json.Marshal(result.Decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("typical git_do decision added bytes: %d", len(encoded)+len(`,"decision":`))
+	if len(encoded)+len(`,"decision":`) >= 2048 {
+		t.Fatalf("decision exceeds 2 KB: %d", len(encoded))
 	}
 	// On main with no pull request, the recipes that need one are not offered.
 	for _, absent := range []string{"follow_up_pr", "pr_status", "commit_push", "rebase_push"} {
@@ -264,7 +301,28 @@ func TestGitDo_JevDeclines(t *testing.T) {
 			if outcome.Code != "declined" || outcome.Effect != EffectNone {
 				t.Fatalf("got %+v", outcome)
 			}
+			decision := gitDoData(t, outcome).Decision
+			want := map[string]string{"more than git": "scope", "none": "none", "low confidence": "threshold", "change under 0.9": "threshold"}[name]
+			if decision.DeclinedBy != want || decision.Probabilities["outcome"] == nil || decision.Probabilities["scope"] == nil {
+				t.Fatalf("decision %+v", decision)
+			}
+			if want == "threshold" && decision.Threshold != 0.9 {
+				t.Fatalf("threshold %+v", decision)
+			}
 		})
+	}
+}
+
+func TestGitDo_RevertTargetDecision(t *testing.T) {
+	ws := gitDoRepo(t)
+	var sent string
+	jev := fakeJev(t, map[string][2]any{
+		"outcome": {"revert_pr", 0.95}, "scope": {"git_only", 0.9}, "target": {"none", 0.95},
+	}, nil, &sent)
+	outcome := runTool(t, NewGitDoTool(ws, jev), `{"intent":"revert the unrelated commit"}`)
+	decision := gitDoData(t, outcome).Decision
+	if outcome.Code != "declined" || decision.DeclinedBy != "target_none" || decision.Threshold != 0.9 || len(decision.Probabilities["target"]) != 2 || !strings.Contains(sent, "Repository: ") {
+		t.Fatalf("got %+v / %+v", outcome, decision)
 	}
 }
 
