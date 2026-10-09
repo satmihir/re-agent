@@ -264,3 +264,24 @@ func TestSessionStore_PreservesExactNativeAndSnapshotBytes(t *testing.T) {
 		t.Fatalf("raw bytes changed: %#v vs %#v", got.History, cp.History)
 	}
 }
+
+func TestSessionStore_InRunCompactOptInSurvivesResume(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider, cfg.WorkspacePath = openaiName, t.TempDir()
+	cfg.InRunCompact = true
+	s := NewSession(cfg, NewScriptedModel(turn(textBlock("done"))), NewTrace(io.Discard), io.Discard)
+	st := testSessionStore(t, s.ID)
+	s.store = st
+	if err := s.checkpoint("idle", ""); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := st.load(s.ID)
+	if err != nil || !cp.InRunCompact {
+		t.Fatalf("saved flag: %+v error=%v", cp, err)
+	}
+	restored := NewSession(testConfig(t), s.model, NewTrace(io.Discard), io.Discard)
+	restored.restore(cp)
+	if !restored.cfg.InRunCompact {
+		t.Fatal("resume dropped the opt-in setting")
+	}
+}

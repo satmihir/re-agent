@@ -50,6 +50,7 @@ func continuationCall(id, name, args string) ModelResponse {
 
 func continuationRun(t *testing.T, cfg Config, model Model, window int64, task string) (*Session, RunResult, []event) {
 	t.Helper()
+	cfg.InRunCompact = true
 	s := NewSession(cfg, model, NewTrace(io.Discard), io.Discard)
 	path := filepath.Join(t.TempDir(), "run.jsonl")
 	s.trace.Open(s.ID, "run", path)
@@ -83,6 +84,9 @@ func TestLoop_InRunContinuationKeepsTaskAndEffectsAcrossTwoBoundaries(t *testing
 	}
 	if !strings.Contains(model.requests[2].History[1].Summary.Text, "checkpoint=tests-A") || !strings.Contains(model.requests[4].History[1].Summary.Text, "checkpoint=impl-B") {
 		t.Fatal("exact checkpoint references were lost")
+	}
+	if len(s.history) < 2 || s.history[0].User == nil || s.history[0].User.Text != strings.Repeat("task ", 2000) {
+		t.Fatal("next chat turn lost the exact submitted task")
 	}
 	if len(results(s)) != 0 || result.ToolCalls != 2 {
 		t.Fatalf("old tool calls were replayed or effects lost: %+v %+v", results(s), result.Effects)
@@ -154,10 +158,13 @@ func (m *continuationFailureModel) Generate(_ context.Context, req ModelRequest)
 	if len(m.requests) == 1 {
 		return continuationResponse("first"), nil
 	}
-	if m.cancel != nil {
-		m.cancel()
+	if len(m.requests) == 2 {
+		if m.cancel != nil {
+			m.cancel()
+		}
+		return ModelResponse{}, m.failure
 	}
-	return ModelResponse{}, m.failure
+	return turn(textBlock("done")), nil
 }
 
 func TestLoop_InRunContinuationFailureLeavesHistoryIntact(t *testing.T) {
@@ -168,37 +175,45 @@ func TestLoop_InRunContinuationFailureLeavesHistoryIntact(t *testing.T) {
 		status  RunStatus
 		reason  string
 	}{
-		{"blank", turn(textBlock("  ")), nil, StatusProtocolError, "empty"},
-		{"oversized", turn(textBlock(strings.Repeat("s", MaxResultBytes+1))), nil, StatusLimitExceeded, "32 KiB"},
-		{"refusal", turn(refusalBlock("no")), nil, StatusProtocolError, "refusal"},
-		{"tool", turn(callBlock("summary-tool", "echo", `{}`)), nil, StatusProtocolError, "tool call"},
+		{"blank", turn(textBlock("  ")), nil, StatusCompleted, ""},
+		{"oversized", turn(textBlock(strings.Repeat("s", MaxResultBytes+1))), nil, StatusCompleted, ""},
+		{"refusal", turn(refusalBlock("no")), nil, StatusCompleted, ""},
+		{"tool", turn(callBlock("summary-tool", "echo", `{}`)), nil, StatusCompleted, ""},
 		{"provider", ModelResponse{}, &ModelError{Status: StatusProviderError, Message: "provider down", Usage: Usage{Known: true, InputTokens: 500}}, StatusProviderError, "provider down"},
-		{"overflow", ModelResponse{}, &ModelError{Status: StatusLimitExceeded, Message: "context overflow"}, StatusLimitExceeded, "context overflow"},
+		{"overflow", ModelResponse{}, &ModelError{Status: StatusLimitExceeded, Message: "context overflow"}, StatusCompleted, ""},
 		{"cancelled", ModelResponse{}, &ModelError{Status: StatusCancelled, Message: "cancelled"}, StatusCancelled, "cancelled"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := testConfig(t)
 			cfg.Provider = openaiName
-			model := &compactModel{replies: []ModelResponse{continuationResponse("first"), test.reply}}
+			model := &compactModel{replies: []ModelResponse{continuationResponse("first"), test.reply, turn(textBlock("done"))}}
 			var source Model = model
 			if test.failure != nil {
 				source = &continuationFailureModel{failure: test.failure}
 			}
 			s, result, events := continuationRun(t, cfg, source, 100_000, strings.Repeat("task ", 2000))
-			if result.Status != test.status || !strings.Contains(result.Reason, test.reason) || result.Steps != 2 || len(results(s)) != 1 || len(s.history) != 3 || s.history[0].Kind != EntryUser || s.seenCalls["summary-tool"] {
+			stops := test.status != StatusCompleted
+			steps, entries := 3, 4
+			if stops {
+				steps, entries = 2, 3
+			}
+			if result.Status != test.status || !strings.Contains(result.Reason, test.reason) || result.Resumable != stops || result.Steps != steps || len(results(s)) != 1 || len(s.history) != entries || s.history[0].Kind != EntryUser || s.history[1].Kind != EntryAssistant || s.seenCalls["summary-tool"] {
 				t.Fatalf("failure changed accepted history: result=%+v history=%+v", result, s.history)
 			}
 			if test.name == "provider" && result.Usage.InputTokens != 10_500 {
 				t.Fatalf("failed request usage was lost: %+v", result.Usage)
 			}
-			var failed int
+			var failed, skipped int
 			for _, e := range events {
-				if e.Type == "compaction.failed" {
+				switch e.Type {
+				case "compaction.failed":
 					failed++
+				case "compaction.skipped":
+					skipped++
 				}
 			}
-			if failed != 1 {
-				t.Fatalf("missing failure trace: %d", failed)
+			if failed != 1 || skipped != steps-2 {
+				t.Fatalf("failure/skip trace: failed=%d skipped=%d", failed, skipped)
 			}
 		})
 	}
@@ -215,8 +230,8 @@ func TestLoop_InRunContinuationStopsAtEightSummaries(t *testing.T) {
 	}
 	model := &compactModel{replies: replies}
 	_, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusLimitExceeded || !strings.Contains(result.Reason, "eight summaries") || result.Steps != 17 || result.ToolCalls != 9 || len(model.requests) != 17 {
-		t.Fatalf("unbounded summary work: %+v requests=%d", result, len(model.requests))
+	if result.Status != StatusCompleted || result.Steps != 18 || result.ToolCalls != 9 || len(model.requests) != 18 {
+		t.Fatalf("cap stopped a safe final request: %+v requests=%d", result, len(model.requests))
 	}
 	finished := 0
 	for _, e := range events {
@@ -224,8 +239,60 @@ func TestLoop_InRunContinuationStopsAtEightSummaries(t *testing.T) {
 			finished++
 		}
 	}
-	if finished != 8 {
-		t.Fatalf("summaries committed: %d", finished)
+	skipped := 0
+	for _, e := range events {
+		if e.Type == "compaction.skipped" {
+			skipped++
+		}
+	}
+	if finished != 8 || skipped != 1 {
+		t.Fatalf("summaries committed=%d skipped=%d", finished, skipped)
+	}
+}
+
+func TestLoop_InRunContinuationDoesNotRetryFailedSummary(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider = openaiName
+	model := &compactModel{replies: []ModelResponse{
+		continuationResponse("first"), turn(textBlock("  ")), continuationResponse("second"), turn(textBlock("unreached")),
+	}}
+	model.replies[2].Usage = Usage{Known: true, InputTokens: 95_000}
+	s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
+	if result.Status != StatusLimitExceeded || !strings.Contains(result.Reason, "next request cannot fit") || result.Steps != 3 || result.ToolCalls != 2 || len(model.requests) != 3 || len(results(s)) != 2 {
+		t.Fatalf("summary retried or unsafe next request sent: %+v requests=%d", result, len(model.requests))
+	}
+	requested := 0
+	for _, e := range events {
+		if e.Type == "compaction.requested" {
+			requested++
+		}
+	}
+	if requested != 1 {
+		t.Fatalf("summary requests: %d", requested)
+	}
+}
+
+func TestLoop_InRunContinuationSkipsLargeHandoffWhenNextFits(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider = openaiName
+	model := &compactModel{replies: []ModelResponse{
+		continuationResponse("first"), turn(textBlock(strings.Repeat("s", 30_000))), turn(textBlock("done")),
+	}}
+	s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
+	if result.Status != StatusCompleted || result.Steps != 3 || len(model.requests) != 3 || len(s.history) != 4 || s.history[0].Kind != EntryUser || s.history[1].Kind != EntryAssistant {
+		t.Fatalf("oversized handoff blocked safe request: %+v", result)
+	}
+	failed, skipped := 0, 0
+	for _, e := range events {
+		if e.Type == "compaction.failed" {
+			failed++
+		}
+		if e.Type == "compaction.skipped" {
+			skipped++
+		}
+	}
+	if failed != 1 || skipped != 1 {
+		t.Fatalf("failed=%d skipped=%d", failed, skipped)
 	}
 }
 
@@ -235,6 +302,7 @@ func TestLoop_InRunContinuationCancellationPreservesHistory(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	model := &continuationFailureModel{failure: &ModelError{Status: StatusCancelled, Message: "cancelled in summary"}, cancel: cancel}
+	cfg.InRunCompact = true
 	s := NewSession(cfg, model, NewTrace(io.Discard), io.Discard)
 	path := filepath.Join(t.TempDir(), "cancelled.jsonl")
 	s.trace.Open(s.ID, "run", path)
@@ -242,7 +310,7 @@ func TestLoop_InRunContinuationCancellationPreservesHistory(t *testing.T) {
 	r.window = 100_000
 	result := r.Execute(ctx, strings.Repeat("task ", 2000), nil, "")
 	s.trace.Close()
-	if ctx.Err() == nil || result.Status != StatusCancelled || result.Resumable || result.Steps != 2 || len(s.history) != 3 || s.history[0].Kind != EntryUser || len(model.requests) != 2 {
+	if ctx.Err() == nil || result.Status != StatusCancelled || !result.Resumable || result.Steps != 2 || len(s.history) != 3 || s.history[0].Kind != EntryUser || len(model.requests) != 2 {
 		t.Fatalf("cancelled compaction changed accepted history: %+v history=%+v", result, s.history)
 	}
 }
@@ -252,7 +320,7 @@ func TestLoop_InRunContinuationKeepsPlanAndReadOnlyAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Provider: openaiName, Model: "test", Registry: registry, PlanMode: true, MaxSteps: 10}
+	cfg := Config{Provider: openaiName, Model: "test", Registry: registry, PlanMode: true, InRunCompact: true, MaxSteps: 10}
 	model := &compactModel{replies: []ModelResponse{continuationResponse("read"), turn(textBlock("handoff")), turn(textBlock("done"))}}
 	s := NewSession(cfg, model, NewTrace(io.Discard), io.Discard)
 	r := newRun(s, "run")
@@ -271,8 +339,8 @@ func TestLoop_InRunContinuationPreservesStepBudget(t *testing.T) {
 	cfg.Provider, cfg.MaxSteps = openaiName, 2
 	model := &compactModel{replies: []ModelResponse{continuationResponse("first"), turn(textBlock("unreached"))}}
 	s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusLimitExceeded || !strings.Contains(result.Reason, "follow-up step") || result.Steps != 1 || len(model.requests) != 1 || len(s.history) != 3 {
-		t.Fatalf("summary reset or exceeded budget: result=%+v requests=%d", result, len(model.requests))
+	if result.Status != StatusCompleted || result.Steps != 2 || len(model.requests) != 2 || len(s.history) != 4 {
+		t.Fatalf("summary consumed the final step: result=%+v requests=%d", result, len(model.requests))
 	}
 	for _, e := range events {
 		if e.Type == "compaction.requested" {
@@ -288,6 +356,19 @@ func TestLoop_InRunContinuationRejectsSummaryThatCannotFit(t *testing.T) {
 	s, result, _ := continuationRun(t, cfg, model, 20_000, strings.Repeat("task ", 2000))
 	if result.Status != StatusLimitExceeded || !strings.Contains(result.Reason, "summary request cannot fit") || len(model.requests) != 1 || len(s.history) != 3 {
 		t.Fatalf("oversized summary preflight acted: %+v requests=%d", result, len(model.requests))
+	}
+}
+
+func TestLoop_OrdinaryRunDoesNotCompactWithoutOptIn(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider = openaiName
+	model := &compactModel{replies: []ModelResponse{continuationResponse("first"), turn(textBlock("done"))}}
+	s := NewSession(cfg, model, NewTrace(io.Discard), io.Discard)
+	r := newRun(s, "run")
+	r.window = 100_000
+	result := r.Execute(context.Background(), strings.Repeat("task ", 2000), nil, "")
+	if result.Status != StatusCompleted || result.Steps != 2 || len(model.requests) != 2 || s.history[0].Kind != EntryUser || len(s.history) != 4 {
+		t.Fatalf("unopted task unexpectedly compacted: %+v history=%+v", result, s.history)
 	}
 }
 

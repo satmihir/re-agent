@@ -1063,13 +1063,13 @@ func TestChat_WarnsFromLastRequestNotTurnTotal(t *testing.T) {
 		last  int64
 		warns bool
 	}{
-		{"below", 599_999, false},
-		{"at", 600_000, true},
+		{"below", 119_999, false},
+		{"at", 120_000, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			c := newConversation(t, "claude-sonnet-5-5", "", 0)
+			c := newConversation(t, "claude-haiku-4-5", "", 0)
 			first := turn(callBlock("call_1", "echo", `{"text":"hi"}`))
-			first.Usage = Usage{Known: true, InputTokens: 20_000}
+			first.Usage = Usage{Known: true, InputTokens: 190_000}
 			second := turn(textBlock("done"))
 			second.Usage = Usage{Known: true, InputTokens: test.last}
 			c.session.model = NewScriptedModel(first, second)
@@ -1079,7 +1079,7 @@ func TestChat_WarnsFromLastRequestNotTurnTotal(t *testing.T) {
 			if got := strings.Contains(stderr.String(), "/reset starts over"); got != test.warns {
 				t.Fatalf("warning %t, want %t: %s", got, test.warns, stderr.String())
 			}
-			if c.session.lastRequest.InputTokens != test.last || c.usage.InputTokens != 20_000+test.last {
+			if c.session.lastRequest.InputTokens != test.last || c.usage.InputTokens != 190_000+test.last {
 				t.Fatalf("last %+v, total %+v", c.session.lastRequest, c.usage)
 			}
 		})

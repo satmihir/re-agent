@@ -25,6 +25,7 @@ type Config struct {
 	ProjectInstructions *string
 	MaxSteps            int
 	MaxToolCalls        int
+	InRunCompact        bool
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -60,6 +61,7 @@ type Run struct {
 	task        *UserTurn
 	window      int64
 	compactions int
+	compactOff  bool
 }
 
 func newRun(session *Session, runID string) *Run {
@@ -94,6 +96,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"approved_workspaces": s.approvedWorkspacePaths(),
 		"max_steps":           r.cfg.MaxSteps,
 		"max_tool_calls":      r.cfg.MaxToolCalls,
+		"in_run_compact":      r.cfg.InRunCompact,
 		"prompt":              prompt,
 		"instructions":        instructions(r.cfg),
 		"tools":               r.cfg.Registry.Specs(),
@@ -128,7 +131,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.persistenceFailure(err)
 		}
 		r.steps++
-		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, r.requestHistory())
+		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
 		r.trace.Write("model.requested", r.steps, req)
 
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)

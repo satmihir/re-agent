@@ -32,6 +32,7 @@ type chatCheckpoint struct {
 	LaunchInstructions    *string         `json:"launch_instructions,omitempty"`
 	MaxSteps              int             `json:"max_steps"`
 	MaxToolCalls          int             `json:"max_tool_calls"`
+	InRunCompact          bool            `json:"in_run_compact"`
 	ReportFriction        bool            `json:"report_friction"`
 	Auto                  bool            `json:"auto"`
 	AutoEnabled           bool            `json:"auto_enabled"`

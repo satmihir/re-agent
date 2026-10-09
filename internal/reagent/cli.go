@@ -137,6 +137,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		options.reasoning, options.readOnly, options.plan = saved.Effort, saved.ReadOnly, saved.Plan
 		options.maxSteps, options.maxToolCalls = saved.MaxSteps, saved.MaxToolCalls
 		options.noProjectInstructions, options.reportFriction, options.auto = saved.NoProjectInstructions, saved.ReportFriction, saved.Auto
+		options.inRunCompact = saved.InRunCompact
 	}
 	if options.promptFile != "" {
 		text, err := readPrompt(options.promptFile, stdin)
@@ -216,7 +217,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		Registry: registry, WorkspacePath: ws.Root(), Workspace: ws, NoProjectInstructions: options.noProjectInstructions,
 		ProjectInstructions: projectInstructions,
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
-		PlanMode: options.plan, ReportFriction: options.reportFriction,
+		PlanMode: options.plan, ReportFriction: options.reportFriction, InRunCompact: options.inRunCompact,
 	}
 	for _, path := range options.allowedWorkspaces {
 		destination, bad := workspaceDestinationAt(ctx, path, true)
@@ -392,7 +393,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir, resume, gitDo string
 	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction                     bool
-	auto                                                                                          bool
+	auto, inRunCompact                                                                            bool
 	maxSteps, maxToolCalls                                                                        int
 	allowedWorkspaces                                                                             []string
 }
@@ -409,6 +410,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.readOnly, "read-only", false, "withhold write and exec tools; only allow reading")
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
 	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6-sol/medium")
+	fs.BoolVar(&o.inRunCompact, "in-run-compact", false, "opt in to bounded compaction within a long run; default off")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")
@@ -431,7 +433,7 @@ var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "in-run-compact"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-file", "report-friction"}},
 	{"Experimental", []string{"git-do"}},
@@ -442,7 +444,7 @@ var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "in-run-compact"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir", "report-friction"}},
 	{"Experimental", []string{"git-do"}},
