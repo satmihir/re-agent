@@ -25,6 +25,8 @@ jobs:
           total=$(go tool cover -func=coverage.out | awk '$1 == "total:" {print $3}')
           echo "Total coverage: $total" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "COVERAGE=$total" >> "$GITHUB_ENV"
+      - name: Offline Python bench tests
+        run: python3 -m unittest discover -s bench -p '*test.py'
       - name: Generate coverage badge
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |

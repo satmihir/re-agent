@@ -469,16 +469,19 @@ make live     # two real API round trips; reads .env (or main checkout's .env fr
 make tty-check  # drive the chat in a pseudo-terminal and check the screen; offline, needs python3
 ```
 
-GitHub Actions builds, vets, and runs the offline suite with coverage on pushes
-to `main` and on pull requests. The total appears in the run summary. On pushes
-to `main`, the workflow publishes the coverage badge to GitHub Pages; enable
+GitHub Actions builds, vets, runs Go tests with coverage, and runs the offline
+Python bench tests on pushes to `main` and on pull requests. Go coverage appears
+in the run summary. On pushes to `main`, the workflow publishes the coverage
+badge to GitHub Pages; enable
 Pages with **GitHub Actions** as its build and deployment source for the badge
 to appear.
 
-A test that reaches the internet is a bug. [`AGENTS.md`](AGENTS.md) holds the
+A test that reaches the internet is a bug. For evaluated repository changes,
+use the optional [discovery and offline comparison procedure](docs/reagent-requirement-discovery.md).
+It does not run untrusted candidate code. [`AGENTS.md`](AGENTS.md) holds the
 house rules for any agent working here, re:agent included.
 
-**Not yet:** fresh child runs, within-run continuation, retrieval, and a sandbox.
+**Not yet:** retrieval and a sandbox. Fresh child runs and within-run continuation are opt-in.
 A completed run means the model gave a final answer, not that the task was
 done right. See the [autonomous tasks plan](docs/reagent-autonomous-tasks-plan.md)
 for proposed longer-task capabilities.
