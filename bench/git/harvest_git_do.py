@@ -6,13 +6,18 @@ Defaults to ~/Library/Caches/reagent/runs. Output goes to stdout.
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
 def harvest(path):
     calls = {}
-    for line in path.open():
-        event = json.loads(line)
+    for number, line in enumerate(path.open(), 1):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            print(f"warning: {path}:{number}: skipping malformed trace line: {error.msg}", file=sys.stderr)
+            continue
         kind = event.get("type")
         data = event.get("data") or {}
         if kind == "model.accepted":

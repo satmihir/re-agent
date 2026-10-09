@@ -111,7 +111,6 @@ type gitDoDecision struct {
 }
 
 type gitDoResult struct {
-	Decision   gitDoDecision `json:"decision"`
 	Recipe     string        `json:"recipe"`
 	ChosenBy   string        `json:"chosen_by"`
 	Confidence *float64      `json:"confidence,omitempty"`
@@ -123,6 +122,7 @@ type gitDoResult struct {
 	JevCalls   int           `json:"jev_calls,omitempty"`
 	JevTokens  int64         `json:"jev_tokens,omitempty"`
 	JevMS      int64         `json:"jev_ms,omitempty"`
+	Decision   gitDoDecision `json:"decision"`
 }
 
 func (t gitDoTool) Spec() ToolSpec {
@@ -251,6 +251,7 @@ type gitDoState struct {
 	BehindDefault  int      `json:"behind_default"`
 	AheadDefault   int      `json:"ahead_of_default"`
 	Changed        []string `json:"changed"`
+	ChangedCount   int      `json:"changed_count,omitempty"`
 	Recent         []string `json:"recent_commits"`
 	PullRequest    *int     `json:"pull_request,omitempty"`
 	PRReviewThread int      `json:"pull_request_comments,omitempty"`
@@ -277,7 +278,7 @@ func (r *gitDoRun) carryOut(jev *jevClient) gitDoResult {
 	r.result, r.jev = &result, jev
 	r.snapshot()
 	allowed := r.feasible()
-	result.Decision.Snapshot = r.state
+	result.Decision.Snapshot = r.decisionSnapshot()
 	for _, recipe := range gitDoRecipes {
 		if allowed[recipe.name] {
 			result.Decision.Offered = append(result.Decision.Offered, recipe.name)
@@ -373,7 +374,7 @@ func (r *gitDoRun) classify(allowed map[string]bool) (string, float64, error) {
 }
 
 func (r *gitDoRun) ask(questions map[string]jevQuestion, request string) (map[string]jevAnswer, error) {
-	state, _ := json.Marshal(r.state)
+	state, _ := json.Marshal(r.result.Decision.Snapshot)
 	answers, decision, err := r.jev.choose(r.ctx, "Request: "+request+"\nRepository: "+string(state), questions)
 	r.result.JevCalls++
 	r.result.JevMS += decision.DurationMS
@@ -479,6 +480,22 @@ func (r *gitDoRun) snapshot() {
 			}
 		}
 	}
+}
+
+// v0 §10.9: Jev and the result share this small view; recipes keep the full list.
+func (r *gitDoRun) decisionSnapshot() gitDoState {
+	s := r.state
+	if len(s.Changed) > 12 {
+		s.ChangedCount = len(s.Changed)
+		s.Changed = s.Changed[:12]
+	}
+	s.Recent = append([]string(nil), s.Recent...)
+	for i, line := range s.Recent {
+		if subject := []rune(line); len(subject) > 80 {
+			s.Recent[i] = string(subject[:80]) + "…"
+		}
+	}
+	return s
 }
 
 func (r *gitDoRun) counts(rangeSpec string) (behind, ahead int) {

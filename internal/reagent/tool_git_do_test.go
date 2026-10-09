@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -282,6 +283,39 @@ func TestGitDo_JevPicksAFeasibleRecipe(t *testing.T) {
 	}
 	if offered["outcome"]["none"] == "" || len(offered["scope"]) != 2 {
 		t.Fatalf("offered %v", offered)
+	}
+}
+
+func TestGitDo_JevSnapshotStaysSmallWithManyChanges(t *testing.T) {
+	ws := gitDoRepo(t)
+	for i := 0; i < 7; i++ {
+		cmd := exec.Command("git", "commit", "-q", "--allow-empty", "-m", strings.Repeat("A realistic commit subject ", 6))
+		cmd.Dir = ws.Root()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("commit: %v: %s", err, out)
+		}
+	}
+	for i := 0; i < 50; i++ {
+		name := filepath.Join(ws.Root(), fmt.Sprintf("changed-path-with-a-realistic-name-%02d.txt", i))
+		if err := os.WriteFile(name, []byte("changed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var sent string
+	jev := fakeJev(t, map[string][2]any{"outcome": {"status", 1.0}, "scope": {"git_only", 0.9}}, nil, &sent)
+	outcome := runTool(t, NewGitDoTool(ws, jev), `{"intent":"show status"}`)
+	decision := gitDoData(t, outcome).Decision
+	encoded, err := json.Marshal(decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("50 paths, 8 long subjects: decision added bytes: %d", len(encoded)+len(`,"decision":`))
+	if !outcome.OK || len(encoded)+len(`,"decision":`) >= 2048 || len(decision.Snapshot.Changed) != 12 || decision.Snapshot.ChangedCount != 50 {
+		t.Fatalf("result %v; decision %s", outcome.Code, encoded)
+	}
+	snapshot, err := json.Marshal(decision.Snapshot)
+	if err != nil || !strings.HasSuffix(decision.Snapshot.Recent[0], "…") || sent != "Request: show status\nRepository: "+string(snapshot) {
+		t.Fatalf("snapshot not sent to Jev: %s: %v", sent, err)
 	}
 }
 
