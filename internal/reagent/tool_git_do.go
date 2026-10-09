@@ -290,33 +290,9 @@ func (r *gitDoRun) carryOut(jev *jevClient) gitDoResult {
 	} else {
 		result.Decision.ChosenBy = "model"
 	}
-	if jev != nil {
-		result.ChosenBy = "jev"
-		choice, confidence, err := r.classify(allowed)
-		if err != nil {
-			result.Decision.DeclinedBy = "jev_error"
-			result.Status, result.Reason = "declined", "Jev could not decide: "+err.Error()
-			return result
-		}
-		result.Recipe, result.Confidence = choice, &confidence
-		if choice == "none" || choice == "more" {
-			result.Decision.DeclinedBy = map[string]string{"none": "none", "more": "scope"}[choice]
-			result.Status, result.Reason = "declined", "not a git-only outcome these recipes cover; use exec"
-			return result
-		}
-		result.Decision.Threshold = gitDoThresholdFor(choice)
-		if confidence < result.Decision.Threshold {
-			result.Decision.DeclinedBy = "threshold"
-			result.Status, result.Reason = "declined", fmt.Sprintf("unsure which outcome is meant (%s at %.2f); use exec or say it more plainly", choice, confidence)
-			return result
-		}
-	} else {
-		result.Recipe = r.args.Recipe
-		if !allowed[result.Recipe] {
-			result.Decision.DeclinedBy = "state"
-			result.Status, result.Reason = "declined", result.Recipe+" does not fit this repository state: "+r.stateSummary()
-			return result
-		}
+	runnable, _ := r.chooseRecipe(allowed)
+	if !runnable {
+		return result
 	}
 	output, checks, err := gitDoFind(result.Recipe).run(r)
 	result.Steps, result.Checks = r.steps, checks
@@ -348,6 +324,40 @@ func (r *gitDoRun) carryOut(jev *jevClient) gitDoResult {
 		}
 	}
 	return result
+}
+
+// v0 §10.9: evaluation and execution must apply the same choice and decline rules.
+func (r *gitDoRun) chooseRecipe(allowed map[string]bool) (bool, error) {
+	result := r.result
+	if r.jev == nil {
+		result.Recipe = r.args.Recipe
+		if !allowed[result.Recipe] {
+			result.Decision.DeclinedBy = "state"
+			result.Status, result.Reason = "declined", result.Recipe+" does not fit this repository state: "+r.stateSummary()
+			return false, nil
+		}
+		return true, nil
+	}
+	result.ChosenBy = "jev"
+	choice, confidence, err := r.classify(allowed)
+	if err != nil {
+		result.Decision.DeclinedBy = "jev_error"
+		result.Status, result.Reason = "declined", "Jev could not decide: "+err.Error()
+		return false, err
+	}
+	result.Recipe, result.Confidence = choice, &confidence
+	if choice == "none" || choice == "more" {
+		result.Decision.DeclinedBy = map[string]string{"none": "none", "more": "scope"}[choice]
+		result.Status, result.Reason = "declined", "not a git-only outcome these recipes cover; use exec"
+		return false, nil
+	}
+	result.Decision.Threshold = gitDoThresholdFor(choice)
+	if confidence < result.Decision.Threshold {
+		result.Decision.DeclinedBy = "threshold"
+		result.Status, result.Reason = "declined", fmt.Sprintf("unsure which outcome is meant (%s at %.2f); use exec or say it more plainly", choice, confidence)
+		return false, nil
+	}
+	return true, nil
 }
 
 // classify asks Jev two questions in one request: which outcome, among the

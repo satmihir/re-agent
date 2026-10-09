@@ -56,10 +56,11 @@ func TestGitDoEval(t *testing.T) {
 		}
 		answers := map[string]bool{}
 		for i := 0; i < repeats; i++ {
-			choice, ran, err := gitDoEvalDecision(c, jev)
+			result, ran, err := gitDoEvalDecision(c, jev)
 			if err != nil {
 				t.Fatalf("%s repeat %d: %v", c.Arguments.Intent, i+1, err)
 			}
+			choice := result.Recipe
 			answers[fmt.Sprintf("%s/%t", choice, ran)] = true
 			g.repeats++
 			if c.Expected[0] != "decline" {
@@ -80,7 +81,7 @@ func TestGitDoEval(t *testing.T) {
 				g.wrongRan++
 			}
 			if !ran && c.Expected[0] != "decline" || ran && !right {
-				findings = append(findings, fmt.Sprintf("%s %s repeat %d: %s ran=%t want=%s", key, c.CallID, i+1, choice, ran, strings.Join(c.Expected, "|")))
+				findings = append(findings, gitDoEvalFinding(key, c, i+1, result, ran, jev != nil))
 			}
 		}
 		if len(answers) > 1 {
@@ -292,76 +293,108 @@ type gitDoEvalTally struct {
 	cases, repeats, gitOnly, rightRan, falseDeclines, wrongRan, correctDeclines, changed, skipped int
 }
 
-func gitDoEvalDecision(c gitDoEvalCase, jev *jevClient) (string, bool, error) {
-	r := &gitDoRun{ctx: context.Background(), args: c.Arguments, state: c.Snapshot, jev: jev, result: &gitDoResult{}}
-	r.result.Decision.Snapshot = c.Snapshot
-	r.result.Decision.Probabilities = map[string]map[string]float64{}
-	if len(c.Arguments.PR) > 0 {
-		r.pr, _ = strconv.Atoi(string(c.Arguments.PR))
+func gitDoEvalDecision(c gitDoEvalCase, jev *jevClient) (gitDoResult, bool, error) {
+	args := c.Arguments
+	if jev == nil && args.Recipe == "" {
+		args.Recipe = c.NamedRecipe
 	}
-	allowed := r.feasible()
-	if jev == nil {
-		name := c.Arguments.Recipe
-		if name == "" {
-			name = c.NamedRecipe
-		}
-		return name, allowed[name], nil
+	result := gitDoResult{}
+	r := &gitDoRun{ctx: context.Background(), args: args, state: c.Snapshot, jev: jev, result: &result}
+	result.Decision.Snapshot = c.Snapshot
+	result.Decision.Probabilities = map[string]map[string]float64{}
+	if len(args.PR) > 0 {
+		r.pr, _ = strconv.Atoi(string(args.PR))
 	}
-	choice, confidence, err := r.classify(allowed)
-	if err != nil {
-		return "", false, err
-	}
-	if choice == "none" || choice == "more" || confidence < gitDoThresholdFor(choice) {
-		return choice, false, nil
-	}
-	return choice, true, nil
+	ran, err := r.chooseRecipe(r.feasible())
+	return result, ran, err
 }
 
 func TestGitDoEvalCases(t *testing.T) {
 	cases := gitDoLoadRealCases(t)
-	if len(cases) != 6 {
-		t.Fatalf("want six traced calls, got %d", len(cases))
-	}
 	sets := map[string]int{}
-	declines, heldRightRan := 0, 0
 	for _, c := range cases {
 		sets[c.Set]++
-		if c.Status == "declined" {
-			declines++
-		} else if c.Set == "held_out" {
-			heldRightRan++
+		wantSet := "tuning"
+		if sha256.Sum256([]byte(c.CallID))[0]%2 == 1 {
+			wantSet = "held_out"
 		}
 		r := &gitDoRun{state: c.Snapshot}
 		if len(c.Arguments.PR) > 0 {
 			r.pr, _ = strconv.Atoi(string(c.Arguments.PR))
 		}
-		if len(c.Expected) != 1 || !r.feasible()[c.Expected[0]] {
-			t.Fatalf("wrong or infeasible label: %s: %v", c.CallID, c.Expected)
+		if c.Set != wantSet {
+			t.Fatalf("%s: split %s, want %s", c.CallID, c.Set, wantSet)
+		}
+		for _, want := range c.Expected {
+			if want != "decline" && !r.feasible()[want] {
+				t.Fatalf("%s: %s is not feasible", c.CallID, want)
+			}
 		}
 	}
-	if sets["held_out"] != 3 || sets["tuning"] != 3 || declines != 2 || heldRightRan != 1 {
-		t.Fatalf("unexpected historical split or declines: sets=%v declined=%d held-right-and-ran=%d", sets, declines, heldRightRan)
+	if sets["tuning"] == 0 || sets["held_out"] == 0 {
+		t.Fatalf("missing a split: %v", sets)
 	}
-	t.Logf("historical held-out real calls: right-and-ran=%d/%d (%.1f%%); historical, not live repeated eval", heldRightRan, sets["held_out"], 100*float64(heldRightRan)/float64(sets["held_out"]))
+	t.Logf("real cases=%d split=%v", len(cases), sets)
 }
 
 func TestGitDoEvalReplaysHistoricalDeclines(t *testing.T) {
-	cases := gitDoLoadRealCases(t)
+	byID := map[string]gitDoEvalCase{}
+	for _, c := range gitDoLoadRealCases(t) {
+		byID[c.CallID] = c
+	}
+	branch := byID["call_f6c99083bd4649a5a8f666b288d316cc"]
+	follow := byID["call_bbf6a735470d4ad88bd97f748e6cc8e6"]
+	tuning := byID["call_3434e78337314d09b685de1ce2bfc50f"]
+	if branch.CallID == "" || follow.CallID == "" || tuning.CallID == "" {
+		t.Fatal("historical false declines missing")
+	}
 	for _, test := range []struct {
 		c       gitDoEvalCase
 		answers map[string][2]any
 		choice  string
 	}{
-		{cases[0], map[string][2]any{"outcome": {"new_branch", 0.88}, "scope": {"git_only", 0.99}}, "new_branch"},
-		{cases[5], map[string][2]any{"outcome": {"follow_up_pr", 0.95}, "scope": {"more", 0.69}}, "more"},
+		{branch, map[string][2]any{"outcome": {"new_branch", 0.88}, "scope": {"git_only", 0.99}}, "new_branch"},
+		{follow, map[string][2]any{"outcome": {"follow_up_pr", 0.95}, "scope": {"more", 0.69}}, "more"},
+		{tuning, map[string][2]any{"outcome": {"ship_pr", 0.89}, "scope": {"git_only", 0.99}}, "ship_pr"},
 	} {
-		choice, ran, err := gitDoEvalDecision(test.c, fakeJev(t, test.answers, nil))
-		if err != nil || choice != test.choice || ran {
-			t.Fatalf("%s: %q ran=%t: %v", test.c.CallID, choice, ran, err)
+		result, ran, err := gitDoEvalDecision(test.c, fakeJev(t, test.answers, nil))
+		if err != nil || result.Recipe != test.choice || ran {
+			t.Fatalf("%s: %q ran=%t: %v", test.c.CallID, result.Recipe, ran, err)
 		}
 	}
-	choice, ran, err := gitDoEvalDecision(cases[5], nil)
-	if err != nil || choice != "follow_up_pr" || !ran {
-		t.Fatalf("model name %q ran=%t: %v", choice, ran, err)
+	result, ran, err := gitDoEvalDecision(follow, nil)
+	if err != nil || result.Recipe != "follow_up_pr" || !ran {
+		t.Fatalf("model name %q ran=%t: %v", result.Recipe, ran, err)
+	}
+}
+
+func gitDoEvalFinding(key string, c gitDoEvalCase, repeat int, result gitDoResult, ran, jev bool) string {
+	detail := "outcome_p=n/a outcome_threshold=n/a scope_more_p=n/a"
+	if jev {
+		probabilities := result.Decision.Probabilities
+		outcome, threshold := probabilities["outcome"][result.Recipe], result.Decision.Threshold
+		if result.Recipe == "more" {
+			for name, p := range probabilities["outcome"] {
+				if p > outcome {
+					outcome, threshold = p, gitDoThresholdFor(name)
+				}
+			}
+		}
+		detail = fmt.Sprintf("outcome_p=%.2f outcome_threshold=%.2f scope_more_p=%.2f", outcome, threshold, probabilities["scope"]["more"])
+	}
+	return fmt.Sprintf("%s %s repeat %d: %s %s declined_by=%s ran=%t want=%s intent=%q",
+		key, c.CallID, repeat, result.Recipe, detail, result.Decision.DeclinedBy, ran, strings.Join(c.Expected, "|"), c.Arguments.Intent)
+}
+
+func TestGitDoEvalFindingsIncludeIntentAndProbabilities(t *testing.T) {
+	result := gitDoResult{Recipe: "more", Decision: gitDoDecision{DeclinedBy: "scope", Probabilities: map[string]map[string]float64{
+		"outcome": {"follow_up_pr": 0.95, "none": 0.05}, "scope": {"more": 0.69, "git_only": 0.31},
+	}}}
+	c := gitDoEvalCase{Arguments: gitDoArgs{Intent: "follow_up_pr: commit, push and comment"}, Expected: []string{"follow_up_pr"}}
+	finding := gitDoEvalFinding("hand/agent/hand", c, 2, result, false, true)
+	for _, want := range []string{`intent="follow_up_pr: commit, push and comment"`, "outcome_p=0.95", "outcome_threshold=0.90", "scope_more_p=0.69"} {
+		if !strings.Contains(finding, want) {
+			t.Fatalf("%q missing from %s", want, finding)
+		}
 	}
 }
