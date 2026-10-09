@@ -29,6 +29,8 @@ beats completeness. When in doubt, write less.
   `docs/archive/reagent-v0-design-2026-10-02.md`; leave them, add no new
   ones, and read the archive only to trace such a citation.
 
+For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is a worked example.
+
 ## Code economy
 
 - No line budgets. Size follows from doing one thing per function and one
