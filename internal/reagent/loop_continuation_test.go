@@ -250,16 +250,17 @@ func TestLoop_InRunContinuationStopsAtEightSummaries(t *testing.T) {
 	}
 }
 
-func TestLoop_InRunContinuationDoesNotRetryFailedSummary(t *testing.T) {
+func TestLoop_InRunContinuationSkippedSummaryDoesNotTightenWindow(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider = openaiName
 	model := &compactModel{replies: []ModelResponse{
-		continuationResponse("first"), turn(textBlock("  ")), continuationResponse("second"), turn(textBlock("unreached")),
+		continuationResponse("first"), turn(textBlock("  ")), continuationResponse("second"), turn(textBlock("done")),
 	}}
 	model.replies[2].Usage = Usage{Known: true, InputTokens: 95_000}
+	model.replies[3].Usage = Usage{Known: true, InputTokens: 99_000}
 	s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusLimitExceeded || !strings.Contains(result.Reason, "next request cannot fit") || result.Steps != 3 || result.ToolCalls != 2 || len(model.requests) != 3 || len(results(s)) != 2 {
-		t.Fatalf("summary retried or unsafe next request sent: %+v requests=%d", result, len(model.requests))
+	if result.Status != StatusCompleted || result.Reply != "done" || result.Steps != 4 || result.ToolCalls != 2 || len(model.requests) != 4 || len(results(s)) != 2 {
+		t.Fatalf("skipped summary stopped a request the provider could complete: %+v requests=%d", result, len(model.requests))
 	}
 	requested := 0
 	for _, e := range events {
@@ -349,13 +350,13 @@ func TestLoop_InRunContinuationPreservesStepBudget(t *testing.T) {
 	}
 }
 
-func TestLoop_InRunContinuationRejectsSummaryThatCannotFit(t *testing.T) {
+func TestLoop_InRunContinuationSkipsSummaryThatCannotFit(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider = openaiName
 	model := &compactModel{replies: []ModelResponse{continuationResponse("first"), turn(textBlock("unreached"))}}
 	s, result, _ := continuationRun(t, cfg, model, 20_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusLimitExceeded || !strings.Contains(result.Reason, "summary request cannot fit") || len(model.requests) != 1 || len(s.history) != 3 {
-		t.Fatalf("oversized summary preflight acted: %+v requests=%d", result, len(model.requests))
+	if result.Status != StatusCompleted || result.Steps != 2 || len(model.requests) != 2 || len(s.history) != 4 {
+		t.Fatalf("oversized summary preflight blocked the ordinary request: %+v requests=%d", result, len(model.requests))
 	}
 }
 

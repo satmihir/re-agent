@@ -11,10 +11,7 @@ const inRunCompactFocus = "Keep the current task and constraints, stage, unresol
 // compactWithinRun acts only at a settled pre-request boundary (v0 §10.4).
 func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
 	s := r.session
-	if !r.cfg.InRunCompact || r.steps == 0 || r.window == 0 {
-		return "", ""
-	}
-	if !r.compactOff && (!s.lastRequest.Known || s.lastRequest.InputTokens <= 0) {
+	if !r.cfg.InRunCompact || r.steps == 0 || r.window == 0 || r.compactOff || !s.lastRequest.Known || s.lastRequest.InputTokens <= 0 {
 		return "", ""
 	}
 	scope := RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps + 1}
@@ -27,23 +24,12 @@ func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
 		// not evidence that this request could have been encoded instead.
 		return "", ""
 	}
-	estimated := math.Max(float64(s.lastRequest.InputTokens), math.Ceil(float64(size)*rate))
-	safeNext := estimated+16_000 <= float64(r.window)
-	if r.compactOff {
-		if !safeNext {
-			return StatusLimitExceeded, "the next request cannot fit with 16,000 tokens reserved after within-run compaction was skipped"
-		}
-		return "", ""
-	}
 	if float64(s.lastRequest.InputTokens) < threshold && math.Ceil(float64(size)*rate) < threshold {
 		return "", ""
 	}
 	skip := func(reason string) (RunStatus, string) {
 		r.trace.Write("compaction.skipped", r.steps, map[string]any{"reason": reason})
 		r.compactOff = true
-		if !safeNext {
-			return StatusLimitExceeded, reason + "; the next request cannot fit with 16,000 tokens reserved"
-		}
 		return "", ""
 	}
 	if r.compactions >= 8 {
