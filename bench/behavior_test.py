@@ -197,6 +197,30 @@ class BehaviorTest(unittest.TestCase):
                 self.assertEqual(report["status"], "pass")
         self.assertEqual(self.native_requests, 2)
 
+    def test_file_enumeration_is_unordered_but_content_and_events_are_not(self):
+        manifest, mapping, links, reference, candidate, refbin, candbin = self.records("ordinary")
+        for observation in (reference["cases"][0], candidate["cases"][0]):
+            path = Path(observation["workspace"]) / "z.txt"
+            path.write_bytes(b"same")
+            observation["files"].append({"path": "z.txt", "present": True, "mode": path.stat().st_mode & 0o777,
+                                         "sha256": behavior.digest(path)})
+        candidate["cases"][0]["files"].reverse()
+        self.assertEqual(self.check(manifest, mapping, links, reference, candidate, refbin, candbin)["status"], "pass")
+        candidate["cases"][0]["files"][0]["sha256"] = sha(b"different")
+        self.assertIn({"case": "range", "field": "files"},
+                      self.check(manifest, mapping, links, reference, candidate, refbin, candbin)["differences"])
+        candidate["cases"][0]["files"].append(candidate["cases"][0]["files"][0].copy())
+        with self.assertRaises(behavior.Incomplete):
+            self.check(manifest, mapping, links, reference, candidate, refbin, candbin)
+
+        manifest, mapping, links, reference, candidate, refbin, candbin = self.records("migration")
+        extra = {"provider": "openai", "raw_b64": encoded(b'{"type":"reasoning"}')}
+        reference["cases"][0]["native_items"].append(extra)
+        candidate["cases"][0]["native_items"].append(extra)
+        candidate["cases"][0]["native_items"].reverse()
+        self.assertIn({"case": "native", "field": "native_items"},
+                      self.check(manifest, mapping, links, reference, candidate, refbin, candbin)["differences"])
+
     def test_wrong_candidate_program_fails_both_fixture_kinds(self):
         for kind, old, new, field in (("ordinary", "return lines[1]", "return lines[0]", "stdout_b64"),
                                       ("migration", 'write_bytes(body)', 'write_bytes(b"wrong")', "files")):

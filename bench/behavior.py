@@ -267,6 +267,9 @@ def compare(manifest, mapping, links, reference, candidate, root, reference_bina
             if field == "stderr_b64" and case.get("normalize_stderr_workspace", False):
                 left = decoded(left, f"{key}.stderr", InvalidReference).replace(a["workspace"].encode(), b"<workspace>")
                 right = decoded(right, f"{key}.stderr", Incomplete).replace(b["workspace"].encode(), b"<workspace>")
+            if field == "files":
+                left = sorted(left, key=lambda file: file["path"])
+                right = sorted(right, key=lambda file: file["path"])
             if left != right:
                 differences.append({"case": key, "field": field})
     return {"status": "behavior_difference" if differences else "pass", "differences": differences,
