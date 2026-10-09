@@ -12,6 +12,9 @@ import (
 //go:embed instructions.txt
 var defaultInstructions string
 
+//go:embed child_instructions.txt
+var childInstructions string
+
 const frictionInstructions = `
 # Friction reports
 
@@ -57,7 +60,11 @@ func instructions(cfg Config) string {
 	}
 	// The model named here is the one requested. A provider may serve a dated
 	// snapshot of it, which the trace records separately from the response.
-	text := defaultInstructions + fmt.Sprintf(
+	fixed := defaultInstructions
+	if cfg.child {
+		fixed = childInstructions // v0 §6: child rules omit parent-only tools and state.
+	}
+	text := fixed + fmt.Sprintf(
 		"\n# Runtime\n\nProvider: %s\nModel: %s\nReasoning effort: %s\nPlatform: %s\n"+
 			"Workspace: %s\nMode: %s\nBudget: %s model requests and %s tool calls per run\n",
 		cfg.Provider, cfg.Model, effort, runtime.GOOS,

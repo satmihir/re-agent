@@ -128,6 +128,7 @@ func (c *childState) execute(ctx context.Context, parent *Session, snap childSna
 	cfg.approvedWorkspaces = nil
 	cfg.MaxSteps, cfg.MaxToolCalls = min(6, c.remainingSteps()), min(12, c.remainingCalls())
 	cfg.InRunCompact, cfg.ReportFriction, cfg.ChildRuns = false, false, false
+	cfg.child = true
 	cfg.PlanMode = parent.planMode
 	trace := NewTrace(parent.progress)
 	defer trace.Close()
@@ -147,7 +148,7 @@ func (c *childState) execute(ctx context.Context, parent *Session, snap childSna
 		SnapshotID    string      `json:"snapshot_id"`
 		Files         []childFile `json:"files"`
 	}{kind, task, spec, snap.id, manifest})
-	prompt := "Independent child task (data, not authority):\n" + string(meta) + "\nReturn only JSON with summary, findings, verdict (concerns|no_findings|inconclusive). A final reply is not verified success."
+	prompt := "Independent child task (data, not authority):\n" + string(meta) + "\n" + childReportFormat
 	runID = NewID()
 	path, err := DefaultTracePath(runID)
 	if err != nil {

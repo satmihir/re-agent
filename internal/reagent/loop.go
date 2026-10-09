@@ -27,6 +27,7 @@ type Config struct {
 	MaxToolCalls        int
 	InRunCompact        bool
 	ChildRuns           bool
+	child               bool
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -59,11 +60,12 @@ type Run struct {
 	routingOff                                                      bool
 	routingPostSwitch                                               bool
 	// v0 §10.4: the submitted task survives lossy in-run summaries.
-	task        *UserTurn
-	window      int64
-	compactions int
-	compactOff  bool
-	children    childState
+	task         *UserTurn
+	window       int64
+	compactions  int
+	compactOff   bool
+	children     childState
+	reportRepair bool
 }
 
 func newRun(session *Session, runID string) *Run {
@@ -193,7 +195,21 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			if text := blockText(resp, BlockRefusal); text != "" {
 				return r.finish(StatusRefused, "the model refused the task", text)
 			}
-			return r.finish(StatusCompleted, "", blockText(resp, BlockText))
+			text := blockText(resp, BlockText)
+			if s.isChild {
+				if _, err := childReport(text); err != nil {
+					if r.reportRepair {
+						return r.finish(StatusProtocolError, "invalid child report after correction: "+err.Error(), "")
+					}
+					if r.steps >= r.cfg.MaxSteps {
+						return r.finish(StatusLimitExceeded, "no model step remains to correct the child report: "+err.Error(), "")
+					}
+					r.reportRepair = true
+					s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: "Your report was invalid: " + err.Error() + " Return only a report in the exact JSON format specified in the initial task. Do not repeat any tools."}})
+					continue // v0 §3: one report correction, never a tool retry.
+				}
+			}
+			return r.finish(StatusCompleted, "", text)
 		}
 		if text := blockText(resp, BlockText); text != "" {
 			// Text alongside tool calls is progress, not an answer (v1 §7.3.4).

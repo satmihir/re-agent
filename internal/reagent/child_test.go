@@ -132,7 +132,7 @@ func TestChild_TwoFreshReviewersInspectEncodedFirstRequests(t *testing.T) {
 						t.Fatalf("request %d contaminated by %s", i, unwanted)
 					}
 				}
-				if !strings.Contains(string(body), "preserve public behavior") || !strings.Contains(string(body), "source.go") || strings.Contains(string(body), "child_run") || strings.Contains(string(body), "write_file") {
+				if !strings.Contains(string(body), "preserve public behavior") || !strings.Contains(string(body), "source.go") || !strings.Contains(string(body), "severity") || !strings.Contains(string(body), "location") || !strings.Contains(string(body), "description") || !strings.Contains(string(body), "at most 20") || strings.Contains(string(body), "child_run") || strings.Contains(string(body), "write_file") || strings.Contains(string(body), "When commands depend on each other") || strings.Contains(string(body), "A user message may carry a workspace_state") {
 					t.Fatalf("wrong child boundary: %s", body)
 				}
 			}
@@ -234,7 +234,7 @@ func TestChild_RefusalMalformedFailureAndReadOnly(t *testing.T) {
 		status   RunStatus
 	}{
 		{"refusal", turn(refusalBlock("no")), StatusRefused},
-		{"malformed report", turn(textBlock(`{"summary":"okay","verdict":"no_findings"}`)), StatusCompleted},
+		{"malformed report", turn(textBlock(`{"summary":"okay","verdict":"no_findings"}`)), StatusProtocolError},
 		{"protocol failure", turn(), StatusProtocolError},
 		{"write denied", turn(callBlock("write", "write_file", `{"path":"source.go","content":"changed"}`)), StatusCompleted},
 		{"recursion denied", turn(callBlock("nested", "child_run", `{}`)), StatusCompleted},
@@ -243,7 +243,9 @@ func TestChild_RefusalMalformedFailureAndReadOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, digest := childFixture(t, openaiName)
 			s.model = NewScriptedModel(turn(callBlock("child", "child_run", childArgs("review", digest))), turn(textBlock("done")))
-			if tc.name == "write denied" || tc.name == "recursion denied" {
+			if tc.name == "malformed report" {
+				s.childModel = func(_ string, _ *Trace) Model { return NewScriptedModel(tc.response, tc.response) }
+			} else if tc.name == "write denied" || tc.name == "recursion denied" {
 				s.childModel = func(_ string, _ *Trace) Model {
 					return NewScriptedModel(tc.response, turn(textBlock(`{"summary":"could not write","findings":[],"verdict":"inconclusive"}`)))
 				}
@@ -276,6 +278,8 @@ func TestChild_RefusalMalformedFailureAndReadOnly(t *testing.T) {
 				}
 			} else if data.ReportValid || data.Status != tc.status {
 				t.Fatalf("child: %+v", data)
+			} else if tc.name == "malformed report" && data.Steps != 2 {
+				t.Fatalf("child did not use exactly one correction: %+v", data)
 			}
 		})
 	}
@@ -458,5 +462,75 @@ func TestChild_FreshModelSwitchRetainsAdapterBinding(t *testing.T) {
 	result, err := c.session.Turn(context.Background(), "review", NewID(), filepath.Join(t.TempDir(), "parent.jsonl"))
 	if err != nil || result.Status != StatusCompleted || !childOutcome(t, c.session, 0).ReportValid {
 		t.Fatalf("fresh switch child: %+v %v", result, err)
+	}
+}
+
+func TestChild_ReportCorrectionUsesOneBoundedStep(t *testing.T) {
+	s, digest := childFixture(t, openaiName)
+	s.model = NewScriptedModel(turn(callBlock("child", "child_run", childArgs("review", digest))), turn(textBlock("done")))
+	requests := 0
+	s.childModel = func(_ string, _ *Trace) Model {
+		return childTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			requests++
+			body, err := EncodeOpenAIRequest(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if requests == 1 {
+				if len(req.History) != 1 || !strings.Contains(string(body), "description") || !strings.Contains(string(body), "16 KiB") {
+					t.Fatalf("missing report schema: %s", body)
+				}
+				response := turn(textBlock(`{"summary":"found issue","findings":[{"file":"source.go","issue":"bug"}],"verdict":"approve"}`))
+				response.Native = NativeOutput{Provider: openaiProvider, Items: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first report"}]}`)}}
+				return response, nil
+			}
+			if len(req.History) != 3 || !strings.Contains(string(body), "Your report was invalid") {
+				t.Fatalf("missing correction in same child run: %s", body)
+			}
+			return turn(textBlock(`{"summary":"found issue","findings":[{"severity":"high","location":"source.go:1","description":"bug"}],"verdict":"concerns"}`)), nil
+		}}
+	}
+	result, err := s.Turn(context.Background(), "review", NewID(), filepath.Join(t.TempDir(), "parent.jsonl"))
+	if err != nil || result.Status != StatusCompleted || result.Children != 1 || result.ChildSteps != 2 || result.ChildCalls != 0 || requests != 2 || !childOutcome(t, s, 0).ReportValid {
+		t.Fatalf("correction: %+v %+v %v", result, childOutcome(t, s, 0), err)
+	}
+}
+
+func TestChild_ReportWrappersAreNarrow(t *testing.T) {
+	report := `{"summary":"reviewed","findings":[],"verdict":"no_findings"}`
+	for _, valid := range []string{report, "```json\n" + report + "\n```", "```\n" + report + "\n```", "Here is my review:\n\n" + report} {
+		if _, err := childReport(valid); err != nil {
+			t.Errorf("rejected wrapper %q: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{"Here is my review:\n```json\n" + report + "\n```", report + "\nextra text", `{"summary":"reviewed","findings":[{"file":"x","issue":"bug"}],"verdict":"approve"}`, "```xml\n" + report + "\n```"} {
+		if _, err := childReport(invalid); err == nil {
+			t.Errorf("accepted invalid report %q", invalid)
+		}
+	}
+}
+
+func TestChild_ReportCorrectionRequiresRemainingStep(t *testing.T) {
+	s, digest := childFixture(t, openaiName)
+	count := 0
+	s.model = childTestModel{generate: func(_ context.Context, _ ModelRequest) (ModelResponse, error) {
+		count++
+		if count == 1 {
+			s.currentRun.children.steps = maxChildSteps - 1
+			return turn(callBlock("child", "child_run", childArgs("review", digest))), nil
+		}
+		return turn(textBlock("done")), nil
+	}}
+	calls := 0
+	s.childModel = func(_ string, _ *Trace) Model {
+		return childTestModel{generate: func(_ context.Context, _ ModelRequest) (ModelResponse, error) {
+			calls++
+			return turn(textBlock(`{"summary":"invalid"}`)), nil
+		}}
+	}
+	result, err := s.Turn(context.Background(), "review", NewID(), filepath.Join(t.TempDir(), "parent.jsonl"))
+	data := childOutcome(t, s, 0)
+	if err != nil || result.Status != StatusCompleted || data.Status != StatusLimitExceeded || data.ReportValid || calls != 1 || result.ChildSteps != maxChildSteps {
+		t.Fatalf("exhausted correction: %+v %+v %v", result, data, err)
 	}
 }

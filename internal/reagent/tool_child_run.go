@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+// v0 §3: one visible schema for generation and validation.
+const childReportFormat = `Return a text-only JSON object with exactly these fields and no extras:
+{"summary":"nonblank text","findings":[{"severity":"nonblank text","location":"file:line or other precise reference","description":"nonblank text"}],"verdict":"concerns"}
+Use an empty findings array if none. Verdict must be concerns, no_findings, or inconclusive. Summary is at most 4096 bytes; findings at most 20; each severity at most 32 bytes, location 256 bytes, description 1024 bytes; the whole reply at most 16 KiB. Every field is required, including all three finding fields. Prefer only JSON, without commentary or a code fence. Completed is not verified success.`
+
 type childRunTool struct{ session *Session }
 
 // NewChildRunTool offers bounded fresh-context work when explicitly enabled.
@@ -128,11 +133,24 @@ func (t childRunTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOut
 }
 
 func childReport(reply string) (json.RawMessage, error) {
-	if len(reply) > 16<<10 || !json.Valid([]byte(reply)) {
-		return nil, fmt.Errorf("child report is oversized or malformed")
+	if len(reply) > 16<<10 {
+		return nil, fmt.Errorf("child report exceeds 16 KiB")
+	}
+	text := strings.TrimSpace(reply)
+	if strings.HasPrefix(text, "```") {
+		line, rest, ok := strings.Cut(text, "\n")
+		if !ok || (line != "```" && line != "```json") || !strings.HasSuffix(rest, "\n```") {
+			return nil, fmt.Errorf("child report has an invalid code fence")
+		}
+		text = strings.TrimSpace(strings.TrimSuffix(rest, "\n```"))
+	} else if line, rest, ok := strings.Cut(text, "\n"); ok && len(line) <= 160 && (strings.HasSuffix(line, ":") || strings.HasSuffix(line, ".")) && strings.HasPrefix(strings.TrimSpace(rest), "{") {
+		text = strings.TrimSpace(rest)
+	}
+	if !json.Valid([]byte(text)) {
+		return nil, fmt.Errorf("child report is malformed JSON")
 	}
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(reply), &fields); err != nil || fields["summary"] == nil || fields["findings"] == nil || fields["verdict"] == nil || string(fields["findings"]) == "null" {
+	if err := json.Unmarshal([]byte(text), &fields); err != nil || fields["summary"] == nil || fields["findings"] == nil || fields["verdict"] == nil || string(fields["findings"]) == "null" {
 		return nil, fmt.Errorf("child report requires summary, findings and verdict")
 	}
 	var report struct {
@@ -144,7 +162,7 @@ func childReport(reply string) (json.RawMessage, error) {
 		} `json:"findings"`
 		Verdict string `json:"verdict"`
 	}
-	if bad := decodeArgs(json.RawMessage(reply), &report); bad != nil {
+	if bad := decodeArgs(json.RawMessage(text), &report); bad != nil {
 		return nil, fmt.Errorf("invalid child report: %s", bad.Message)
 	}
 	if strings.TrimSpace(report.Summary) == "" || len(report.Summary) > 4096 || len(report.Findings) > 20 {
