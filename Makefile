@@ -4,7 +4,7 @@
 #   make check    format, vet, and the offline suite; needs no credentials
 #   make live     conformance runs against both providers; reads keys from .env
 #   make tty-check  drive the chat in a pseudo-terminal and check the screen; offline
-#   make git-do-eval  score git_do's recipe choice on 72 requests against live Jev; reads .env
+#   make git-do-eval  repeated real/hand git_do decisions; MODE=jev|recipe N=5; Jev reads .env
 
 .PHONY: all build check live tty-check git-do-eval
 
@@ -36,9 +36,13 @@ tty-check:
 	@dir=$$(mktemp -d) && go build -o $$dir/reagent ./cmd/reagent && \
 	python3 bench/tty/check.py $$dir/reagent; status=$$?; rm -rf $$dir; exit $$status
 
-# Calls live Jev about 72 times with TYPESAFE_API_KEY from .env. It fails if
-# any wrong git_do recipe would have run (v0 §10.9).
+# Repeats each case; recipe mode uses only actual model-named outcomes and needs no key.
+# Wrong runs or <90% held-out real git-only right-and-ran fail (v0 §10.9).
 git-do-eval:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
-	if [ -z "$$TYPESAFE_API_KEY" ]; then echo "no TYPESAFE_API_KEY set; add it to .env"; exit 1; fi; \
-	REAGENT_GIT_DO_EVAL=1 go test ./internal/reagent/ -run TestGitDoEval -v -count=1
+	if [ "$(MODE)" = jev ] && [ -z "$$TYPESAFE_API_KEY" ]; then echo "no TYPESAFE_API_KEY set; add it to .env"; exit 1; fi; \
+	REAGENT_GIT_DO_EVAL=1 REAGENT_GIT_DO_EVAL_MODE=$(MODE) REAGENT_GIT_DO_EVAL_REPEATS=$(N) \
+	go test ./internal/reagent/ -run '^TestGitDoEval$$' -v -count=1
+
+MODE ?= jev
+N ?= 5

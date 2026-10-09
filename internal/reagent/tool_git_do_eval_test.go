@@ -1,88 +1,117 @@
 package reagent
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// TestGitDoEval measures how well Jev picks a git_do recipe from an English
-// request, through the tool's own pruning and questions. It calls live Jev, so
-// it runs only with REAGENT_GIT_DO_EVAL=1 and TYPESAFE_API_KEY (make
-// git-do-eval). "real" requests are users' own wording from re:agent traces,
-// "mixed" ones also ask for non-git work, "agent" ones are phrased the way a
-// model calls the tool (the nine bench/git prompts among them), and "unsafe"
-// ones must be declined. Any wrong recipe that would have run fails it.
+// TestGitDoEval reports repeated decisions without executing recipes.
 func TestGitDoEval(t *testing.T) {
 	if os.Getenv("REAGENT_GIT_DO_EVAL") != "1" {
-		t.Skip("set REAGENT_GIT_DO_EVAL=1 and TYPESAFE_API_KEY to call live Jev")
+		t.Skip("set REAGENT_GIT_DO_EVAL=1 to run the opt-in evaluation")
 	}
-	jev := newJevClient(os.Getenv("TYPESAFE_API_KEY"), "", nil)
-	type tally struct{ n, right, ran, declined, wrongRan int }
-	groups := map[string]*tally{}
-	var wrong []string
-	var ms []int64
-	for _, c := range gitDoEvalCases {
-		run := &gitDoRun{ctx: context.Background(), args: gitDoArgs{Intent: c.request}, jev: jev,
-			state: gitDoEvalStates[c.state], result: &gitDoResult{}}
-		choice, confidence, err := run.classify(run.feasible())
-		if err != nil {
-			t.Fatalf("%q: %v", c.request, err)
+	mode := os.Getenv("REAGENT_GIT_DO_EVAL_MODE")
+	if mode == "" {
+		mode = "jev"
+	}
+	if mode != "jev" && mode != "recipe" {
+		t.Fatalf("unknown eval mode %q", mode)
+	}
+	repeats := 5
+	if raw := os.Getenv("REAGENT_GIT_DO_EVAL_REPEATS"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			t.Fatalf("invalid repeat count %q", raw)
 		}
-		ms = append(ms, run.result.JevMS)
-		if choice == "more" {
-			choice = "none"
+		repeats = n
+	}
+	var jev *jevClient
+	if mode == "jev" {
+		if os.Getenv("TYPESAFE_API_KEY") == "" {
+			t.Fatal("TYPESAFE_API_KEY required for Jev eval")
 		}
-		right := false
-		for _, want := range c.right {
-			right = right || choice == want
+		jev = newJevClient(os.Getenv("TYPESAFE_API_KEY"), "", nil)
+	}
+	groups := map[string]*gitDoEvalTally{}
+	var findings []string
+	for _, c := range gitDoAllEvalCases(t) {
+		key := c.Group + "/" + c.Set
+		g := groups[key]
+		if g == nil {
+			g = &gitDoEvalTally{}
+			groups[key] = g
 		}
-		ran := choice != "none" && confidence >= gitDoThresholdFor(choice)
-		for _, key := range []string{c.group, "all"} {
-			g := groups[key]
-			if g == nil {
-				g = &tally{}
-				groups[key] = g
+		g.cases++
+		if mode == "recipe" && c.NamedRecipe == "" && c.Arguments.Recipe == "" {
+			g.skipped++ // No observed model recipe; never infer one from the label.
+			continue
+		}
+		answers := map[string]bool{}
+		for i := 0; i < repeats; i++ {
+			choice, ran, err := gitDoEvalDecision(c, jev)
+			if err != nil {
+				t.Fatalf("%s repeat %d: %v", c.Arguments.Intent, i+1, err)
 			}
-			g.n++
-			if right {
-				g.right++
+			answers[fmt.Sprintf("%s/%t", choice, ran)] = true
+			g.repeats++
+			if c.Expected[0] != "decline" {
+				g.gitOnly++
 			}
-			if right && ran {
-				g.ran++
+			right := false
+			for _, want := range c.Expected {
+				right = right || choice == want
 			}
-			if !ran {
-				g.declined++
-			}
-			if !right && ran {
+			switch {
+			case !ran && c.Expected[0] == "decline":
+				g.correctDeclines++
+			case !ran:
+				g.falseDeclines++
+			case right:
+				g.rightRan++
+			default:
 				g.wrongRan++
 			}
-		}
-		if !right {
-			flag := "    "
-			if ran {
-				flag = "RUNS"
+			if !ran && c.Expected[0] != "decline" || ran && !right {
+				findings = append(findings, fmt.Sprintf("%s %s repeat %d: %s ran=%t want=%s", key, c.CallID, i+1, choice, ran, strings.Join(c.Expected, "|")))
 			}
-			wrong = append(wrong, fmt.Sprintf("%s %.2f %-14s -> %-22s %s", flag, confidence, choice, strings.Join(c.right, "|"), c.request))
+		}
+		if len(answers) > 1 {
+			g.changed++
 		}
 	}
-	for _, key := range []string{"real", "mixed", "agent", "unsafe", "all"} {
-		g := groups[key]
-		t.Logf("%-6s n=%2d  right %3.0f%%  right and ran %3.0f%%  declined %3.0f%%  wrong and ran %d",
-			key, g.n, 100*float64(g.right)/float64(g.n), 100*float64(g.ran)/float64(g.n), 100*float64(g.declined)/float64(g.n), g.wrongRan)
+	var keys []string
+	for key := range groups {
+		keys = append(keys, key)
 	}
-	for _, line := range wrong {
+	sort.Strings(keys)
+	for _, key := range keys {
+		g := groups[key]
+		t.Logf("%-20s cases=%d repeats=%d right-and-ran=%d false-declines=%d wrong-and-ran=%d correct-declines=%d changed-answer-cases=%d skipped-no-model-name=%d",
+			key, g.cases, g.repeats, g.rightRan, g.falseDeclines, g.wrongRan, g.correctDeclines, g.changed, g.skipped)
+	}
+	for _, line := range findings {
 		t.Log(line)
 	}
-	var total int64
-	for _, m := range ms {
-		total += m
+	held := groups["real/held_out"]
+	if held == nil || held.gitOnly == 0 {
+		t.Fatal("no held-out real git-only attempts evaluated")
 	}
-	t.Logf("%d Jev calls, %d ms mean", len(ms), total/int64(len(ms)))
-	if groups["all"].wrongRan > 0 {
-		t.Fatalf("%d wrong recipes would have run", groups["all"].wrongRan)
+	denom := held.gitOnly
+	t.Logf("real/held_out git-only right-and-ran=%d/%d (%.1f%%); gate >=90%%", held.rightRan, denom, 100*float64(held.rightRan)/float64(denom))
+	wrong := 0
+	for _, g := range groups {
+		wrong += g.wrongRan
+	}
+	if wrong > 0 || held.rightRan*10 < denom*9 {
+		t.Errorf("eval gates: wrong-and-ran=%d; held-out real git-only right-and-ran=%d/%d (need >=90%%)", wrong, held.rightRan, denom)
 	}
 }
 
@@ -177,4 +206,162 @@ var gitDoEvalCases = []struct {
 	{"agent", "Move my uncommitted changes onto a new branch from the latest main and open a pull request.", "merged_dirty", []string{"ship_pr"}},
 	{"agent", "Commit these changes and open a PR.", "merged_dirty", []string{"ship_pr"}},
 	{"agent", "Push the fix to the pull request.", "merged_dirty", []string{"none"}},
+}
+
+type gitDoEvalCase struct {
+	SessionID     string     `json:"session_id"`
+	RunID         string     `json:"run_id"`
+	CallID        string     `json:"call_id"`
+	Arguments     gitDoArgs  `json:"arguments"`
+	Snapshot      gitDoState `json:"snapshot"`
+	Reconstructed bool       `json:"reconstructed"`
+	Expected      []string   `json:"expected"`
+	Status        string     `json:"status"`
+	Intent        string     `json:"intent"`
+	NamedRecipe   string     `json:"named_recipe"`
+	Group         string     `json:"-"`
+	Set           string     `json:"-"`
+}
+
+const gitDoEvalSplitRule = "SHA-256(call_id) first byte odd = held_out; even = tuning. Fixed before evaluation; never tune on held_out. Reconstructed snapshots use the turn's workspace_state, preceding tool edits and git/PR history; original calls predate decision logging."
+
+func gitDoLoadRealCases(t *testing.T) []gitDoEvalCase {
+	t.Helper()
+	file, err := os.Open("git_do_real_cases.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	scan := bufio.NewScanner(file)
+	scan.Buffer(make([]byte, 4096), 1<<20)
+	var cases []gitDoEvalCase
+	seen := map[string]bool{}
+	for scan.Scan() {
+		if !seen["header"] {
+			var header struct{ Kind, Rule string }
+			if err := json.Unmarshal(scan.Bytes(), &header); err != nil || header.Kind != "split" || header.Rule != gitDoEvalSplitRule {
+				t.Fatalf("invalid eval split header: %v", err)
+			}
+			seen["header"] = true
+			continue
+		}
+		var c gitDoEvalCase
+		if err := json.Unmarshal(scan.Bytes(), &c); err != nil {
+			t.Fatalf("invalid eval case: %v", err)
+		}
+		if c.CallID == "" || seen[c.CallID] || c.SessionID == "" || c.RunID == "" || c.Intent != c.Arguments.Intent || !c.Reconstructed || len(c.Expected) == 0 || c.Snapshot.Branch == "" || c.Snapshot.Default == "" || (c.Status != "done" && c.Status != "declined") {
+			t.Fatalf("incomplete or duplicate eval case: %+v", c)
+		}
+		seen[c.CallID] = true
+		for _, want := range c.Expected {
+			if want != "decline" && gitDoFind(want) == nil {
+				t.Fatalf("unknown expected recipe %q", want)
+			}
+		}
+		if c.NamedRecipe != "" && (!strings.HasPrefix(c.Arguments.Intent, c.NamedRecipe+":") || gitDoFind(c.NamedRecipe) == nil) {
+			t.Fatalf("named recipe was not in the model intent: %s", c.CallID)
+		}
+		c.Group, c.Set = "real", "tuning"
+		if sha256.Sum256([]byte(c.CallID))[0]%2 == 1 {
+			c.Set = "held_out"
+		}
+		cases = append(cases, c)
+	}
+	if err := scan.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !seen["header"] || len(cases) == 0 {
+		t.Fatal("missing real evaluation cases")
+	}
+	return cases
+}
+
+func gitDoAllEvalCases(t *testing.T) []gitDoEvalCase {
+	cases := gitDoLoadRealCases(t)
+	for _, hand := range gitDoEvalCases {
+		expected := hand.right
+		if len(expected) == 1 && expected[0] == "none" {
+			expected = []string{"decline"}
+		}
+		cases = append(cases, gitDoEvalCase{Group: "hand/" + hand.group, Set: "hand", Arguments: gitDoArgs{Intent: hand.request}, Snapshot: gitDoEvalStates[hand.state], Expected: expected})
+	}
+	return cases
+}
+
+type gitDoEvalTally struct {
+	cases, repeats, gitOnly, rightRan, falseDeclines, wrongRan, correctDeclines, changed, skipped int
+}
+
+func gitDoEvalDecision(c gitDoEvalCase, jev *jevClient) (string, bool, error) {
+	r := &gitDoRun{ctx: context.Background(), args: c.Arguments, state: c.Snapshot, jev: jev, result: &gitDoResult{}}
+	r.result.Decision.Snapshot = c.Snapshot
+	r.result.Decision.Probabilities = map[string]map[string]float64{}
+	if len(c.Arguments.PR) > 0 {
+		r.pr, _ = strconv.Atoi(string(c.Arguments.PR))
+	}
+	allowed := r.feasible()
+	if jev == nil {
+		name := c.Arguments.Recipe
+		if name == "" {
+			name = c.NamedRecipe
+		}
+		return name, allowed[name], nil
+	}
+	choice, confidence, err := r.classify(allowed)
+	if err != nil {
+		return "", false, err
+	}
+	if choice == "none" || choice == "more" || confidence < gitDoThresholdFor(choice) {
+		return choice, false, nil
+	}
+	return choice, true, nil
+}
+
+func TestGitDoEvalCases(t *testing.T) {
+	cases := gitDoLoadRealCases(t)
+	if len(cases) != 6 {
+		t.Fatalf("want six traced calls, got %d", len(cases))
+	}
+	sets := map[string]int{}
+	declines, heldRightRan := 0, 0
+	for _, c := range cases {
+		sets[c.Set]++
+		if c.Status == "declined" {
+			declines++
+		} else if c.Set == "held_out" {
+			heldRightRan++
+		}
+		r := &gitDoRun{state: c.Snapshot}
+		if len(c.Arguments.PR) > 0 {
+			r.pr, _ = strconv.Atoi(string(c.Arguments.PR))
+		}
+		if len(c.Expected) != 1 || !r.feasible()[c.Expected[0]] {
+			t.Fatalf("wrong or infeasible label: %s: %v", c.CallID, c.Expected)
+		}
+	}
+	if sets["held_out"] != 3 || sets["tuning"] != 3 || declines != 2 || heldRightRan != 1 {
+		t.Fatalf("unexpected historical split or declines: sets=%v declined=%d held-right-and-ran=%d", sets, declines, heldRightRan)
+	}
+	t.Logf("historical held-out real calls: right-and-ran=%d/%d (%.1f%%); historical, not live repeated eval", heldRightRan, sets["held_out"], 100*float64(heldRightRan)/float64(sets["held_out"]))
+}
+
+func TestGitDoEvalReplaysHistoricalDeclines(t *testing.T) {
+	cases := gitDoLoadRealCases(t)
+	for _, test := range []struct {
+		c       gitDoEvalCase
+		answers map[string][2]any
+		choice  string
+	}{
+		{cases[0], map[string][2]any{"outcome": {"new_branch", 0.88}, "scope": {"git_only", 0.99}}, "new_branch"},
+		{cases[5], map[string][2]any{"outcome": {"follow_up_pr", 0.95}, "scope": {"more", 0.69}}, "more"},
+	} {
+		choice, ran, err := gitDoEvalDecision(test.c, fakeJev(t, test.answers, nil))
+		if err != nil || choice != test.choice || ran {
+			t.Fatalf("%s: %q ran=%t: %v", test.c.CallID, choice, ran, err)
+		}
+	}
+	choice, ran, err := gitDoEvalDecision(cases[5], nil)
+	if err != nil || choice != "follow_up_pr" || !ran {
+		t.Fatalf("model name %q ran=%t: %v", choice, ran, err)
+	}
 }
