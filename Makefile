@@ -4,7 +4,7 @@
 #   make check    format, vet, and the offline suite; needs no credentials
 #   make live     conformance runs against both providers; reads keys from .env
 #   make tty-check  drive the chat in a pseudo-terminal and check the screen; offline
-#   make git-do-eval  repeated real/hand git_do decisions; MODE=jev|recipe N=5; Jev reads .env
+#   make git-do-eval  repeated git_do decisions; MODE=jev|recipe N=5 SET=all|tuning|held_out
 
 .PHONY: all build check live tty-check git-do-eval
 
@@ -41,8 +41,9 @@ tty-check:
 git-do-eval:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ "$(MODE)" = jev ] && [ -z "$$TYPESAFE_API_KEY" ]; then echo "no TYPESAFE_API_KEY set; add it to .env"; exit 1; fi; \
-	REAGENT_GIT_DO_EVAL=1 REAGENT_GIT_DO_EVAL_MODE=$(MODE) REAGENT_GIT_DO_EVAL_REPEATS=$(N) \
+	REAGENT_GIT_DO_EVAL=1 REAGENT_GIT_DO_EVAL_MODE=$(MODE) REAGENT_GIT_DO_EVAL_REPEATS=$(N) REAGENT_GIT_DO_EVAL_SET=$(SET) \
 	go test ./internal/reagent/ -run '^TestGitDoEval$$' -v -count=1
 
 MODE ?= jev
 N ?= 5
+SET ?= all

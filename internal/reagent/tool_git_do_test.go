@@ -186,6 +186,7 @@ func TestGitDo_ArgumentsMatchTheMode(t *testing.T) {
 		{NewGitDoTool(ws, nil), `{"recipe":"nope"}`},
 		{NewGitDoTool(ws, nil), `{"recipe":"status","intent":"x"}`},
 		{NewGitDoTool(ws, newJevClient("k", "", nil)), `{"recipe":"status"}`},
+		{NewGitDoTool(ws, newJevClient("k", "", nil)), `{"intent":"show status","recipe":"nope"}`},
 	} {
 		if outcome := runTool(t, c.tool, c.args); outcome.Code != "invalid_arguments" {
 			t.Fatalf("%s: got %+v", c.args, outcome)
@@ -253,7 +254,7 @@ func TestGitDo_JevPicksAFeasibleRecipe(t *testing.T) {
 	if err != nil || sent != "Request: commit my change\nRepository: "+string(snapshot) {
 		t.Fatalf("Jev received %q; decision snapshot %s: %v", sent, snapshot, err)
 	}
-	if result.Decision.Threshold != 0.9 || result.Decision.DeclinedBy != "" || result.Decision.ChosenBy != "" || result.Decision.Probabilities["outcome"]["commit"] != 0.95 || result.Decision.Probabilities["scope"]["git_only"] != 0.9 {
+	if result.Decision.Threshold != 0.85 || result.Decision.DeclinedBy != "" || result.Decision.ChosenBy != "" || result.Decision.Probabilities["outcome"]["commit"] != 0.95 || result.Decision.Probabilities["scope"]["git_only"] != 0.9 {
 		t.Fatalf("decision %+v", result.Decision)
 	}
 	if len(result.Decision.Offered) != len(offered["outcome"]) {
@@ -325,22 +326,26 @@ func TestGitDo_JevDeclines(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, answers := range map[string]map[string][2]any{
-		"more than git":    {"outcome": {"commit", 0.99}, "scope": {"more", 0.8}},
-		"none":             {"outcome": {"none", 0.9}, "scope": {"git_only", 0.9}},
-		"low confidence":   {"outcome": {"commit", 0.5}, "scope": {"git_only", 0.9}},
-		"change under 0.9": {"outcome": {"commit", 0.85}, "scope": {"git_only", 0.9}},
+		"more than git":     {"outcome": {"commit", 0.99}, "scope": {"more", 0.8}},
+		"none":              {"outcome": {"none", 0.9}, "scope": {"git_only", 0.9}},
+		"low confidence":    {"outcome": {"commit", 0.5}, "scope": {"git_only", 0.9}},
+		"change under 0.85": {"outcome": {"commit", 0.84}, "scope": {"git_only", 0.9}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			outcome := runTool(t, NewGitDoTool(ws, fakeJev(t, answers, nil)), `{"intent":"implement it and commit"}`)
+			intent := `{"intent":"commit the changed README"}`
+			if name == "more than git" {
+				intent = `{"intent":"implement it and commit"}`
+			}
+			outcome := runTool(t, NewGitDoTool(ws, fakeJev(t, answers, nil)), intent)
 			if outcome.Code != "declined" || outcome.Effect != EffectNone {
 				t.Fatalf("got %+v", outcome)
 			}
 			decision := gitDoData(t, outcome).Decision
-			want := map[string]string{"more than git": "scope", "none": "none", "low confidence": "threshold", "change under 0.9": "threshold"}[name]
+			want := map[string]string{"more than git": "scope", "none": "none", "low confidence": "threshold", "change under 0.85": "threshold"}[name]
 			if decision.DeclinedBy != want || decision.Probabilities["outcome"] == nil || decision.Probabilities["scope"] == nil {
 				t.Fatalf("decision %+v", decision)
 			}
-			if want == "threshold" && decision.Threshold != 0.9 {
+			if want == "threshold" && decision.Threshold != 0.85 {
 				t.Fatalf("threshold %+v", decision)
 			}
 		})
@@ -490,5 +495,95 @@ func TestGitDo_ShipCommittedWorkWithoutAMessage(t *testing.T) {
 	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"ship_pr"}`)
 	if !outcome.OK {
 		t.Fatalf("got %+v", outcome)
+	}
+}
+
+func TestGitDo_JevNamedRecipeThresholdsAndMessages(t *testing.T) {
+	state := gitDoState{Branch: "main", Default: "main", Changed: []string{"README.md"}}
+	for _, test := range []struct {
+		name, intent, named, jevChoice, scope, declinedBy, reason string
+		probability, threshold                                    float64
+		ran                                                       bool
+	}{
+		{"explicit agreement", "commit changes", "commit", "commit", "git_only", "", "", 0.72, 0.7, true},
+		{"prefix agreement", "commit: record these changes", "", "commit", "git_only", "", "", 0.73, 0.7, true},
+		{"disagree", "commit changes", "status", "commit", "git_only", "threshold", "name the matching recipe", 0.88, 0.9, false},
+		{"name not allowed", "commit changes", "follow_up_pr", "commit", "git_only", "threshold", "name the matching recipe", 0.88, 0.9, false},
+		{"conflicting names", "commit: record changes", "status", "commit", "git_only", "threshold", "name the matching recipe", 0.88, 0.9, false},
+		{"unnamed below bar", "commit changes", "", "commit", "git_only", "threshold", "restate the git-only outcome", 0.84, 0.85, false},
+		{"unnamed at bar", "commit changes", "", "commit", "git_only", "", "", 0.85, 0.85, true},
+		{"scope overrides agreement", "commit: record changes", "", "commit", "more", "scope", "If the work is already done", 0.95, 0, false},
+		{"none", "delete branches", "", "none", "git_only", "none", "use exec", 0.9, 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			answers := map[string][2]any{"outcome": {test.jevChoice, test.probability}, "scope": {test.scope, 0.9}}
+			c := gitDoEvalCase{Arguments: gitDoArgs{Intent: test.intent, Recipe: test.named}, Snapshot: state}
+			result, ran, err := gitDoEvalDecision(c, fakeJev(t, answers, nil))
+			if err != nil || ran != test.ran || result.Decision.Threshold != test.threshold || result.Decision.DeclinedBy != test.declinedBy || !strings.Contains(result.Reason, test.reason) {
+				t.Fatalf("result %+v ran=%t: %v", result, ran, err)
+			}
+			name := test.named
+			if name == "" {
+				name = gitDoIntentRecipe(test.intent)
+			}
+			if name != result.Decision.NamedRecipe || (name != "" && result.Decision.NamedAgreed == nil) {
+				t.Fatalf("named decision %+v, want %s", result.Decision, name)
+			}
+		})
+	}
+}
+
+func TestGitDo_JevPrefixIsOnlyLeadingRecipe(t *testing.T) {
+	for intent, want := range map[string]string{
+		"ship_pr: commit and open a PR":          "ship_pr",
+		"  follow_up_pr: push and reply":         "follow_up_pr",
+		"commit the changes, then ship_pr: a PR": "",
+		"not_a_recipe: commit changes":           "",
+		"commit_push this branch":                "",
+	} {
+		if got := gitDoIntentRecipe(intent); got != want {
+			t.Fatalf("%q: got %q want %q", intent, got, want)
+		}
+	}
+}
+
+func TestGitDo_JevAcceptsOptionalRecipeArgument(t *testing.T) {
+	ws := gitDoRepo(t)
+	jev := fakeJev(t, map[string][2]any{"outcome": {"status", 0.76}, "scope": {"git_only", 0.99}}, nil)
+	outcome := runTool(t, NewGitDoTool(ws, jev), `{"intent":"show status","recipe":"status"}`)
+	result := gitDoData(t, outcome)
+	if !outcome.OK || result.Decision.NamedRecipe != "status" || result.Decision.NamedAgreed == nil || !*result.Decision.NamedAgreed || result.Decision.Threshold != 0.7 {
+		t.Fatalf("got %+v / %+v", outcome, result)
+	}
+}
+
+func TestGitDo_JevRejectsExplicitUnfinishedWorkDespiteGitOnlyAnswer(t *testing.T) {
+	state := gitDoState{Branch: "main", Default: "main", Changed: []string{"README.md"}}
+	for _, intent := range []string{
+		"implement the feature, commit and create a PR",
+		"Check the PR comments and fix all, commit and respond",
+		"check PR comments + fix + push + comment",
+	} {
+		c := gitDoEvalCase{Arguments: gitDoArgs{Intent: intent}, Snapshot: state}
+		answers := map[string][2]any{"outcome": {"commit", 0.99}, "scope": {"git_only", 0.99}}
+		result, ran, err := gitDoEvalDecision(c, fakeJev(t, answers, nil))
+		if err != nil || ran || result.Decision.DeclinedBy != "scope" || !strings.Contains(result.Reason, "finish it") {
+			t.Fatalf("%s: %+v ran=%t: %v", intent, result, ran, err)
+		}
+	}
+}
+
+func TestGitDo_JevRebaseKeepsHighBarWithoutName(t *testing.T) {
+	state := gitDoState{Branch: "feat/test", Default: "main"}
+	c := gitDoEvalCase{Arguments: gitDoArgs{Intent: "pull from main and try again"}, Snapshot: state}
+	answers := map[string][2]any{"outcome": {"rebase_push", 0.88}, "scope": {"git_only", 0.99}}
+	result, ran, err := gitDoEvalDecision(c, fakeJev(t, answers, nil))
+	if err != nil || ran || result.Decision.Threshold != 0 || result.Decision.DeclinedBy != "scope" {
+		t.Fatalf("%+v ran=%t: %v", result, ran, err)
+	}
+	c.Arguments.Intent = "rebase branch onto main and update remote"
+	result, ran, err = gitDoEvalDecision(c, fakeJev(t, answers, nil))
+	if err != nil || ran || result.Decision.Threshold != 0.9 || result.Decision.DeclinedBy != "threshold" {
+		t.Fatalf("%+v ran=%t: %v", result, ran, err)
 	}
 }
