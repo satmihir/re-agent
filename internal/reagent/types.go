@@ -271,7 +271,13 @@ type RunResult struct {
 	Usage     Usage     `json:"usage"`
 	// RouterUsage is separate from generative-model accounting and omitted without attempts.
 	RouterUsage *Usage `json:"router_usage,omitempty"`
-	TracePath   string `json:"trace_path,omitempty"`
+	// ChildUsage is distinct from this run's own model generations.
+	ChildUsage    *Usage `json:"child_usage,omitempty"`
+	ChildSteps    int    `json:"child_steps,omitempty"`
+	ChildCalls    int    `json:"child_calls,omitempty"`
+	ChildAttempts int    `json:"child_attempts,omitempty"`
+	Children      int    `json:"children,omitempty"`
+	TracePath     string `json:"trace_path,omitempty"`
 	// Effects lists what the run actually changed, so a failed run still
 	// reports the edits it made before stopping.
 	Effects []EffectRecord `json:"effects,omitempty"`

@@ -266,6 +266,15 @@ func TestLoop_DuplicateCallIDFailsWholeResponse(t *testing.T) {
 	})
 }
 
+func TestLoop_ProtocolRejectedResponseStillCountsReportedUsage(t *testing.T) {
+	invalid := turn(callBlock("repeat", "echo", `{}`), callBlock("repeat", "echo", `{}`))
+	invalid.Usage = Usage{Known: true, InputTokens: 31, OutputTokens: 7}
+	_, result := runScript(t, testConfig(t), invalid)
+	if result.Status != StatusProtocolError || result.Usage.InputTokens != 31 || result.Usage.OutputTokens != 7 {
+		t.Fatalf("protocol response usage: %+v", result)
+	}
+}
+
 // v1 §7.3.4: text next to a tool call is progress, never the final answer.
 func TestLoop_ProgressTextWithCallIsNotFinal(t *testing.T) {
 	_, result := runScript(t, testConfig(t),

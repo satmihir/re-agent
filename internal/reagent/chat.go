@@ -192,6 +192,7 @@ func (c *conversation) switchTo(info modelInfo) {
 	previous := c.session
 	c.session = NewSession(cfg, model, c.trace, c.progress)
 	c.session.snapshot, c.session.planMode = previous.snapshot, previous.planMode
+	c.session.childModel = previous.childModel
 	c.session.launchInstructions = previous.launchInstructions
 	c.session.workspaceConsent = previous.workspaceConsent
 	if previous.workspace != nil {

@@ -26,6 +26,8 @@ type Config struct {
 	MaxSteps            int
 	MaxToolCalls        int
 	InRunCompact        bool
+	ChildRuns           bool
+	child               bool
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -58,10 +60,12 @@ type Run struct {
 	routingOff                                                      bool
 	routingPostSwitch                                               bool
 	// v0 §10.4: the submitted task survives lossy in-run summaries.
-	task        *UserTurn
-	window      int64
-	compactions int
-	compactOff  bool
+	task         *UserTurn
+	window       int64
+	compactions  int
+	compactOff   bool
+	children     childState
+	reportRepair bool
 }
 
 func newRun(session *Session, runID string) *Run {
@@ -83,6 +87,8 @@ func NewID() string {
 // (v1 §7.2). Everything that reaches the model passes through here.
 func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMessage, plan string) RunResult {
 	s := r.session
+	s.currentRun = r
+	defer func() { s.currentRun = nil }()
 	defer s.display.stopStatus()
 	// The history a run starts from is embedded so its trace can be read on
 	// its own, without the traces of the turns before it (v1 §6.2).
@@ -130,6 +136,13 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 			return r.persistenceFailure(err)
 		}
+		if s.isChild && r.steps >= r.cfg.MaxSteps {
+			return r.finish(StatusLimitExceeded, "child model step budget exhausted", "")
+		}
+		if s.childBudget != nil && r.usage.Known && s.childBudget.usage.Known &&
+			r.usage.InputTokens+r.usage.OutputTokens+s.childBudget.usage.InputTokens+s.childBudget.usage.OutputTokens >= maxChildTokens {
+			return r.finish(StatusLimitExceeded, "reported child usage threshold reached", "")
+		}
 		r.steps++
 		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
 		r.trace.Write("model.requested", r.steps, req)
@@ -161,12 +174,12 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 				s.tokensPerByte = float64(resp.Usage.InputTokens) / float64(size)
 			}
 		}
+		r.usage.Add(resp.Usage)
 		if reason := r.validateResponse(resp); reason != "" {
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": reason, "response": resp})
 			return r.finish(StatusProtocolError, reason, "")
 		}
 
-		r.usage.Add(resp.Usage)
 		r.trace.Write("model.accepted", r.steps, resp)
 		// The whole response is appended before any of its results (I08).
 		s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &resp})
@@ -182,7 +195,21 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			if text := blockText(resp, BlockRefusal); text != "" {
 				return r.finish(StatusRefused, "the model refused the task", text)
 			}
-			return r.finish(StatusCompleted, "", blockText(resp, BlockText))
+			text := blockText(resp, BlockText)
+			if s.isChild {
+				if _, err := childReport(text); err != nil {
+					if r.reportRepair {
+						return r.finish(StatusProtocolError, "invalid child report after correction: "+err.Error(), "")
+					}
+					if r.steps >= r.cfg.MaxSteps {
+						return r.finish(StatusLimitExceeded, "no model step remains to correct the child report: "+err.Error(), "")
+					}
+					r.reportRepair = true
+					s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: "Your report was invalid: " + err.Error() + " Return only a report in the exact JSON format specified in the initial task. Do not repeat any tools."}})
+					continue // v0 §3: one report correction, never a tool retry.
+				}
+			}
+			return r.finish(StatusCompleted, "", text)
 		}
 		if text := blockText(resp, BlockText); text != "" {
 			// Text alongside tool calls is progress, not an answer (v1 §7.3.4).
@@ -374,6 +401,10 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 		Status: status, Reason: reason, Reply: reply,
 		Steps: r.steps, ToolCalls: r.calls, Usage: r.usage, TracePath: r.trace.Path(),
 		Effects: r.effects, Resumable: r.resumable, RouterUsage: r.routerUsage,
+	}
+	if r.children.children > 0 {
+		result.ChildUsage = &r.children.usage
+		result.Children, result.ChildSteps, result.ChildCalls, result.ChildAttempts = r.children.children, r.children.steps, r.children.calls, r.children.attempts
 	}
 	r.trace.Write("run.finished", r.steps, result)
 	if r.persistenceErr != nil {
