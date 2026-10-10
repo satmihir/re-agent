@@ -73,6 +73,7 @@ SCENARIOS = {
             ("expect", "status_row_last"),
             ("wait", "Hello after retry", 6),
             ("show", "model reply after retry"),
+            ("expect", "screen_has", "1 unreported retry"),
             ("expect", "status_row_last"),
         ],
     },

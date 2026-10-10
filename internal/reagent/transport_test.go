@@ -156,3 +156,36 @@ func TestTransport_OvernightRetryConnectionFailureIsRetried(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestTransport_OvernightWindowDoesNotCutOffInFlightAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		window     time.Duration
+		replyDelay time.Duration
+		firstFault bool
+		want       int32
+	}{
+		{"first attempt", 60 * time.Millisecond, 120 * time.Millisecond, false, 1},
+		{"retry near window end", 1400 * time.Millisecond, 700 * time.Millisecond, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.Copy(io.Discard, r.Body)
+				if attempts.Add(1) == 1 && tc.firstFault {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				time.Sleep(tc.replyDelay)
+				io.WriteString(w, "ok")
+			}))
+			t.Cleanup(server.Close)
+			tr := &transport{endpoint: server.URL, client: server.Client(), trace: NewTrace(io.Discard)}
+			start := time.Now()
+			status, raw, err := tr.call(withModelRetry(context.Background(), tc.window, nil), 1, []byte(`{}`), nil)
+			if err != nil || status != http.StatusOK || string(raw) != "ok" || attempts.Load() != tc.want || time.Since(start) <= tc.window {
+				t.Fatalf("after %s: status %d, body %q, attempts %d, error %v", time.Since(start), status, raw, attempts.Load(), err)
+			}
+		})
+	}
+}

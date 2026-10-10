@@ -139,21 +139,11 @@ func (t *transport) call(ctx context.Context, step int, body []byte, headers map
 func (t *transport) callModel(ctx context.Context, step int, body []byte, headers map[string]string, transient func([]byte) (bool, Usage)) (int, []byte, Usage, error) {
 	policy, overnight := ctx.Value(modelRetryKey{}).(modelRetry)
 	deadline := time.Now().Add(policy.window)
-	requestCtx := ctx
-	if overnight {
-		var cancel context.CancelFunc
-		requestCtx, cancel = context.WithDeadline(ctx, deadline)
-		defer cancel()
-	}
 	prior := Usage{Known: true}
 	for attempt := 1; ; attempt++ {
-		status, raw, retryAfter, err := t.send(requestCtx, attempt, step, body, headers)
+		status, raw, retryAfter, err := t.send(ctx, attempt, step, body, headers)
 		if ctx.Err() != nil {
 			return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled during a model request", Usage: prior}
-		}
-		if overnight && requestCtx.Err() != nil {
-			prior.Add(Usage{})
-			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, false, prior)
 		}
 		if modelErr, ok := err.(*ModelError); ok {
 			return 0, nil, prior, modelErr
@@ -178,10 +168,10 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 			}
 			continue
 		}
-		if streamRetry {
+		if streamRetry && streamUsage.Known {
 			prior.Add(streamUsage)
 		} else {
-			prior.Add(Usage{}) // A retry may have reached the provider without reporting usage.
+			prior.UnreportedAttempts++ // The provider may have billed an attempt without reporting usage.
 		}
 		if time.Until(deadline) <= 0 {
 			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
@@ -203,12 +193,9 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 		}
 		timer := time.NewTimer(delay)
 		select {
-		case <-requestCtx.Done():
+		case <-ctx.Done():
 			timer.Stop()
-			if ctx.Err() != nil {
-				return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry", Usage: prior}
-			}
-			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
+			return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry", Usage: prior}
 		case <-timer.C:
 		}
 		if time.Until(deadline) <= 0 {

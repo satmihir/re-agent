@@ -291,6 +291,9 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 	if result.Usage.Known {
 		tokens = fmt.Sprintf("%s in (%s cached) · %s out", formatCount(result.Usage.InputTokens), formatCount(result.Usage.CachedInputTokens), formatCount(result.Usage.OutputTokens))
 	}
+	if result.Usage.UnreportedAttempts > 0 {
+		tokens += " · " + plural(result.Usage.UnreportedAttempts, "unreported retry", "unreported retries")
+	}
 	markText := map[mark]string{markOK: "✓", markFailed: "✗", markUncertain: "!", markSkipped: "–"}[marker]
 	if d.styled {
 		markText = styleMark(marker, markText)

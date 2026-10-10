@@ -595,9 +595,12 @@ func TestOpenAI_OvernightRetryPreservesRequestAndDoesNotRepeatTools(t *testing.T
 	cfg.Provider, cfg.Model, cfg.ModelRetryWindow = openaiName, "test-model", 6*time.Second
 	trace := NewTrace(io.Discard)
 	model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
-	_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "find the marker")
+	session, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "find the marker")
 	if result.Status != StatusCompleted || result.ToolCalls != 1 || result.Steps != 2 {
 		t.Fatalf("run %+v", result)
+	}
+	if !result.Usage.Known || result.Usage.InputTokens != 250 || result.Usage.UnreportedAttempts != 2 || !session.lastRequest.Known || session.lastRequest.InputTokens != 150 || session.tokensPerByte <= 0 {
+		t.Fatalf("usage %+v, last request %+v, tokens/byte %v", result.Usage, session.lastRequest, session.tokensPerByte)
 	}
 	received := api.received()
 	if len(received) != 4 || !bytes.Equal(received[0], received[1]) || !bytes.Equal(received[1], received[2]) || bytes.Equal(received[2], received[3]) {
@@ -632,6 +635,7 @@ func TestOpenAI_OvernightRetryClassifiesTransportAndPermanentErrors(t *testing.T
 
 func TestOpenAI_OvernightRetryStreamOverloadAccountsUsage(t *testing.T) {
 	failure := sse(`{"type":"response.failed","response":{"status":"failed","error":{"code":"server_is_overloaded","message":"busy"},"usage":` + streamUsage + `}}`)
+	failure = strings.Replace(failure, "data: ", "x-retry-metadata: NO_MORE_RETRY\ndata: ", 1)
 	api := newFakeAPI(t, okReply(failure), okReply(sse(completed(`[{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]`))))
 	cfg := testConfig(t)
 	cfg.Provider, cfg.Model, cfg.Proxied, cfg.ModelRetryWindow = openaiName, "test-model", true, 3*time.Second
