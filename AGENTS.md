@@ -107,6 +107,7 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
   or real concurrency, so they are not enough on their own.
 - Report what works, what was tested, what was not, and any deviation from the
   design. Never claim a live run happened if it did not.
+- Create git worktrees outside the repository checkout (for example, as siblings), never inside it.
 - Do not commit, push, add CI, linters, Makefiles, or tooling unless asked.
 - If unsure whether something is in scope, it is not. Ask.
 

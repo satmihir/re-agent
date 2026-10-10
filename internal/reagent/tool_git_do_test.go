@@ -116,7 +116,7 @@ func TestGitDo_RecipeShipsAPullRequestWithProof(t *testing.T) {
 	for _, step := range result.Steps {
 		argv = append(argv, strings.Join(step.Argv, " "))
 	}
-	want := []string{"git switch -q -c docs/more", "git add -A", "git commit -q -m Say more",
+	want := []string{"git switch -q -c docs/more", "git add -A", "git diff --cached --name-status", "git commit -q -m Say more",
 		"git push -q -u origin docs/more", "gh pr create --base main --head docs/more --title More --body Adds a line."}
 	if strings.Join(argv, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("steps:\n%s", strings.Join(argv, "\n"))
@@ -658,5 +658,251 @@ func TestGitDo_JevStripsPrefixForRevertTargetQuestion(t *testing.T) {
 	outcome := runTool(t, NewGitDoTool(ws, jev), `{"intent":"revert_pr: revert the unrelated commit"}`)
 	if outcome.Code != "declined" || !strings.HasPrefix(sent, "Request: revert the unrelated commit\nRepository: ") {
 		t.Fatalf("%+v / Jev received %q", outcome, sent)
+	}
+}
+
+func gitDoGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func gitDoNestedWorktree(t *testing.T, ws *Workspace) {
+	t.Helper()
+	gitDoGit(t, ws.Root(), "worktree", "add", "-q", "--detach", filepath.Join(ws.Root(), "nested"))
+}
+
+func gitDoWrite(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGitDo_EmbeddedWorktreeDeclinesBeforeAnyMutation(t *testing.T) {
+	for _, recipe := range []string{"ship_pr", "commit_push", "split_commits"} {
+		t.Run(recipe, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+			gitDoWrite(t, ws.Root(), "intended.txt")
+			gitDoNestedWorktree(t, ws)
+			before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"`+recipe+`"}`)
+			if outcome.Code != "declined" || !strings.Contains(outcome.Message, "nested") || !strings.Contains(outcome.Message, "paths") || len(gitDoData(t, outcome).Steps) != 0 {
+				t.Fatalf("%+v", outcome)
+			}
+			if head := gitDoGit(t, ws.Root(), "rev-parse", "HEAD"); head != before {
+				t.Fatalf("committed %s", head)
+			}
+			if remote := gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature"); remote != "" {
+				t.Fatalf("pushed %s", remote)
+			}
+			if index := gitDoGit(t, ws.Root(), "diff", "--cached", "--name-only"); index != "" {
+				t.Fatalf("staged %s", index)
+			}
+		})
+	}
+}
+
+func TestGitDo_PathsPublishOnlyNamedFiles(t *testing.T) {
+	for _, recipe := range []string{"ship_pr", "commit_push"} {
+		t.Run(recipe, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+			gitDoWrite(t, ws.Root(), "intended.txt")
+			gitDoWrite(t, ws.Root(), "notes.txt")
+			gitDoWrite(t, ws.Root(), ".env.local")
+			gitDoNestedWorktree(t, ws)
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"`+recipe+`","paths":["intended.txt"],"message":"Only intended"}`)
+			result := gitDoData(t, outcome)
+			if !outcome.OK || result.Status != "done" {
+				t.Fatalf("%+v / %+v", outcome, result)
+			}
+			proof := false
+			for _, step := range result.Steps {
+				if strings.Join(step.Argv, " ") == "git diff --cached --name-status" && strings.TrimSpace(step.Output) == "A\tintended.txt" {
+					proof = true
+				}
+			}
+			if !proof {
+				t.Fatalf("missing staged proof: %+v", result.Steps)
+			}
+			if files := gitDoGit(t, ws.Root(), "ls-tree", "--name-only", "HEAD"); files != "README.md\nintended.txt" {
+				t.Fatalf("committed %q", files)
+			}
+			if remote := gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature"); !strings.HasPrefix(remote, gitDoGit(t, ws.Root(), "rev-parse", "HEAD")) {
+				t.Fatalf("remote %s", remote)
+			}
+		})
+	}
+}
+
+func TestGitDo_PathsDeclineStagedChangesOutsideSelection(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoWrite(t, ws.Root(), "intended.txt")
+	gitDoWrite(t, ws.Root(), "other.txt")
+	gitDoGit(t, ws.Root(), "add", "other.txt")
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit","paths":["intended.txt"]}`)
+	if outcome.Code != "declined" || !strings.Contains(outcome.Message, "other.txt") || len(gitDoData(t, outcome).Steps) != 0 {
+		t.Fatalf("%+v", outcome)
+	}
+	if staged := gitDoGit(t, ws.Root(), "diff", "--cached", "--name-only"); staged != "other.txt" {
+		t.Fatalf("index changed: %s", staged)
+	}
+}
+
+func TestGitDo_PathsValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, selected string
+		allowed        bool
+	}{
+		{"absolute", "/tmp/file", false},
+		{"parent", "../file", false},
+		{"nonexistent", "missing.txt", false},
+		{"deleted tracked", "README.md", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			gitDoWrite(t, ws.Root(), "intended.txt")
+			if tc.allowed {
+				if err := os.Remove(filepath.Join(ws.Root(), "README.md")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			selected, _ := json.Marshal(tc.selected)
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit","paths":[`+string(selected)+`]}`)
+			if outcome.OK != tc.allowed {
+				t.Fatalf("%+v", outcome)
+			}
+			if tc.allowed && !strings.Contains(gitDoGit(t, ws.Root(), "show", "--name-status", "--format=", "HEAD"), "D\tREADME.md") {
+				t.Fatalf("deletion not committed")
+			}
+		})
+	}
+}
+
+func TestGitDo_UnscopedCommitIncludesStrayFileWithProof(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoWrite(t, ws.Root(), "notes.txt")
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit"}`)
+	if !outcome.OK {
+		t.Fatalf("%+v", outcome)
+	}
+	found := false
+	for _, step := range gitDoData(t, outcome).Steps {
+		if strings.Join(step.Argv, " ") == "git diff --cached --name-status" && strings.Contains(step.Output, "A\tnotes.txt") {
+			found = true
+		}
+	}
+	if !found || gitDoGit(t, ws.Root(), "ls-tree", "--name-only", "HEAD", "notes.txt") != "notes.txt" {
+		t.Fatalf("stray file or proof missing: %+v", outcome)
+	}
+}
+
+func TestGitDo_NewGitlinkInIndexCannotBeCommitted(t *testing.T) {
+	ws := gitDoRepo(t)
+	sha := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+	gitDoWrite(t, ws.Root(), "intended.txt")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	// Simulate a new gitlink appearing between the preflight and the index check.
+	wrapper := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\n add) '%s' \"$@\" || exit; '%s' update-index --add --cacheinfo 160000,%s,link ;;\n *) exec '%s' \"$@\" ;;\nesac\n", realGit, realGit, sha, realGit)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit"}`)
+	if outcome.Code != "declined" || !strings.Contains(outcome.Message, "new gitlink staged at link") || gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != sha {
+		t.Fatalf("%+v", outcome)
+	}
+	proof := false
+	for _, step := range gitDoData(t, outcome).Steps {
+		if strings.Join(step.Argv, " ") == "git diff --cached --name-status" && strings.Contains(step.Output, "link") {
+			proof = true
+		}
+	}
+	if !proof {
+		t.Fatalf("missing staged proof: %+v", outcome)
+	}
+}
+
+func TestGitDo_JevCommitRespectsLiteralPaths(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoWrite(t, ws.Root(), "[note].txt")
+	gitDoWrite(t, ws.Root(), "notes.txt")
+	jev := fakeJev(t, map[string][2]any{"outcome": {"commit", 0.95}, "scope": {"git_only", 0.99}}, nil)
+	outcome := runTool(t, NewGitDoTool(ws, jev), `{"intent":"commit the chosen file","paths":["[note].txt"]}`)
+	if !outcome.OK || gitDoGit(t, ws.Root(), "ls-tree", "--name-only", "HEAD", "[note].txt") != "[note].txt" || gitDoGit(t, ws.Root(), "ls-tree", "--name-only", "HEAD", "notes.txt") != "" {
+		t.Fatalf("%+v", outcome)
+	}
+}
+
+func TestGitDo_PathsCannotSelectAnEmbeddedWorktree(t *testing.T) {
+	for _, selected := range []string{"nested", "nested/README.md"} {
+		t.Run(selected, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			gitDoNestedWorktree(t, ws)
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit","paths":["`+selected+`"]}`)
+			if outcome.Code != "declined" || !strings.Contains(outcome.Message, "nested") || len(gitDoData(t, outcome).Steps) != 0 {
+				t.Fatalf("%+v", outcome)
+			}
+		})
+	}
+}
+
+func TestGitDo_ScopedDefaultMessageNamesOnlyCommittedFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, recipe string
+		fresh        bool
+	}{
+		{"commit", "commit", false},
+		{"commit_push", "commit_push", false},
+		{"ship_pr existing branch", "ship_pr", false},
+		{"ship_pr fresh branch", "ship_pr", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			if !tc.fresh {
+				gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+			}
+			gitDoWrite(t, ws.Root(), "intended.txt")
+			gitDoWrite(t, ws.Root(), "notes.txt")
+			gitDoWrite(t, ws.Root(), ".env.local")
+			gitDoNestedWorktree(t, ws)
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"`+tc.recipe+`","paths":["intended.txt"]}`)
+			if !outcome.OK {
+				t.Fatalf("%+v", outcome)
+			}
+			if subject := gitDoGit(t, ws.Root(), "log", "-1", "--format=%s"); subject != "Update intended.txt" {
+				t.Fatalf("subject %q", subject)
+			}
+			if files := gitDoGit(t, ws.Root(), "show", "--name-only", "--format=", "HEAD"); files != "intended.txt" {
+				t.Fatalf("committed %q", files)
+			}
+			if tc.fresh {
+				if branch := gitDoGit(t, ws.Root(), "branch", "--show-current"); branch != "change/update-intended-txt" {
+					t.Fatalf("branch %q", branch)
+				}
+			}
+			if tc.recipe == "ship_pr" {
+				found := false
+				for _, step := range gitDoData(t, outcome).Steps {
+					if len(step.Argv) > 2 && step.Argv[0] == "gh" && step.Argv[2] == "create" && step.Argv[len(step.Argv)-1] == "--fill" {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("PR did not derive its title from the commit: %+v", outcome)
+				}
+			}
+		})
 	}
 }
