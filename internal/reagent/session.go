@@ -82,7 +82,7 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		Launch: launch, Active: s.cfg.WorkspacePath, ReadOnly: s.cfg.Registry.Mode().ReadOnly,
 		Plan: s.planMode, NoProjectInstructions: s.cfg.NoProjectInstructions,
 		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
-		MaxToolCalls: s.cfg.MaxToolCalls, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, ChildRuns: s.cfg.ChildRuns,
+		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, ChildRuns: s.cfg.ChildRuns,
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
 		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
 		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
@@ -125,6 +125,7 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.tokensPerByte, s.checkpointUsage = cp.TokensPerByte, cp.Usage
 	s.checkpointAutoCompactOff = cp.AutoCompactOff
 	s.cfg.InRunCompact = cp.InRunCompact
+	s.cfg.ModelRetryWindow = cp.ModelRetryWindow
 	s.cfg.ChildRuns = cp.ChildRuns
 	s.launchInstructions = cp.LaunchInstructions
 	if cp.Active == cp.Launch {
@@ -268,7 +269,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 		return result, 0, nil
 	}
 	s.display.startStatus("summarizing the conversation with " + sanitize(s.cfg.Model))
-	resp, err := s.model.Generate(ctx, req)
+	resp, err := s.model.Generate(withModelRetry(ctx, s.cfg.ModelRetryWindow, s.display), req)
 	s.display.stopStatus()
 	if err != nil {
 		status, usage := classifyModelError(err)
@@ -280,6 +281,9 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 		return fail(status, reason)
 	}
 	result.Usage, s.lastRequest = resp.Usage, resp.Usage
+	if resp.retryUsage != (Usage{}) {
+		result.Usage.Add(resp.retryUsage)
+	}
 	text, err := compactText(resp)
 	if err != nil {
 		return fail(StatusProtocolError, err.Error())

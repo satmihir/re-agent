@@ -299,11 +299,14 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 	for _, root := range c.session.approvedWorkspacePaths() {
 		fmt.Fprintf(stderr, "approved   %s (until chat exits)\n", sanitize(root))
 	}
+	usage := "tokens unknown"
 	if c.usage.Known {
-		fmt.Fprintf(stderr, "session    %s · %s in (%s cached) · %s out\n", plural(c.session.Turns(), "turn", "turns"), formatCount(c.usage.InputTokens), formatCount(c.usage.CachedInputTokens), formatCount(c.usage.OutputTokens))
-	} else {
-		fmt.Fprintf(stderr, "session    %s · tokens unknown\n", plural(c.session.Turns(), "turn", "turns"))
+		usage = fmt.Sprintf("%s in (%s cached) · %s out", formatCount(c.usage.InputTokens), formatCount(c.usage.CachedInputTokens), formatCount(c.usage.OutputTokens))
 	}
+	if c.usage.UnreportedAttempts > 0 {
+		usage += " · " + plural(c.usage.UnreportedAttempts, "unreported retry", "unreported retries")
+	}
+	fmt.Fprintf(stderr, "session    %s · %s\n", plural(c.session.Turns(), "turn", "turns"), usage)
 	if a := c.session.auto; a != nil {
 		fmt.Fprintf(stderr, "auto       %t · fallback %s / %s · %d router attempts\n", a.enabled, a.fallback.Model, a.fallback.Effort, a.attempts)
 		if a.attempts > 0 {

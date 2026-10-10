@@ -113,6 +113,8 @@ type ModelResponse struct {
 	Blocks     []OutputBlock `json:"blocks"`
 	Native     NativeOutput  `json:"native"`
 	Usage      Usage         `json:"usage"`
+	// retryUsage is billed to the run, not to this accepted response's context meter.
+	retryUsage Usage
 }
 
 // NativeOutput holds the provider's own output items, kept verbatim so a later
@@ -123,19 +125,22 @@ type NativeOutput struct {
 	Items    []json.RawMessage `json:"items,omitempty"`
 }
 
-// Usage is token accounting, when the provider reports any.
+// Usage holds reported tokens and counts retries whose possible cost was not reported.
 type Usage struct {
-	Known             bool  `json:"known"`
-	InputTokens       int64 `json:"input_tokens"`
-	CachedInputTokens int64 `json:"cached_input_tokens"`
-	OutputTokens      int64 `json:"output_tokens"`
-	ReasoningTokens   int64 `json:"reasoning_tokens"`
+	Known              bool  `json:"known"`
+	InputTokens        int64 `json:"input_tokens"`
+	CachedInputTokens  int64 `json:"cached_input_tokens"`
+	OutputTokens       int64 `json:"output_tokens"`
+	ReasoningTokens    int64 `json:"reasoning_tokens"`
+	UnreportedAttempts int   `json:"unreported_attempts,omitempty"`
 }
 
 // Add accumulates one response's usage. Cached input and reasoning tokens are
 // subsets of input and output tokens, so they are not added again. One
-// unreported response makes the whole total unknown (v1 §5.4).
+// unreported response makes the whole total unknown (v1 §5.4); retry attempts
+// with unreported usage are counted separately and do not hide known tokens.
 func (u *Usage) Add(o Usage) {
+	u.UnreportedAttempts += o.UnreportedAttempts
 	if !o.Known {
 		u.Known = false
 		return

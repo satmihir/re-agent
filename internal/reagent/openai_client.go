@@ -60,19 +60,28 @@ func (m *OpenAIModel) Generate(ctx context.Context, req ModelRequest) (ModelResp
 	if m.proxied {
 		headers = map[string]string{"session-id": openAICacheKey(req)}
 	}
-	status, raw, err := m.transport.call(ctx, req.Scope.Step, body, headers)
+	var classify func([]byte) (bool, Usage)
+	if m.proxied {
+		classify = transientOpenAIStream
+	}
+	status, raw, prior, err := m.transport.callModel(ctx, req.Scope.Step, body, headers, classify)
 	if err != nil {
 		return ModelResponse{}, err
 	}
 	if status != http.StatusOK {
-		return ModelResponse{}, providerError(status, raw)
-	}
-	if m.proxied {
+		err = providerError(status, raw)
+	} else if m.proxied {
 		// The trace already holds the stream exactly as it arrived; what is
 		// assembled from it is the body a non-streamed request would return.
-		if raw, err = assembleOpenAIStream(raw); err != nil {
-			return ModelResponse{}, err
-		}
+		raw, err = assembleOpenAIStream(raw)
 	}
-	return normalizeOpenAIResponse(raw)
+	if err != nil {
+		return ModelResponse{}, addRetryUsage(err, prior)
+	}
+	resp, err := normalizeOpenAIResponse(raw)
+	if err != nil {
+		return ModelResponse{}, addRetryUsage(err, prior)
+	}
+	resp.retryUsage = prior
+	return resp, nil
 }

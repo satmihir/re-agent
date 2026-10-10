@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"syscall"
+	"time"
 )
 
 // v0 §10 amendment (2026-10-02): checkpoints are execution barriers, not traces.
@@ -32,6 +33,7 @@ type chatCheckpoint struct {
 	LaunchInstructions    *string         `json:"launch_instructions,omitempty"`
 	MaxSteps              int             `json:"max_steps"`
 	MaxToolCalls          int             `json:"max_tool_calls"`
+	ModelRetryWindow      time.Duration   `json:"model_retry_window"`
 	InRunCompact          bool            `json:"in_run_compact"`
 	ChildRuns             bool            `json:"child_runs"`
 	ReportFriction        bool            `json:"report_friction"`
@@ -205,7 +207,7 @@ func (st *sessionStore) load(id string) (chatCheckpoint, error) {
 	if cp.Version != envelope.Version {
 		return cp, fmt.Errorf("corrupt session %s: mismatched version", id)
 	}
-	if cp.ID != id || cp.Launch == "" || cp.Provider == "" || cp.Model == "" || cp.MaxSteps < 0 || cp.MaxToolCalls < 0 {
+	if cp.ID != id || cp.Launch == "" || cp.Provider == "" || cp.Model == "" || cp.MaxSteps < 0 || cp.MaxToolCalls < 0 || cp.ModelRetryWindow < 0 {
 		return cp, fmt.Errorf("corrupt session %s: invalid configuration", id)
 	}
 	switch cp.Phase {

@@ -69,9 +69,10 @@ func TestLoop_InRunContinuationKeepsTaskAndEffectsAcrossTwoBoundaries(t *testing
 		continuationResponse("second"), turn(textBlock("stage two; checkpoint=impl-B; checks pass")),
 		turn(textBlock("done")),
 	}}
+	model.replies[1].retryUsage = Usage{Known: true, InputTokens: 42, UnreportedAttempts: 1}
 	model.replies[2].Usage = Usage{Known: true, InputTokens: 12_000, OutputTokens: 20}
 	s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusCompleted || result.Steps != 5 || result.ToolCalls != 2 || result.Reply != "done" || len(model.requests) != 5 || !s.seenCalls["first"] || !s.seenCalls["second"] {
+	if result.Status != StatusCompleted || result.Steps != 5 || result.ToolCalls != 2 || result.Reply != "done" || len(model.requests) != 5 || !s.seenCalls["first"] || !s.seenCalls["second"] || result.Usage.InputTokens != 22_042 || result.Usage.UnreportedAttempts != 1 {
 		t.Fatalf("result %+v, requests %d", result, len(model.requests))
 	}
 	if model.requests[1].History[len(model.requests[1].History)-1].User == nil || !strings.Contains(model.requests[1].History[len(model.requests[1].History)-1].User.Text, "unresolved findings") {

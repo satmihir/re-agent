@@ -10,12 +10,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSessionResume_RoundTripHandoffPlanSummaryAndDedup(t *testing.T) {
 	st := testSessionStore(t, NewID())
 	cfg := testConfig(t)
 	cfg.Provider, cfg.Model, cfg.WorkspacePath = openaiName, "gpt-6-sol", t.TempDir()
+	cfg.ModelRetryWindow = 12 * time.Hour
 	instructions := "frozen"
 	cfg.ProjectInstructions = &instructions
 	s := NewSession(cfg, NewScriptedModel(turn(textBlock("done"))), NewTrace(io.Discard), io.Discard)
@@ -38,7 +40,7 @@ func TestSessionResume_RoundTripHandoffPlanSummaryAndDedup(t *testing.T) {
 	restored := NewSession(cfg, NewScriptedModel(turn(textBlock("done"))), NewTrace(io.Discard), io.Discard)
 	restored.restore(cp)
 	restored.store = st
-	if restored.handoff.Text != "historical" || restored.history[0].Summary.Text != "compacted" || !restored.planMode || restored.compactedPlan != "on" || !restored.seenCalls["duplicate"] || restored.checkpointUsage.InputTokens != 55 || *restored.launchInstructions != "frozen" {
+	if restored.handoff.Text != "historical" || restored.history[0].Summary.Text != "compacted" || !restored.planMode || restored.compactedPlan != "on" || !restored.seenCalls["duplicate"] || restored.checkpointUsage.InputTokens != 55 || *restored.launchInstructions != "frozen" || restored.cfg.ModelRetryWindow != 12*time.Hour {
 		t.Fatalf("lost state: %+v", cp)
 	}
 	r := newRun(restored, NewID())

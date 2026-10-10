@@ -53,7 +53,7 @@ func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
 		return StatusPersistenceError, err.Error()
 	}
 	r.trace.Write("compaction.requested", r.steps, req)
-	resp, err := r.model.Generate(ctx, req)
+	resp, err := r.model.Generate(withModelRetry(ctx, r.cfg.ModelRetryWindow, s.display), req)
 	if err != nil {
 		status, usage := classifyModelError(err)
 		r.usage.Add(usage)
@@ -68,6 +68,9 @@ func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
 		return skip(reason)
 	}
 	r.usage.Add(resp.Usage)
+	if resp.retryUsage != (Usage{}) {
+		r.usage.Add(resp.retryUsage)
+	}
 	s.lastRequest = resp.Usage
 	r.recordRouteUsage(resp.Usage)
 	text, err := compactText(resp)

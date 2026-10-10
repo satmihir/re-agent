@@ -100,6 +100,10 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, "--show-context and --trace-file apply to run; chat writes one trace per turn")
 	case command == "run" && options.traceDir != "":
 		return usage(stderr, command, "--trace-dir applies to chat; run takes --trace-file")
+	case options.modelRetryWindow < 0:
+		return usage(stderr, command, "--model-retry-window must be nonnegative (0 disables overnight retry)")
+	case options.modelRetryWindow > 0 && (options.script != "" || options.showContext):
+		return usage(stderr, command, "--model-retry-window requires a live model request")
 	case options.maxSteps < 0 || options.maxToolCalls < 0:
 		return usage(stderr, command, "--max-steps and --max-tool-calls must be nonnegative (0 means unlimited)")
 	case options.script != "" && (options.model != "" || options.provider != ""):
@@ -140,6 +144,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		options.maxSteps, options.maxToolCalls = saved.MaxSteps, saved.MaxToolCalls
 		options.noProjectInstructions, options.reportFriction, options.auto = saved.NoProjectInstructions, saved.ReportFriction, saved.Auto
 		options.inRunCompact, options.childRuns = saved.InRunCompact, saved.ChildRuns
+		options.modelRetryWindow = saved.ModelRetryWindow
 	}
 	if options.promptFile != "" {
 		text, err := readPrompt(options.promptFile, stdin)
@@ -221,7 +226,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		Provider: provider, Model: model, ReasoningEffort: resolveEffort(options.reasoning, provider, model),
 		Registry: registry, WorkspacePath: ws.Root(), Workspace: ws, NoProjectInstructions: options.noProjectInstructions,
 		ProjectInstructions: projectInstructions,
-		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls,
+		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls, ModelRetryWindow: options.modelRetryWindow,
 		PlanMode: options.plan, ReportFriction: options.reportFriction, InRunCompact: options.inRunCompact, ChildRuns: options.childRuns,
 	}
 	for _, path := range options.allowedWorkspaces {
@@ -405,6 +410,7 @@ type options struct {
 	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction                     bool
 	auto, inRunCompact, childRuns                                                                 bool
 	maxSteps, maxToolCalls                                                                        int
+	modelRetryWindow                                                                              time.Duration
 	allowedWorkspaces                                                                             []string
 }
 
@@ -421,6 +427,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
 	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6-sol/medium")
 	fs.BoolVar(&o.inRunCompact, "in-run-compact", false, "opt in to bounded compaction within a long run; default off")
+	fs.DurationVar(&o.modelRetryWindow, "model-retry-window", 0, "keep retrying transient model failures within this window (e.g. 12h); 0 disables")
 	fs.BoolVar(&o.childRuns, "child-runs", false, "offer bounded read-only fresh-context child runs")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
@@ -444,7 +451,7 @@ var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls", "in-run-compact", "child-runs"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "child-runs"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-file", "report-friction"}},
 	{"Experimental", []string{"git-do"}},
@@ -455,7 +462,7 @@ var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls", "in-run-compact", "child-runs"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "child-runs"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir", "report-friction"}},
 	{"Experimental", []string{"git-do"}},
@@ -466,7 +473,7 @@ var chatFlagGroups = []flagGroup{
 var flagPlaceholders = map[string]string{
 	"workspace": "DIR", "allow-workspace": "PATH", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL",
 	"scripted": "FILE", "resume": "ID", "prompt-file": "PATH", "trace-file": "PATH", "trace-dir": "DIR",
-	"max-steps": "N", "max-tool-calls": "N",
+	"max-steps": "N", "max-tool-calls": "N", "model-retry-window": "DURATION",
 }
 
 func writeTopLevelHelp(w io.Writer) {
