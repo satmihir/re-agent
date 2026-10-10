@@ -6,10 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,7 +27,7 @@ const (
 	ResponseHeaderTimeout = 10 * time.Minute
 	ResponseIdleTimeout   = 5 * time.Minute
 
-	// The whole v0 retry rule: at most two attempts, one fixed delay (v0 §6.2).
+	// Without an opt-in retry window the original bounded policy remains (v0 §6.2).
 	maxAttempts = 2
 	retryDelay  = 500 * time.Millisecond
 )
@@ -109,40 +112,161 @@ type transport struct {
 	trace           *Trace
 }
 
-// call performs the bounded attempts for one logical request and returns the
-// status and body of the last one. A transport failure, including this
-// attempt's timeout, ends the call: only a reply the server actually sent is
-// retried. headers are this request's own, sent after the transport's fixed ones.
+// modelRetryKey scopes the opt-in policy to generative requests, including summaries.
+// Routing and git-do requests use their own clients and do not acquire this policy.
+type modelRetryKey struct{}
+
+type modelRetry struct {
+	window  time.Duration
+	display *Display
+}
+
+func withModelRetry(ctx context.Context, window time.Duration, display *Display) context.Context {
+	if window <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, modelRetryKey{}, modelRetry{window: window, display: display})
+}
+
+// call retains the transport-only behavior for callers that do not decode streams.
 func (t *transport) call(ctx context.Context, step int, body []byte, headers map[string]string) (int, []byte, error) {
+	status, raw, _, err := t.callModel(ctx, step, body, headers, nil)
+	return status, raw, err
+}
+
+// callModel owns retry admission. A provider-specific classifier may identify an
+// explicit transient error in a complete 200 stream, without moving decoding into transport.
+func (t *transport) callModel(ctx context.Context, step int, body []byte, headers map[string]string, transient func([]byte) (bool, Usage)) (int, []byte, Usage, error) {
+	policy, overnight := ctx.Value(modelRetryKey{}).(modelRetry)
+	deadline := time.Now().Add(policy.window)
+	requestCtx := ctx
+	if overnight {
+		var cancel context.CancelFunc
+		requestCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+	prior := Usage{Known: true}
 	for attempt := 1; ; attempt++ {
-		status, raw, err := t.send(ctx, attempt, step, body, headers)
-		switch {
-		case err != nil:
-			if modelErr, ok := err.(*ModelError); ok {
-				return 0, nil, modelErr
+		status, raw, retryAfter, err := t.send(requestCtx, attempt, step, body, headers)
+		if ctx.Err() != nil {
+			return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled during a model request", Usage: prior}
+		}
+		if overnight && requestCtx.Err() != nil {
+			prior.Add(Usage{})
+			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, false, prior)
+		}
+		if modelErr, ok := err.(*ModelError); ok {
+			return 0, nil, prior, modelErr
+		}
+		streamRetry := false
+		var streamUsage Usage
+		if overnight && err == nil && status == http.StatusOK && transient != nil {
+			streamRetry, streamUsage = transient(raw)
+		}
+		if !streamRetry && err == nil && !retryable(status) {
+			return status, raw, prior, nil
+		}
+		if !overnight {
+			if err != nil {
+				return 0, nil, prior, &ModelError{Status: StatusProviderError, Message: "model request failed: " + err.Error()}
 			}
-			if ctx.Err() != nil {
-				return 0, nil, &ModelError{Status: StatusCancelled, Message: "cancelled during a model request"}
+			if attempt >= maxAttempts {
+				return status, raw, prior, nil
 			}
-			return 0, nil, &ModelError{Status: StatusProviderError, Message: "model request failed: " + err.Error()}
-		case retryable(status) && attempt < maxAttempts:
 			if err := waitBeforeRetry(ctx); err != nil {
-				return 0, nil, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry"}
+				return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry"}
 			}
-		default:
-			return status, raw, nil
+			continue
+		}
+		if streamRetry {
+			prior.Add(streamUsage)
+		} else {
+			prior.Add(Usage{}) // A retry may have reached the provider without reporting usage.
+		}
+		if time.Until(deadline) <= 0 {
+			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
+		}
+		delay := retryBackoff(attempt, retryAfter)
+		if remaining := time.Until(deadline); delay > remaining {
+			delay = remaining
+		}
+		reason := "connection or read failure"
+		if err == nil {
+			reason = fmt.Sprintf("HTTP %d", status)
+			if streamRetry {
+				reason = "provider stream overload"
+			}
+		}
+		t.trace.Write("api.retry.scheduled", step, map[string]any{"attempt": attempt, "reason": reason, "delay_ms": delay.Milliseconds()})
+		if policy.display != nil {
+			policy.display.modelRetry(attempt, delay, reason)
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-requestCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry", Usage: prior}
+			}
+			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
+		case <-timer.C:
+		}
+		if time.Until(deadline) <= 0 {
+			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
+		}
+		if policy.display != nil {
+			policy.display.modelRetryStarted(attempt + 1)
 		}
 	}
 }
 
+// addRetryUsage retains tokens reported by earlier failed streamed attempts.
+func addRetryUsage(err error, prior Usage) error {
+	var modelErr *ModelError
+	if errors.As(err, &modelErr) {
+		copy := *modelErr
+		copy.Usage.Add(prior)
+		return &copy
+	}
+	return err
+}
+
+func (t *transport) retryExhausted(step, attempt, status int, raw []byte, err error, stream bool, usage Usage) error {
+	t.trace.Write("api.retry.exhausted", step, map[string]any{"attempt": attempt, "http_status": status})
+	reason := fmt.Sprintf("HTTP %d", status)
+	if stream {
+		reason = "provider stream overload"
+	} else if err != nil {
+		reason = strings.ReplaceAll(err.Error(), t.endpoint, redacted(t.endpoint))
+	} else if retryable(status) && len(raw) > 0 {
+		reason = providerError(status, raw).Error()
+	}
+	return &ModelError{Status: StatusProviderError, Message: fmt.Sprintf("model retry window exhausted after %d attempts: %s", attempt, reason), Usage: usage}
+}
+
+func retryBackoff(attempt int, header string) time.Duration {
+	backoff := time.Second
+	for n := 1; n < attempt && backoff < 2*time.Minute; n++ {
+		backoff = min(backoff*2, 2*time.Minute)
+	}
+	backoff = time.Duration(float64(backoff) * (0.8 + 0.4*rand.Float64()))
+	if seconds, err := strconv.ParseInt(strings.TrimSpace(header), 10, 64); err == nil && seconds > 0 {
+		return max(backoff, time.Duration(min(seconds, int64(86400*365)))*time.Second)
+	}
+	if when, err := http.ParseTime(header); err == nil {
+		return max(backoff, time.Until(when))
+	}
+	return backoff
+}
+
 // send performs one HTTP transmission and records its exact request and
 // response bytes before anything interprets them.
-func (t *transport) send(ctx context.Context, attempt, step int, body []byte, headers map[string]string) (int, []byte, error) {
+func (t *transport) send(ctx context.Context, attempt, step int, body []byte, headers map[string]string) (int, []byte, string, error) {
 	if ctx.Err() != nil {
-		return 0, nil, ctx.Err()
+		return 0, nil, "", ctx.Err()
 	}
 	if meter, ok := ctx.Value(childAttemptKey{}).(*childState); ok && !meter.admitAttempt() {
-		return 0, nil, &ModelError{Status: StatusLimitExceeded, Message: "aggregate child HTTP attempts exhausted"}
+		return 0, nil, "", &ModelError{Status: StatusLimitExceeded, Message: "aggregate child HTTP attempts exhausted"}
 	}
 	digest := sha256.Sum256(body)
 	t.trace.Write("api.attempt.started", step, map[string]any{
@@ -156,7 +280,7 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
 	if err != nil {
 		t.failed(step, attempt, 0, started, err)
-		return 0, nil, err
+		return 0, nil, "", &ModelError{Status: StatusProviderError, Message: "invalid model request: " + err.Error()}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	for name, value := range t.headers {
@@ -169,14 +293,14 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 	response, err := t.client.Do(request)
 	if err != nil {
 		t.failed(step, attempt, 0, started, err)
-		return 0, nil, err
+		return 0, nil, "", err
 	}
 	defer response.Body.Close()
 
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.failed(step, attempt, response.StatusCode, started, err)
-		return 0, nil, err
+		return 0, nil, "", err
 	}
 
 	text, replaced := traceableBody(raw)
@@ -188,7 +312,7 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 		"response_body":      text,
 		"body_utf8_replaced": replaced,
 	})
-	return response.StatusCode, raw, nil
+	return response.StatusCode, raw, response.Header.Get("Retry-After"), nil
 }
 
 // redacted masks a password in an endpoint URL, which a proxy URL may carry,

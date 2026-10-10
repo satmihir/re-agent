@@ -585,3 +585,60 @@ func TestOpenAI_CancellationDuringARequestStopsTheRun(t *testing.T) {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
 	}
 }
+
+func TestOpenAI_OvernightRetryPreservesRequestAndDoesNotRepeatTools(t *testing.T) {
+	api := newFakeAPI(t,
+		apiReply{status: 503, body: `{"error":{"message":"offline"}}`},
+		apiReply{status: 429, body: `{"error":{"message":"busy"}}`},
+		okReply(callReply), okReply(textReply))
+	cfg := testConfig(t, NewEchoTool())
+	cfg.Provider, cfg.Model, cfg.ModelRetryWindow = openaiName, "test-model", 6*time.Second
+	trace := NewTrace(io.Discard)
+	model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
+	_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "find the marker")
+	if result.Status != StatusCompleted || result.ToolCalls != 1 || result.Steps != 2 {
+		t.Fatalf("run %+v", result)
+	}
+	received := api.received()
+	if len(received) != 4 || !bytes.Equal(received[0], received[1]) || !bytes.Equal(received[1], received[2]) || bytes.Equal(received[2], received[3]) {
+		t.Fatalf("unexpected request sequence: %d attempts", len(received))
+	}
+}
+
+func TestOpenAI_OvernightRetryClassifiesTransportAndPermanentErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		first    apiReply
+		want     RunStatus
+		attempts int
+	}{
+		{"lost headers", apiReply{status: 200, body: textReply, delay: 120 * time.Millisecond}, StatusCompleted, 2},
+		{"unauthorized", apiReply{status: 401, body: `{"error":{"message":"bad key"}}`}, StatusProviderError, 1},
+		{"invalid response", apiReply{status: 200, body: `not-json`}, StatusProtocolError, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeAPI(t, tc.first, okReply(textReply))
+			cfg := testConfig(t)
+			cfg.Provider, cfg.Model, cfg.ModelRetryWindow = openaiName, "test-model", 3*time.Second
+			trace := NewTrace(io.Discard)
+			model := NewOpenAIModel("sk", api.server.URL, newHTTPClient(35*time.Millisecond, time.Second), trace)
+			_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "test")
+			if result.Status != tc.want || len(api.received()) != tc.attempts {
+				t.Fatalf("got %s and %d attempts: %s", result.Status, len(api.received()), result.Reason)
+			}
+		})
+	}
+}
+
+func TestOpenAI_OvernightRetryStreamOverloadAccountsUsage(t *testing.T) {
+	failure := sse(`{"type":"response.failed","response":{"status":"failed","error":{"code":"server_is_overloaded","message":"busy"},"usage":` + streamUsage + `}}`)
+	api := newFakeAPI(t, okReply(failure), okReply(sse(completed(`[{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]`))))
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model, cfg.Proxied, cfg.ModelRetryWindow = openaiName, "test-model", true, 3*time.Second
+	trace := NewTrace(io.Discard)
+	model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+	_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "test")
+	if result.Status != StatusCompleted || len(api.received()) != 2 || !result.Usage.Known || result.Usage.InputTokens < 864 {
+		t.Fatalf("got %+v; attempts %d", result, len(api.received()))
+	}
+}

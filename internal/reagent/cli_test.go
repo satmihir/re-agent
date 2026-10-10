@@ -817,3 +817,22 @@ func TestMain_InRunCompactIsExplicitAndTraced(t *testing.T) {
 		}
 	}
 }
+
+func TestCLI_ModelRetryWindowValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"negative", []string{"run", "--model-retry-window", "-1s", "test"}},
+		{"bad duration", []string{"run", "--model-retry-window", "overnight", "test"}},
+		{"preview", []string{"run", "--model-retry-window", "12h", "--show-context", "test"}},
+		{"scripted", []string{"run", "--model-retry-window", "12h", "--scripted", "script.json", "test"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Main(context.Background(), tc.args, strings.NewReader(""), &stdout, &stderr); code != exitUsage || !strings.Contains(stderr.String(), "model-retry-window") {
+				t.Fatalf("exit %d stderr %s", code, stderr.String())
+			}
+		})
+	}
+}

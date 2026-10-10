@@ -20,6 +20,8 @@ The table lists emitted keys; `?` means conditional or omitted. Dotted paths ind
 | `model.failed` | `error`; `response?` (same response shape as `model.accepted` if a response failed validation; absent on model/transport error). |
 | `api.attempt.started` | `attempt` (1-based), `endpoint` (URL with password redacted), `request_body` (exact prepared bytes as a string), `request_sha256`. |
 | `api.attempt.finished` | `attempt`, `http_status`, `duration_ms`; on a received body: `request_id`, `response_body` (UTF-8 replacement if needed), `body_utf8_replaced`; on failure: `error` instead of those three fields. Retries produce separate attempts. |
+| `api.retry.scheduled` | `attempt` (just failed), `reason`, `delay_ms` (next wait). Only with an opt-in retry window. |
+| `api.retry.exhausted` | `attempt`, `http_status`; the logical request's retry window elapsed. |
 | `tool.started` | `call_id`, `name`, `arguments` (same JSON string), `workspace`. Only emitted when a real implementation starts. |
 | `tool.finished` | `call_id`, `name`, `outcome` (`workspace?`, `ok`, `code`, `message`, `data`, `truncated`, `effect`). Emitted also for denied/unavailable/not-executed calls without `tool.started`. `outcome.data` is tool-specific JSON (or `null`), not a string. |
 | `run.finished` | `status`, `reason?`, `reply?`, `steps`, `tool_calls`, `usage` (same keys as response usage, total for this run), `router_usage?`, `child_usage?`, `child_steps?`, `child_calls?`, `child_attempts?`, `children?`, `trace_path?`, `effects?[]` (`workspace?`, `step`, `call_id`, `tool`, `summary`, `effect`), `resumable?` (present only when true). Child/router usage is separate from `usage`. |

@@ -60,6 +60,16 @@ func (d *Display) modelStarted(model string, step, maxSteps int) {
 	d.startStatus(status)
 }
 
+// modelRetry leaves one visible notice even when progress status is not interactive.
+func (d *Display) modelRetry(attempt int, delay time.Duration, reason string) {
+	d.note(fmt.Sprintf("model attempt %d failed (%s); retrying in %s", attempt, reason, delay.Round(time.Millisecond)))
+	d.startStatus(fmt.Sprintf("model unavailable · retry %d in %s", attempt+1, delay.Round(time.Second)))
+}
+
+func (d *Display) modelRetryStarted(attempt int) {
+	d.startStatus(fmt.Sprintf("waiting for model · attempt %d", attempt))
+}
+
 // modelFinished removes the model-request status line.
 func (d *Display) modelFinished() { d.stopStatus() }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Config holds model settings and the current workspace request prefix.
@@ -25,6 +26,7 @@ type Config struct {
 	ProjectInstructions *string
 	MaxSteps            int
 	MaxToolCalls        int
+	ModelRetryWindow    time.Duration
 	InRunCompact        bool
 	ChildRuns           bool
 	child               bool
@@ -150,7 +152,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)
 		// v0 §10 amendment (2026-09-28): meter the last request, not the turn.
 		s.lastRequest = Usage{}
-		resp, err := r.model.Generate(ctx, req)
+		resp, err := r.model.Generate(withModelRetry(ctx, r.cfg.ModelRetryWindow, s.display), req)
 		s.display.modelFinished()
 		if err != nil {
 			// A failed request can still have cost tokens, so account what the

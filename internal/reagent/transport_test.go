@@ -87,3 +87,72 @@ func TestTransport_CancelDuringAReply(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestTransport_OvernightRetryWindowExpiresWithoutAnExtraAttempt(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"message":"quota temporarily unavailable"}}`)
+	}))
+	t.Cleanup(server.Close)
+	tr := &transport{endpoint: server.URL, client: server.Client(), trace: NewTrace(io.Discard)}
+	start := time.Now()
+	ctx := withModelRetry(context.Background(), 80*time.Millisecond, nil)
+	_, _, err := tr.call(ctx, 1, []byte(`{}`), nil)
+	me, ok := err.(*ModelError)
+	if !ok || me.Status != StatusProviderError || !strings.Contains(me.Message, "after 1 attempts") || !strings.Contains(me.Message, "quota temporarily unavailable") || attempts.Load() != 1 {
+		t.Fatalf("attempts %d, error %v", attempts.Load(), err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("Retry-After outlived the retry window")
+	}
+}
+
+func TestTransport_OvernightRetryCancellationDuringWaitAndRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"wait", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }},
+		{"request", func(w http.ResponseWriter, r *http.Request) {
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(tc.handler)
+			t.Cleanup(server.Close)
+			tr := &transport{endpoint: server.URL, client: server.Client(), trace: NewTrace(io.Discard)}
+			ctx, cancel := context.WithTimeout(withModelRetry(context.Background(), 4*time.Second, nil), 70*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			_, _, err := tr.call(ctx, 1, []byte(`{}`), nil)
+			if me, ok := err.(*ModelError); !ok || me.Status != StatusCancelled || time.Since(start) > time.Second {
+				t.Fatalf("elapsed %s, error %v", time.Since(start), err)
+			}
+		})
+	}
+}
+
+func TestTransport_OvernightRetryConnectionFailureIsRetried(t *testing.T) {
+	var attempts atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if attempts.Add(1) == 1 {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}, nil
+	})}
+	tr := &transport{endpoint: "http://localhost/model", client: client, trace: NewTrace(io.Discard)}
+	status, raw, err := tr.call(withModelRetry(context.Background(), 3*time.Second, nil), 1, []byte(`{}`), nil)
+	if err != nil || status != 200 || string(raw) != "ok" || attempts.Load() != 2 {
+		t.Fatalf("status %d body %s attempts %d error %v", status, raw, attempts.Load(), err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

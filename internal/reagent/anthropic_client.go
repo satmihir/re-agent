@@ -46,12 +46,17 @@ func (m *AnthropicModel) Generate(ctx context.Context, req ModelRequest) (ModelR
 		return ModelResponse{}, &ModelError{Status: StatusProviderError, Message: err.Error()}
 	}
 
-	status, raw, err := m.transport.call(ctx, req.Scope.Step, body, nil)
+	status, raw, prior, err := m.transport.callModel(ctx, req.Scope.Step, body, nil, nil)
 	if err != nil {
 		return ModelResponse{}, err
 	}
 	if status != http.StatusOK {
-		return ModelResponse{}, providerError(status, raw)
+		return ModelResponse{}, addRetryUsage(providerError(status, raw), prior)
 	}
-	return normalizeAnthropicResponse(raw)
+	resp, err := normalizeAnthropicResponse(raw)
+	if err != nil {
+		return ModelResponse{}, addRetryUsage(err, prior)
+	}
+	resp.Usage.Add(prior)
+	return resp, nil
 }

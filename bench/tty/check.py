@@ -20,6 +20,7 @@ quirks (resize reflow especially), so UI changes still deserve a manual look.
 
 import codecs
 import fcntl
+import http.server
 import json
 import os
 import pty
@@ -30,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +62,20 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "model-retry": {
+        "retry": True,
+        "steps": [
+            ("idle", 0.5),
+            ("type", "say hello"),
+            ("key", "enter"),
+            ("wait", "model attempt 1 failed", 5),
+            ("show", "waiting before the next model attempt"),
+            ("expect", "status_row_last"),
+            ("wait", "Hello after retry", 6),
+            ("show", "model reply after retry"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "auto-startup": {
         "auto": True,
         "steps": [
@@ -248,7 +264,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "esc": "\x1b",
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -260,7 +276,9 @@ class Session:
             env.pop("NO_COLOR", None)
             env.update(extra_env or {})
             args = [binary, "chat", "--workspace", workspace]
-            if script_path is None:
+            if retry:
+                args += ["--model-retry-window", "5s", "--no-project-instructions"]
+            elif script_path is None:
                 args += ["--auto", "--no-project-instructions"]
             else:
                 args += ["--scripted", script_path]
@@ -420,7 +438,36 @@ def run(binary, name, scenario, workspace):
             json.dump(scenario["script"], f)
             script_path = f.name
     extra_env = {}
-    if scenario.get("auto"):
+    server = None
+    if scenario.get("retry"):
+        class RetryHandler(http.server.BaseHTTPRequestHandler):
+            attempts = 0
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                type(self).attempts += 1
+                if type(self).attempts == 1:
+                    self.send_response(503)
+                    self.end_headers()
+                    return
+                result = {"id": "r", "model": "test", "status": "completed", "output": [
+                    {"type": "message", "status": "completed", "content": [
+                        {"type": "output_text", "text": "Hello after retry"}]}]}
+                body = ("event: response.completed\ndata: " + json.dumps(
+                    {"type": "response.completed", "response": result}) + "\n\n").encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RetryHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL="http://127.0.0.1:%d/v1/responses" % server.server_port)
+    if scenario.get("auto"): 
         extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL="http://127.0.0.1:1/v1/responses",
                          TYPESAFE_API_KEY="", REAGENT_MODEL="")
     editor_path = None
@@ -430,7 +477,7 @@ def run(binary, name, scenario, workspace):
             editor.write(scenario["editor"])
         os.chmod(editor_path, 0o700)
         extra_env["VISUAL"] = editor_path
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env)
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]
@@ -460,6 +507,9 @@ def run(binary, name, scenario, workspace):
         s.close()
         if script_path is not None: os.unlink(script_path)
         if editor_path is not None: os.unlink(editor_path)
+        if server is not None:
+            server.shutdown()
+            server.server_close()
     try:
         bytes(s.raw).decode("utf-8")
     except UnicodeDecodeError as e:
