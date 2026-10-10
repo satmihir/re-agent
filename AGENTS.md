@@ -10,24 +10,20 @@ to learn how a harness works by building one whose every decision can be read.
 A human will read all of the code. Legibility beats features, and code economy
 beats completeness. When in doubt, write less.
 
-## Documents and precedence
+## Documents
 
-- `docs/reagent-v0-design.md` governs what we build now. It states current
-  rules only.
-- `docs/reagent-v1-design.md` is the reference target. When v0 cites a v1
-  section, adopt only what v0 selects from it. Read a v1 section only when
-  v0 or the task cites it.
-- On conflict, v0 wins. Do not implement anything v0 defers, even if it looks
-  easy or "obviously needed".
-- If the design is wrong or ambiguous, say so and propose the smallest
-  change to the doc. Never code around it silently.
-- Change the design by editing the governing section in place so it states
-  the new rule, as briefly as the rule allows. Do not append dated
-  amendments, history, or evidence; the reason goes in the PR description.
-- Cite the governing section in code as `// v0 §N`. Older citations of the
-  form `// v0 §N amendment (YYYY-MM-DD)` refer to
-  `docs/archive/reagent-v0-design-2026-10-02.md`; leave them, add no new
-  ones, and read the archive only to trace such a citation.
+- `docs/reagent-overview.md` describes what re:agent does today. It is a
+  description, not a rulebook: it does not rule features in or out. When a
+  change alters described behavior, update the overview briefly in the same
+  change. If the overview and the code disagree, the code is right; fix the
+  overview.
+- `docs/reagent-v1-design.md`, the plan documents in `docs/`, and everything in
+  `docs/archive/` are history. Read them for background when useful; they
+  constrain nothing.
+- Older code comments cite the old specification as `// v0 §N`, which refers to
+  `docs/archive/reagent-v0-design-2026-10-10.md`, or as
+  `// v0 §N amendment (YYYY-MM-DD)`, which refers to
+  `docs/archive/reagent-v0-design-2026-10-02.md`. Leave them; add no new ones.
 
 For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is a worked example.
 
@@ -38,22 +34,22 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
   fine. A short function that exists only to hit a number is not.
 - Split when a reader would otherwise have to hold two unrelated things in
   their head at once. Never split to make something look smaller.
-- If a milestone makes the codebase feel noticeably bigger than the design
+- If a milestone makes the codebase feel noticeably bigger than the feature
   warrants, stop and say so before continuing.
 - One package `internal/reagent` plus `cmd/reagent`. No new package without a
   second real consumer, named in the PR or report.
 - Standard library, with one exception: `golang.org/x/term`, for line editing
   at the chat prompt. Nothing else without asking first.
-- Interfaces only where the design justifies them: model I/O, tool execution,
+- Interfaces only where they earn their place: model I/O, tool execution,
   trace recording. No interface with a single implementation elsewhere.
 - No generics, reflection, functional options, middleware, event buses, or
   channels for control flow. The agent loop is a `for` loop in one function.
 - No config structs for hypothetical flags, no TODO scaffolding for deferred
   work, no commented-out code. Delete what is unused.
 - Errors: return them, wrap with `%w` and context, use the typed errors the
-  design names. No error hierarchy beyond that.
+  code already has. No error hierarchy beyond that.
 - `gofmt` everything. Go 1.23 is what is installed here; `go.mod` says
-  `go 1.23`. v1's `os.Root` needs 1.24+ and is not a v0 concern.
+  `go 1.23`.
 
 ## Comments
 
@@ -62,15 +58,13 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
 - Every exported identifier gets a one-sentence doc comment. Longer only when
   the concept is genuinely non-obvious.
 - Keep comments short. If an explanation is growing into an essay, it belongs
-  in `docs/`, referenced from the code by section number.
-- The preferred comment is a design citation: `// v0 §6.2: two attempts, fixed
-  delay.` Put one next to code that implements a specific rule.
+  in `docs/` or the PR description.
 - No banner comments, section dividers, changelog comments, or restating the
   function name in prose.
 
 ## Naming and shape
 
-- Use the design vocabulary exactly: Session, Run, Step, Entry, Block,
+- Use the project vocabulary exactly: Session, Run, Step, Entry, Block,
   ToolCall, ToolResult, ToolOutcome, Exhibit. Do not invent synonyms.
 - Flat over nested. Early returns. No `else` after a `return`.
 - Plain structs and functions over methods that only forward.
@@ -105,8 +99,8 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
   scenario to `bench/tty/check.py` for new terminal behavior. Go tests with an
   in-process fake terminal do not exercise file descriptors, the pty buffer,
   or real concurrency, so they are not enough on their own.
-- Report what works, what was tested, what was not, and any deviation from the
-  design. Never claim a live run happened if it did not.
+- Report what works, what was tested, what was not, and anything left
+  undone. Never claim a live run happened if it did not.
 - Create git worktrees outside the repository checkout (for example, as siblings), never inside it.
 - Do not commit, push, add CI, linters, Makefiles, or tooling unless asked.
 - If unsure whether something is in scope, it is not. Ask.

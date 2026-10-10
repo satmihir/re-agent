@@ -436,9 +436,8 @@ A few rules shape the rest:
   evidence into text instead; foreign or old-segment native items are never replayed.
 - **History is append-only except for `/reset`, `/model ... fresh`, and `/compact`.** Compaction replaces the entire history at once with one model-written summary; it does not edit earlier entries in place. Failed attempts keep the history. In chat, a turn that follows a request using at least 80% of a known context window is preceded by an automatic compaction.
 
-Two design documents govern the code: [v0](docs/reagent-v0-design.md) is what
-is built, and [v1](docs/reagent-v1-design.md) is the fuller target. Comments
-cite them by section, for example `// v0 §6.2`.
+[docs/reagent-overview.md](docs/reagent-overview.md) describes how the code
+works today. Older design documents are kept for history only.
 
 ## Configuration
 

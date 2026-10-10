@@ -1,6 +1,6 @@
 # re:agent v0 — Design
 
-**Status:** Current specification. It states the rules as they are now. Reasons and evidence for a change live in its PR, not here; the dated amendment history up to 2026-10-02 is in `docs/archive/reagent-v0-design-2026-10-02.md`.
+**Status:** Archived 2026-10-10. Kept so older `// v0 §N` code comments can be traced; it no longer constrains re:agent. `docs/reagent-overview.md` describes current behavior.
 **Reference target:** `docs/reagent-v1-design.md`. A reference such as **v1 §5.3** adopts only what this document selects. On conflict, v0 wins. MUST marks required behavior. Do not implement deferred v1 requirements because v1 already specifies them.
 
 ## 1. Objective and scope

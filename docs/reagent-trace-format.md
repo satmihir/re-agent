@@ -1,4 +1,4 @@
-# re:agent JSONL traces (v0 §7)
+# re:agent JSONL traces
 
 Source: `internal/reagent/trace.go` and the event writers in `loop.go`, `transport.go`, `session.go`, `run_compact.go`, `model_switch.go`, `auto.go`, `child.go`, and `tool_git_do.go`; payload types are in `types.go`, `tool_exec.go`, and `tool_git_do.go`. These are **private records**: prompts, file contents, tool arguments and API bodies may appear. Do not publish a raw trace or credentials.
 
