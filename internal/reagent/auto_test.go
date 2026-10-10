@@ -618,3 +618,30 @@ func TestAuto_CLIStartsWithoutRoutingBanner(t *testing.T) {
 		t.Fatalf("unexpected startup banner: %s", errs.String())
 	}
 }
+
+func TestAuto_ExecTimeoutDefersOnlyUntilTheNextModelResponse(t *testing.T) {
+	cfg := autoConfig(t, NewEchoTool())
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("routed after timeout")))}
+	api := newFakeAPI(t, autoChoice("fast", 0.95))
+	s := autoSession(t, cfg, NewScriptedModel(), fast, api)
+	call := autoTestReply("gpt-6-sol", callBlock("slow", "exec", `{"argv":["sleep","30"],"cwd":"."}`))
+	timeout := ToolResult{CallID: "slow", Name: "exec", Outcome: ToolOutcome{Code: "timeout", Effect: EffectUnknown, Message: "exec request timed out"}}
+	s.history = []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: "check the tests"}},
+		{Kind: EntryAssistant, Assistant: &call},
+		{Kind: EntryTool, Tool: &timeout},
+	}
+	r := newRun(s, "pending")
+	if err := r.routeNext(context.Background()); err != nil || r.routingOff || len(api.received()) != 0 {
+		t.Fatalf("pending timeout disabled routing: %v, off=%t, requests=%d", err, r.routingOff, len(api.received()))
+	}
+	ack := autoTestReply("gpt-6-sol", textBlock("I saw the timeout and inspected the workspace."))
+	s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &ack})
+	result, err := s.Turn(context.Background(), "what next?", "after", filepath.Join(t.TempDir(), "after.jsonl"))
+	if err != nil || result.Status != StatusCompleted || result.Reply != "routed after timeout" || s.cfg.Model != "gpt-6-luna" || len(fast.requests) != 1 || len(api.received()) != 1 {
+		t.Fatalf("routing after acknowledgement: result %+v, model %s, requests %d, router %d, err %v", result, s.cfg.Model, len(fast.requests), len(api.received()), err)
+	}
+	if !strings.Contains(s.handoff.Text, `"effect":"unknown"`) || !strings.Contains(s.handoff.Text, `"code":"timeout"`) {
+		t.Fatalf("routing lost the uncertain-effect evidence: %s", s.handoff.Text)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -62,11 +63,15 @@ func renderModelHandoff(history []Entry) (*modelHandoff, error) {
 	return &modelHandoff{Text: transcriptPreamble + string(body), Plan: plan, Entries: len(history), NativeItems: nativeItems}, nil
 }
 
+// An unresolved exec timeout defers routing until a model has seen its result.
+var errUnacknowledgedExecTimeout = errors.New("exec timeout has not reached a later model response")
+
 // visibleHistory is shared by the full handoff and the bounded routing packet.
 func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 	var nativeItems int
 	entries := make([]transcriptEntry, 0, len(history))
 	pending := map[string]string{}
+	unacknowledged := 0
 	for i, entry := range history {
 		if len(pending) != 0 && entry.Kind != EntryTool {
 			return nil, 0, fmt.Errorf("entry %d interrupts an unresolved tool batch", i+1)
@@ -100,13 +105,17 @@ func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 				Blocks: response.Blocks, OmittedNativeItems: len(response.Native.Items),
 			}
 			nativeItems += len(response.Native.Items)
+			unacknowledged = 0
 		case entry.Kind == EntryTool && entry.Tool != nil:
 			result := entry.Tool
 			if pending[result.CallID] != result.Name || result.Name == "" {
 				return nil, 0, fmt.Errorf("entry %d has an unmatched tool result", i+1)
 			}
 			if result.Outcome.Effect == EffectUnknown {
-				return nil, 0, fmt.Errorf("entry %d has uncertain tool effects", i+1)
+				if result.Name != "exec" || result.Outcome.Code != "timeout" {
+					return nil, 0, fmt.Errorf("entry %d has uncertain tool effects", i+1)
+				}
+				unacknowledged = i + 1
 			}
 			delete(pending, result.CallID)
 			record.Tool = result
@@ -118,6 +127,9 @@ func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 	}
 	if len(pending) != 0 {
 		return nil, 0, fmt.Errorf("history ends with an unresolved tool batch")
+	}
+	if unacknowledged != 0 {
+		return nil, 0, fmt.Errorf("entry %d has uncertain tool effects: %w", unacknowledged, errUnacknowledgedExecTimeout)
 	}
 	return entries, nativeItems, nil
 }
