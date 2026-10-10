@@ -55,6 +55,7 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("key", name)               enter, ctrl-c, ctrl-u, esc, left, up
 #   ("paste", text)             a bracketed paste
 #   ("wait", text, seconds)     until text is on screen or in scrollback
+#   ("wait_screen", text, seconds) until text is on the current screen
 #   ("idle", seconds)           let output settle
 #   ("resize", rows, cols)
 #   ("show", label)             print the screen
@@ -142,8 +143,7 @@ SCENARIOS = {
             ("key", "enter"),
             ("wait", "Working.", 5),
             ("type", "next question"),
-            ("idle", 0.3),
-            ("expect", "screen_has", "❯ next question"),
+            ("wait_screen", "❯ next question", 5),
             ("key", "enter"),
             ("wait", "queued", 5),
             ("wait", "queued reply arrived", 10),
@@ -291,13 +291,14 @@ class Session:
             os.write(self.fd, ch.encode())
             self.pump(0.01)
 
-    def wait_for(self, text, seconds):
+    def wait_for(self, text, seconds, screen_only=False):
+        lines = self.term.screen if screen_only else self.term.text
         end = time.time() + seconds
         while time.time() < end and self.alive:
-            if any(text in line for line in self.term.text()):
+            if any(text in line for line in lines()):
                 return True
             self.pump(0.05)
-        return any(text in line for line in self.term.text())
+        return any(text in line for line in lines())
 
     def resize(self, rows, cols):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -443,6 +444,11 @@ def run(binary, name, scenario, workspace):
             elif kind == "wait":
                 if not s.wait_for(args[0], args[1]):
                     failures.append("timed out waiting for %r" % args[0])
+                    show(s, "failed wait for %r" % args[0])
+            elif kind == "wait_screen":
+                if not s.wait_for(args[0], args[1], screen_only=True):
+                    failures.append("timed out waiting on screen for %r" % args[0])
+                    show(s, "failed screen wait for %r" % args[0])
             elif kind == "idle":
                 s.pump(args[0])
             elif kind == "resize":
@@ -453,6 +459,7 @@ def run(binary, name, scenario, workspace):
                 error = CHECKS[args[0]](s, *args[1:])
                 if error:
                     failures.append(error)
+                    show(s, "failed assertion: " + error)
             if not s.alive:
                 failures.append("reagent exited during %r" % (step,))
                 break
