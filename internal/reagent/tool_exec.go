@@ -26,8 +26,7 @@ var allowedEnvironment = []string{
 	"GOROOT", "GOPATH", "GOCACHE", "GOMODCACHE",
 }
 
-// v0 §9 amendment (2026-09-25): a model asked for one-second timeouts on
-// commands that take longer, and a timeout ends the run.
+// A ten-second floor keeps an accidentally short timeout from cutting off commands (v0 §9).
 const (
 	defaultExecTimeout = 120 * time.Second
 	minExecTimeout     = 10 * time.Second
@@ -35,9 +34,7 @@ const (
 
 // execTool runs one foreground command and reports what actually happened.
 //
-// Its hardest obligation is honesty about uncertainty: once a process has
-// started, a timeout cannot say the workspace is unchanged, so that outcome
-// stops the run rather than inviting another attempt (v0 §9).
+// A timeout keeps unknown effects visible to the next model step (v0 §9).
 type execTool struct {
 	ws *Workspace
 	// minTimeout is minExecTimeout; tests set zero to reach a timeout quickly.
@@ -90,7 +87,7 @@ func (execTool) Spec() ToolSpec {
 			"[[\"git\",\"commit\",\"-m\",\"Add a\"]]: each runs only if the one before it succeeded, " +
 			"like && in a shell, and every step is reported. " +
 			"Commands run with the host user's authority and may read, write, and use the network. " +
-			"A command that times out leaves uncertain effects and ends the run. Unavailable in read-only mode.",
+			"A timed-out command leaves uncertain effects; inspect before retrying. The remaining then commands do not run, but the next model step sees the timeout. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -341,7 +338,7 @@ func classifyRun(parent, deadline context.Context, runErr error, started, output
 	case deadline.Err() != nil:
 		reason := "timeout"
 		result.TerminationReason = &reason
-		return "timeout", "the command exceeded its timeout; its effects are unknown", EffectUnknown
+		return "timeout", "the exec request timed out; its effects are unknown; inspect partial output and workspace before retrying", EffectUnknown
 	case outputIncomplete:
 		return "output_wait_failed", "a command output pipe did not reach EOF; output and effects are uncertain", EffectUnknown
 	case runErr != nil:

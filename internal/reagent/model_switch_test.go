@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -507,5 +508,36 @@ func TestModelSwitch_AdmissionUsesReportedGenerationBytes(t *testing.T) {
 	s.Reset()
 	if s.tokensPerByte != 0 {
 		t.Fatal("reset retained measurement")
+	}
+}
+
+func TestModelSwitch_ExecTimeoutAfterModelReplyCanBeProjected(t *testing.T) {
+	c := newConversation(t, "gpt-6.1-sol", "high", 0)
+	call := turn(callBlock("slow", "exec", `{"argv":["sleep","30"],"cwd":"."}`))
+	timeout := ToolResult{CallID: "slow", Name: "exec", Outcome: ToolOutcome{
+		Code: "timeout", Message: "the exec request timed out; its effects are unknown", Effect: EffectUnknown,
+		Data: json.RawMessage(`{"termination_reason":"timeout","stdout":"partial"}`),
+	}}
+	ack := turn(textBlock("I inspected the timeout; continue from here."))
+	c.session.history = []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: "check the tests"}},
+		{Kind: EntryAssistant, Assistant: &call},
+		{Kind: EntryTool, Tool: &timeout},
+		{Kind: EntryAssistant, Assistant: &ack},
+	}
+	if _, err := renderModelHandoff(c.session.history[:3]); !errors.Is(err, errUnacknowledgedExecTimeout) {
+		t.Fatalf("unresolved timeout was accepted: %v", err)
+	}
+	var stderr bytes.Buffer
+	c.commandModel(context.Background(), "gpt-6-luna", nil, &stderr)
+	if c.session.cfg.Model != "gpt-6-luna" || c.session.handoff == nil || strings.Contains(stderr.String(), "switch failed") {
+		t.Fatalf("acknowledged timeout blocked switch: %s", stderr.String())
+	}
+	var records []transcriptEntry
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(c.session.handoff.Text, transcriptPreamble)), &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 4 || records[2].Trust != "untrusted_tool_data" || !reflect.DeepEqual(records[2].Tool, &timeout) || records[3].Assistant == nil || !strings.Contains(records[3].Assistant.Blocks[0].Text, "inspected") {
+		t.Fatalf("handoff omitted the timeout or model acknowledgement: %+v", records)
 	}
 }

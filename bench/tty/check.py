@@ -62,6 +62,21 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "exec-timeout-continues": {
+        "script": [tool("Running a slow check.", "slow", "exec",
+                        {"argv": ["sleep", "30"], "cwd": ".", "timeout_ms": 1000}),
+                   reply("I saw the exec timeout; I can inspect before retrying.")],
+        "steps": [
+            ("idle", 0.5),
+            ("type", "run the check"),
+            ("key", "enter"),
+            ("wait", "I saw the exec timeout", 20),
+            ("show", "model continued after exec timed out"),
+            ("expect", "screen_has", "timed out after"),
+            ("expect", "screen_lacks", "session blocked:"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "model-retry": {
         "retry": True,
         "steps": [

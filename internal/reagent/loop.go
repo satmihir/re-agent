@@ -353,14 +353,18 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			return StatusPersistenceError, r.persistenceErr.Error()
 		}
 
-		// Once an effect is uncertain, no further work can be reasoned about:
-		// the run stops rather than trying again or reporting a clean state
-		// (v0 §9). This is v0's one uncertain-effect rule.
+		// v0 §9: a timed-out exec ends this batch but gives the model its
+		// observation in the next step; other uncertain effects stop the run.
 		if outcome.Effect == EffectUnknown {
-			r.recordNotExecuted(calls[i+1:], "run stopped")
 			if ctx.Err() != nil {
+				r.recordNotExecuted(calls[i+1:], "run stopped")
 				return StatusCancelled, "cancelled while " + call.Name + " was running; its effects are unknown"
 			}
+			if call.Name == "exec" && outcome.Code == "timeout" {
+				r.recordNotExecuted(calls[i+1:], "exec timed out; inspect its uncertain effects before retrying")
+				return "", ""
+			}
+			r.recordNotExecuted(calls[i+1:], "run stopped")
 			return StatusEffectUnknown, call.Name + " left uncertain effects: " + outcome.Message
 		}
 	}

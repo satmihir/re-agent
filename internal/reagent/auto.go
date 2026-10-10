@@ -2,6 +2,7 @@ package reagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -240,7 +241,11 @@ func (r *Run) routeNext(ctx context.Context) error {
 		return nil
 	}
 	if _, _, err := visibleHistory(s.history); err != nil {
-		r.routingOff = true
+		// v0 §10: a timeout awaiting its first model response defers only
+		// this boundary, not every later route in the same run.
+		if !errors.Is(err, errUnacknowledgedExecTimeout) {
+			r.routingOff = true
+		}
 		metadata["action"], metadata["reason"] = "defer", err.Error()
 		r.trace.Write("auto.route", r.steps+1, metadata)
 		return nil
