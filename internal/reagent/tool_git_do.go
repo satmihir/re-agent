@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -89,6 +91,7 @@ type gitDoArgs struct {
 	Branch  string          `json:"branch"`
 	PR      json.RawMessage `json:"pr"`
 	Commit  string          `json:"commit"`
+	Paths   []string        `json:"paths"`
 }
 
 type gitDoStep struct {
@@ -143,13 +146,15 @@ func (t gitDoTool) Spec() ToolSpec {
     "body": {"type": "string", "description": "Pull request body, or the reply posted on a pull request."},
     "branch": {"type": "string", "description": "Branch name to create, when the outcome creates one."},
     "pr": {"type": "integer", "minimum": 1, "description": "Pull request number, when the outcome names one."},
-    "commit": {"type": "string", "description": "Commit to revert, as a hash or ref."}`
+    "commit": {"type": "string", "description": "Commit to revert, as a hash or ref."},
+    "paths": {"type": "array", "items": {"type": "string"}, "description": "For commit, commit_push, ship_pr, follow_up_pr and amend: name exactly what to commit when the tree has unrelated changes; workspace-relative files or directories."}`
 	description := "Carry out a routine git or pull request outcome in one call and get back proof: " +
 		"the commands that ran and checks of the result, such as the remote tip matching HEAD and the pull request existing. " +
 		"Prefer it to exec for these outcomes. It reads the repository itself before acting (branch, upstream, changed files, " +
 		"recent commits, the branch's pull request) and declines when the outcome does not fit, so call it directly " +
 		"instead of running status, diff or log first. Pass the commit message, pull request title and body when you " +
 		"already know what changed; otherwise omit them and they are derived from the changed files. " +
+		"For commit, commit_push, ship_pr, follow_up_pr and amend, pass paths to name exactly what to commit when the tree has unrelated changes. " +
 		"For a revert, pass commit if you know it; otherwise describe the commit in intent. " +
 		"Do any other work, such as editing code, first. A request it cannot do safely comes back declined with the reason; " +
 		"then use exec. Outcomes:" + menu.String()
@@ -191,6 +196,20 @@ func (t gitDoTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 	}
 	if t.jev == nil && (gitDoFind(a.Recipe) == nil || a.Intent != "") {
 		return failOutcome("invalid_arguments", "recipe must be one of the listed outcomes"), nil
+	}
+	if a.Paths != nil && len(a.Paths) == 0 {
+		return failOutcome("invalid_arguments", "paths must name at least one file or directory"), nil
+	}
+	for i, p := range a.Paths {
+		if p == "" || filepath.IsAbs(p) || strings.Contains(p, "\\") {
+			return failOutcome("invalid_arguments", "paths must be workspace-relative files or directories"), nil
+		}
+		for _, part := range strings.Split(p, "/") {
+			if part == ".." {
+				return failOutcome("invalid_arguments", "paths must not contain .."), nil
+			}
+		}
+		a.Paths[i] = filepath.Clean(p)
 	}
 	pr := 0
 	if len(a.PR) > 0 {
@@ -302,6 +321,15 @@ func (r *gitDoRun) carryOut(jev *jevClient) gitDoResult {
 	runnable, _ := r.chooseRecipe(allowed)
 	if !runnable {
 		return result
+	}
+	if len(r.args.Paths) > 0 {
+		switch result.Recipe {
+		case "commit", "commit_push", "ship_pr", "follow_up_pr", "amend":
+		default:
+			result.Status, result.Reason = "declined", "paths only applies to commit, commit_push, ship_pr, follow_up_pr and amend"
+			result.Decision.DeclinedBy = "recipe"
+			return result
+		}
 	}
 	output, checks, err := gitDoFind(result.Recipe).run(r)
 	result.Steps, result.Checks = r.steps, checks
@@ -675,11 +703,169 @@ func (r *gitDoRun) newBranchName(fallback string) (string, error) {
 	return name, nil
 }
 
+// v0 §10.9: preflight before any add, then inspect the index before committing.
+func (r *gitDoRun) stageChanges() error {
+	if err := r.preflightStage(); err != nil {
+		return err
+	}
+	paths := r.args.Paths
+	argv := []string{"git", "add", "-A"}
+	if len(paths) > 0 {
+		argv = append(argv, "--")
+		for _, p := range paths {
+			argv = append(argv, ":(literal)"+p)
+		}
+	}
+	if _, err := r.step(argv...); err != nil {
+		return err
+	}
+	return r.recordStaged()
+}
+
+func (r *gitDoRun) preflightStage() error {
+	paths := r.args.Paths
+	if len(paths) > 0 {
+		for _, p := range paths {
+			if err := r.validatePath(p); err != nil {
+				return err
+			}
+		}
+		staged, ok := r.quiet("git", "diff", "--cached", "--name-only", "-z", "--no-renames")
+		if !ok {
+			return gitDoDecline{"cannot inspect staged changes"}
+		}
+		for _, p := range strings.Split(staged, "\x00") {
+			if p == "" {
+				continue
+			}
+			inside := false
+			for _, selected := range paths {
+				if selected == "." || p == selected || strings.HasPrefix(p, selected+"/") {
+					inside = true
+					break
+				}
+			}
+			if !inside {
+				return gitDoDecline{"staged change outside paths: " + p}
+			}
+		}
+	}
+	return r.rejectEmbedded(paths)
+}
+
+func (r *gitDoRun) validatePath(p string) error {
+	full := filepath.Join(r.dir, p)
+	if _, err := os.Lstat(full); err == nil {
+		real, err := filepath.EvalSymlinks(full)
+		if err != nil {
+			return gitDoDecline{"cannot resolve path: " + p}
+		}
+		rel, err := filepath.Rel(r.dir, real)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return gitDoDecline{"path leaves the repository: " + p}
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return gitDoDecline{"cannot inspect path: " + p}
+	}
+	// A deleted tracked file (or directory) is still a valid pathspec.
+	indexed, ok := r.quiet("git", "ls-files", "--cached", "-z", "--", ":(literal)"+p)
+	if !ok || indexed == "" {
+		return gitDoDecline{"path does not exist in the working tree or index: " + p}
+	}
+	return nil
+}
+
+func (r *gitDoRun) rejectEmbedded(paths []string) error {
+	for _, p := range paths {
+		dir := filepath.Join(r.dir, p)
+		if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+			dir = filepath.Dir(dir)
+		}
+		for dir != r.dir {
+			if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+				rel, _ := filepath.Rel(r.dir, dir)
+				tracked, _ := r.quiet("git", "ls-tree", "HEAD", "--", rel)
+				if !strings.HasPrefix(tracked, "160000 ") {
+					return gitDoDecline{"embedded repository/worktree: " + rel + "; pass paths to name exactly what to commit, or move or ignore it"}
+				}
+			}
+			dir = filepath.Dir(dir)
+		}
+	}
+	argv := []string{"git", "ls-files", "--others", "--exclude-standard", "--directory", "-z"}
+	if len(paths) > 0 {
+		argv = append(argv, "--")
+		for _, p := range paths {
+			argv = append(argv, ":(literal)"+p)
+		}
+	}
+	out, ok := r.quiet(argv...)
+	if !ok {
+		return gitDoDecline{"cannot inspect untracked paths"}
+	}
+	var embedded []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p == "" {
+			continue
+		}
+		full := filepath.Join(r.dir, p)
+		info, err := os.Lstat(full)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		err = filepath.WalkDir(full, func(name string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.Name() == ".git" {
+				rel, _ := filepath.Rel(r.dir, filepath.Dir(name))
+				embedded = append(embedded, rel)
+				return filepath.SkipDir
+			}
+			return nil
+		})
+		if err != nil {
+			return gitDoDecline{"cannot inspect untracked path: " + p + ": " + err.Error()}
+		}
+	}
+	if len(embedded) > 0 {
+		return gitDoDecline{"embedded repositories/worktrees: " + strings.Join(embedded, ", ") + "; pass paths to name exactly what to commit, or move or ignore them"}
+	}
+	return nil
+}
+
+func (r *gitDoRun) recordStaged() error {
+	if _, err := r.step("git", "diff", "--cached", "--name-status"); err != nil {
+		return err
+	}
+	// A repository created between preflight and add must never become a new gitlink.
+	raw, ok := r.quiet("git", "diff", "--cached", "--raw", "-z", "--no-renames")
+	if !ok {
+		return gitDoDecline{"cannot inspect staged modes; no commit made"}
+	}
+	parts := strings.Split(raw, "\x00")
+	for i := 0; i+1 < len(parts); i += 2 {
+		fields := strings.Fields(parts[i])
+		if len(fields) < 2 || fields[1] != "160000" {
+			continue
+		}
+		previous, ok := r.quiet("git", "ls-tree", "HEAD", "--", parts[i+1])
+		if !ok || !strings.HasPrefix(previous, "160000 ") {
+			return gitDoDecline{"new gitlink staged at " + parts[i+1] + "; no commit made; remove it from the index"}
+		}
+	}
+	return nil
+}
+
 func (r *gitDoRun) commitChanges(message string) (string, error) {
 	if len(r.state.Changed) == 0 {
+		if len(r.args.Paths) > 0 {
+			return "", r.preflightStage()
+		}
 		return "", nil
 	}
-	if _, err := r.step("git", "add", "-A"); err != nil {
+	if err := r.stageChanges(); err != nil {
 		return "", err
 	}
 	if _, err := r.step("git", "commit", "-q", "-m", message); err != nil {
@@ -692,6 +878,10 @@ func (r *gitDoRun) commitChanges(message string) (string, error) {
 // --- Checks ----------------------------------------------------------------------
 
 func (r *gitDoRun) cleanCheck() gitDoCheck {
+	if len(r.args.Paths) > 0 {
+		staged, ok := r.quiet("git", "diff", "--cached", "--name-status")
+		return gitDoCheck{"index clean", ok && staged == "", staged}
+	}
 	status, _ := r.quiet("git", "status", "--porcelain")
 	evidence := status
 	if evidence == "" {
@@ -772,8 +962,14 @@ func (r *gitDoRun) commit() (string, []gitDoCheck, error) {
 
 func (r *gitDoRun) splitCommits() (string, []gitDoCheck, error) {
 	before, _ := r.quiet("git", "rev-parse", "HEAD")
+	if err := r.rejectEmbedded(nil); err != nil {
+		return "", nil, err
+	}
 	for _, file := range r.state.Changed {
-		if _, err := r.step("git", "add", "-A", "--", file); err != nil {
+		if _, err := r.step("git", "add", "-A", "--", ":(literal)"+file); err != nil {
+			return "", nil, err
+		}
+		if err := r.recordStaged(); err != nil {
 			return "", nil, err
 		}
 		if _, err := r.step("git", "commit", "-q", "-m", "Update "+path.Base(file)); err != nil {
@@ -790,7 +986,7 @@ func (r *gitDoRun) amend() (string, []gitDoCheck, error) {
 		return "", nil, gitDoDecline{"the last commit is already pushed"}
 	}
 	parent, _ := r.quiet("git", "rev-parse", "HEAD~1")
-	if _, err := r.step("git", "add", "-A"); err != nil {
+	if err := r.stageChanges(); err != nil {
 		return "", nil, err
 	}
 	argv := []string{"git", "commit", "-q", "--amend", "--no-edit"}
@@ -833,6 +1029,11 @@ func (r *gitDoRun) createPR(branch string) error {
 }
 
 func (r *gitDoRun) shipPR() (string, []gitDoCheck, error) {
+	if len(r.state.Changed) > 0 || len(r.args.Paths) > 0 {
+		if err := r.preflightStage(); err != nil {
+			return "", nil, err
+		}
+	}
 	branch := r.state.Branch
 	message := r.message(r.state.Changed)
 	fresh := branch == r.state.Default || branch == ""
