@@ -906,3 +906,35 @@ func TestGitDo_ScopedDefaultMessageNamesOnlyCommittedFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestGitDo_EmbeddedWorktreeWithLeadingSpaceDeclines(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+	gitDoWrite(t, ws.Root(), "intended.txt")
+	gitDoGit(t, ws.Root(), "worktree", "add", "-q", "--detach", filepath.Join(ws.Root(), " nested"))
+	before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+	for _, recipe := range []string{"ship_pr", "commit_push", "split_commits"} {
+		outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"`+recipe+`"}`)
+		if outcome.Code != "declined" || !strings.Contains(outcome.Message, " nested") || len(gitDoData(t, outcome).Steps) != 0 {
+			t.Fatalf("%s: %+v", recipe, outcome)
+		}
+	}
+	if gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature") != "" {
+		t.Fatal("committed or pushed despite embedded worktree")
+	}
+}
+
+func TestGitDo_PathsDeclineStagedLeadingSpaceOutsideSelection(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoWrite(t, ws.Root(), "notes.txt")
+	gitDoWrite(t, ws.Root(), " notes.txt")
+	gitDoGit(t, ws.Root(), "add", "--", " notes.txt")
+	before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit","paths":["notes.txt"]}`)
+	if outcome.Code != "declined" || !strings.Contains(outcome.Message, " notes.txt") || len(gitDoData(t, outcome).Steps) != 0 {
+		t.Fatalf("%+v", outcome)
+	}
+	if gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "diff", "--cached", "--name-status") != "A\t notes.txt" {
+		t.Fatal("changed HEAD or index despite staged file outside paths")
+	}
+}
