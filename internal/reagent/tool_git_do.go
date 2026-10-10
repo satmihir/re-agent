@@ -730,8 +730,8 @@ func (r *gitDoRun) preflightStage() error {
 				return err
 			}
 		}
-		staged, ok := r.quiet("git", "diff", "--cached", "--name-only", "-z", "--no-renames")
-		if !ok {
+		staged, code, err := r.exec([]string{"git", "diff", "--cached", "--name-only", "-z", "--no-renames"})
+		if err != nil || code != 0 {
 			return gitDoDecline{"cannot inspect staged changes"}
 		}
 		for _, p := range strings.Split(staged, "\x00") {
@@ -769,8 +769,8 @@ func (r *gitDoRun) validatePath(p string) error {
 		return gitDoDecline{"cannot inspect path: " + p}
 	}
 	// A deleted tracked file (or directory) is still a valid pathspec.
-	indexed, ok := r.quiet("git", "ls-files", "--cached", "-z", "--", ":(literal)"+p)
-	if !ok || indexed == "" {
+	indexed, code, err := r.exec([]string{"git", "ls-files", "--cached", "-z", "--", ":(literal)" + p})
+	if err != nil || code != 0 || indexed == "" {
 		return gitDoDecline{"path does not exist in the working tree or index: " + p}
 	}
 	return nil
@@ -800,8 +800,8 @@ func (r *gitDoRun) rejectEmbedded(paths []string) error {
 			argv = append(argv, ":(literal)"+p)
 		}
 	}
-	out, ok := r.quiet(argv...)
-	if !ok {
+	out, code, err := r.exec(argv)
+	if err != nil || code != 0 {
 		return gitDoDecline{"cannot inspect untracked paths"}
 	}
 	var embedded []string
@@ -840,8 +840,8 @@ func (r *gitDoRun) recordStaged() error {
 		return err
 	}
 	// A repository created between preflight and add must never become a new gitlink.
-	raw, ok := r.quiet("git", "diff", "--cached", "--raw", "-z", "--no-renames")
-	if !ok {
+	raw, code, err := r.exec([]string{"git", "diff", "--cached", "--raw", "-z", "--no-renames"})
+	if err != nil || code != 0 {
 		return gitDoDecline{"cannot inspect staged modes; no commit made"}
 	}
 	parts := strings.Split(raw, "\x00")
@@ -871,8 +871,8 @@ func (r *gitDoRun) commitChanges(message string) (string, error) {
 	if strings.TrimSpace(message) == "" {
 		files := r.state.Changed
 		if len(r.args.Paths) > 0 {
-			staged, ok := r.quiet("git", "diff", "--cached", "--name-only", "-z", "--no-renames")
-			if !ok {
+			staged, code, err := r.exec([]string{"git", "diff", "--cached", "--name-only", "-z", "--no-renames"})
+			if err != nil || code != 0 {
 				return "", gitDoDecline{"cannot derive a message from staged files; no commit made"}
 			}
 			files = strings.Split(strings.TrimSuffix(staged, "\x00"), "\x00")
