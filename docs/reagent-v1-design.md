@@ -1,6 +1,6 @@
 # re:agent v1 — Design and Implementation Plan
 
-**Status:** Proposed implementation specification, ready for independent review.  
+**Status:** Historical. This was the original target specification; it no longer constrains re:agent. `docs/reagent-overview.md` describes current behavior.  
 **Date:** 2026-09-05.  
 **Language:** Go.  
 **Live backend:** OpenAI Responses API, called directly.  

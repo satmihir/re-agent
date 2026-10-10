@@ -1,6 +1,6 @@
 // Package reagent implements a small agent harness: it builds a model request,
-// interprets the response, executes authorized tools, and repeats. The design
-// it follows is docs/reagent-v0-design.md, which cites the fuller v1 design.
+// interprets the response, executes authorized tools, and repeats.
+// docs/reagent-overview.md describes how it works.
 package reagent
 
 import (
