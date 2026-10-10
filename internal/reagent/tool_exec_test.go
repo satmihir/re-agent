@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -415,46 +416,50 @@ func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
 	}
 }
 
-// An uncertain effect stops the run: no further tool runs, and no next model
-// step. This is v0's one uncertain-effect rule (v0 §9).
-func TestLoop_UncertainEffectStopsTheRun(t *testing.T) {
-	t.Parallel()
-	ws := testWorkspace(t, nil)
-	runs := 0
-	registry, err := NewRegistry(Mode{},
-		execTool{ws: ws}, countingTool{runs: &runs})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := Config{Model: "test", Registry: registry, WorkspacePath: ws.Root(), MaxSteps: 20, MaxToolCalls: 40}
-
-	run, result := runScript(t, cfg,
-		turn(callBlock("call_1", "exec", execArgsJSON(shell("touch marker; sleep 30"), ".", 300)),
-			callBlock("call_2", "counter", `{}`)),
-		turn(textBlock("unreached")))
-
-	if result.Status != StatusEffectUnknown {
-		t.Fatalf("got %s: %s", result.Status, result.Reason)
-	}
-	// Unlike a failed model request, this outcome cannot be continued from.
-	if result.Resumable || run.blocked != string(StatusEffectUnknown) {
-		t.Fatalf("resumable=%v blocked=%q", result.Resumable, run.blocked)
-	}
-	if result.Steps != 1 {
-		t.Fatalf("took %d steps; no further model request may follow", result.Steps)
-	}
-	if runs != 0 {
-		t.Fatalf("the rest of the batch ran %d times", runs)
-	}
-	if got := results(run); len(got) != 2 || got[1].Outcome.Code != "not_executed" {
-		t.Fatalf("got %+v", got)
-	}
-	// The uncertainty is reported rather than the workspace being assumed clean.
-	if len(result.Effects) != 1 || result.Effects[0].Effect != EffectUnknown {
-		t.Fatalf("got %+v", result.Effects)
-	}
-	if _, err := os.Stat(filepath.Join(ws.Root(), "marker")); err != nil {
-		t.Fatalf("the command's partial work is missing: %v", err)
+func TestLoop_ExecTimeoutEndsBatchButReachesNextModelStep(t *testing.T) {
+	for _, chain := range []bool{false, true} {
+		t.Run(map[bool]string{false: "single", true: "then chain"}[chain], func(t *testing.T) {
+			ws := testWorkspace(t, nil)
+			runs := 0
+			registry, err := NewRegistry(Mode{}, execTool{ws: ws}, countingTool{runs: &runs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := Config{Model: "test", Registry: registry, WorkspacePath: ws.Root(), MaxSteps: 20, MaxToolCalls: 40}
+			command := execArgsJSON(shell("printf 'before timeout\\n'; touch marker; sleep 30"), ".", 300)
+			if chain {
+				command = `{"argv":` + shell("printf 'before timeout\\n'; touch marker; sleep 30") + `,"then":[["/bin/sh","-c","touch should-not-run"]],"cwd":".","timeout_ms":300}`
+			}
+			model := &compactModel{replies: []ModelResponse{
+				turn(callBlock("call_1", "exec", command), callBlock("call_2", "counter", `{}`)),
+				turn(callBlock("call_3", "counter", `{}`)),
+				turn(textBlock("Inspected the timeout and continued.")),
+			}}
+			run, result := oneTurn(t, context.Background(), cfg, model, NewTrace(io.Discard), filepath.Join(t.TempDir(), "events.jsonl"), "task")
+			if result.Status != StatusCompleted || result.Steps != 3 || result.Reply != "Inspected the timeout and continued." || run.blocked != "" || runs != 1 {
+				t.Fatalf("result %+v, blocked %q, counter runs %d", result, run.blocked, runs)
+			}
+			got := results(run)
+			if len(got) != 3 || got[0].Outcome.Code != "timeout" || got[0].Outcome.OK || got[0].Outcome.Effect != EffectUnknown || !strings.Contains(got[0].Outcome.Message, "exec request timed out") || got[1].Outcome.Code != "not_executed" || got[1].Outcome.Effect != EffectNone || got[2].Outcome.Code != "ok" {
+				t.Fatalf("tool observations: %+v", got)
+			}
+			if len(model.requests) != 3 || len(model.requests[1].History) < 4 {
+				t.Fatalf("model did not see the timeout: %+v", model.requests)
+			}
+			history := model.requests[1].History
+			if history[len(history)-2].Tool == nil || history[len(history)-2].Tool.Outcome.Code != "timeout" || history[len(history)-1].Tool == nil || history[len(history)-1].Tool.Outcome.Code != "not_executed" {
+				t.Fatalf("follow-up request lost the batch results: %+v", history)
+			}
+			if len(result.Effects) != 1 || result.Effects[0].Effect != EffectUnknown || !strings.Contains(string(got[0].Outcome.Data), "before timeout") {
+				t.Fatalf("partial output/effects missing: %+v %+v", result.Effects, got[0])
+			}
+			if _, err := os.Stat(filepath.Join(ws.Root(), "marker")); err != nil {
+				t.Fatalf("command's partial work is missing: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(ws.Root(), "should-not-run")); !os.IsNotExist(err) {
+				t.Fatalf("then command ran despite timeout: %v", err)
+			}
+		})
 	}
 }
 
