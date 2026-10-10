@@ -82,6 +82,6 @@ func (m *OpenAIModel) Generate(ctx context.Context, req ModelRequest) (ModelResp
 	if err != nil {
 		return ModelResponse{}, addRetryUsage(err, prior)
 	}
-	resp.Usage.Add(prior)
+	resp.retryUsage = prior
 	return resp, nil
 }

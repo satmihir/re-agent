@@ -281,6 +281,9 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 		return fail(status, reason)
 	}
 	result.Usage, s.lastRequest = resp.Usage, resp.Usage
+	if resp.retryUsage != (Usage{}) {
+		result.Usage.Add(resp.retryUsage)
+	}
 	text, err := compactText(resp)
 	if err != nil {
 		return fail(StatusProtocolError, err.Error())

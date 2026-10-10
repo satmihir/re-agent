@@ -57,6 +57,6 @@ func (m *AnthropicModel) Generate(ctx context.Context, req ModelRequest) (ModelR
 	if err != nil {
 		return ModelResponse{}, addRetryUsage(err, prior)
 	}
-	resp.Usage.Add(prior)
+	resp.retryUsage = prior
 	return resp, nil
 }

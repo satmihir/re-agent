@@ -641,8 +641,9 @@ func TestOpenAI_OvernightRetryStreamOverloadAccountsUsage(t *testing.T) {
 	cfg.Provider, cfg.Model, cfg.Proxied, cfg.ModelRetryWindow = openaiName, "test-model", true, 3*time.Second
 	trace := NewTrace(io.Discard)
 	model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
-	_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "test")
-	if result.Status != StatusCompleted || len(api.received()) != 2 || !result.Usage.Known || result.Usage.InputTokens < 864 {
-		t.Fatalf("got %+v; attempts %d", result, len(api.received()))
+	session, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "test")
+	requests := api.received()
+	if result.Status != StatusCompleted || len(requests) != 2 || !result.Usage.Known || result.Usage.InputTokens != 1728 || session.lastRequest.InputTokens != 864 || !session.lastRequest.Known || session.tokensPerByte <= 0 || session.tokensPerByte*float64(len(requests[0])) > 865 {
+		t.Fatalf("run %+v; last request %+v; tokens/byte %f; attempts %d", result, session.lastRequest, session.tokensPerByte, len(requests))
 	}
 }

@@ -41,6 +41,7 @@ func compactSession(t *testing.T, model Model) *Session {
 func TestCompact_ReplacesHistoryWithTheSummary(t *testing.T) {
 	reply := turn(textBlock("  Part one"), textBlock("part two  "))
 	reply.Usage = Usage{Known: true, InputTokens: 100, OutputTokens: 20}
+	reply.retryUsage = Usage{Known: true, InputTokens: 25, UnreportedAttempts: 1}
 	model := &compactModel{replies: []ModelResponse{reply}}
 	s := compactSession(t, model)
 	old := append([]Entry(nil), s.history...)
@@ -68,7 +69,7 @@ func TestCompact_ReplacesHistoryWithTheSummary(t *testing.T) {
 	if s.ID != id || s.Turns() != turns-1 || !s.seenCalls["old"] || len(s.history) != 1 || s.history[0].Kind != EntrySummary || *s.history[0].Summary != (Summary{Text: result.Reply, ReplacedEntries: 2, Model: s.cfg.Model}) {
 		t.Fatalf("session changed incorrectly: %+v", s)
 	}
-	if s.LastTrace() != path || s.lastRequest.Known || result.Usage != reply.Usage {
+	if s.LastTrace() != path || s.lastRequest.Known || !result.Usage.Known || result.Usage.InputTokens != 125 || result.Usage.UnreportedAttempts != 1 {
 		t.Fatalf("diagnostics: %+v %+v", s.lastRequest, result)
 	}
 	events := readEvents(t, path)

@@ -113,6 +113,8 @@ type ModelResponse struct {
 	Blocks     []OutputBlock `json:"blocks"`
 	Native     NativeOutput  `json:"native"`
 	Usage      Usage         `json:"usage"`
+	// retryUsage is billed to the run, not to this accepted response's context meter.
+	retryUsage Usage
 }
 
 // NativeOutput holds the provider's own output items, kept verbatim so a later

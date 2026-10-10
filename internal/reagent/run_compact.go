@@ -68,6 +68,9 @@ func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
 		return skip(reason)
 	}
 	r.usage.Add(resp.Usage)
+	if resp.retryUsage != (Usage{}) {
+		r.usage.Add(resp.retryUsage)
+	}
 	s.lastRequest = resp.Usage
 	r.recordRouteUsage(resp.Usage)
 	text, err := compactText(resp)

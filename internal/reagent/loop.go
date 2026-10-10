@@ -177,6 +177,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			}
 		}
 		r.usage.Add(resp.Usage)
+		if resp.retryUsage != (Usage{}) {
+			r.usage.Add(resp.retryUsage)
+		}
 		if reason := r.validateResponse(resp); reason != "" {
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": reason, "response": resp})
 			return r.finish(StatusProtocolError, reason, "")
