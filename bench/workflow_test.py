@@ -140,6 +140,22 @@ class WorkflowTest(unittest.TestCase):
                 with self.assertRaises(workflow.Incomplete):
                     self.check(c, r)
 
+    def test_severity_labels_are_case_insensitive_and_unknown_is_blocking(self):
+        contract, record = self.records()
+        review = record["reviews"][0]
+        review["result"]["report"] = {"summary": "minor note", "verdict": "no_findings", "findings": [
+            {"severity": "INFO", "location": "README.md:1", "description": "wording note"}]}
+        record["dispositions"] = [{"run_id": review["run_id"], "index": 0, "decision": "accepted",
+                                   "reason": "nonblocking wording note"}]
+        self.assertEqual(self.check(contract, record)["status"], "evidence_complete")
+
+        contract, record = self.records()
+        review = record["reviews"][0]
+        review["result"]["report"] = {"summary": "unclear severity", "verdict": "concerns", "findings": [
+            {"severity": "suggestion", "location": "README.md:1", "description": "ambiguous classification"}]}
+        with self.assertRaisesRegex(workflow.Incomplete, "unresolved reviewer finding"):
+            self.check(contract, record)
+
     def test_blocking_finding_requires_fix_and_new_reviews(self):
         contract, record = self.records()
         first = record["reviews"][0]

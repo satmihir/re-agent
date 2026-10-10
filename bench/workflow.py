@@ -221,14 +221,22 @@ def audit(contract, record, candidate):
         keys(report, {"summary", "findings", "verdict"}, label="review report")
         need(isinstance(report["summary"], str) and report["summary"].strip() and
              report["verdict"] in ("no_findings", "concerns") and
-             isinstance(report["findings"], list) and len(report["findings"]) <= 20 and
-             bool(report["findings"]) == (report["verdict"] == "concerns"), "invalid or inconclusive review report")
+             isinstance(report["findings"], list) and len(report["findings"]) <= 20,
+             "invalid or inconclusive review report")
+        blocking = False
         for position, finding in enumerate(report["findings"]):
             keys(finding, {"severity", "location", "description"}, label="finding")
-            need(all(isinstance(value, str) and value.strip() for value in finding.values()) and
-                 finding["severity"] in ("blocking", "critical", "high", "major", "medium", "minor", "low", "info"),
-                 "finding lacks a recognized severity or factual reference")
+            need(all(isinstance(value, str) and value.strip() for value in finding.values()),
+                 "finding lacks a severity or factual reference")
+            severity = finding["severity"].casefold()
+            if severity not in ("blocking", "critical", "high", "major", "medium", "minor", "low", "info"):
+                severity = "blocking"
+            finding = {**finding, "severity": severity}
+            report["findings"][position] = finding
+            blocking = blocking or severity not in ("minor", "low", "info")
             findings[(run_id, position)] = (finding, cp_id, gate)
+        need(not blocking or report["verdict"] == "concerns",
+             "blocking finding lacks concerns verdict")
     for gate in ("tests", "implementation"):
         need(len(grouped.get(latest[gate], [])) >= contract["reviewers_per_gate"],
              f"{gate} checkpoint lacks independent fresh reviewers")
