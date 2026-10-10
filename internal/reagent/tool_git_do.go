@@ -868,6 +868,17 @@ func (r *gitDoRun) commitChanges(message string) (string, error) {
 	if err := r.stageChanges(); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(message) == "" {
+		files := r.state.Changed
+		if len(r.args.Paths) > 0 {
+			staged, ok := r.quiet("git", "diff", "--cached", "--name-only", "-z", "--no-renames")
+			if !ok {
+				return "", gitDoDecline{"cannot derive a message from staged files; no commit made"}
+			}
+			files = strings.Split(strings.TrimSuffix(staged, "\x00"), "\x00")
+		}
+		message = r.message(files)
+	}
 	if _, err := r.step("git", "commit", "-q", "-m", message); err != nil {
 		return "", err
 	}
@@ -952,7 +963,7 @@ func (r *gitDoRun) prStatus() (string, []gitDoCheck, error) {
 
 func (r *gitDoRun) commit() (string, []gitDoCheck, error) {
 	before, _ := r.quiet("git", "rev-parse", "HEAD")
-	if _, err := r.commitChanges(r.message(r.state.Changed)); err != nil {
+	if _, err := r.commitChanges(r.args.Message); err != nil {
 		return "", nil, err
 	}
 	count, _ := r.quiet("git", "rev-list", "--count", before+"..HEAD")
@@ -1008,7 +1019,7 @@ func (r *gitDoRun) push(branch string) error {
 
 func (r *gitDoRun) commitPush() (string, []gitDoCheck, error) {
 	branch := r.state.Branch
-	if _, err := r.commitChanges(r.message(r.state.Changed)); err != nil {
+	if _, err := r.commitChanges(r.args.Message); err != nil {
 		return "", nil, err
 	}
 	if err := r.push(branch); err != nil {
@@ -1035,7 +1046,12 @@ func (r *gitDoRun) shipPR() (string, []gitDoCheck, error) {
 		}
 	}
 	branch := r.state.Branch
-	message := r.message(r.state.Changed)
+	files := r.state.Changed
+	if len(r.args.Paths) > 0 {
+		// A fresh branch needs its name before there is a staged index.
+		files = r.args.Paths
+	}
+	message := r.message(files)
 	fresh := branch == r.state.Default || branch == ""
 	// A branch whose pull request is merged or closed is finished: its new
 	// changes start over on a branch from the latest default branch (v0 §10.9).
@@ -1070,7 +1086,7 @@ func (r *gitDoRun) shipPR() (string, []gitDoCheck, error) {
 		}
 		branch = name
 	}
-	if _, err := r.commitChanges(message); err != nil {
+	if _, err := r.commitChanges(r.args.Message); err != nil {
 		return "", nil, err
 	}
 	if err := r.push(branch); err != nil {

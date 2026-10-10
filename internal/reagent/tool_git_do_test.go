@@ -857,3 +857,52 @@ func TestGitDo_PathsCannotSelectAnEmbeddedWorktree(t *testing.T) {
 		})
 	}
 }
+
+func TestGitDo_ScopedDefaultMessageNamesOnlyCommittedFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, recipe string
+		fresh        bool
+	}{
+		{"commit", "commit", false},
+		{"commit_push", "commit_push", false},
+		{"ship_pr existing branch", "ship_pr", false},
+		{"ship_pr fresh branch", "ship_pr", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			if !tc.fresh {
+				gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+			}
+			gitDoWrite(t, ws.Root(), "intended.txt")
+			gitDoWrite(t, ws.Root(), "notes.txt")
+			gitDoWrite(t, ws.Root(), ".env.local")
+			gitDoNestedWorktree(t, ws)
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"`+tc.recipe+`","paths":["intended.txt"]}`)
+			if !outcome.OK {
+				t.Fatalf("%+v", outcome)
+			}
+			if subject := gitDoGit(t, ws.Root(), "log", "-1", "--format=%s"); subject != "Update intended.txt" {
+				t.Fatalf("subject %q", subject)
+			}
+			if files := gitDoGit(t, ws.Root(), "show", "--name-only", "--format=", "HEAD"); files != "intended.txt" {
+				t.Fatalf("committed %q", files)
+			}
+			if tc.fresh {
+				if branch := gitDoGit(t, ws.Root(), "branch", "--show-current"); branch != "change/update-intended-txt" {
+					t.Fatalf("branch %q", branch)
+				}
+			}
+			if tc.recipe == "ship_pr" {
+				found := false
+				for _, step := range gitDoData(t, outcome).Steps {
+					if len(step.Argv) > 2 && step.Argv[0] == "gh" && step.Argv[2] == "create" && step.Argv[len(step.Argv)-1] == "--fill" {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("PR did not derive its title from the commit: %+v", outcome)
+				}
+			}
+		})
+	}
+}
