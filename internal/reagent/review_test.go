@@ -99,6 +99,8 @@ func TestChat_ReviewCompletionAndCompaction(t *testing.T) {
 	}
 }
 
+// reviewSpawn preserves legacy anonymous-dispatch fixtures without paging.
+// The named-finder recovery test exercises the current retention protocol.
 func reviewSpawn(id, task, brief, authority string) OutputBlock {
 	args, _ := json.Marshal(spawnArgs{Task: task, Authority: authority, Context: &agentContext{Brief: brief, Files: []string{"ratio.go"}}})
 	return callBlock(id, "spawn", string(args))
@@ -118,8 +120,8 @@ func reviewToolResult(t *testing.T, history []Entry, id string) ToolOutcome {
 	return ToolOutcome{}
 }
 
-// The scripts exercise orchestration and tool permissions, not a live model's
-// willingness to follow the embedded protocol.
+// This legacy anonymous-dispatch fixture exercises orchestration and permissions,
+// not the current named-page protocol or a live model's willingness to follow it.
 func TestChat_ReviewPipelineOffline(t *testing.T) {
 	for _, level := range []string{"medium", "high", "max"} {
 		t.Run(level, func(t *testing.T) {
@@ -643,6 +645,8 @@ func TestChat_ReviewOverflowAndSuppliedClaimsToolLoop(t *testing.T) {
 	}
 }
 
+// Legacy anonymous dispatch keeps this fixture focused on shard size/coverage;
+// named retention and dismissal are covered by the recovery tool-loop test.
 func TestChat_ReviewShardScalingFromObservedDiff(t *testing.T) {
 	for _, tc := range []struct {
 		name, level          string
@@ -883,6 +887,256 @@ func TestChat_ReviewPagedSubtreeAccounting(t *testing.T) {
 	for _, want := range []string{"Every descendant: 301", "baseline 300", "review agents delta 1", "input token delta 7", "output token delta 3", "paged IDs 301"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("paged accounting report lacks %q: %s", want, &out)
+		}
+	}
+}
+
+func TestChat_ReviewNamedFinderRecoversTruncatedDeliveryWithoutTrace(t *testing.T) {
+	s := agentFixture(t)
+	type record struct {
+		ID, File, Summary string
+		Line              int
+	}
+	type page struct {
+		Records       []record
+		Total, Cursor int
+		Next          *int
+	}
+	var records []record
+	for i := 0; i < 24; i++ {
+		records = append(records, record{ID: fmt.Sprintf("candidate-%02d", i), File: "ratio.go", Line: i + 1, Summary: strings.Repeat("failure scenario ", 90)})
+	}
+	full, _ := json.Marshal(page{Records: records, Total: len(records)})
+	if len(full) <= MaxResultBytes {
+		t.Fatal("fixture must exceed delivery cap")
+	}
+	followups := 0
+	s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			if !cfg.Registry.Mode().ReadOnly {
+				t.Error("recovery finder gained writes")
+			}
+			if len(req.History) == 1 {
+				return turn(textBlock(string(full))), nil
+			}
+			// Recover from the complete earlier assistant output in this same child,
+			// never from the parent's truncated delivery or an external trace file.
+			var retained page
+			if err := json.Unmarshal([]byte(req.History[1].Assistant.Blocks[0].Text), &retained); err != nil || len(retained.Records) != 24 {
+				t.Errorf("child lost full retained output: %v", err)
+			}
+			var request struct{ Cursor, Limit int }
+			if err := json.Unmarshal([]byte(req.History[len(req.History)-1].User.Text), &request); err != nil {
+				t.Error(err)
+			}
+			if request.Limit != 3 {
+				t.Error("parent did not request smaller bounded page")
+			}
+			end := min(request.Cursor+request.Limit, len(retained.Records))
+			response := page{Records: retained.Records[request.Cursor:end], Total: retained.Total, Cursor: request.Cursor}
+			if end < len(retained.Records) {
+				response.Next = &end
+			}
+			raw, _ := json.Marshal(response)
+			if len(raw) > 8192 {
+				t.Error("recovery page exceeds encoded bound")
+			}
+			for _, r := range response.Records {
+				rawRecord, _ := json.Marshal(r)
+				if len(rawRecord) > 2048 {
+					t.Error("record exceeds encoded bound")
+				}
+			}
+			followups++
+			return turn(textBlock(string(raw))), nil
+		}}, nil
+	}
+	phase, cursor, callIndex := "spawn", 0, 0
+	seen := map[string]record{}
+	truncated := false
+	s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		callIndex++
+		id := fmt.Sprintf("recovery-%d", callIndex)
+		switch phase {
+		case "spawn":
+			phase = "wait"
+			for _, rule := range []string{"JSON-encoded payload is <=8 KiB", "record <=2 KiB", "Use unique named review agents", "Dismiss only then", "not reconstruction from the truncated parent copy", "Do not claim missing candidates were retained or verified", "reuse a verifier for another candidate; page retrieval alone", "is permitted"} {
+				if !strings.Contains(req.History[0].User.Text, rule) {
+					t.Errorf("prompt lacks recovery rule %s", rule)
+				}
+			}
+			args, _ := json.Marshal(spawnArgs{Name: "finder-pages", Task: "find candidates; Do not spawn or delegate.", Authority: "read", Context: &agentContext{Brief: "Retain records; stable IDs/count/cursor. Pages <=8 KiB, records <=2 KiB."}})
+			return turn(callBlock(id, "spawn", string(args))), nil
+		case "wait":
+			phase = "collect"
+			return turn(callBlock(id, "wait", `{"ids":["finder-pages"]}`)), nil
+		case "report":
+			return turn(textBlock(fmt.Sprintf("Recovered %d/24 candidate records via named Session pages; initial delivery truncated; zero trace reads; missing records 0.", len(seen)))), nil
+		}
+		all := agentResults(req.History)
+		latest := all[len(all)-1]
+		if !truncated {
+			if !latest.Truncated || len(latest.Result.Reply) >= len(full) {
+				t.Fatal("oversized initial delivery did not truncate")
+			}
+			truncated = true
+		} else {
+			if latest.Truncated {
+				t.Fatal("bounded recovery result truncated")
+			}
+			var recovered page
+			if err := json.Unmarshal([]byte(latest.Result.Reply), &recovered); err != nil {
+				t.Fatal(err)
+			}
+			if recovered.Cursor != cursor || recovered.Total != 24 {
+				t.Fatal("recovery cursor/count mismatch")
+			}
+			for _, r := range recovered.Records {
+				if _, exists := seen[r.ID]; exists {
+					t.Fatal("duplicate recovered record")
+				}
+				seen[r.ID] = r
+			}
+			if recovered.Next == nil {
+				if len(seen) != 24 {
+					t.Fatal("agent dismissed before all records collected")
+				}
+				phase = "report"
+				return turn(callBlock(id, "dismiss", `{"name":"finder-pages"}`)), nil
+			}
+			cursor = *recovered.Next
+		}
+		phase = "wait"
+		message, _ := json.Marshal(map[string]int{"Cursor": cursor, "Limit": 3})
+		args, _ := json.Marshal(map[string]string{"name": "finder-pages", "message": string(message)})
+		return turn(callBlock(id, "send", string(args))), nil
+	}}
+	var out, errs bytes.Buffer
+	c := &conversation{session: s, traceDir: t.TempDir()}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	chat(ctx, c, newLineReader(strings.NewReader("/review medium\n/exit\n"), &errs, nil), &out, &errs)
+	if s.blocked != "" || !truncated || followups != 8 || len(seen) != 24 || !strings.Contains(out.String(), "Recovered 24/24") {
+		t.Fatalf("truncated %v followups %d records %d blocked %s: %s %s", truncated, followups, len(seen), s.blocked, &out, &errs)
+	}
+	for _, r := range records {
+		if !reflect.DeepEqual(seen[r.ID], r) {
+			t.Errorf("recovered candidate data differs: %s", r.ID)
+		}
+	}
+	for _, result := range results(s) {
+		if result.Name != "spawn" && result.Name != "wait" && result.Name != "send" && result.Name != "dismiss" {
+			t.Errorf("unexpected trace recovery tool %s", result.Name)
+		}
+		if !result.Outcome.OK {
+			t.Errorf("recovery tool failed: %+v", result)
+		}
+	}
+}
+
+func TestChat_ReviewFailedProbeStillReadsAndDeletesScratch(t *testing.T) {
+	s := agentFixture(t)
+	const scratch = "zz_review_probe_failed.txt"
+	model := &compactModel{replies: []ModelResponse{
+		turn(callBlock("absence", "list_files", `{"path":"."}`)),
+		turn(callBlock("create", "write_file", `{"path":"zz_review_probe_failed.txt","content":"offline failed probe evidence\n"}`)),
+		turn(callBlock("failed-probe", "exec", `{"argv":["sh","-c","printf 'probe assertion failed\\n'; exit 7"],"cwd":"."}`)),
+		turn(callBlock("read-failed-probe", "read_file", `{"path":"zz_review_probe_failed.txt"}`)),
+		turn(callBlock("cleanup-failed-probe", "delete_file", `{"path":"zz_review_probe_failed.txt"}`)),
+		turn(textBlock("plausible: failed probe, exit 7; observed evidence read and scratch deleted; no confirmation claimed.")),
+	}}
+	s.model = model
+	var out, errs bytes.Buffer
+	c := &conversation{session: s, traceDir: t.TempDir()}
+	chat(context.Background(), c, newLineReader(strings.NewReader("/review max\n/exit\n"), &errs, nil), &out, &errs)
+	if len(model.requests) != 6 || s.blocked != "" {
+		t.Fatalf("requests %d blocked %s: %s", len(model.requests), s.blocked, &errs)
+	}
+	var failed ToolOutcome
+	for _, result := range results(s) {
+		if result.CallID == "failed-probe" {
+			failed = result.Outcome
+		}
+	}
+	if failed.OK || !strings.Contains(string(failed.Data), `"exit_code":7`) || !strings.Contains(string(failed.Data), "probe assertion failed") {
+		t.Fatalf("probe failure not observed: %+v", failed)
+	}
+	reviewToolResult(t, s.history, "read-failed-probe")
+	reviewToolResult(t, s.history, "cleanup-failed-probe")
+	if _, err := os.Stat(filepath.Join(s.cfg.Workspace.Root(), scratch)); !os.IsNotExist(err) {
+		t.Fatalf("failed probe scratch remains: %v", err)
+	}
+	if !strings.Contains(out.String(), "failed probe, exit 7") || !strings.Contains(out.String(), "no confirmation claimed") {
+		t.Fatal("failed probe report overclaimed success")
+	}
+}
+
+func TestChat_ReviewChangedPagedBaselineDisclosesUnknownDelta(t *testing.T) {
+	s := agentFixture(t)
+	for i := 0; i < 300; i++ {
+		id := fmt.Sprintf("prior-%03d", i)
+		s.agents.archive[id] = agentObservation{AgentThread: AgentThread{ID: id, ParentID: "root", Task: strings.Repeat("prior task ", 20), Cost: Usage{Known: true, InputTokens: 1}}, Depth: 1}
+	}
+	step, offset := 0, 0
+	var before, after agentSubtree
+	seen := map[string]bool{}
+	changed := false
+	s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		step++
+		if after.TotalAgents != 0 {
+			data(t, reviewToolResult(t, req.History, "after"), &after)
+			return turn(textBlock(fmt.Sprintf("Changed paged baseline: totals %d -> %d, input %d -> %d; duplicate/missing IDs observed; collected unique IDs %d. Full final actual total %d, input %d; review delta unknown; no stable baseline or stable ID inventory claimed.", before.TotalAgents, after.TotalAgents, before.TotalCost.InputTokens, after.TotalCost.InputTokens, len(seen), after.TotalAgents, after.TotalCost.InputTokens))), nil
+		}
+		if step == 1 {
+			for _, rule := range []string{"Capture totals before and after EACH paged view", "Offset", "NOT a stable snapshot", "unknown review delta"} {
+				if !strings.Contains(req.History[0].User.Text, rule) {
+					t.Errorf("prompt lacks changed-view rule %s", rule)
+				}
+			}
+			return turn(callBlock("before", "threads", `{"subtree":true}`)), nil
+		}
+		id := fmt.Sprintf("page-%d", step-1)
+		var page agentSubtree
+		if step == 2 {
+			data(t, reviewToolResult(t, req.History, "before"), &page)
+			before = page
+			if page.NextOffset == nil {
+				t.Fatal("baseline fixture did not page")
+			}
+			// Simulate a pre-existing parent's new descendant after page zero.
+			// An earlier-sort ID shifts offsets; no nested agent is launched here.
+			s.agents.mu.Lock()
+			s.agents.archive["a-new-descendant"] = agentObservation{AgentThread: AgentThread{ID: "a-new-descendant", ParentID: "prior-000", Cost: Usage{Known: true, InputTokens: 9}}, Depth: 2}
+			s.agents.mu.Unlock()
+		} else {
+			data(t, reviewToolResult(t, req.History, id), &page)
+		}
+		if page.TotalAgents != before.TotalAgents || page.TotalCost != before.TotalCost {
+			changed = true
+		}
+		for _, thread := range page.Threads {
+			if seen[thread.ID] {
+				changed = true
+			}
+			seen[thread.ID] = true
+		}
+		if page.NextOffset != nil {
+			offset = *page.NextOffset
+			raw, _ := json.Marshal(map[string]any{"subtree": true, "offset": offset})
+			return turn(callBlock(fmt.Sprintf("page-%d", step), "threads", string(raw))), nil
+		}
+		after = page
+		return turn(callBlock("after", "threads", `{"subtree":true}`)), nil
+	}}
+	var out, errs bytes.Buffer
+	c := &conversation{session: s, traceDir: t.TempDir()}
+	chat(context.Background(), c, newLineReader(strings.NewReader("/review medium\n/exit\n"), &errs, nil), &out, &errs)
+	if !changed || s.blocked != "" {
+		t.Fatalf("changed %v blocked %s: %s", changed, s.blocked, &errs)
+	}
+	for _, want := range []string{"Changed paged baseline", "totals 300 -> 301", "input 300 -> 309", "review delta unknown", "no stable baseline"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("instability report lacks %q: %s", want, &out)
 		}
 	}
 }

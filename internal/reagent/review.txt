@@ -33,8 +33,9 @@ Levels and scheduling
   Low uses N for its inline finder pass. Include the selected N in every finder
   brief. Rank correctness failures before cleanup/style, then by user impact
   and evidence. These caps limit the prioritized lists, not retained evidence:
-  disclose overflow counts and retain ALL overflow candidate records in an
-  explicitly labelled appendix (page via the agent trace if delivery truncates).
+  disclose overflow counts and retain ALL overflow candidate records that were
+  actually collected in an explicitly labelled appendix. Use the bounded output
+  protocol below; missing pages are missing evidence, not retained candidates.
   Merge and verify overflow exactly like other candidates; no candidate is lost
   because of N or K. The final top K confirmed/plausible findings are ranked;
   preserve remaining verdicts, locations and scenarios in an overflow appendix.
@@ -48,9 +49,10 @@ Levels and scheduling
 - Finders run independently in parallel by angle; only the root coordinates.
   All review agents must be told "Do not spawn or delegate." No nesting. Finder
   authority is read. Respect the eight-live-agent tree cap and other active work:
-  batch launches, wait for results, then dismiss finished named finders before
-  the next batch. Fresh anonymous agents release capacity after delivery. Never
-  retry failed tool calls automatically; adjust the plan or report the limit.
+  batch launches, wait for results, collect all pages, then dismiss finished
+  agents before the next batch. Use unique named review agents, not anonymous
+  agents, so their retained Session can answer page requests. Never retry failed
+  tool calls automatically; adjust the plan or report the limit.
 - If agents are disabled/unavailable, do these phases inline with separate
   passes and state that verification is not independent. Read-only/plan mode
   never gains writers or exec. Do not change mode just to run a review.
@@ -81,9 +83,30 @@ realistic failure scenario, with evidence/probe suggestion and uncertainty.
 Prefer recall over premature dismissal. Merge duplicates by underlying failure,
 keeping distinct scenarios and locations; do not silently drop candidates.
 
+Bounded candidate and verdict delivery
+Tell each named finder, verifier and sweep agent to retain its complete records
+in its Session and return pages whose JSON-encoded payload is <=8 KiB, with each
+record <=2 KiB. Every page carries stable record IDs, total record count, current
+cursor and next cursor (null at end). Keep essential file/line/scenario/verdict
+fields; split oversized evidence into separately identified bounded records.
+The parent tracks IDs, counts and cursors, checks for missing/duplicate records,
+and uses send to that SAME named agent for the next page. If delivery truncates,
+send a new explicit smaller-page request at the last confirmed cursor; this is
+new work, not an automatic retry. Request data from the child's retained history,
+not reconstruction from the truncated parent copy. Wait, collect the new result,
+and continue until counts/IDs and end cursor prove all records were collected.
+Dismiss only then; verifier sends may retrieve pages, never rejudge a candidate.
+A trace reference is not necessarily readable: traces may be outside the granted
+workspace, and giant JSONL lines cannot be paged by read_file. Use a trace only
+if actually accessible with available tools. Never assume it recovers records.
+If the named Session is gone/blocked, paging fails, or records cannot be bounded,
+disclose the missing IDs/count (or unknown count), unverified candidates and
+incomplete coverage. Do not claim missing candidates were retained or verified.
+
 Fresh verification
-For EACH merged candidate launch ONE new verifier Session (never send to a
-finder or reuse a verifier). Its brief contains only the candidate record,
+For EACH merged candidate launch ONE new verifier Session (never use a finder
+as the verifier or reuse a verifier for another candidate; page retrieval alone
+is permitted). Its brief contains only the candidate record,
 refs/diff access, relevant live files, applicable quoted conventions and these
 verification rules. NEVER include the author's reasoning, finder deliberations,
 or other agents' conclusions. Inspect source and callers independently.
@@ -121,8 +144,16 @@ When agents are available, collect threads(subtree=true) BEFORE launching and
 AFTER all work finishes, following next_offset on each view. Count every
 descendant, including retired/dismissed agents and any prior nested agents;
 never use only the direct-child roster. Use total_agents/total_cost once per
-view, not summed across pages. Report all review IDs, phases, verdict counts,
-actual token/cost fields, and baseline-to-final deltas if prior work existed.
+view, not summed across pages. Capture totals before and after EACH paged view
+and compare totals on every page; record duplicate/missing/changed IDs. Offset
+paging is NOT a stable snapshot: other existing agents may spawn or change costs
+between calls, shifting the ordering. Disclose a changed view and the observed
+ID coverage, even if totals eventually match. If a stable baseline cannot be
+established, report the full final actual total and unknown review delta, not a
+subtraction presented as review-only cost. If the final view also changes, label
+its totals as time-specific observations, not a complete stable inventory.
+Report all review IDs, phases, verdict counts, actual token/cost fields, and
+baseline-to-final deltas only when the observed views support that attribution.
 Label accounting_complete=false or unknown usage honestly; do not estimate
 prices or claim requested agents ran when launches failed. With agents off or
 low report zero review agents and inline phases; do not invent agent costs.
