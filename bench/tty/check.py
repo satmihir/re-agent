@@ -64,6 +64,25 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "review-command": {
+        "script": [tool("Reviewing inline.", "review-read", "list_files", {"path": "."}),
+                   reply("Review complete; zero review agents; inline verification."),
+                   reply("Next ordinary turn works.")],
+        "steps": [
+            ("idle", 0.5), ("type", "/review nonsense"), ("key", "enter"),
+            ("wait", "usage: /review [low|medium|high|max]", 5),
+            ("type", "/rev\t"), ("type", "high"), ("key", "enter"),
+            ("wait", "Review complete; zero review agents", 8),
+            ("wait_status", "scripted", 5),
+            ("show", "review command completion, real tool loop and prompt recovery"),
+            ("expect", "screen_has", "1 listing"),
+            ("expect", "all_lines", ["❯ /review high", "inline verification."]),
+            ("expect", "status_row_last"),
+            ("type", "next question"), ("key", "enter"),
+            ("wait", "Next ordinary turn works.", 5),
+            ("expect", "status_row_last"),
+        ],
+    },
     "agents-live-wait": {
         "agents": True,
         "agents_progress": True,

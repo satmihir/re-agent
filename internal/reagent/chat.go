@@ -17,6 +17,9 @@ import (
 //go:embed friction.txt
 var frictionPrompt string
 
+//go:embed review.txt
+var reviewPrompt string
+
 // chatCommand is one locally handled chat command.
 type chatCommand struct{ name, argument, help string }
 
@@ -29,6 +32,7 @@ var chatCommands = []chatCommand{
 	{"/context", "", "what the next request is made of, by size"},
 	{"/compact", "[-v] [focus]", "summarize and replace the conversation (-v prints it)"},
 	{"/friction", "", "ask the model to review harness friction in this conversation"},
+	{"/review", "[low|medium|high|max]", "review this branch and uncommitted changes (default medium)"},
 	{"/trace", "", "path of the last turn or compaction trace"},
 	{"/reset", "", "discard the conversation and start a fresh session"},
 	{"/edit", "", "write the next message in $VISUAL or $EDITOR"},
@@ -808,6 +812,16 @@ func chat(ctx context.Context, c *conversation, input lineReader, stdout, stderr
 				continue
 			}
 			c.runTurn(ctx, frictionPrompt, input, stdout, stderr)
+		case command == "/review":
+			if argument == "" {
+				argument = "medium"
+			}
+			switch argument {
+			case "low", "medium", "high", "max":
+				c.runTurn(ctx, "re:agent code review\nReview level: "+argument+"\n\n"+reviewPrompt, input, stdout, stderr)
+			default:
+				fmt.Fprintln(stderr, "usage: /review [low|medium|high|max]")
+			}
 		case command == "/trace":
 			if path := c.session.LastTrace(); path != "" {
 				fmt.Fprintln(stderr, sanitize(path))
@@ -852,6 +866,8 @@ func (c *conversation) completionArguments(command string) []string {
 		return models
 	case "/auto":
 		return []string{"on", "off"}
+	case "/review":
+		return []string{"low", "medium", "high", "max"}
 	case "/effort":
 		if model, ok := findModel(c.session.cfg.Model); ok {
 			return model.Efforts
