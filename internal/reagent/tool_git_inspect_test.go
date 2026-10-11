@@ -295,3 +295,12 @@ func TestAgents_ReadStartupRefusesPromisorTraversal(t *testing.T) {
 		t.Fatal("startup launched remote helper")
 	}
 }
+
+func TestGitInspect_BoundsArgumentFailureEnvelope(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{})
+	args := `{"` + strings.Repeat("x", MaxResultBytes-16) + `":0}`
+	out, err := NewGitInspectTool(ws).Execute(context.Background(), json.RawMessage(args))
+	if err != nil || out.OK || encodedSize(out) > MaxResultBytes {
+		t.Fatalf("argument failure exceeds result budget: %d bytes, error %v", encodedSize(out), err)
+	}
+}

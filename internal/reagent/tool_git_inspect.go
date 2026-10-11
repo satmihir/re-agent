@@ -71,7 +71,8 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 	}
 	var a gitInspectArgs
 	if bad := decodeArgs(args, &a); bad != nil {
-		return *bad, nil
+		// Decoder errors can echo an oversized field name into the result.
+		return failOutcome("invalid_arguments", "arguments must match the git_inspect schema"), nil
 	}
 	var fields map[string]json.RawMessage
 	json.Unmarshal(args, &fields)
