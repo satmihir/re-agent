@@ -20,6 +20,7 @@ One Go binary, `cmd/reagent`, over one package, `internal/reagent`. It talks to 
 | `edit_file`, `write_file`, `delete_file` | Guarded text edits, creation and deletion; opt-in recursive deletion |
 | `git_inspect` | Read committed diffs, historical files and logs in every mode, without configured programs or network; working-tree diffs and partial clones are refused |
 | `exec` | Run an argv (no shell) with a timeout, optionally chained with `then` |
+| `recall` | With `--context-gc`, retrieve a dropped tool outcome by its original call ID, in every mode and for agents |
 | `request_workspace_access`, `switch_workspace` | Ask the human for another root, and move to it |
 | `spawn`, `send`, `wait`, `threads`, `cancel`, `dismiss`, `reset` | With `--agents`: concurrent agents with per-spawn read/write authority, operated only by their parent |
 | `report_friction` | With `--report-friction`: let the model report harness friction |
@@ -42,6 +43,8 @@ Parents operate only their own children. Named agents keep history for later `se
 Instructions are, in order: fixed embedded rules (`instructions.txt`, plus `agent_instructions.txt` for fresh/text-context agents; native forks keep the parent's instructions and append agent guidance with the task), a runtime section of session-fixed facts, the optional friction paragraph, then the workspace root's `AGENTS.md` (up to 32 KiB, off with `--no-project-instructions`). Nothing that changes per request goes in the instructions, so providers can cache the prefix. Each user message also carries a `workspace_state` snapshot: date, workspace, and Git branch, upstream and change counts. With agents enabled, a sibling `agent_roster` text part holds IDs, names, states and one-line tasks; it is collected afresh after compaction or model switching, not stored in the cached instructions.
 
 `BuildContext` is pure, and `run --show-context` prints the exact first request without a key or network.
+
+**Context GC.** `--context-gc` is off by default and saved across resume. Before in-run compaction, settled passes replace fully superseded or stale file reads and repeated command outputs with stable recall-ID placeholders in the request view only. Stored history, traces, checkpoints, assistant blocks and native reasoning stay intact; file-write digest authorization is unchanged. Failed/uncertain outcomes, agent results and the latest three steps are protected. A pass needs a measured prior request of at least 32k input tokens, at least 15% estimated removable input and 16 steps since the last pass. Chat prints one dim notice per pass. Forks inherit the GC view and its recall originals; selected entries and model switches see placeholders. Summaries use that view; after compaction removes an original, recall returns `not_found`. `bench/context_gc.py` replays private traces offline and reports aggregate savings and cache-rebuild costs.
 
 **Providers.** OpenAI requests use `store: false` and encrypted reasoning, and carry a `prompt_cache_key`; Anthropic requests use cache breakpoints and merge adjacent user content. `API_PROXY_URL` with `API_PROXY_PROVIDER=openai` sends OpenAI requests through a streaming proxy without a key.
 

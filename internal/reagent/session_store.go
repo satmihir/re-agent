@@ -35,6 +35,8 @@ type chatCheckpoint struct {
 	MaxToolCalls          int             `json:"max_tool_calls"`
 	ModelRetryWindow      time.Duration   `json:"model_retry_window"`
 	InRunCompact          bool            `json:"in_run_compact"`
+	ContextGC             bool            `json:"context_gc"`
+	GC                    contextGCState  `json:"gc_state"`
 	Agents                bool            `json:"agents"`
 	AgentRoster           []AgentThread   `json:"agent_roster,omitempty"`
 	AgentSubtree          *agentSubtree   `json:"agent_subtree,omitempty"`

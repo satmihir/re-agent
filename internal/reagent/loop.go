@@ -28,6 +28,7 @@ type Config struct {
 	MaxToolCalls        int
 	ModelRetryWindow    time.Duration
 	InRunCompact        bool
+	ContextGC           bool
 	Agents              bool
 	agent               bool
 	agentPrefix         *agentRequestPrefix
@@ -110,6 +111,8 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"max_steps":           r.cfg.MaxSteps,
 		"max_tool_calls":      r.cfg.MaxToolCalls,
 		"in_run_compact":      r.cfg.InRunCompact,
+		"context_gc":          r.cfg.ContextGC,
+		"gc_state":            s.gc,
 		"prompt":              prompt,
 		"instructions":        prefix.Instructions,
 		"tools":               prefix.Tools,
@@ -143,7 +146,8 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		if r.cfg.Model != previousModel {
 			r.window = contextWindow(r.cfg.Model)
 		}
-		if status, reason := r.compactWithinRun(ctx); status != "" {
+		gcRan := r.collectContext()
+		if status, reason := r.compactWithinRunAfterGC(ctx, gcRan); status != "" {
 			return r.finish(status, reason, "")
 		}
 		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
@@ -371,6 +375,7 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			"call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "workspace": r.cfg.WorkspacePath,
 		})
 		r.session.display.toolStarted(*call)
+		r.session.gcCallPath(call)
 		outcome, err := tool.Execute(ctx, json.RawMessage(call.Arguments))
 		if err != nil {
 			r.recordResult(call, failOutcome("internal_error", err.Error()))

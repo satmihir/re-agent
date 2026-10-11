@@ -10,6 +10,10 @@ const inRunCompactFocus = "Keep the current task and constraints, stage, unresol
 
 // compactWithinRun acts only at a settled pre-request boundary (v0 §10.4).
 func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
+	return r.compactWithinRunAfterGC(ctx, false)
+}
+
+func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatus, string) {
 	s := r.session
 	if !r.cfg.InRunCompact || r.steps == 0 || r.window == 0 || r.compactOff || !s.lastRequest.Known || s.lastRequest.InputTokens <= 0 {
 		return "", ""
@@ -24,7 +28,7 @@ func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
 		// not evidence that this request could have been encoded instead.
 		return "", ""
 	}
-	if float64(s.lastRequest.InputTokens) < threshold && math.Ceil(float64(size)*rate) < threshold {
+	if (gcRan || float64(s.lastRequest.InputTokens) < threshold) && math.Ceil(float64(size)*rate) < threshold {
 		return "", ""
 	}
 	skip := func(reason string) (RunStatus, string) {
@@ -95,6 +99,7 @@ func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
 	// No accepted call is in flight. The old history remains intact until all
 	// requests and the handoff have been checked.
 	s.history = []Entry{{Kind: EntryUser, User: r.task}, {Kind: EntrySummary, Summary: &summary}}
+	s.gc = contextGCState{}
 	s.compactedPlan = r.task.Plan
 	s.handoff = nil
 	s.tokensPerByte = 0

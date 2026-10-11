@@ -91,6 +91,9 @@ func (r *Registry) bindWorkspace(s *Session, ws *Workspace) *Registry {
 			tool = t
 		case workspaceBoundTool:
 			tool = t.withWorkspace(ws)
+		case recallTool:
+			t.session = s
+			tool = t
 		case agentTool:
 			t.session = s
 			tool = t
