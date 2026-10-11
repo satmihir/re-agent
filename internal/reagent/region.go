@@ -15,6 +15,7 @@ type regionStatus struct {
 	usage                 Usage
 	window                int64
 	progress              string
+	agents                int
 }
 
 func regionLabel(s string) string {
@@ -32,6 +33,9 @@ func (s regionStatus) row(width int, styled bool) string {
 			part += " / " + regionLabel(s.effort)
 		}
 		parts = append(parts, part)
+	}
+	if s.agents > 0 {
+		parts = append(parts, plural(s.agents, "agent", "agents"))
 	}
 	if s.auto {
 		parts = append(parts, "auto")

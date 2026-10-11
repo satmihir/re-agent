@@ -321,6 +321,14 @@ func recapLine(call ToolCall, outcome ToolOutcome) string {
 		}
 		return "replaced " + callTarget(call)
 	case "delete_file":
+		var tree deleteTreeResult
+		if json.Unmarshal(outcome.Data, &tree) == nil && tree.Recursive {
+			text := fmt.Sprintf("deleted %d paths under %s", tree.RemovedCount, callTarget(call))
+			if !outcome.OK {
+				text += " (partial; stopped at " + sanitize(tree.FailedPath) + ")"
+			}
+			return text
+		}
 		return "deleted " + callTarget(call)
 	case "exec":
 		return "ran " + callTarget(call)

@@ -21,6 +21,7 @@ func summarizeAgentEffects(records []EffectRecord) agentEffects {
 	seen := make(map[agentFileEffect]bool)
 	bytes := 128
 	for _, record := range records {
+		summary.Omitted += record.OmittedPaths
 		if record.Tool == "exec" && record.Effect == EffectUnknown {
 			summary.ExecUnknown = true
 		}

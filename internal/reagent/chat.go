@@ -197,6 +197,7 @@ func (c *conversation) switchTo(info modelInfo) {
 	c.session.agentTraceDir = previous.agentTraceDir
 	c.session.agentReceipts = previous.agentReceipts
 	c.session.agents = previous.agents
+	c.session.display.agents = previous.agents
 	c.session.launchInstructions = previous.launchInstructions
 	c.session.workspaceConsent = previous.workspaceConsent
 	if previous.workspace != nil {

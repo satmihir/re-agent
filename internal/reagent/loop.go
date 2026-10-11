@@ -211,7 +211,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			if len(ids) > 0 {
 				message := strings.Join(ids, ", ") + " still running; wait for their results before finishing."
 				s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Source: "agent", Text: message}})
+				s.display.agentWaitStarted(ids)
 				_, _ = s.waitAgents(ctx, ids)
+				s.display.stopStatus()
 				r.deliverAgents()
 				continue
 			}
@@ -405,7 +407,23 @@ func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 				record.Path, record.Operation = file.Path, file.Operation
 			}
 		}
-		r.effects = append(r.effects, record)
+		var tree deleteTreeResult
+		if call.Name == "delete_file" && json.Unmarshal(outcome.Data, &tree) == nil && tree.Recursive {
+			for _, path := range tree.RemovedPaths {
+				removed := record
+				removed.Path, removed.Operation = path, "delete"
+				r.effects = append(r.effects, removed)
+			}
+			if tree.Omitted > 0 {
+				record.Path = ""
+				record.Operation = "delete"
+				record.OmittedPaths = tree.Omitted
+				record.Summary = fmt.Sprintf("deleted %d additional paths under %s (path list omitted)", tree.Omitted, tree.Path)
+				r.effects = append(r.effects, record)
+			}
+		} else {
+			r.effects = append(r.effects, record)
+		}
 	}
 	r.trace.Write("tool.finished", r.steps, result)
 	r.session.history = append(r.session.history, Entry{Kind: EntryTool, Tool: &result})

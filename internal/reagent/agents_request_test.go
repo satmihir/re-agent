@@ -9,21 +9,22 @@ import (
 	"testing"
 )
 
-func TestAgents_DisabledHistoricalRequestBytes(t *testing.T) {
-	// Stage-1 hashes (5ca87b6) used Darwin; normalize before encoding so cache
-	// keys are normalized too, without excluding any request field from the check.
+func TestAgents_DisabledRequestBytes(t *testing.T) {
+	// Git inspection, deletion's public contract and review guidance intentionally
+	// change all modes. Freeze those bytes with agents off, including cache keys.
+	// Normalize Darwin before encoding without excluding any request fields.
 	for _, scenario := range []struct {
 		provider string
 		readOnly bool
 		digest   string
 	}{
-		{openaiName, false, "a9e495caa69fb0905582cd3bbc5bdbf702101c412caf5642031cb783b8ed7cb9"},
-		{openaiName, true, "be5aae284dc05536b0d34baec199fa5b4cfbf9557244e2b44c1db35a88f13376"},
-		{anthropicName, false, "f521d38eb4c11ca749c3c0d75bbc5f37f428e529463c06337a8cd1787150027f"},
-		{anthropicName, true, "f0d4cd5258cf7da2bf4b5928217ceefbd4da60bb8548ac7d8a3c6a3084d01f9f"},
+		{openaiName, false, "6aebc279f4c6c9c8dafca16de615d1abd9d0b91fee017b17d117923a68cedb93"},
+		{openaiName, true, "29fdace403ea4e4b3c32e5ea2837b2071825b2a6c5f5ff0a2f7d86f026e8a693"},
+		{anthropicName, false, "30aad69c5ca3288d4b5921f55f2580fc59a8ea625e00db750145ab83cb05889d"},
+		{anthropicName, true, "1829741f16cb3249dde83b4ec3a6d33a2aacad602bcd12d3ba0632494acb2eaa"},
 	} {
 		t.Run(fmt.Sprintf("%s/%t", scenario.provider, scenario.readOnly), func(t *testing.T) {
-			registry, err := NewRegistry(Mode{ReadOnly: scenario.readOnly}, NewListFilesTool(nil), NewReadFileTool(nil), NewSearchTextTool(nil), NewEditFileTool(nil), NewWriteFileTool(nil), NewDeleteFileTool(nil), NewExecTool(nil), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool())
+			registry, err := NewRegistry(Mode{ReadOnly: scenario.readOnly}, NewListFilesTool(nil), NewReadFileTool(nil), NewSearchTextTool(nil), NewGitInspectTool(nil), NewEditFileTool(nil), NewWriteFileTool(nil), NewDeleteFileTool(nil), NewExecTool(nil), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -39,8 +40,16 @@ func TestAgents_DisabledHistoricalRequestBytes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			for _, spec := range req.Tools {
+				if spec.Name == "spawn" || spec.Name == "wait" || spec.Name == "threads" {
+					t.Fatal("agent declarations leaked with agents off")
+				}
+			}
+			if strings.Contains(req.Instructions, "authority granted by your parent") {
+				t.Fatal("agent instructions leaked")
+			}
 			if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != scenario.digest {
-				t.Fatalf("agents-off request bytes changed: %s != historical %s", got, scenario.digest)
+				t.Fatalf("agents-off request bytes changed: %s != frozen %s", got, scenario.digest)
 			}
 		})
 	}

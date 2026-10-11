@@ -24,6 +24,7 @@ import http.server
 import json
 import os
 import pty
+import re
 import select
 import signal
 import struct
@@ -63,6 +64,28 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "agents-live-wait": {
+        "agents": True,
+        "agents_progress": True,
+        "steps": [
+            ("idle", 0.5), ("type", "delegate research"), ("key", "enter"),
+            ("wait", "waiting on t1 research (step 1)", 8),
+            ("release", "advance"),
+            ("wait", "waiting on t1 research (step 3)", 8),
+            ("wait_status", "2 agents", 8),
+            ("wait_regex", r"waiting on t1 research \(step 3\) · [0-9]+(?:\.[0-9]+s|m[0-9]+s)", 8),
+            ("show", "live wait, nested count and elapsed clock"),
+            ("expect", "screen_has", "2 agents"),
+            ("release", "finish"),
+            ("wait", "t1 research results delivered", 8),
+            ("wait", "tree cost: 70 input", 8),
+            ("wait_status", "gpt-6-sol / low", 8),
+            ("show", "finished and delivered notices"),
+            ("expect", "all_lines", ["t1 research finished · completed", "t1 research results delivered"]),
+            ("expect", "all_lack", ["t2 nested finished", "PRIVATE CHILD REPLY"]),
+            ("expect", "status_row_last"),
+        ],
+    },
     "agents-write-recap": {
         "agents": True,
         "agents_write": True,
@@ -499,6 +522,7 @@ def run(binary, name, scenario, workspace):
             script_path = f.name
     extra_env = {}
     server = None
+    gates = {name: threading.Event() for name in ("advance", "finish")}
     if scenario.get("agents"):
         class AgentHandler(http.server.BaseHTTPRequestHandler):
             root_requests = 0
@@ -513,7 +537,29 @@ def run(binary, name, scenario, workspace):
                     with self.lock:
                         type(self).child_requests += 1
                         child_number = type(self).child_requests
-                    if scenario.get("agents_write") and child_number == 1:
+                    if scenario.get("agents_progress"):
+                        decoded = json.loads(request)
+                        texts = [part.get("text", "") for item in decoded.get("input", [])
+                                 for part in item.get("content", []) if isinstance(part, dict)]
+                        nested = any(text.startswith("nested task\n") for text in texts)
+                        if nested:
+                            gates["finish"].wait(20)
+                            output = [{"type": "message", "status": "completed", "content": [
+                                {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                        elif child_number == 1:
+                            gates["advance"].wait(20)
+                            output = [{"type": "function_call", "call_id": "nested-spawn", "name": "spawn",
+                                       "arguments": json.dumps({"task": "nested task", "context": {"brief": "independent"}, "name": "nested"})}]
+                        elif b"child-probe" not in request:
+                            output = [{"type": "function_call", "call_id": "child-probe", "name": "read_file",
+                                       "arguments": json.dumps({"path": "absent.txt"})}]
+                        elif b"nested-wait" not in request:
+                            output = [{"type": "function_call", "call_id": "nested-wait", "name": "wait",
+                                       "arguments": json.dumps({"ids": ["nested"]})}]
+                        else:
+                            output = [{"type": "message", "status": "completed", "content": [
+                                {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                    elif scenario.get("agents_write") and child_number == 1:
                         output = [{"type": "function_call", "call_id": "child-create", "name": "write_file",
                                    "arguments": json.dumps({"path": "agent.txt", "content": "written by an agent"})}]
                     else:
@@ -530,6 +576,9 @@ def run(binary, name, scenario, workspace):
                         4: [("send", {"name": "tests", "message": "check again"})],
                         5: [("wait", {"ids": ["tests"]})],
                     }.get(number, [])
+                    if scenario.get("agents_progress"):
+                        calls = [("spawn", {"task": "research task", "context": {"brief": "independent"}, "name": "research"}),
+                                 ("wait", {"ids": ["research"]})] if number == 1 else []
                     if scenario.get("agents_write"):
                         calls = [("spawn", {"task": "create a file", "context": {"brief": "independent"},
                                             "name": "writer", "authority": "write"}),
@@ -612,6 +661,16 @@ def run(binary, name, scenario, workspace):
             elif kind == "wait":
                 if not s.wait_for(args[0], args[1]):
                     failures.append("timed out waiting for %r" % args[0])
+            elif kind == "release":
+                gates[args[0]].set()
+            elif kind == "wait_regex":
+                deadline = time.monotonic() + args[1]
+                while time.monotonic() < deadline:
+                    if any(re.search(args[0], line) for line in s.term.screen()):
+                        break
+                    s.pump(0.05)
+                else:
+                    failures.append("timed out waiting for screen pattern %r" % args[0])
             elif kind == "wait_status":
                 if not s.wait_for(args[0], args[1], status=True):
                     failures.append("timed out waiting for the prompt status row")
@@ -629,6 +688,8 @@ def run(binary, name, scenario, workspace):
                 failures.append("reagent exited during %r" % (step,))
                 break
     finally:
+        for gate in gates.values():
+            gate.set()
         s.close()
         if script_path is not None: os.unlink(script_path)
         if editor_path is not None: os.unlink(editor_path)

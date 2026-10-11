@@ -13,6 +13,7 @@ import (
 // statusLine owns one live status ticker and its cancellation state.
 type statusLine struct {
 	label   string
+	waitIDs []string
 	started time.Time
 	stop    chan struct{}
 	wg      sync.WaitGroup
@@ -34,6 +35,7 @@ type Display struct {
 	readFiles map[[2]string]bool
 	searches  int
 	listings  int
+	agents    *agentTree
 }
 
 // NewDisplay creates a display for w.
@@ -122,6 +124,7 @@ func (d *Display) startStatus(label string) {
 // needs that mutex before it can observe the stop signal. It then erases the
 // line after the ticker is guaranteed not to draw again.
 func (d *Display) stopStatus() {
+	d.refreshAgents()
 	d.mu.Lock()
 	s := d.status
 	d.status = nil
@@ -146,6 +149,7 @@ func (d *Display) stopStatus() {
 }
 
 func (d *Display) drawProgressLocked(s *statusLine, frame int, now time.Time) {
+	d.refreshAgentsLocked()
 	if d.region != nil && d.region.active {
 		elapsed := time.Duration(0)
 		if !now.IsZero() {

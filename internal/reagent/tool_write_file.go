@@ -2,9 +2,13 @@ package reagent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,15 +20,18 @@ type writeFileTool struct {
 	ws     *Workspace
 	agents bool
 }
-type deleteFileTool struct{ ws *Workspace }
+type deleteFileTool struct {
+	ws     *Workspace
+	remove func(string) error
+}
 
 const invalidExpectedDigest = "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote"
 
 // NewWriteFileTool returns the whole-file creation and replacement tool.
 func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws: ws} }
 
-// NewDeleteFileTool returns the guarded regular-file deletion tool.
-func NewDeleteFileTool(ws *Workspace) Tool { return deleteFileTool{ws} }
+// NewDeleteFileTool returns guarded file and opt-in recursive deletion.
+func NewDeleteFileTool(ws *Workspace) Tool { return deleteFileTool{ws: ws} }
 
 func (t writeFileTool) withWorkspace(ws *Workspace) Tool {
 	t.ws = ws
@@ -45,6 +52,7 @@ type writeFileArgs struct {
 type deleteFileArgs struct {
 	Path           string          `json:"path"`
 	ExpectedSHA256 json.RawMessage `json:"expected_sha256"`
+	Recursive      json.RawMessage `json:"recursive"`
 }
 
 type writeFileResult struct {
@@ -85,14 +93,14 @@ func (writeFileTool) Spec() ToolSpec {
 
 func (deleteFileTool) Spec() ToolSpec {
 	return ToolSpec{
-		Name: "delete_file",
-		Description: "Delete one file read or written in this conversation; read it again after changes outside these tools (exec or the user). " +
-			"Unavailable in read-only mode.",
+		Name:        "delete_file",
+		Description: "Delete one regular file by its last read/write digest, or an explicit expected_sha256. Explicit digests permit unread binary files of any size; exec-created files get no digest exemption. Set recursive:true to authorize a directory tree or symlink deletion without prior reads; symlinks are removed, never followed. Refuses the workspace root, symlink ancestors and withheld names anywhere in the tree. Stops at the first failure, reporting actual removed paths (bounded with omitted count) as an applied effect. File digest rules still apply with recursive:true. Unavailable in read-only mode.",
 		InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "path": {"type": "string", "description": "Workspace-relative regular file to delete."},
-    "expected_sha256": {"type": "string", "description": "Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version."}
+    "path": {"type": "string", "description": "Workspace-relative regular file, or directory/symlink with recursive:true."},
+    "expected_sha256": {"type": "string", "description": "Optional regular-file SHA-256; omit to use the last observed version. Not accepted for directories or symlinks."},
+    "recursive": {"type": "boolean", "description": "Explicitly authorize a directory tree or symlink deletion; default false."}
   },
   "required": ["path"],
   "additionalProperties": false
@@ -283,12 +291,24 @@ func (t deleteFileTool) Execute(ctx context.Context, args json.RawMessage) (Tool
 	if bad != nil {
 		return *bad, nil
 	}
+	recursive, bad := optionalBool(a.Recursive, "recursive")
+	if bad != nil {
+		return *bad, nil
+	}
 	t.ws.publishMu.Lock()
 	defer t.ws.publishMu.Unlock()
 	if ctx.Err() != nil {
-		return failOutcome("not_executed", "cancelled before file publication"), nil
+		return failOutcome("not_executed", "cancelled before deletion"), nil
 	}
-	abs, bad := t.ws.resolve(a.Path)
+	if bad := t.checkDeleteRoot(); bad != nil {
+		return *bad, nil
+	}
+	var abs string
+	if recursive {
+		abs, bad = t.deletePath(a.Path)
+	} else {
+		abs, bad = t.ws.resolve(a.Path)
+	}
 	if bad != nil {
 		return *bad, nil
 	}
@@ -296,29 +316,263 @@ func (t deleteFileTool) Execute(ctx context.Context, args json.RawMessage) (Tool
 	if err != nil {
 		return *osOutcome(err), nil
 	}
+	if recursive && (info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+		if len(a.ExpectedSHA256) != 0 {
+			return failOutcome("invalid_arguments", "expected_sha256 is only valid for regular files"), nil
+		}
+		return t.deleteTree(ctx, abs)
+	}
 	if bad := fileTarget(info); bad != nil {
 		return *bad, nil
 	}
-	var snap *snapshot
+	var before string
 	if len(a.ExpectedSHA256) != 0 {
-		snap, bad = t.ws.checkFileDigest(abs, expected)
+		before, bad = t.deleteDigest(ctx, abs, expected, info)
 	} else {
+		var snap *snapshot
 		snap, bad = t.ws.checkSeenDigest(abs)
+		if bad == nil {
+			before = snap.sha256
+		}
 	}
 	if bad != nil {
 		return *bad, nil
+	}
+	if ctx.Err() != nil {
+		return failOutcome("not_executed", "cancelled before deletion"), nil
+	}
+	current, err := os.Lstat(abs)
+	if err != nil {
+		return *osOutcome(err), nil
+	}
+	if !os.SameFile(info, current) || info.Mode().Type() != current.Mode().Type() {
+		return failOutcome("stale_file", "path changed while preparing deletion"), nil
 	}
 	canonical, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return *osOutcome(err), nil
 	}
-	if err := os.Remove(abs); err != nil {
+	if err := t.removePath(abs); err != nil {
 		return *osOutcome(err), nil
 	}
+	t.forgetDeleted(canonical, false)
+	return appliedOutcome(deleteFileResult{Operation: "delete", Path: t.ws.relative(abs), BeforeSHA256: before}, t.ws.Root())
+}
+
+func (t deleteFileTool) removePath(path string) error {
+	if bad := t.checkDeleteRoot(); bad != nil {
+		return fmt.Errorf("workspace root changed before deletion")
+	}
+	if t.remove != nil {
+		return t.remove(path)
+	}
+	return os.Remove(path)
+}
+
+func (t deleteFileTool) deleteDigest(ctx context.Context, abs, expected string, info os.FileInfo) (string, *ToolOutcome) {
+	f, err := os.Open(abs)
+	if err != nil {
+		return "", osOutcome(err)
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return "", osOutcome(err)
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return "", failPtr("stale_file", "path changed while preparing deletion")
+	}
+	hash := sha256.New()
+	buffer := make([]byte, 64*1024)
+	for {
+		if ctx.Err() != nil {
+			return "", failPtr("not_executed", "cancelled while hashing file")
+		}
+		n, err := f.Read(buffer)
+		hash.Write(buffer[:n])
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", osOutcome(err)
+		}
+	}
+	before := hex.EncodeToString(hash.Sum(nil))
+	if before == expected {
+		return before, nil
+	}
+	if t.ws.returned(abs, expected) {
+		return "", failPtr("stale_file", "the file has changed since it was read; its current digest is "+before)
+	}
+	return "", failPtr("unknown_digest", "this is not a digest read_file returned for this file; its current digest is "+before)
+}
+
+// Recursive deletion validates ancestors without resolving a link leaf.
+func (t deleteFileTool) deletePath(path string) (string, *ToolOutcome) {
+	if bad := t.checkDeleteRoot(); bad != nil {
+		return "", bad
+	}
+	if !utf8.ValidString(path) || strings.ContainsRune(path, 0) {
+		return "", failPtr("invalid_path", "path must be valid UTF-8 without NUL bytes")
+	}
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == ".." || withheld(part) {
+			return "", failPtr("invalid_path", "path contains a parent or withheld component")
+		}
+	}
+	abs := filepath.Clean(path)
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(t.ws.Root(), abs)
+	}
+	if !insidePath(t.ws.Root(), abs) || abs == t.ws.Root() {
+		return "", failPtr("invalid_path", "deletion must stay inside the workspace and cannot remove its root")
+	}
+	rel, err := filepath.Rel(t.ws.Root(), abs)
+	if err != nil {
+		return "", osOutcome(err)
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	current := t.ws.Root()
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return "", osOutcome(err)
+		}
+		if i == len(parts)-1 {
+			break
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", failPtr("symlink_target", "recursive deletion refuses symlink ancestors")
+		}
+		if !info.IsDir() {
+			return "", failPtr("not_directory", "parent path is not a directory")
+		}
+	}
+	return abs, nil
+}
+
+type deleteTreeResult struct {
+	Operation    string   `json:"operation"`
+	Path         string   `json:"path"`
+	Recursive    bool     `json:"recursive"`
+	RemovedPaths []string `json:"removed_paths"`
+	RemovedCount int      `json:"removed_count"`
+	Omitted      int      `json:"omitted"`
+	FailedPath   string   `json:"failed_path,omitempty"`
+}
+
+type deleteEntry struct {
+	path string
+	info os.FileInfo
+}
+
+func (t deleteFileTool) deleteTree(ctx context.Context, abs string) (ToolOutcome, error) {
+	var plan []deleteEntry
+	var problem *ToolOutcome
+	// Refuse withheld names before removing anything, including on partial failure.
+	err := filepath.WalkDir(abs, func(path string, entry fs.DirEntry, walkErr error) error {
+		if ctx.Err() != nil {
+			problem = failPtr("not_executed", "cancelled before deletion")
+			return fs.SkipAll
+		}
+		if walkErr != nil {
+			problem = osOutcome(walkErr)
+			return fs.SkipAll
+		}
+		if _, bad := t.deletePath(path); bad != nil {
+			problem = bad
+			return fs.SkipAll
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			problem = osOutcome(err)
+			return fs.SkipAll
+		}
+		if info.Mode().Type() != entry.Type() {
+			problem = failPtr("stale_file", "path changed during preflight")
+			return fs.SkipAll
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+			problem = failPtr("invalid_arguments", "recursive deletion refuses special files")
+			return fs.SkipAll
+		}
+		plan = append(plan, deleteEntry{path, info})
+		return nil
+	})
+	if err != nil {
+		return *osOutcome(err), nil
+	}
+	if problem != nil {
+		return *problem, nil
+	}
+	result := deleteTreeResult{Operation: "delete", Path: t.ws.relative(abs), Recursive: true, RemovedPaths: []string{}}
+	bytes := 0
+	for i := len(plan) - 1; i >= 0; i-- {
+		entry := plan[i]
+		if ctx.Err() != nil {
+			problem = failPtr("not_executed", "cancelled during deletion")
+		}
+		if problem == nil {
+			_, problem = t.deletePath(entry.path)
+		}
+		if problem == nil {
+			current, err := os.Lstat(entry.path)
+			if err != nil {
+				problem = osOutcome(err)
+			} else if !os.SameFile(entry.info, current) || entry.info.Mode().Type() != current.Mode().Type() {
+				problem = failPtr("stale_file", "path changed after preflight")
+			}
+		}
+		if problem == nil {
+			if err := t.removePath(entry.path); err != nil {
+				problem = osOutcome(err)
+			}
+		}
+		if problem != nil {
+			result.FailedPath = t.ws.relative(entry.path)
+			break
+		}
+		t.forgetDeleted(entry.path, entry.info.IsDir())
+		result.RemovedCount++
+		rel := t.ws.relative(entry.path)
+		raw, _ := json.Marshal(rel)
+		if bytes+len(raw)+1 <= 8*1024 {
+			result.RemovedPaths = append(result.RemovedPaths, rel)
+			bytes += len(raw) + 1
+		}
+	}
+	result.Omitted = result.RemovedCount - len(result.RemovedPaths)
+	out, err := workspaceOutcome(result, t.ws.Root())
+	if err != nil {
+		return ToolOutcome{}, err
+	}
+	if result.RemovedCount > 0 {
+		out.Effect = EffectApplied
+	}
+	if problem != nil {
+		out.OK = false
+		out.Code = problem.Code
+		out.Message = truncateUTF8(problem.Message, 256)
+	}
+	// Deep paths and a long workspace root also consume the envelope budget.
+	for encodedSize(out) > MaxResultBytes && len(result.RemovedPaths) > 0 {
+		result.RemovedPaths = result.RemovedPaths[:len(result.RemovedPaths)-1]
+		result.Omitted++
+		out.Data, _ = json.Marshal(result)
+	}
+	out.Truncated = result.Omitted > 0
+	return out, nil
+}
+
+func (t deleteFileTool) forgetDeleted(path string, directory bool) {
 	t.ws.mu.Lock()
-	delete(t.ws.seen, canonical)
-	t.ws.mu.Unlock()
-	return appliedOutcome(deleteFileResult{Operation: "delete", Path: t.ws.relative(abs), BeforeSHA256: snap.sha256}, t.ws.Root())
+	defer t.ws.mu.Unlock()
+	for seen := range t.ws.seen {
+		if seen == path || directory && insidePath(path, seen) {
+			delete(t.ws.seen, seen)
+		}
+	}
 }
 
 func fileTarget(info os.FileInfo) *ToolOutcome {
@@ -387,4 +641,19 @@ func appliedOutcome(result any, workspace string) (ToolOutcome, error) {
 	}
 	outcome.Effect = EffectApplied
 	return outcome, nil
+}
+
+func (t deleteFileTool) checkDeleteRoot() *ToolOutcome {
+	info, err := os.Lstat(t.ws.Root())
+	if err != nil {
+		return osOutcome(err)
+	}
+	canonical, err := filepath.EvalSymlinks(t.ws.Root())
+	if err != nil {
+		return osOutcome(err)
+	}
+	if !info.IsDir() || t.ws.rootInfo == nil || !os.SameFile(t.ws.rootInfo, info) || canonical != t.ws.Root() {
+		return failPtr("invalid_path", "workspace root changed after it was opened")
+	}
+	return nil
 }

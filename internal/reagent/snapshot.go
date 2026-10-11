@@ -1,9 +1,9 @@
 package reagent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,6 +83,18 @@ func collectSnapshot(ctx context.Context, root string, refsOnly bool) json.RawMe
 
 // v0 §6 amendment (2026-10-01): these probes inspect refs, never worktree contents.
 func collectGitRefs(ctx context.Context, root string) *gitState {
+	configCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	config, _, err := gitInspectCommand(configCtx, root, "config", "--get-regexp", `^(remote\..*\.promisor|extensions\.partialclone)$`)
+	cancel()
+	if len(config) > 0 || ctx.Err() != nil {
+		return nil
+	}
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			return nil
+		}
+	}
 	var git gitState
 	if branch, ok := snapshotGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD"); ok {
 		git.Branch = strings.TrimSpace(branch)
@@ -103,16 +115,8 @@ func collectGitRefs(ctx context.Context, root string) *gitState {
 func snapshotGit(ctx context.Context, root string, args ...string) (string, bool) {
 	deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	// v0 §6 amendment (2026-09-30): metadata probes must not run configured fsmonitor commands.
-	cmd := exec.CommandContext(deadline, "git", append([]string{"-c", "core.fsmonitor=false"}, args...)...)
-	cmd.Dir = root
-	cmd.Env = childEnvironment()
-	cmd.Stdin = bytes.NewReader(nil)
-	cmd.WaitDelay = time.Second
-	out := &boundedWriter{limit: MaxResultBytes}
-	cmd.Stdout = out
-	err := cmd.Run()
-	return string(out.head) + string(out.tail), err == nil && out.seen <= MaxResultBytes
+	out, seen, err := gitInspectCommand(deadline, root, args...)
+	return string(out), err == nil && seen <= MaxResultBytes
 }
 
 func parseGitStatus(status string) gitState {
