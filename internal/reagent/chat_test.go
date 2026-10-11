@@ -1172,30 +1172,20 @@ func TestComposeInEditor(t *testing.T) {
 	}
 	defer stderr.Close()
 
-	write := t.TempDir() + "/write"
-	if err := os.WriteFile(write, []byte("#!/bin/sh\nprintf 'known text\\n' > \"$1\"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	text, err := composeInEditor([]string{write}, stdin, stdout, stderr)
-	if err != nil || text != "known text\n" {
-		t.Fatalf("text %q, err %v", text, err)
-	}
-
-	empty := t.TempDir() + "/empty"
-	if err := os.WriteFile(empty, []byte("#!/bin/sh\n: > \"$1\"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	text, err = composeInEditor([]string{empty}, stdin, stdout, stderr)
-	if err != nil || text != "" {
-		t.Fatalf("text %q, err %v", text, err)
-	}
-
-	fail := t.TempDir() + "/fail"
-	if err := os.WriteFile(fail, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := composeInEditor([]string{fail}, stdin, stdout, stderr); err == nil {
-		t.Fatal("failing editor succeeded")
+	for _, tc := range []struct {
+		name, script, want string
+		fails              bool
+	}{
+		{"write", `printf 'known text\n' > "$1"`, "known text\n", false},
+		{"empty", `: > "$1"`, "", false},
+		{"failure", "exit 1", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text, err := composeInEditor([]string{"/bin/sh", "-c", tc.script, "test-editor"}, stdin, stdout, stderr)
+			if (err != nil) != tc.fails || text != tc.want {
+				t.Fatalf("text %q, err %v", text, err)
+			}
+		})
 	}
 }
 

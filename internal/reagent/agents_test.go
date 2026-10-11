@@ -956,18 +956,31 @@ func TestAgents_WaitAndBoundaryBoundEscapedReply(t *testing.T) {
 
 func TestAgents_ReceiptsAreBoundedAndReleaseCapacity(t *testing.T) {
 	s := agentFixture(t)
-	for i := 0; i < maxAgentReceipts+2; i++ {
-		s.model = NewScriptedModel(turn(spawnBlock(fmt.Sprintf("s%d", i), "one", ""), callBlock(fmt.Sprintf("w%d", i), "wait", fmt.Sprintf(`{"ids":["t%d"]}`, i+1))), turn(textBlock("done")))
+	// Start just below the receipt limit; only the boundary needs real deliveries.
+	step := 1
+	for i := 1; i < maxAgentReceipts; i++ {
+		s.agentReceipts = append(s.agentReceipts, agentWaitStatus{ID: fmt.Sprintf("t%d", i), State: "delivered", DeliveryRunID: "prior-run", DeliveryStep: &step})
+	}
+	s.agents.next = maxAgentReceipts - 1
+	// More than the live limit still exercises capacity release through the loop.
+	for i := 0; i < maxLiveAgents+2; i++ {
+		id := maxAgentReceipts + i
+		s.model = NewScriptedModel(turn(spawnBlock(fmt.Sprintf("s%d", i), "one", ""), callBlock(fmt.Sprintf("w%d", i), "wait", fmt.Sprintf(`{"ids":["t%d"]}`, id))), turn(textBlock("done")))
 		agentTurn(t, s, "collect")
+		if len(s.agentReceipts) != maxAgentReceipts || len(s.agentRoster()) != 0 {
+			t.Fatal("unbounded receipts or retained capacity")
+		}
 	}
-	if len(s.agentReceipts) != maxAgentReceipts || len(s.agentRoster()) != 0 {
-		t.Fatal("unbounded receipts or retained capacity")
-	}
-	if _, err := s.waitAgents(context.Background(), []string{"t1"}); err == nil {
+	if _, err := s.waitAgents(context.Background(), []string{fmt.Sprintf("t%d", maxLiveAgents+1)}); err == nil {
 		t.Fatal("old receipt not evicted")
 	}
-	if _, err := s.waitAgents(context.Background(), []string{"t66"}); err != nil {
-		t.Fatal(err)
+	if _, err := s.waitAgents(context.Background(), []string{fmt.Sprintf("t%d", maxLiveAgents+2)}); err != nil {
+		t.Fatalf("oldest retained receipt: %v", err)
+	}
+	latest := fmt.Sprintf("t%d", maxAgentReceipts+maxLiveAgents+1)
+	statuses, err := s.waitAgents(context.Background(), []string{latest})
+	if err != nil || len(statuses) != 1 || statuses[0].State != "delivered" || statuses[0].DeliveryRunID == "" || statuses[0].DeliveryStep == nil {
+		t.Fatalf("latest receipt: %+v %v", statuses, err)
 	}
 }
 
