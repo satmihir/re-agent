@@ -91,13 +91,14 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		Launch: launch, Active: s.cfg.WorkspacePath, ReadOnly: s.cfg.Registry.Mode().ReadOnly,
 		Plan: s.planMode, NoProjectInstructions: s.cfg.NoProjectInstructions,
 		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
-		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, Agents: s.cfg.Agents, AgentRoster: s.agentRoster(),
+		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, Agents: s.cfg.Agents,
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
 		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
 		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
 		Usage: s.checkpointUsage, AutoCompactOff: s.checkpointAutoCompactOff,
 		Phase: phase, InFlight: inFlight,
 	}
+	cp.AgentRoster, cp.AgentSubtree = s.agentCheckpoint()
 	if s.auto != nil {
 		cp.Auto, cp.AutoEnabled = true, s.auto.enabled
 		cp.AutoFallbackModel, cp.AutoFallbackEffort = s.auto.fallback.Model, s.auto.fallback.Effort
@@ -139,12 +140,38 @@ func (s *Session) restore(cp chatCheckpoint) {
 	if cp.Agents {
 		s.agents = newAgentTree()
 		s.display.agents = s.agents
+		s.agents.accountingComplete = false
+		if cp.AgentSubtree != nil {
+			s.agents.accountingComplete = cp.AgentSubtree.AccountingComplete
+			for _, record := range cp.AgentSubtree.Threads {
+				if record.State == "running" {
+					record.EffectsUnknown = true
+				}
+				if record.State != "dismissed" {
+					record.State = "ended at resume"
+				}
+				s.agents.archive[record.ID] = record
+				s.agents.cost.Add(record.Cost)
+				var number int
+				if _, err := fmt.Sscanf(record.ID, "t%d", &number); err == nil {
+					s.agents.next = max(s.agents.next, number)
+				}
+			}
+		}
 		for _, record := range cp.AgentRoster {
 			if record.State == "running" {
 				record.EffectsUnknown = true
 			}
 			record.State = "ended at resume"
-			s.agents.nodes[record.ID] = &agentThread{AgentThread: record, ended: true}
+			depth := 1
+			if archived, ok := s.agents.archive[record.ID]; ok {
+				depth = archived.Depth
+				record.Cost = archived.Cost
+				delete(s.agents.archive, record.ID)
+			} else {
+				s.agents.cost.Add(record.Cost)
+			}
+			s.agents.nodes[record.ID] = &agentThread{AgentThread: record, depth: depth, ended: true}
 			var number int
 			if _, err := fmt.Sscanf(record.ID, "t%d", &number); err == nil {
 				s.agents.next = max(s.agents.next, number)

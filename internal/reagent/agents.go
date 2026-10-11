@@ -72,18 +72,19 @@ type agentThread struct {
 
 // agentTree owns every field of agentThread except its worker-owned Session.
 type agentTree struct {
-	mu      sync.Mutex
-	changed *sync.Cond
-	next    int
-	nodes   map[string]*agentThread
-	cost    Usage
-	execs   map[string]activeAgentExec
-	archive map[string]agentObservation
-	notices []string
+	mu                 sync.Mutex
+	changed            *sync.Cond
+	next               int
+	nodes              map[string]*agentThread
+	cost               Usage
+	execs              map[string]activeAgentExec
+	archive            map[string]agentObservation
+	notices            []string
+	accountingComplete bool
 }
 
 func newAgentTree() *agentTree {
-	t := &agentTree{nodes: make(map[string]*agentThread), archive: make(map[string]agentObservation), cost: Usage{Known: true}}
+	t := &agentTree{nodes: make(map[string]*agentThread), archive: make(map[string]agentObservation), cost: Usage{Known: true}, accountingComplete: true}
 	t.changed = sync.NewCond(&t.mu)
 	return t
 }
@@ -128,8 +129,12 @@ func (s *Session) agentRoster() []AgentThread {
 	t := s.agents
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.rosterLocked(s.agentParent())
+}
+
+func (t *agentTree) rosterLocked(parent string) []AgentThread {
 	roster := make([]AgentThread, 0)
-	for _, n := range t.childrenLocked(s.agentParent()) {
+	for _, n := range t.childrenLocked(parent) {
 		record := n.AgentThread
 		for _, result := range n.results {
 			if len(result.Result.Effects) > 0 {

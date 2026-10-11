@@ -145,7 +145,6 @@ func (u *Usage) Add(o Usage) {
 	u.UnreportedAttempts += o.UnreportedAttempts
 	if !o.Known {
 		u.Known = false
-		return
 	}
 	u.InputTokens += o.InputTokens
 	u.CachedInputTokens += o.CachedInputTokens

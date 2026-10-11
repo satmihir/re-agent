@@ -300,6 +300,9 @@ func (t deleteFileTool) Execute(ctx context.Context, args json.RawMessage) (Tool
 	if ctx.Err() != nil {
 		return failOutcome("not_executed", "cancelled before deletion"), nil
 	}
+	if bad := t.checkDeleteRoot(); bad != nil {
+		return *bad, nil
+	}
 	var abs string
 	if recursive {
 		abs, bad = t.deletePath(a.Path)
@@ -357,6 +360,9 @@ func (t deleteFileTool) Execute(ctx context.Context, args json.RawMessage) (Tool
 }
 
 func (t deleteFileTool) removePath(path string) error {
+	if bad := t.checkDeleteRoot(); bad != nil {
+		return fmt.Errorf("workspace root changed before deletion")
+	}
 	if t.remove != nil {
 		return t.remove(path)
 	}
@@ -403,6 +409,9 @@ func (t deleteFileTool) deleteDigest(ctx context.Context, abs, expected string, 
 
 // Recursive deletion validates ancestors without resolving a link leaf.
 func (t deleteFileTool) deletePath(path string) (string, *ToolOutcome) {
+	if bad := t.checkDeleteRoot(); bad != nil {
+		return "", bad
+	}
 	if !utf8.ValidString(path) || strings.ContainsRune(path, 0) {
 		return "", failPtr("invalid_path", "path must be valid UTF-8 without NUL bytes")
 	}
@@ -632,4 +641,19 @@ func appliedOutcome(result any, workspace string) (ToolOutcome, error) {
 	}
 	outcome.Effect = EffectApplied
 	return outcome, nil
+}
+
+func (t deleteFileTool) checkDeleteRoot() *ToolOutcome {
+	info, err := os.Lstat(t.ws.Root())
+	if err != nil {
+		return osOutcome(err)
+	}
+	canonical, err := filepath.EvalSymlinks(t.ws.Root())
+	if err != nil {
+		return osOutcome(err)
+	}
+	if !info.IsDir() || t.ws.rootInfo == nil || !os.SameFile(t.ws.rootInfo, info) || canonical != t.ws.Root() {
+		return failPtr("invalid_path", "workspace root changed after it was opened")
+	}
+	return nil
 }

@@ -12,10 +12,11 @@ type agentObservation struct {
 }
 
 type agentSubtree struct {
-	Threads     []agentObservation `json:"threads"`
-	TotalCost   Usage              `json:"total_cost"`
-	TotalAgents int                `json:"total_agents"`
-	NextOffset  *int               `json:"next_offset,omitempty"`
+	Threads            []agentObservation `json:"threads"`
+	TotalCost          Usage              `json:"total_cost"`
+	TotalAgents        int                `json:"total_agents"`
+	NextOffset         *int               `json:"next_offset,omitempty"`
+	AccountingComplete bool               `json:"accounting_complete"`
 }
 
 // Retain accounting, not Sessions, when anonymous or dismissed agents release capacity.
@@ -33,7 +34,7 @@ func (t *agentTree) subtreeLocked(parent string) agentSubtree {
 	for id, n := range t.nodes {
 		records[id] = agentObservation{AgentThread: n.AgentThread, Depth: n.depth}
 	}
-	out := agentSubtree{Threads: []agentObservation{}, TotalCost: Usage{Known: true}}
+	out := agentSubtree{Threads: []agentObservation{}, TotalCost: Usage{Known: true}, AccountingComplete: t.accountingComplete}
 	for _, n := range records {
 		ancestor := n.ParentID
 		for ancestor != parent && ancestor != "root" && ancestor != "" {
@@ -70,15 +71,16 @@ func (t *agentTree) displaySnapshot(parent string, targets []string) (int, strin
 	}
 	var labels []string
 	for _, target := range targets {
-		for _, n := range t.childrenLocked(parent) {
-			if n.ID == target || n.Name == target {
-				name := n.ID
-				if n.Name != "" {
-					name += " " + n.Name
-				}
-				labels = append(labels, fmt.Sprintf("%s (step %d)", name, n.Steps))
-				break
+		n, err := t.lookupLocked(parent, agentTargetArgs{ID: target})
+		if err != nil {
+			n, _ = t.lookupLocked(parent, agentTargetArgs{Name: target})
+		}
+		if n != nil {
+			name := n.ID
+			if n.Name != "" {
+				name += " " + n.Name
 			}
+			labels = append(labels, fmt.Sprintf("%s (step %d)", name, n.Steps))
 		}
 	}
 	notices := t.notices
@@ -142,4 +144,15 @@ func (s *Session) agentSubtreePage(offset int) (ToolOutcome, error) {
 	out, err := okOutcome(build(n))
 	out.Truncated = offset+n < tree.TotalAgents
 	return out, err
+}
+
+func (s *Session) agentCheckpoint() ([]AgentThread, *agentSubtree) {
+	if s.agents == nil {
+		return nil, nil
+	}
+	t := s.agents
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	subtree := t.subtreeLocked(s.agentParent())
+	return t.rosterLocked(s.agentParent()), &subtree
 }

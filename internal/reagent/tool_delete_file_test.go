@@ -211,3 +211,57 @@ func TestAgents_WriterRecursivePartialEffectsReachRoot(t *testing.T) {
 		t.Fatal("failed deletion target changed")
 	}
 }
+
+func TestDeleteFile_RefusesReplacedWorkspaceRoot(t *testing.T) {
+	for _, recursive := range []bool{false, true} {
+		t.Run(fmt.Sprint(recursive), func(t *testing.T) {
+			parent := t.TempDir()
+			root := filepath.Join(parent, "root")
+			if err := os.Mkdir(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			ws, err := OpenWorkspace(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outside := t.TempDir()
+			gitInspectTestWrite(t, outside, "scratch/a", "outside")
+			if err := os.Rename(root, root+"-old"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, root); err != nil {
+				t.Fatal(err)
+			}
+			args := `{"path":"scratch","recursive":true}`
+			if !recursive {
+				args = `{"path":"scratch/a","expected_sha256":"` + digestOf("outside") + `"}`
+			}
+			out := runTool(t, NewDeleteFileTool(ws), args)
+			if out.OK || out.Effect != EffectNone {
+				t.Fatalf("replaced root accepted %+v", out)
+			}
+			raw, err := os.ReadFile(filepath.Join(outside, "scratch", "a"))
+			if err != nil || string(raw) != "outside" {
+				t.Fatal("deleted outside workspace")
+			}
+		})
+	}
+}
+
+func TestDeleteFile_RecursiveCancellationReportsAppliedPrefix(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"tree/a": "a", "tree/b": "b"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tool := deleteFileTool{ws: ws, remove: func(path string) error { err := os.Remove(path); cancel(); return err }}
+	out, err := tool.Execute(ctx, json.RawMessage(`{"path":"tree","recursive":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result deleteTreeResult
+	if err := json.Unmarshal(out.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if out.OK || out.Effect != EffectApplied || result.RemovedCount != 1 || result.RemovedPaths[0] != "tree/b" {
+		t.Fatalf("cancel lost applied prefix %+v %+v", out, result)
+	}
+}

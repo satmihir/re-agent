@@ -261,3 +261,37 @@ func TestGitInspect_AllTextOperationsTruncateEncodedOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestAgents_ReadStartupRefusesPromisorTraversal(t *testing.T) {
+	s := agentFixture(t)
+	root := s.workspace.active.Root()
+	gitInspectTestGit(t, root, "init", "-q", "-b", "main")
+	gitInspectTestWrite(t, root, "a", "a")
+	gitInspectTestGit(t, root, "add", "a")
+	gitInspectTestGit(t, root, "commit", "-q", "-m", "base")
+	marker := filepath.Join(root, "RAN")
+	bin := t.TempDir()
+	gitInspectTestWrite(t, bin, "git-remote-evil", "#!/bin/sh\ntouch '"+marker+"'\nexit 1\n")
+	if err := os.Chmod(filepath.Join(bin, "git-remote-evil"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	gitInspectTestGit(t, root, "config", "remote.origin.url", "evil::unused")
+	gitInspectTestGit(t, root, "config", "remote.origin.promisor", "true")
+	gitInspectTestWrite(t, root, ".git/refs/remotes/origin/main", strings.Repeat("a", 40)+"\n")
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			var state workspaceState
+			json.Unmarshal(req.History[0].User.Workspace, &state)
+			if state.Git != nil || state.Counts == "" {
+				t.Error("promisor refs traversal was not refused")
+			}
+			return turn(textBlock("review without unsafe startup")), nil
+		}}, nil
+	}
+	s.model = NewScriptedModel(turn(spawnBlock("spawn", "review", ""), callBlock("wait", "wait", `{"ids":["t1"]}`)), turn(textBlock("done")))
+	agentTurn(t, s, "review")
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("startup launched remote helper")
+	}
+}
