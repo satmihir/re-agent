@@ -161,7 +161,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// Every tool this build has is offered to the registry; the mode decides
 	// which of them the model is told about (v1 §10.3).
 	tools := []Tool{
-		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws),
+		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewGitInspectTool(ws),
 		NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws),
 		NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool(),
 	}

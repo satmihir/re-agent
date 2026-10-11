@@ -18,6 +18,7 @@ One Go binary, `cmd/reagent`, over one package, `internal/reagent`. It talks to 
 |---|---|
 | `list_files`, `read_file`, `search_text` | Read the active workspace; results fit a 32 KiB budget and say when they are incomplete |
 | `edit_file`, `write_file`, `delete_file` | Guarded text edits, creation and deletion; opt-in recursive deletion |
+| `git_inspect` | Read committed diffs, historical files and logs in every mode, without configured programs or network; working-tree diffs and partial clones are refused |
 | `exec` | Run an argv (no shell) with a timeout, optionally chained with `then` |
 | `request_workspace_access`, `switch_workspace` | Ask the human for another root, and move to it |
 | `spawn`, `send`, `wait`, `threads`, `cancel`, `dismiss`, `reset` | With `--agents`: concurrent agents with per-spawn read/write authority, operated only by their parent |

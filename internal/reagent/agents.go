@@ -198,7 +198,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	var tools []Tool
 	for _, spec := range s.cfg.Registry.Specs() {
 		switch spec.Name {
-		case "read_file", "list_files", "search_text":
+		case "read_file", "list_files", "search_text", "git_inspect":
 			tool, _ := s.cfg.Registry.Lookup(spec.Name)
 			tools = append(tools, tool)
 		case "edit_file", "write_file", "delete_file", "exec":
