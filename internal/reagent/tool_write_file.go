@@ -12,13 +12,16 @@ import (
 )
 
 // v0 §8 amendment (2026-09-27): create and delete join guarded file editing.
-type writeFileTool struct{ ws *Workspace }
+type writeFileTool struct {
+	ws     *Workspace
+	agents bool
+}
 type deleteFileTool struct{ ws *Workspace }
 
 const invalidExpectedDigest = "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote"
 
 // NewWriteFileTool returns the whole-file creation and replacement tool.
-func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws} }
+func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws: ws} }
 
 // NewDeleteFileTool returns the guarded regular-file deletion tool.
 func NewDeleteFileTool(ws *Workspace) Tool { return deleteFileTool{ws} }
@@ -142,11 +145,13 @@ func (t writeFileTool) Execute(ctx context.Context, args json.RawMessage) (ToolO
 		if hasDigest {
 			return failOutcome("not_found", "no such path in the workspace"), nil
 		}
-		t.ws.mu.Lock()
-		_, previouslySeen := t.ws.seen[missingPath(abs)]
-		t.ws.mu.Unlock()
-		if previouslySeen {
-			return failOutcome("stale_file", "the file you read or wrote was deleted; read_file must observe its absence before recreating it"), nil
+		if t.agents {
+			t.ws.mu.Lock()
+			_, previouslySeen := t.ws.seen[missingPath(abs)]
+			t.ws.mu.Unlock()
+			if previouslySeen {
+				return failOutcome("stale_file", "the file you read or wrote was deleted; read_file must observe its absence before recreating it"), nil
+			}
 		}
 		// v0 §8: preserve existing-parent behavior; create only missing parents.
 		parent := filepath.Dir(abs)

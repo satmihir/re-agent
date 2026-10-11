@@ -8,10 +8,13 @@ import (
 
 // readFileTool returns numbered lines plus the digest of the whole file, which
 // is what a later edit uses to prove it read the current bytes.
-type readFileTool struct{ ws *Workspace }
+type readFileTool struct {
+	ws     *Workspace
+	agents bool
+}
 
 // NewReadFileTool returns the file reading tool.
-func NewReadFileTool(ws *Workspace) Tool { return readFileTool{ws} }
+func NewReadFileTool(ws *Workspace) Tool { return readFileTool{ws: ws} }
 
 func (t readFileTool) withWorkspace(ws *Workspace) Tool {
 	t.ws = ws
@@ -79,7 +82,7 @@ func (t readFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	}
 	snap, bad := readSnapshot(abs)
 	if bad != nil {
-		if bad.Code == "not_found" {
+		if t.agents && bad.Code == "not_found" {
 			// Observing absence allows an intentional later recreation.
 			t.ws.mu.Lock()
 			delete(t.ws.seen, missingPath(abs))

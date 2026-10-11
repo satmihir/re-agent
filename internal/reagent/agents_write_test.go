@@ -456,3 +456,104 @@ func TestAgents_DeletionMakesOmittedDigestOverwriteStaleUntilAbsenceRead(t *test
 		})
 	}
 }
+
+func TestAgents_WriteInstructionsIncludeSharedWorkingRules(t *testing.T) {
+	s := agentFixture(t)
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			if !strings.HasPrefix(req.Instructions, defaultInstructions) || !strings.Contains(req.Instructions, "# Agent task\n\n"+agentInstructions) {
+				t.Error("agent instructions do not compose the root's shared rules with agent restrictions")
+			}
+			for _, rule := range []string{"find what depends on it", "what the change could break", "in argv and the rest in then", "Tool failures are observations", "Do not repeat an operation merely because its effects are uncertain", "including failures"} {
+				if !strings.Contains(req.Instructions, rule) {
+					t.Errorf("writing agent missing shared rule: %s", rule)
+				}
+			}
+			return turn(textBlock("shared rules received")), nil
+		}}, nil
+	}
+	s.model = NewScriptedModel(turn(writeSpawnBlock("spawn", "implement", "writer"), callBlock("wait", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
+	agentTurn(t, s, "writing instructions")
+}
+
+func TestAgents_OffKeepsReadExecRemoveRecreateBehavior(t *testing.T) {
+	for _, agents := range []bool{false, true} {
+		for _, switched := range []bool{false, true} {
+			t.Run(fmt.Sprintf("agents=%t/switched=%t", agents, switched), func(t *testing.T) {
+				ws, err := OpenWorkspace(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				root := ws.Root()
+				if switched {
+					root = filepath.Join(root, "sub")
+					if err := os.Mkdir(root, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				registry, err := NewRegistry(Mode{}, NewReadFileTool(ws), NewWriteFileTool(ws), NewExecTool(ws), NewSwitchWorkspaceTool())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var responses []ModelResponse
+				if switched {
+					args, _ := json.Marshal(map[string]string{"path": root})
+					responses = append(responses, turn(callBlock("switch", "switch_workspace", string(args))))
+				}
+				responses = append(responses, turn(callBlock("read", "read_file", `{"path":"a.txt"}`), callBlock("rm", "exec", `{"argv":["rm","a.txt"],"cwd":"."}`), callBlock("recreate", "write_file", `{"path":"a.txt","content":"recreated"}`)), turn(textBlock("done")))
+				s := NewSession(Config{Workspace: ws, WorkspacePath: ws.Root(), Registry: registry, Agents: agents}, NewScriptedModel(responses...), NewTrace(io.Discard), io.Discard)
+				t.Cleanup(s.closeAgents)
+				agentTurn(t, s, "remove and recreate")
+				got := results(s)
+				last := got[len(got)-1].Outcome
+				if agents {
+					if last.Code != "stale_file" {
+						t.Fatalf("agents-on deletion unguarded: %+v", last)
+					}
+					s.model = NewScriptedModel(turn(callBlock("absent", "read_file", `{"path":"a.txt"}`), callBlock("intentional", "write_file", `{"path":"a.txt","content":"recreated"}`)), turn(textBlock("done")))
+					agentTurn(t, s, "intentional recreation after absence read")
+				} else if !last.OK {
+					t.Fatalf("agents-off behavior changed: %+v", last)
+				}
+				content, err := os.ReadFile(filepath.Join(root, "a.txt"))
+				if err != nil || string(content) != "recreated" {
+					t.Fatalf("recreate: %s %v", content, err)
+				}
+			})
+		}
+	}
+}
+
+func TestAgents_OffMissingReadPreservesPriorDigest(t *testing.T) {
+	for _, agents := range []bool{false, true} {
+		t.Run(fmt.Sprint(agents), func(t *testing.T) {
+			ws, err := OpenWorkspace(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"a.txt", "seed.txt"} {
+				if err := os.WriteFile(filepath.Join(ws.Root(), path), []byte("original"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			registry, err := NewRegistry(Mode{}, NewReadFileTool(ws), NewWriteFileTool(ws), NewExecTool(ws))
+			if err != nil {
+				t.Fatal(err)
+			}
+			model := NewScriptedModel(turn(callBlock("read", "read_file", `{"path":"a.txt"}`), callBlock("rm", "exec", `{"argv":["rm","a.txt"],"cwd":"."}`), callBlock("absent", "read_file", `{"path":"a.txt"}`), callBlock("restore", "exec", `{"argv":["cp","seed.txt","a.txt"],"cwd":"."}`), callBlock("write", "write_file", `{"path":"a.txt","content":"new"}`)), turn(textBlock("done")))
+			s := NewSession(Config{Workspace: ws, WorkspacePath: ws.Root(), Registry: registry, Agents: agents}, model, NewTrace(io.Discard), io.Discard)
+			t.Cleanup(s.closeAgents)
+			agentTurn(t, s, "missing-read provenance")
+			got := results(s)
+			if got[2].Outcome.Code != "not_found" {
+				t.Fatalf("absence: %+v", got)
+			}
+			if agents && got[4].Outcome.Code != "invalid_arguments" || !agents && !got[4].Outcome.OK {
+				t.Fatalf("missing read changed provenance in wrong mode: %+v", got)
+			}
+		})
+	}
+}
