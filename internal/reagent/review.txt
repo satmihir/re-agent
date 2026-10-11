@@ -47,6 +47,13 @@ Levels and scheduling
   within the total review budget below. Allocate one finder to each of the ten
   angles before extra shards; nominal shard counts never override the caps.
   Disclose uninspected shards/files/angles rather than increasing the budget.
+- ALL review agents (finders, verifiers, and the sweep) must start fresh: never
+  use spawn.context.fork or spawn.context.entries; omit both fields. Supply only
+  the phase-specific task, brief and live file paths allowed below, not copied
+  author history or reasoning. Independence overrides cache savings and budgets:
+  stop and report uncovered scope rather than share history to reduce cost.
+  Named-agent send is only for bounded page retrieval from that agent's own
+  fresh Session; it does not permit importing parent history or reusing a verifier.
 - Finders run independently in parallel by angle; only the root coordinates.
   All review agents must be told "Do not spawn or delegate." No nesting. Finder
   authority is read. Respect the eight-live-agent tree cap and other active work:

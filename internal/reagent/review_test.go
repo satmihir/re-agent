@@ -181,6 +181,13 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 					if strings.HasPrefix(task, "prior nested") {
 						return respond(textBlock("prior nested done"))
 					}
+					if req.Scope.Step == 1 && (len(req.History) != 1 || req.History[0].Kind != EntryUser) {
+						return ModelResponse{}, fmt.Errorf("review agent inherited history: %s", task)
+					}
+					encoded, err := json.Marshal(req.History)
+					if err != nil || strings.Contains(string(encoded), "AUTHOR_CONTEXT") || strings.Contains(string(encoded), "AUTHOR_REASONING") {
+						t.Errorf("review agent inherited author context/reasoning: %s, %v", task, err)
+					}
 					if !strings.Contains(task, "Do not spawn or delegate.") {
 						t.Error("review child lacks no-nesting rule")
 					}
@@ -285,6 +292,11 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 				s.model = NewScriptedModel(turn(spawnBlock("prior", "prior outer", "")), turn(callBlock("prior-wait", "wait", `{"ids":["t1"]}`)), turn(textBlock("prior work")))
 				agentTurn(t, s, "earlier unrelated task")
 			}
+			author := turn(textBlock("AUTHOR_REASONING private implementation rationale"))
+			author.Native = NativeOutput{Provider: openaiName, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"AUTHOR_REASONING opaque"}`)}}
+			s.model = NewScriptedModel(author)
+			agentTurn(t, s, "AUTHOR_CONTEXT private implementation task")
+			reviewStart := len(s.history)
 			phase := 0
 			nextID := 1
 			if level == "max" {
@@ -428,6 +440,32 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 			defer cancel()
 			if code := chat(ctx, c, newLineReader(strings.NewReader("/review "+level+"\n/exit\n"), &errs, nil), &out, &errs); code != exitOK || s.blocked != "" {
 				t.Fatalf("exit %d blocked %q: %s", code, s.blocked, &errs)
+			}
+			spawns := 0
+			for _, entry := range s.history[reviewStart:] {
+				if entry.Assistant == nil {
+					continue
+				}
+				for _, block := range entry.Assistant.Blocks {
+					if block.Call == nil || block.Call.Name != "spawn" {
+						continue
+					}
+					spawns++
+					var args struct {
+						Context map[string]json.RawMessage `json:"context"`
+					}
+					if err := json.Unmarshal([]byte(block.Call.Arguments), &args); err != nil {
+						t.Fatal(err)
+					}
+					for _, field := range []string{"fork", "entries"} {
+						if _, present := args.Context[field]; present {
+							t.Errorf("%s supplied forbidden context.%s", block.Call.CallID, field)
+						}
+					}
+				}
+			}
+			if spawns != expectedReviewAgents {
+				t.Errorf("checked %d fresh-context spawns, want %d", spawns, expectedReviewAgents)
 			}
 			mu.Lock()
 			if len(childSessions) != expectedReviewAgents || probeRan != (level == "max") {
@@ -1392,5 +1430,22 @@ func TestChat_ReviewTaskTurnBudgetStopsNamedPaging(t *testing.T) {
 	}
 	if child := s.agents.nodes["t1"].session; child.Turns() != 32 {
 		t.Fatalf("actual task turns %d", child.Turns())
+	}
+}
+
+func TestReviewPrompt_AllReviewAgentsStartFresh(t *testing.T) {
+	text := strings.Join(strings.Fields(reviewPrompt), " ")
+	for _, rule := range []string{
+		"ALL review agents (finders, verifiers, and the sweep) must start fresh",
+		"never use spawn.context.fork or spawn.context.entries; omit both fields",
+		"not copied author history or reasoning",
+		"Independence overrides cache savings and budgets",
+		"stop and report uncovered scope rather than share history to reduce cost",
+		"Named-agent send is only for bounded page retrieval from that agent's own fresh Session",
+		"does not permit importing parent history or reusing a verifier",
+	} {
+		if !strings.Contains(text, rule) {
+			t.Errorf("missing fresh review context rule: %s", rule)
+		}
 	}
 }
