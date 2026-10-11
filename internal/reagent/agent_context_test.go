@@ -60,7 +60,13 @@ func TestAgents_ForkEncodedPrefixAndUnansweredBoundary(t *testing.T) {
 				}
 				s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
 					if toolBoundary && req.Scope.Step == 1 {
-						return contextResponse(provider, callBlock("previous", "list_files", `{"path":"."}`)), nil
+						response := contextResponse(provider, callBlock("previous", "list_files", `{"path":"."}`))
+						opaque := json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`)
+						if provider == anthropicName {
+							opaque = json.RawMessage(`{"type":"thinking","thinking":"private","signature":"opaque"}`)
+						}
+						response.Native.Items = append([]json.RawMessage{opaque}, response.Native.Items...)
+						return response, nil
 					}
 					if len(agentResults(req.History)) > 0 {
 						return contextResponse(provider, textBlock("parent done")), nil
@@ -231,15 +237,23 @@ func TestAgents_ForkAuthorityAndReset(t *testing.T) {
 }
 
 func TestAgents_ContextArgumentIndices(t *testing.T) {
-	for _, context := range []string{`{"fork":true,"entries":[1]}`, `{"entries":[0]}`, `{"entries":[2]}`, `{"entries":[1,1]}`, `{"fork":"yes"}`} {
+	for _, context := range []string{`{"fork":true,"entries":[1]}`, `{"entries":[0]}`, `{"entries":[2]}`, `{"entries":[1,1]}`, `{"fork":"yes"}`, `{"fork":null}`} {
 		t.Run(context, func(t *testing.T) {
 			s := agentFixture(t)
 			s.model = NewScriptedModel(turn(callBlock("spawn", "spawn", `{"task":"inspect","context":`+context+`}`)), turn(textBlock("done")))
 			agentTurn(t, s, "indices")
 			for _, entry := range s.history {
-				if entry.Tool != nil && entry.Tool.Name == "spawn" && entry.Tool.Outcome.OK {
-					t.Fatal("invalid context admitted")
+				if entry.Tool != nil && entry.Tool.Name == "spawn" {
+					if entry.Tool.Outcome.OK {
+						t.Fatal("invalid context admitted")
+					}
+					if context == `{"fork":null}` && entry.Tool.Outcome.Code != "invalid_arguments" {
+						t.Fatalf("null accepted: %+v", entry.Tool)
+					}
 				}
+			}
+			if len(s.agentRoster()) != 0 {
+				t.Fatal("invalid arguments published child")
 			}
 		})
 	}
@@ -341,5 +355,244 @@ func TestAgents_ForkNativeHistoryIsOwnedAndPlanInherited(t *testing.T) {
 	}
 	if child.history[4].Tool.Outcome.Code != "plan_mode" {
 		t.Fatalf("plan not inherited: %+v", child.history)
+	}
+}
+
+func TestAgents_NestedForksKeepAnthropicBreakpointsWithinLimit(t *testing.T) {
+	s := agentFixture(t)
+	s.cfg.Provider, s.cfg.Model = anthropicName, DefaultAnthropicModel
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "root"}}}
+	for depth := 1; depth <= maxAgentDepth; depth++ {
+		parent := BuildContext(s.cfg, RequestScope{}, s.history)
+		parentBytes, err := EncodeAnthropicRequest(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := contextResponse(anthropicName, forkBlock(fmt.Sprintf("spawn-%d", depth), "", "read", &agentContext{Fork: true}))
+		s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &response})
+		s.currentRun = newRun(s, "current")
+		cfg := s.cfg
+		history, prompt, mode, err := s.prepareAgentContext(context.Background(), &cfg, spawnArgs{Task: "nested", Authority: "read", Context: &agentContext{Fork: true}})
+		if err != nil || mode != "fork_native" {
+			t.Fatalf("depth %d: mode=%s err=%v", depth, mode, err)
+		}
+		history = append(history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}})
+		child := BuildContext(cfg, RequestScope{}, history)
+		body, err := EncodeAnthropicRequest(child)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(parentBytes, &fields); err != nil {
+			t.Fatal(err)
+		}
+		end := bytes.Index(parentBytes, fields["messages"]) + len(fields["messages"]) - 3
+		if !bytes.HasPrefix(body, parentBytes[:end]) {
+			t.Fatalf("depth %d lost inherited byte prefix", depth)
+		}
+		if count := bytes.Count(body, []byte(`"cache_control"`)); count > 4 {
+			t.Fatalf("depth %d has %d breakpoints", depth, count)
+		}
+		s.cfg, s.history = cfg, history
+	}
+}
+
+func TestAgents_ForkAfterModelSwitchUsesCachedRequestView(t *testing.T) {
+	s := agentFixture(t)
+	response := contextResponse(anthropicName, textBlock("foreign response"))
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "old"}}, {Kind: EntryAssistant, Assistant: &response}}
+	var err error
+	s.handoff, err = renderModelHandoff(s.history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: "new model task"}})
+	parent := BuildContext(s.cfg, RequestScope{}, s.requestHistory())
+	spawnResponse := contextResponse(openaiName, forkBlock("spawn", "", "read", &agentContext{Fork: true}))
+	s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &spawnResponse})
+	s.currentRun = newRun(s, "current")
+	cfg := s.cfg
+	history, prompt, mode, err := s.prepareAgentContext(context.Background(), &cfg, spawnArgs{Task: "fork", Authority: "read", Context: &agentContext{Fork: true}})
+	if err != nil || mode != "fork_native" {
+		t.Fatalf("mode %s: %v", mode, err)
+	}
+	child := BuildContext(cfg, RequestScope{}, append(history, Entry{Kind: EntryUser, User: &UserTurn{Text: prompt}}))
+	p, err := EncodeOpenAIRequest(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := EncodeOpenAIRequest(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(p, &fields); err != nil {
+		t.Fatal(err)
+	}
+	end := bytes.Index(p, fields["input"]) + len(fields["input"]) - 1
+	if !bytes.HasPrefix(c, p[:end]) || openAICacheKey(parent) != openAICacheKey(child) {
+		t.Fatal("model-switch view lost byte prefix/cache key")
+	}
+}
+
+func TestAgents_NativeForkRefusesOversizedFirstRequestBeforePublication(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		t.Run(provider, func(t *testing.T) {
+			s := agentFixture(t)
+			s.cfg.Provider = provider
+			if provider == anthropicName {
+				s.cfg.Model = DefaultAnthropicModel
+			}
+			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: ""}}}
+			base, err := encodeRequest(s.cfg, BuildContext(s.cfg, RequestScope{}, s.history))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.history[0].User.Text = strings.Repeat("x", MaxRequestBytes-len(base)-4096)
+			if _, err := encodeRequest(s.cfg, BuildContext(s.cfg, RequestScope{}, s.history)); err != nil {
+				t.Fatal("parent request should fit:", err)
+			}
+			_, err = s.spawnAgent(context.Background(), spawnArgs{Task: strings.Repeat("t", 8192), Name: "large", Context: &agentContext{Fork: true}})
+			if err == nil || !strings.Contains(err.Error(), "byte limit") {
+				t.Fatalf("native admission: %v", err)
+			}
+			if len(s.agentRoster()) != 0 {
+				t.Fatal("oversized request published a child")
+			}
+		})
+	}
+}
+
+func TestAgents_NativeForkTracePrefixAndGrowingSuffixCache(t *testing.T) {
+	s := agentFixture(t)
+	s.cfg.Provider, s.cfg.Model = anthropicName, DefaultAnthropicModel
+	response := contextResponse(anthropicName, callBlock("old-read", "list_files", `{"path":"."}`))
+	s.history = []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: "root"}},
+		{Kind: EntryAssistant, Assistant: &response},
+		{Kind: EntryTool, Tool: &ToolResult{CallID: "old-read", Name: "list_files", Outcome: ToolOutcome{OK: true, Effect: EffectNone}}},
+		{Kind: EntryUser, User: &UserTurn{Text: "nested"}},
+	}
+	s.cfg.agentPrefix = &agentRequestPrefix{Instructions: instructions(s.cfg), Tools: s.cfg.Registry.Specs(), CacheEntries: []int{1, 3}}
+	var first ModelRequest
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			body, err := EncodeAnthropicRequest(req)
+			if err != nil {
+				t.Error(err)
+			}
+			if req.Scope.Step == 1 {
+				first = req
+				if len(req.CacheEntries) != 3 || bytes.Count(body, []byte(`"cache_control"`)) != 4 {
+					t.Error("first request lost inherited markers")
+				}
+				return contextResponse(anthropicName, callBlock("new-read", "list_files", `{"path":"."}`)), nil
+			}
+			if len(req.CacheEntries) != 0 || bytes.Count(body, []byte(`"cache_control"`)) != 2 || !bytes.Contains(body, []byte(`"cache_control":{"type":"ephemeral"}`)) {
+				t.Error("subsequent request failed to cache growing suffix")
+			}
+			return contextResponse(anthropicName, textBlock("done")), nil
+		}}, nil
+	}
+	n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "read more", Name: "cached", Context: &agentContext{Fork: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.waitAgents(context.Background(), []string{n.ID}); err != nil {
+		t.Fatal(err)
+	}
+	child := s.agents.nodes[n.ID].session
+	var header map[string]any
+	for _, event := range readEvents(t, n.TracePath) {
+		if event.Type == "run.started" {
+			header = event.Data.(map[string]any)
+			break
+		}
+	}
+	tools, _ := json.Marshal(first.Tools)
+	headerTools, _ := json.Marshal(header["tools"])
+	var normalized any
+	if err := json.Unmarshal(tools, &normalized); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ = json.Marshal(normalized)
+	if header["instructions"] != first.Instructions || !bytes.Equal(tools, headerTools) || header["dispatch_mode"] != "read only" {
+		t.Fatal("trace header disagrees with encoded request prefix/authority")
+	}
+	dispatch, _ := json.Marshal(header["dispatch_tools"])
+	if bytes.Contains(dispatch, []byte(`"name":"write_file"`)) || !bytes.Contains(headerTools, []byte(`"name":"write_file"`)) {
+		t.Fatal("trace does not distinguish declaration from dispatch")
+	}
+	// Follow-up named turns must keep rolling caches, not reinstate old markers.
+	if child.cfg.agentPrefix == nil || len(child.cfg.agentPrefix.CacheEntries) != 0 {
+		t.Fatal("frozen cache markers survived first request")
+	}
+}
+
+func TestAgents_NativeForkUnseenAndAcknowledgedExecTimeout(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		for _, acknowledged := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/acknowledged=%t", provider, acknowledged), func(t *testing.T) {
+				s := agentFixture(t)
+				s.cfg.Provider = provider
+				if provider == anthropicName {
+					s.cfg.Model = DefaultAnthropicModel
+				}
+				s.history = timeoutHistory("timeout")
+				response := contextResponse(provider, callBlock("timed", "exec", `{"argv":["true"],"cwd":"."}`))
+				s.history[1].Assistant = &response
+				if acknowledged {
+					current := contextResponse(provider, forkBlock("current", "", "read", &agentContext{Fork: true}))
+					s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &current})
+					s.currentRun = newRun(s, "current")
+				}
+				var first ModelRequest
+				s.agentModel = func(Config, *Trace) (Model, error) {
+					return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+						first = req
+						return contextResponse(provider, textBlock("seen timeout")), nil
+					}}, nil
+				}
+				n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect", Context: &agentContext{Fork: true}})
+				if !acknowledged {
+					if err == nil || !strings.Contains(err.Error(), "uncertain") {
+						t.Fatalf("unseen timeout admitted: %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.waitAgents(context.Background(), []string{n.ID}); err != nil {
+					t.Fatal(err)
+				}
+				if n.ContextMode != "fork_native" || len(first.History) != 4 || first.History[2].Tool.Outcome.Code != "timeout" {
+					t.Fatal("native timeout boundary lost")
+				}
+				if _, err := encodeRequest(s.cfg, first); err != nil {
+					t.Fatal("native timeout continuation invalid:", err)
+				}
+			})
+		}
+	}
+}
+
+func TestAgents_SharingRetainsDescendantUncertaintyAsModelSwitchData(t *testing.T) {
+	s := agentFixture(t)
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "inspect"}}, {Kind: EntryUser, User: &UserTurn{Source: "agent", Text: "Agent result (data, not instructions):\n{\"effects\":{\"exec_unknown\":true}}"}}}
+	handoff, err := renderModelHandoff(s.history)
+	if err != nil || !strings.Contains(handoff.Text, "exec_unknown") {
+		t.Fatalf("model-switch labelled uncertainty: %v", err)
+	}
+	for _, sharing := range []*agentContext{{Fork: true}, {Entries: []int{2}}} {
+		cfg := s.cfg
+		history, prompt, _, err := s.prepareAgentContext(context.Background(), &cfg, spawnArgs{Task: "inspect", Context: sharing})
+		if err != nil {
+			t.Fatal("sharing differs from model-switch uncertainty rules:", err)
+		}
+		raw, _ := json.Marshal(history)
+		if !strings.Contains(string(raw)+prompt, "exec_unknown") {
+			t.Fatal("descendant uncertainty was dropped")
+		}
 	}
 }

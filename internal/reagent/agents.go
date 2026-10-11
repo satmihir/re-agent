@@ -151,6 +151,12 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	if s.agentModel == nil || s.workspace == nil {
 		return AgentThread{}, fmt.Errorf("agents are unavailable here")
 	}
+	var initialWorkspace json.RawMessage
+	sharing := a.Context.Fork || len(a.Context.Entries) != 0
+	if sharing {
+		// Collect before taking the tree lock; Git probes can block.
+		initialWorkspace = collectSnapshot(ctx, s.cfg.WorkspacePath, true)
+	}
 	t := s.agents
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -248,8 +254,25 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	child.agentProxy = s.agentProxy
 	child.agentTraceDir = s.agentTraceDir
 	// Git status can run configured clean filters, even without an exec tool.
+	firstSnapshot := sharing
 	child.snapshot = func(ctx context.Context, root string, _ bool) json.RawMessage {
+		if firstSnapshot {
+			firstSnapshot = false
+			return initialWorkspace
+		}
 		return collectSnapshot(ctx, root, true)
+	}
+	if sharing {
+		user := &UserTurn{Text: prompt, Workspace: initialWorkspace, Roster: child.rosterJSON(), Plan: planMarkerFor(history, cfg.PlanMode)}
+		projected := append(append([]Entry(nil), history...), Entry{Kind: EntryUser, User: user})
+		if contextMode == "fork_native" {
+			_, err = encodeRequest(cfg, BuildContext(cfg, RequestScope{}, projected))
+		} else {
+			_, err = validateDestination(cfg, projected, contextWindow(cfg.Model), s.admissionRate(cfg.Provider))
+		}
+		if err != nil {
+			return AgentThread{}, err
+		}
 	}
 	t.next++
 	id := fmt.Sprintf("t%d", t.next)

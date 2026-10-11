@@ -98,7 +98,8 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 	defer s.display.stopStatus()
 	// The history a run starts from is embedded so its trace can be read on
 	// its own, without the traces of the turns before it (v1 §6.2).
-	r.trace.Write("run.started", 0, map[string]any{
+	prefix := BuildContext(r.cfg, RequestScope{}, nil)
+	header := map[string]any{
 		"model":      r.model.Name(),
 		"provider":   r.cfg.Provider,
 		"configured": r.cfg.Model,
@@ -110,10 +111,15 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"max_tool_calls":      r.cfg.MaxToolCalls,
 		"in_run_compact":      r.cfg.InRunCompact,
 		"prompt":              prompt,
-		"instructions":        instructions(r.cfg),
-		"tools":               r.cfg.Registry.Specs(),
+		"instructions":        prefix.Instructions,
+		"tools":               prefix.Tools,
 		"initial_history":     s.history,
-	})
+	}
+	if r.cfg.agentPrefix != nil {
+		header["dispatch_tools"] = r.cfg.Registry.Specs()
+		header["dispatch_mode"] = r.cfg.Registry.Mode().String()
+	}
+	r.trace.Write("run.started", 0, header)
 	r.task = &UserTurn{Text: prompt, Workspace: workspace, Roster: s.rosterJSON(), Plan: plan}
 	s.history = append(s.history, Entry{Kind: EntryUser, User: r.task})
 	s.pendingSubmission = nil
@@ -151,7 +157,15 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		}
 		r.steps++
 		r.meterAgent(Usage{Known: true})
+		if p := r.cfg.agentPrefix; p != nil && p.Requested {
+			// Only the first request needs inherited markers byte-for-byte.
+			// Later requests cache the growing suffix at their current end.
+			p.CacheEntries = nil
+		}
 		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
+		if r.cfg.agentPrefix != nil {
+			r.cfg.agentPrefix.Requested = true
+		}
 		r.trace.Write("model.requested", r.steps, req)
 
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)

@@ -27,7 +27,7 @@ func (t agentTool) Spec() ToolSpec {
 	schema := `{"type":"object","properties":{},"additionalProperties":false}`
 	switch t.name {
 	case "spawn":
-		description = "Delegate substantial independent implementation, research or review, not tiny lookups you can do in a few reads. Start a concurrent agent with a task, prose brief and optional live paths. context.fork copies history through the complete boundary before the current tool batch; same-model forks preserve the request prefix, other models use admitted labelled text (reported in context_mode). context.entries selects 1-based accepted history entries before that boundary as labelled data, in supplied order. fork and entries are exclusive; unseen uncertain effects refuse either. History is fixed at spawn; later parent entries never reach the child. Authority defaults to read; write grants only your available edit_file, write_file, delete_file and exec. Read-only launch and plan mode remain inherited. Only the root has git_do or workspace access/switching. File writes reject stale observations; overlapping exec returns a notice, not a block. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
+		description = "Delegate substantial independent implementation, research or review, not tiny lookups you can do in a few reads. Start a concurrent agent with a task, prose brief and optional live paths. context.fork copies history through the complete boundary before the current tool batch; same-model forks preserve the request prefix, other models use admitted labelled text (reported in context_mode). context.entries selects 1-based accepted history entries before that boundary as labelled data, in supplied order. fork and entries are exclusive. Both use /model's uncertainty gate for direct tool outcomes; descendant uncertainty remains labelled data to inspect. History is fixed at spawn; later parent entries never reach the child. Authority defaults to read; write grants only your available edit_file, write_file, delete_file and exec. Read-only launch and plan mode remain inherited. Only the root has git_do or workspace access/switching. File writes reject stale observations; overlapping exec returns a notice, not a block. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
 		schema = `{"type":"object","properties":{"task":{"type":"string"},"context":{"type":"object","properties":{"brief":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"fork":{"type":"boolean"},"entries":{"type":"array","items":{"type":"integer","minimum":1}}},"additionalProperties":false},"name":{"type":"string"},"model":{"type":"string"},"authority":{"type":"string","enum":["read","write"]}},"required":["task","context"],"additionalProperties":false}`
 	case "send":
 		description = "Queue a follow-up message to your own child by ID or name; idle named agents retain their Session across chat turns. Busy agents handle messages sequentially. Blocked agents require reset. In plan mode, new work for a non-planning writer is refused."
@@ -54,10 +54,21 @@ type spawnArgs struct {
 }
 
 type agentContext struct {
-	Brief   string   `json:"brief"`
-	Files   []string `json:"files,omitempty"`
-	Fork    bool     `json:"fork,omitempty"`
-	Entries []int    `json:"entries,omitempty"`
+	Brief   string    `json:"brief"`
+	Files   []string  `json:"files,omitempty"`
+	Fork    agentFork `json:"fork,omitempty"`
+	Entries []int     `json:"entries,omitempty"`
+}
+
+type agentFork bool
+
+func (f *agentFork) UnmarshalJSON(raw []byte) error {
+	value, bad := optionalBool(raw, "fork")
+	if bad != nil {
+		return fmt.Errorf("%s", bad.Message)
+	}
+	*f = agentFork(value)
+	return nil
 }
 
 type agentTargetArgs struct {
