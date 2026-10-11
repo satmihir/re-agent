@@ -63,6 +63,20 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "agents-write-recap": {
+        "agents": True,
+        "agents_write": True,
+        "steps": [
+            ("idle", 0.5), ("type", "delegate a file change"), ("key", "enter"),
+            ("wait", "agent t1: create agent.txt", 8),
+            ("wait_status", "gpt-6-sol / low", 8),
+            ("show", "writing agent effects in the root recap"),
+            ("expect", "screen_has", "Agent changed a file."),
+            ("expect", "screen_has", "agent t1: create agent.txt (applied)"),
+            ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
+            ("expect", "status_row_last"),
+        ],
+    },
     "agents-tree-cost": {
         "agents": True,
         "steps": [
@@ -313,7 +327,7 @@ class Session:
             env.update(extra_env or {})
             args = [binary, "chat", "--workspace", workspace]
             if agents:
-                args += ["--agents", "--no-project-instructions", "--model", "gpt-6-sol"]
+                args += ["--agents", "--recap", "--no-project-instructions", "--model", "gpt-6-sol"]
             elif retry:
                 args += ["--model-retry-window", "5s", "--no-project-instructions"]
             elif script_path is None:
@@ -488,15 +502,23 @@ def run(binary, name, scenario, workspace):
     if scenario.get("agents"):
         class AgentHandler(http.server.BaseHTTPRequestHandler):
             root_requests = 0
+            child_requests = 0
             lock = threading.Lock()
 
             def do_POST(self):
                 request = self.rfile.read(int(self.headers["Content-Length"]))
-                is_child = b"read-only agent working" in request
+                is_child = b"authority granted by your parent" in request
                 if is_child:
                     time.sleep(0.05)
-                    output = [{"type": "message", "status": "completed", "content": [
-                        {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                    with self.lock:
+                        type(self).child_requests += 1
+                        child_number = type(self).child_requests
+                    if scenario.get("agents_write") and child_number == 1:
+                        output = [{"type": "function_call", "call_id": "child-create", "name": "write_file",
+                                   "arguments": json.dumps({"path": "agent.txt", "content": "written by an agent"})}]
+                    else:
+                        output = [{"type": "message", "status": "completed", "content": [
+                            {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
                 else:
                     with self.lock:
                         type(self).root_requests += 1
@@ -508,11 +530,17 @@ def run(binary, name, scenario, workspace):
                         4: [("send", {"name": "tests", "message": "check again"})],
                         5: [("wait", {"ids": ["tests"]})],
                     }.get(number, [])
+                    if scenario.get("agents_write"):
+                        calls = [("spawn", {"task": "create a file", "context": {"brief": "independent"},
+                                            "name": "writer", "authority": "write"}),
+                                 ("wait", {"ids": ["writer"]})] if number == 1 else []
                     output = [{"type": "function_call", "call_id": f"c{number}-{index}",
                                "name": name, "arguments": json.dumps(arguments)}
                               for index, (name, arguments) in enumerate(calls)]
                     if not output:
                         text = "Agent results received." if number == 3 else "Named agent reused."
+                        if scenario.get("agents_write"):
+                            text = "Agent changed a file."
                         output = [{"type": "message", "status": "completed", "content": [
                             {"type": "output_text", "text": text}]}]
                 result = {"id": "r", "model": "test", "status": "completed", "output": output,

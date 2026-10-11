@@ -62,7 +62,7 @@ func instructions(cfg Config) string {
 	// snapshot of it, which the trace records separately from the response.
 	fixed := defaultInstructions
 	if cfg.agent {
-		fixed = agentInstructions
+		fixed += "\n# Agent task\n\n" + agentInstructions
 	}
 	text := fixed + fmt.Sprintf(
 		"\n# Runtime\n\nProvider: %s\nModel: %s\nReasoning effort: %s\nPlatform: %s\n"+

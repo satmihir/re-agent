@@ -80,7 +80,7 @@ func (editFileTool) Spec() ToolSpec {
 	}
 }
 
-func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcome, error) {
+func (t editFileTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcome, error) {
 	var a editFileArgs
 	if bad := decodeArgs(args, &a); bad != nil {
 		return *bad, nil
@@ -93,6 +93,11 @@ func (t editFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	edits, appendText, bad := a.changes(fields)
 	if bad != nil {
 		return *bad, nil
+	}
+	t.ws.publishMu.Lock()
+	defer t.ws.publishMu.Unlock()
+	if ctx.Err() != nil {
+		return failOutcome("not_executed", "cancelled before file publication"), nil
 	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {

@@ -80,6 +80,15 @@ func (r *Registry) bindWorkspace(s *Session, ws *Workspace) *Registry {
 	bound := &Registry{mode: r.mode, specs: r.specs, inactive: r.inactive, byName: make(map[string]Tool)}
 	for name, tool := range r.byName {
 		switch t := tool.(type) {
+		case readFileTool:
+			t.ws, t.agents = ws, s.cfg.Agents
+			tool = t
+		case writeFileTool:
+			t.ws, t.agents = ws, s.cfg.Agents
+			tool = t
+		case execTool:
+			t.ws, t.session = ws, s
+			tool = t
 		case workspaceBoundTool:
 			tool = t.withWorkspace(ws)
 		case agentTool:

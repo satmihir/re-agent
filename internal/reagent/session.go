@@ -136,6 +136,9 @@ func (s *Session) restore(cp chatCheckpoint) {
 	if cp.Agents {
 		s.agents = newAgentTree()
 		for _, record := range cp.AgentRoster {
+			if record.State == "running" {
+				record.EffectsUnknown = true
+			}
 			record.State = "ended at resume"
 			s.agents.nodes[record.ID] = &agentThread{AgentThread: record, ended: true}
 			var number int

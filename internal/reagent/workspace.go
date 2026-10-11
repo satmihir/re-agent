@@ -22,6 +22,8 @@ type Workspace struct {
 	mu      sync.Mutex
 	digests map[string]map[string]bool
 	seen    map[string]string
+	// Shared by the tree's handles; observations remain conversation-local.
+	publishMu *sync.Mutex
 }
 
 // OpenWorkspace opens an existing directory with a canonical immutable root.
@@ -41,7 +43,7 @@ func OpenWorkspace(path string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace %s is not a directory", root)
 	}
-	return &Workspace{root: root, digests: make(map[string]map[string]bool), seen: make(map[string]string)}, nil
+	return &Workspace{root: root, digests: make(map[string]map[string]bool), seen: make(map[string]string), publishMu: &sync.Mutex{}}, nil
 }
 
 // Root is the absolute directory, shown to the model as runtime context.
@@ -155,6 +157,23 @@ func withheldPath(path string) bool {
 	return false
 }
 
+// Preserve aliases in observation keys even after the leaf or its parents disappear.
+func missingPath(abs string) string {
+	probe, suffix := abs, ""
+	for {
+		canonical, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			return filepath.Join(canonical, suffix)
+		}
+		parent := filepath.Dir(probe)
+		if !os.IsNotExist(err) || parent == probe {
+			return abs
+		}
+		suffix = filepath.Join(filepath.Base(probe), suffix)
+		probe = parent
+	}
+}
+
 // relative renders an absolute path the way the model should refer to it.
 func (w *Workspace) relative(abs string) string {
 	rel, err := filepath.Rel(w.root, abs)
@@ -243,8 +262,8 @@ func osOutcome(err error) *ToolOutcome {
 // publish replaces a file by writing the new bytes beside it and renaming over
 // it, so the target is never observed half-written.
 //
-// v0 stops there: it does not sync, re-check the digest immediately before the
-// rename, or reconcile an interrupted publication (v1 §13.4 restores those).
+// File tools hold the shared publication guard from checking through renaming.
+// External processes (including exec) do not participate; publication is not synced.
 func publish(abs string, content []byte, mode os.FileMode) error {
 	name, err := stageFile(abs, content, mode)
 	if err != nil {

@@ -12,13 +12,16 @@ import (
 )
 
 // v0 §8 amendment (2026-09-27): create and delete join guarded file editing.
-type writeFileTool struct{ ws *Workspace }
+type writeFileTool struct {
+	ws     *Workspace
+	agents bool
+}
 type deleteFileTool struct{ ws *Workspace }
 
 const invalidExpectedDigest = "expected_sha256 must be a 64-character digest, or omitted to use the version you last read or wrote"
 
 // NewWriteFileTool returns the whole-file creation and replacement tool.
-func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws} }
+func NewWriteFileTool(ws *Workspace) Tool { return writeFileTool{ws: ws} }
 
 // NewDeleteFileTool returns the guarded regular-file deletion tool.
 func NewDeleteFileTool(ws *Workspace) Tool { return deleteFileTool{ws} }
@@ -98,7 +101,7 @@ func (deleteFileTool) Spec() ToolSpec {
 	}
 }
 
-func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcome, error) {
+func (t writeFileTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcome, error) {
 	// encoding/json repairs malformed UTF-8 in strings; reject it before decoding.
 	if !utf8.Valid(args) {
 		return failOutcome("invalid_utf8", "content is not valid UTF-8"), nil
@@ -128,6 +131,11 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		return *bad, nil
 	}
 	hasDigest := len(a.ExpectedSHA256) != 0
+	t.ws.publishMu.Lock()
+	defer t.ws.publishMu.Unlock()
+	if ctx.Err() != nil {
+		return failOutcome("not_executed", "cancelled before file publication"), nil
+	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {
 		return *bad, nil
@@ -136,6 +144,14 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 	if errors.Is(err, os.ErrNotExist) {
 		if hasDigest {
 			return failOutcome("not_found", "no such path in the workspace"), nil
+		}
+		if t.agents {
+			t.ws.mu.Lock()
+			_, previouslySeen := t.ws.seen[missingPath(abs)]
+			t.ws.mu.Unlock()
+			if previouslySeen {
+				return failOutcome("stale_file", "the file you read or wrote was deleted; read_file must observe its absence before recreating it"), nil
+			}
 		}
 		// v0 §8: preserve existing-parent behavior; create only missing parents.
 		parent := filepath.Dir(abs)
@@ -258,7 +274,7 @@ func removeEmptyDirs(created []string) {
 	}
 }
 
-func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcome, error) {
+func (t deleteFileTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcome, error) {
 	var a deleteFileArgs
 	if bad := decodeArgs(args, &a); bad != nil {
 		return *bad, nil
@@ -266,6 +282,11 @@ func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	expected, bad := expectedDigest(a.ExpectedSHA256)
 	if bad != nil {
 		return *bad, nil
+	}
+	t.ws.publishMu.Lock()
+	defer t.ws.publishMu.Unlock()
+	if ctx.Err() != nil {
+		return failOutcome("not_executed", "cancelled before file publication"), nil
 	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {

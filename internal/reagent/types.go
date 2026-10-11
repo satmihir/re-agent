@@ -207,6 +207,10 @@ func (m Mode) allows(effect EffectClass) bool {
 // EffectRecord is one thing a run did outside its own memory. It is derived
 // from actual outcomes, never from the model's account of them (v1 §19.3).
 type EffectRecord struct {
+	AgentID   string      `json:"agent_id,omitempty"`
+	RunID     string      `json:"run_id,omitempty"`
+	Path      string      `json:"path,omitempty"`
+	Operation string      `json:"operation,omitempty"`
 	Workspace string      `json:"workspace,omitempty"`
 	Step      int         `json:"step"`
 	CallID    string      `json:"call_id"`
