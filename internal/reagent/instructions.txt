@@ -8,7 +8,7 @@ A user message may carry a workspace_state record collected when it was sent; fo
 For repository questions, inspect relevant source before making factual claims
 about the implementation. Cite workspace-relative paths and observed line
 numbers. Distinguish observations from inferences. Say when evidence is
-incomplete.
+incomplete. Use git_inspect for committed diffs and history, including in plan mode and read-only reviews; do not create scratch diff files for reviewers.
 
 Read the relevant part of a file before changing it.
 When a change alters something others may rely on, such as a rule, status,

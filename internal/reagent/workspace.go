@@ -18,10 +18,11 @@ import (
 //
 // Its ordinary path checks are not race-proof sandboxing; v1 §11.1 restores rooted access.
 type Workspace struct {
-	root    string
-	mu      sync.Mutex
-	digests map[string]map[string]bool
-	seen    map[string]string
+	root     string
+	rootInfo os.FileInfo
+	mu       sync.Mutex
+	digests  map[string]map[string]bool
+	seen     map[string]string
 	// Shared by the tree's handles; observations remain conversation-local.
 	publishMu *sync.Mutex
 }
@@ -43,7 +44,7 @@ func OpenWorkspace(path string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace %s is not a directory", root)
 	}
-	return &Workspace{root: root, digests: make(map[string]map[string]bool), seen: make(map[string]string), publishMu: &sync.Mutex{}}, nil
+	return &Workspace{root: root, rootInfo: info, digests: make(map[string]map[string]bool), seen: make(map[string]string), publishMu: &sync.Mutex{}}, nil
 }
 
 // Root is the absolute directory, shown to the model as runtime context.

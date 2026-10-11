@@ -72,16 +72,19 @@ type agentThread struct {
 
 // agentTree owns every field of agentThread except its worker-owned Session.
 type agentTree struct {
-	mu      sync.Mutex
-	changed *sync.Cond
-	next    int
-	nodes   map[string]*agentThread
-	cost    Usage
-	execs   map[string]activeAgentExec
+	mu                 sync.Mutex
+	changed            *sync.Cond
+	next               int
+	nodes              map[string]*agentThread
+	cost               Usage
+	execs              map[string]activeAgentExec
+	archive            map[string]agentObservation
+	notices            []string
+	accountingComplete bool
 }
 
 func newAgentTree() *agentTree {
-	t := &agentTree{nodes: make(map[string]*agentThread), cost: Usage{Known: true}}
+	t := &agentTree{nodes: make(map[string]*agentThread), archive: make(map[string]agentObservation), cost: Usage{Known: true}, accountingComplete: true}
 	t.changed = sync.NewCond(&t.mu)
 	return t
 }
@@ -126,8 +129,12 @@ func (s *Session) agentRoster() []AgentThread {
 	t := s.agents
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.rosterLocked(s.agentParent())
+}
+
+func (t *agentTree) rosterLocked(parent string) []AgentThread {
 	roster := make([]AgentThread, 0)
-	for _, n := range t.childrenLocked(s.agentParent()) {
+	for _, n := range t.childrenLocked(parent) {
 		record := n.AgentThread
 		for _, result := range n.results {
 			if len(result.Result.Effects) > 0 {
@@ -196,7 +203,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	var tools []Tool
 	for _, spec := range s.cfg.Registry.Specs() {
 		switch spec.Name {
-		case "read_file", "list_files", "search_text":
+		case "read_file", "list_files", "search_text", "git_inspect":
 			tool, _ := s.cfg.Registry.Lookup(spec.Name)
 			tools = append(tools, tool)
 		case "edit_file", "write_file", "delete_file", "exec":
@@ -268,6 +275,11 @@ func (t *agentTree) work(n *agentThread, message agentMessage, ctx context.Conte
 		t.mu.Lock()
 		delivered := agentResult{ID: n.ID, Name: n.Name, RunID: runID, Result: result}
 		n.results = append(n.results, delivered)
+		if n.ParentID == "root" {
+			cost := n.Cost
+			cost.Add(t.subtreeLocked(n.ID).TotalCost)
+			t.notices = append(t.notices, fmt.Sprintf("%s %s finished · %s · %d steps · %s tokens", n.ID, n.Name, result.Status, result.Steps, formatCount(cost.InputTokens+cost.OutputTokens)))
+		}
 		if n.session.blocked != "" {
 			n.State = "blocked"
 			n.queue = nil
@@ -429,7 +441,7 @@ func (s *Session) controlAgent(ctx context.Context, target agentTargetArgs, acti
 	err = t.sleepLocked(ctx, func() bool { return !n.working && !t.subtreeWorkingLocked(n.ID) })
 	if err == nil && action == "dismiss" && len(n.results) == 0 {
 		t.removeEndedLocked(n.ID)
-		delete(t.nodes, n.ID)
+		t.retireLocked(n.ID)
 	}
 	return err
 }
@@ -478,7 +490,7 @@ func (r *Run) deliverAgents() bool {
 	}
 	t := s.agents
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer func() { t.mu.Unlock(); s.display.refreshAgents() }()
 	delivered := false
 	for _, n := range t.childrenLocked(s.agentParent()) {
 		for _, result := range n.results {
@@ -487,6 +499,9 @@ func (r *Run) deliverAgents() bool {
 			user, bounded := agentDelivery(result)
 			s.history = append(s.history, Entry{Kind: EntryUser, User: user})
 			r.trace.Write("agent.result", r.steps, bounded)
+			if s.agentID == "" {
+				t.notices = append(t.notices, fmt.Sprintf("%s %s results delivered · step %d", n.ID, n.Name, r.steps))
+			}
 			step := r.steps
 			receipt := agentWaitStatus{ID: n.ID, Name: n.Name, State: "delivered", DeliveryRunID: r.runID, DeliveryStep: &step, Message: fmt.Sprintf("already delivered at step %d", step)}
 			for i, old := range s.agentReceipts {
@@ -506,7 +521,7 @@ func (r *Run) deliverAgents() bool {
 		if hadResult && !n.working && (n.Name == "" || n.ended) {
 			t.cancelLocked(n, true)
 			t.removeEndedLocked(n.ID)
-			delete(t.nodes, n.ID)
+			t.retireLocked(n.ID)
 		}
 	}
 	return delivered
@@ -516,7 +531,7 @@ func (t *agentTree) removeEndedLocked(parent string) {
 	for _, n := range t.childrenLocked(parent) {
 		if n.ended && !n.working {
 			t.removeEndedLocked(n.ID)
-			delete(t.nodes, n.ID)
+			t.retireLocked(n.ID)
 		}
 	}
 }
@@ -599,6 +614,9 @@ const agentRosterPreamble = "Agent roster when this message was sent, collected 
 
 // Keep durations explicit in the tool contract (seconds), unlike exec's milliseconds.
 func agentWaitContext(ctx context.Context, seconds int) (context.Context, context.CancelFunc) {
+	if seconds < 0 {
+		return context.WithCancel(ctx)
+	}
 	return context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 }
 
