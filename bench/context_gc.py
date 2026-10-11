@@ -15,6 +15,7 @@ the original trace cannot supply actual usage for a request it never sent.
 
 import argparse
 import json
+import math
 import posixpath
 import re
 from collections import Counter
@@ -308,6 +309,13 @@ def evaluate(frames, policy=Policy(), window=1_050_000):
     previous_known = False
     last_pass = 0
     for frame in frames:
+        if frame.compaction_before:
+            dropped = {}
+            savings_owner = {}
+            last_pass = 0
+            previous_tokens = previous_original_tokens = previous_rate = 0
+            previous_known = False
+        gc_ran = False
         active_ids = {result.id for result in frame.results}
         dropped = {call_id: value for call_id, value in dropped.items() if call_id in active_ids}
         existing = sum(value for value in dropped.values())
@@ -341,16 +349,24 @@ def evaluate(frames, policy=Policy(), window=1_050_000):
                 savings_owner[call_id] = item
             existing += freed
             last_pass = frame.assistant_steps
+            gc_ran = True
         saving = 0.1 * existing * rate
         report.net_saving += saving
         for call_id, value in dropped.items():
             savings_owner[call_id].net_saving += 0.1 * value * rate
-        frame_rate = frame.tokens / frame.size if frame.tokens > 0 else rate
-        after_tokens = (frame.size - existing) * frame_rate
-        # Mirrors the 40% trigger with its conservative measured admission rate.
-        admission_rate = max(0.25, rate * 1.5)
-        before_trigger = max(previous_original_tokens, frame.size * admission_rate) >= window * 0.4
-        after_trigger = max(previous_tokens, (frame.size - existing) * admission_rate) >= window * 0.4
+        frame_rate = (frame.tokens / frame.size
+                      if frame.known and frame.tokens > 0 else previous_rate)
+        after_tokens = ((frame.size - existing) * frame_rate
+                        if frame.known and frame.tokens > 0 else 0)
+        # Only past measurements affect admission; the run-wide rate above is
+        # for reporting savings, never for deciding an earlier trigger.
+        admission_rate = max(0.25, previous_rate * 1.5) if previous_rate > 0 else 0.5
+        threshold = window * 0.4
+        before_trigger = previous_known and previous_original_tokens > 0 and (
+            previous_original_tokens >= threshold or math.ceil(frame.size * admission_rate) >= threshold)
+        after_trigger = previous_known and previous_tokens > 0 and (
+            (not gc_ran and previous_tokens >= threshold)
+            or math.ceil((frame.size - existing) * admission_rate) >= threshold)
         if report.first_compaction_without is None and before_trigger:
             report.first_compaction_without = frame.step
         if report.first_compaction_with is None and after_trigger:
@@ -358,7 +374,7 @@ def evaluate(frames, policy=Policy(), window=1_050_000):
         report.actual_compactions += frame.compaction_before
         # GC at this boundary changes next-request size, not prior measured usage.
         previous_tokens, previous_rate, previous_known = after_tokens, frame_rate, frame.known
-        previous_original_tokens = frame.tokens if frame.tokens > 0 else frame.size * rate
+        previous_original_tokens = frame.tokens
         report.final_tokens_freed = existing * rate
     return report
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"syscall"
 )
 
 const (
@@ -227,7 +228,8 @@ func (s *Session) gcDigest(abs string) string {
 		if bad != nil {
 			return ""
 		}
-		file, err := os.Open(checked)
+		// Nonblocking open also covers a regular-file-to-FIFO race.
+		file, err := os.OpenFile(checked, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if os.IsNotExist(err) {
 			return "missing"
 		}

@@ -159,6 +159,87 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual(report.first_compaction_without, 9)
         self.assertIsNone(report.first_compaction_with)
 
+    def test_compaction_resets_gc_interval_and_prior_usage(self):
+        old, _, _ = records(batch("old") + batch("new"))
+        fresh, _, _ = records(batch("fresh_old") + batch("fresh_new"))
+        for result in old + fresh:
+            result.size, result.offset = 3000, 500
+        frames = [Frame(1, 5000, 0, 1250, old[:1], True, 1),
+                  Frame(17, 5000, 0, 1250, old, True, 16),
+                  Frame(18, 1000, 0, 250, [], True, 0, compaction_before=True),
+                  Frame(34, 5000, 0, 1250, fresh[:1], True, 15),
+                  Frame(35, 5000, 0, 1250, fresh, True, 16)]
+        report = evaluate(frames, Policy(0, .15, 16, 0))
+        self.assertEqual([item.step for item in report.passes], [17, 35])
+        self.assertEqual(report.actual_compactions, 1)
+        # Even eligible retained results cannot use pre-summary input usage.
+        frames[2].results, frames[2].assistant_steps = fresh, 16
+        first_after_summary = evaluate(frames[:3], Policy(0, .15, 16, 0))
+        self.assertEqual([item.step for item in first_after_summary.passes], [17])
+
+    def test_compaction_admission_uses_only_past_measurements(self):
+        first = Frame(1, 5000, 0, 500, [], True, 0)
+        second = Frame(2, 6000, 0, 600, [], True, 1)
+        future = Frame(3, 6000, 0, 5400, [], True, 2)
+        following = Frame(4, 6000, 0, 600, [], True, 3)
+        high_rate = evaluate([first, second, future], window=4000)
+        self.assertIsNone(high_rate.first_compaction_without)
+        self.assertIsNone(high_rate.first_compaction_with)
+        high_rate = evaluate([first, second, future, following], window=4000)
+        self.assertEqual(high_rate.first_compaction_without, 4)
+        self.assertEqual(high_rate.first_compaction_with, 4)
+        future.tokens = 600
+        low_rate = evaluate([first, second, future, following], window=4000)
+        self.assertIsNone(low_rate.first_compaction_without)
+        self.assertIsNone(low_rate.first_compaction_with)
+        zero_usage = [Frame(1, 10000, 0, 0, [], True, 0),
+                      Frame(2, 10000, 0, 1000, [], True, 1)]
+        # A known zero-token response cannot borrow a future calibration.
+        zero_report = evaluate(zero_usage, window=4000)
+        self.assertIsNone(zero_report.first_compaction_without)
+        self.assertIsNone(zero_report.first_compaction_with)
+
+    def test_successful_current_gc_ignores_prior_compaction_usage(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size, results[0].offset = 3000, 500
+        frames = [Frame(1, 10000, 0, 2500, results[:1], True, 1),
+                  Frame(17, 5000, 0, 1250, results, True, 16)]
+        report = evaluate(frames, Policy(0, .15, 16, 0), window=5000)
+        self.assertEqual(report.first_compaction_without, 17)
+        self.assertIsNone(report.first_compaction_with)
+        no_pass = evaluate(frames, Policy(0, .9, 16, 0), window=5000)
+        self.assertEqual(no_pass.first_compaction_with, 17)
+
+    def test_anthropic_loader_excludes_native_reasoning_and_prefix_bytes(self):
+        history = batch("old")
+        thinking = {"type": "thinking", "thinking": "private" * 100, "signature": "opaque"}
+        redacted = {"type": "redacted_thinking", "data": "encrypted" * 100}
+        native = [thinking, redacted, {"type": "tool_use", "id": "old", "name": "read_file",
+                                         "input": {"path": "file.go"}}]
+        history[0]["assistant"]["native"] = {"provider": "anthropic", "items": native}
+        outcome = history[1]["tool"]["outcome"]
+        body = encoded({"messages": [
+            {"role": "assistant", "content": native},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "old",
+                                             "content": encoded(outcome).decode("utf-8")}]}]})
+        events = [{"type": "compaction.finished", "data": {}},
+                  {"type": "model.requested", "step": 2, "data": {"history": history}},
+                  {"type": "api.attempt.started", "data": {"request_body": body.decode("utf-8")}},
+                  {"type": "model.accepted", "data": {"usage": {"known": True, "input_tokens": 400}}}]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "events.jsonl"
+            path.write_text("\n".join(json.dumps(event) for event in events))
+            frames = load_frames(path)
+        excluded = len(encoded(thinking)) + len(encoded(redacted))
+        self.assertEqual(frames[0].native_bytes, excluded)
+        self.assertEqual(frames[0].size, len(body) - excluded)
+        self.assertTrue(frames[0].compaction_before)
+        result = frames[0].results[0]
+        original = encoded(encoded(outcome).decode("utf-8"))
+        replaced = encoded(encoded(placeholder(result, "", 0)).decode("utf-8"))
+        common = next(i for i, pair in enumerate(zip(original, replaced)) if pair[0] != pair[1])
+        self.assertEqual(result.offset, result_offset(body, "old") - excluded + common)
+
     def test_loader_streams_measured_bodies_and_ignores_retries(self):
         history = batch("old") + batch("new")
         tool_outputs = [{"type": "function_call_output", "call_id": entry["tool"]["call_id"],

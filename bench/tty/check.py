@@ -76,6 +76,7 @@ SCENARIOS = {
             ("expect", "status_row_last"),
             ("type", "next question"), ("key", "enter"),
             ("wait", "Next turn works.", 5),
+            ("wait_status", "gpt-6-sol / low", 5),
             ("expect", "status_row_last"),
         ],
     },

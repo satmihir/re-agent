@@ -266,6 +266,9 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 			}
 		}
 		_, child.gc.LastPass, _ = gcResults(child.history, child.gc.Paths)
+		for id := range child.gc.Dropped {
+			child.seenCalls[id] = true
+		}
 	}
 	if contextMode == "fork_native" {
 		for id := range s.seenCalls {
@@ -286,7 +289,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	}
 	if sharing {
 		user := &UserTurn{Text: prompt, Workspace: initialWorkspace, Roster: child.rosterJSON(), Plan: planMarkerFor(history, cfg.PlanMode)}
-		projected := append(append([]Entry(nil), history...), Entry{Kind: EntryUser, User: user})
+		projected := append(append([]Entry(nil), child.requestHistory()...), Entry{Kind: EntryUser, User: user})
 		_, err = validateDestination(cfg, projected, contextWindow(cfg.Model), s.admissionRate(cfg.Provider))
 		if err != nil {
 			return AgentThread{}, err
