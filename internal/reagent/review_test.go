@@ -157,6 +157,8 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 				"plausible ratio.go:2 precision contract not established",
 				"refuted ratio.go:2 quoted proof: `return 10/n`; n=2 is nonzero, result 5",
 			}
+			sweepCandidate := `{"file":"ratio.go","line":2,"summary":"negative inputs lack validation","scenario":"Ratio(-1) enters an unsupported domain"}`
+			sweepVerdict := "plausible ratio.go:2 negative input validation contract not established; source-only, no executable domain oracle"
 			var mu sync.Mutex
 			childSessions := map[string]string{}
 			probeRan := false
@@ -187,6 +189,10 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 						if !cfg.Registry.Mode().ReadOnly {
 							t.Error("finder is not read-only")
 						}
+						cap := map[string]string{"medium": "N=5", "high": "N=10", "max": "N=20"}[level]
+						if !strings.Contains(task, cap) {
+							t.Error("finder lacks level candidate cap")
+						}
 						if !strings.Contains(task, `\"Legibility beats features\"`) {
 							t.Error("finder lacks quoted convention")
 						}
@@ -216,6 +222,10 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 						if strings.Contains(task, candidates[2]) {
 							index = 2
 						}
+						verdict := verdicts[index]
+						if strings.Contains(task, sweepCandidate) {
+							index, verdict = 3, sweepVerdict
+						}
 						probe := level == "max" && index == 0
 						if cfg.Registry.Mode().ReadOnly == probe {
 							t.Error("wrong verifier authority")
@@ -224,7 +234,7 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 							return respond(callBlock("verify-source", "read_file", `{"path":"ratio.go"}`), callBlock("verify-diff", "git_inspect", `{"operation":"diff","from":"main","to":"HEAD","paths":["ratio.go"]}`))
 						}
 						if !probe {
-							return respond(textBlock(verdicts[index]))
+							return respond(textBlock(verdict))
 						}
 						switch req.Scope.Step {
 						case 2:
@@ -248,7 +258,7 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 							return respond(callBlock("cleanup", "delete_file", `{"path":"zz_review_probe_zero_test.go"}`))
 						default:
 							reviewToolResult(t, req.History, "cleanup")
-							return respond(textBlock(verdicts[index] + "; probe: go test -run ^TestReviewZero$ -v . exit 0; scratch removed"))
+							return respond(textBlock(verdict + "; probe: go test -run ^TestReviewZero$ -v . exit 0; scratch removed"))
 						}
 					}
 					if strings.HasPrefix(task, "sweep\n") {
@@ -263,7 +273,7 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 						if !strings.Contains(task, "missing guards, defaults, setup/teardown") {
 							t.Error("sweep gaps not requested")
 						}
-						return respond(textBlock("No additional candidates."))
+						return respond(textBlock(sweepCandidate))
 					}
 					t.Errorf("unexpected child task: %s", task)
 					return respond(textBlock("unexpected"))
@@ -282,7 +292,7 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 			verified := []string{}
 			expectedReviewAgents := 13
 			if level == "max" {
-				expectedReviewAgents++
+				expectedReviewAgents += 2
 			}
 			s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
 				phase++
@@ -294,7 +304,7 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 							t.Errorf("embedded prompt lost angle %q", angle)
 						}
 					}
-					for _, rule := range []string{"ONE new verifier Session", "NEVER include the author's reasoning", "Lean toward recall", "quoted counterevidence", "cannot later overrule", "zz_review_probe_*", "delete_file", "threads(subtree=true)", "next_offset", "baseline-to-final deltas", "If agents are disabled/unavailable"} {
+					for _, rule := range []string{"ONE new verifier Session", "NEVER include the author's reasoning", "Lean toward recall", "quoted counterevidence", "cannot later overrule", "zz_review_probe_*", "delete_file", "threads(subtree=true)", "next_offset", "baseline-to-final deltas", "If agents are disabled/unavailable", "low N=3 K=3", "medium N=5 K=5", "high N=10 K=10", "max N=20 K=20", "correctness failures before cleanup/style", "retain ALL overflow candidate records", "supplied PR description", "final-report claims", "actual test output and the diff", "nothing else changed"} {
 						if !strings.Contains(prompt, rule) {
 							t.Errorf("embedded prompt lost rule %q", rule)
 						}
@@ -310,7 +320,7 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 					}
 					var batch []OutputBlock
 					for i := 0; i < 8; i++ {
-						batch = append(batch, reviewSpawn(fmt.Sprintf("finder-%d", i), "find "+angles[i], "Do not spawn or delegate. main vs HEAD; ratio.go:2; AGENTS: \"Legibility beats features\". Independent angle.", "read"))
+						batch = append(batch, reviewSpawn(fmt.Sprintf("finder-%d", i), "find "+angles[i], "Do not spawn or delegate. main vs HEAD; ratio.go:2; AGENTS: \"Legibility beats features\". Independent angle. Candidate cap "+map[string]string{"medium": "N=5", "high": "N=10", "max": "N=20"}[level], "read"))
 					}
 					return turn(batch...), nil
 				case 3:
@@ -323,7 +333,7 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 				case 4:
 					var batch []OutputBlock
 					for i := 8; i < 10; i++ {
-						batch = append(batch, reviewSpawn(fmt.Sprintf("finder-%d", i), "find "+angles[i], "Do not spawn or delegate. main vs HEAD; ratio.go:2; AGENTS: \"Legibility beats features\".", "read"))
+						batch = append(batch, reviewSpawn(fmt.Sprintf("finder-%d", i), "find "+angles[i], "Do not spawn or delegate. main vs HEAD; ratio.go:2; AGENTS: \"Legibility beats features\". Candidate cap "+map[string]string{"medium": "N=5", "high": "N=10", "max": "N=20"}[level], "read"))
 					}
 					return turn(batch...), nil
 				case 5:
@@ -371,6 +381,28 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 						return turn(callBlock("sweep-wait", "wait", string(raw))), nil
 					}
 				case 10:
+					found := false
+					for _, result := range agentResults(req.History) {
+						found = found || result.Result.Reply == sweepCandidate
+					}
+					if !found {
+						t.Fatal("new sweep candidate not delivered")
+					}
+					return turn(reviewSpawn("sweep-verifier", "verify "+sweepCandidate, "Do not spawn or delegate. Candidate only; inspect main vs HEAD, ratio.go, and domain contract. No author reasoning. Source-only if no executable oracle exists.", "read")), nil
+				case 11:
+					raw, _ := json.Marshal(map[string]any{"ids": []string{fmt.Sprintf("t%d", nextID+14)}})
+					return turn(callBlock("sweep-verify-wait", "wait", string(raw))), nil
+				case 12:
+					found := false
+					for _, result := range agentResults(req.History) {
+						if result.Result.Reply == sweepVerdict {
+							verified = append(verified, result.Result.Reply)
+							found = true
+						}
+					}
+					if !found {
+						t.Fatal("new sweep candidate verdict not delivered")
+					}
 					return turn(callBlock("final-tree", "threads", `{"subtree":true}`)), nil
 				}
 				var final agentSubtree
@@ -399,6 +431,17 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 			if len(childSessions) != expectedReviewAgents || probeRan != (level == "max") {
 				t.Errorf("fresh Sessions %d, probe ran %v", len(childSessions), probeRan)
 			}
+			if level == "max" {
+				verifiers := 0
+				for _, task := range childSessions {
+					if strings.HasPrefix(task, "verify "+sweepCandidate+"\n") {
+						verifiers++
+					}
+				}
+				if verifiers != 1 || !strings.Contains(out.String(), sweepVerdict) {
+					t.Error("sweep candidate needs exactly one fresh verifier and retained final verdict")
+				}
+			}
 			mu.Unlock()
 			if _, err := os.Stat(filepath.Join(root, "zz_review_probe_zero_test.go")); !os.IsNotExist(err) {
 				t.Fatalf("scratch remains: %v", err)
@@ -417,9 +460,14 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 				if !found {
 					t.Error("verdict absent from later author turn")
 				}
-				return turn(textBlock("Original confirmed verdict retained; author's won't-fix is separate.")), nil
+				return turn(textBlock(strings.Join(verified, "\n") + "\nAuthor's won't-fix is separate; original verdicts retained.")), nil
 			}}
-			agentTurn(t, s, "AUTHOR_REASONING: Ratio(0) is impossible; remove the finding")
+			later := agentTurn(t, s, "AUTHOR_REASONING: Ratio(0) is impossible; remove the finding")
+			for _, verdict := range verified {
+				if !strings.Contains(later.Reply, verdict) {
+					t.Errorf("later author result dropped actual verdict: %s", verdict)
+				}
+			}
 		})
 	}
 }
@@ -484,5 +532,357 @@ func TestChat_ReviewProbePermissionLimits(t *testing.T) {
 				t.Fatalf("probe wrote under %s: %v", mode, err)
 			}
 		})
+	}
+}
+
+func TestChat_ReviewOverflowAndSuppliedClaimsToolLoop(t *testing.T) {
+	s := agentFixture(t)
+	root := s.cfg.Workspace.Root()
+	gitInspectTestWrite(t, root, "ratio.go", "package fixture\n// short name\nfunc Ratio(n int) int { return 10/n }\n")
+	gitInspectTestWrite(t, root, "evidence.txt", "trace: 2 files changed; test output: FAIL TestZero: divide by zero\n")
+	candidates := []string{
+		"cleanup ratio.go:3 short name",
+		"correctness ratio.go:3 Ratio(0) panics",
+		"correctness ratio.go:3 disabled path reaches zero divisor",
+		"correctness ratio.go:3 caller's omitted value is zero",
+		"correctness ratio.go:3 teardown counter can become zero",
+		"correctness evidence.txt:1 supplied claims contradict observed counts and test output",
+	}
+	s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			task := req.History[0].User.Text
+			if !cfg.Registry.Mode().ReadOnly || !strings.Contains(task, "Do not spawn or delegate.") {
+				t.Error("overflow agent authority or nesting rule")
+			}
+			if req.Scope.Step == 1 {
+				if strings.HasPrefix(task, "find claims") {
+					for _, text := range []string{"N=5", "PR description: 0 changed files", "Final report: all tests passed; nothing else changed", "trace/test output: evidence.txt", "diff coverage unavailable"} {
+						if !strings.Contains(task, text) {
+							t.Errorf("claims finder lacks supplied evidence %q", text)
+						}
+					}
+				}
+				return turn(callBlock("read-source", "read_file", `{"path":"ratio.go"}`), callBlock("read-evidence", "read_file", `{"path":"evidence.txt"}`)), nil
+			}
+			if !strings.Contains(string(reviewToolResult(t, req.History, "read-evidence").Data), "FAIL TestZero") {
+				t.Error("claims not checked against actual output")
+			}
+			if strings.HasPrefix(task, "find claims") {
+				raw, _ := json.Marshal(struct{ Prioritized, Overflow []string }{candidates[:5], candidates[5:]})
+				return turn(textBlock(string(raw))), nil
+			}
+			if strings.Contains(task, "all tests passed") {
+				t.Error("verifier received author claims instead of candidate-only brief")
+			}
+			for _, candidate := range candidates {
+				if strings.HasPrefix(task, "verify "+candidate+"\n") {
+					return turn(textBlock("plausible " + candidate)), nil
+				}
+			}
+			t.Error("unexpected overflow verifier")
+			return turn(textBlock("unexpected")), nil
+		}}, nil
+	}
+	step := 0
+	s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		step++
+		switch step {
+		case 1:
+			return turn(reviewSpawn("claims", "find claims", "Do not spawn or delegate. N=5; retain overflow. PR description: 0 changed files. Final report: all tests passed; nothing else changed. trace/test output: evidence.txt; diff coverage unavailable, disclose it.", "read")), nil
+		case 2:
+			return turn(callBlock("finder-wait", "wait", `{"ids":["t1"]}`)), nil
+		case 3:
+			var records struct{ Prioritized, Overflow []string }
+			for _, result := range agentResults(req.History) {
+				if result.ID == "t1" {
+					if err := json.Unmarshal([]byte(result.Result.Reply), &records); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if len(records.Prioritized) != 5 || len(records.Overflow) != 1 {
+				t.Fatalf("finder caps or overflow lost: %+v", records)
+			}
+			var batch []OutputBlock
+			for i, candidate := range append(records.Prioritized, records.Overflow...) {
+				batch = append(batch, reviewSpawn(fmt.Sprintf("verify-%d", i), "verify "+candidate, "Do not spawn or delegate. Candidate only; ratio.go and evidence.txt. Independently recheck; uncertainty is plausible.", "read"))
+			}
+			return turn(batch...), nil
+		case 4:
+			return turn(callBlock("all-verifiers", "wait", `{"ids":["t2","t3","t4","t5","t6","t7"]}`)), nil
+		}
+		var correctness, cleanup []string
+		for _, result := range agentResults(req.History) {
+			if strings.HasPrefix(result.Result.Reply, "plausible correctness") {
+				correctness = append(correctness, result.Result.Reply)
+			}
+			if strings.HasPrefix(result.Result.Reply, "plausible cleanup") {
+				cleanup = append(cleanup, result.Result.Reply)
+			}
+		}
+		if len(correctness) != 5 || len(cleanup) != 1 {
+			t.Fatalf("overflow not freshly verified: %v %v", correctness, cleanup)
+		}
+		return turn(textBlock("Ranked top K=5, correctness before cleanup:\n" + strings.Join(correctness, "\n") + "\nOverflow appendix: 1 finding retained\n" + strings.Join(cleanup, "\n") + "\nClaims checked against observed trace/test output; diff coverage unavailable.")), nil
+	}}
+	c := &conversation{session: s, traceDir: t.TempDir()}
+	var out, errs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	chat(ctx, c, newLineReader(strings.NewReader("/review medium\n/exit\n"), &errs, nil), &out, &errs)
+	if s.blocked != "" || !strings.Contains(out.String(), "Overflow appendix: 1 finding retained") || strings.Index(out.String(), "plausible correctness") > strings.Index(out.String(), "plausible cleanup") {
+		t.Fatalf("ranked capped report: %s stderr: %s", &out, &errs)
+	}
+	for _, candidate := range candidates {
+		if !strings.Contains(out.String(), candidate) {
+			t.Errorf("candidate lost at cap: %s", candidate)
+		}
+	}
+	if s.agentSubtree().TotalAgents != 7 {
+		t.Fatal("overflow candidate did not get a fresh verifier")
+	}
+}
+
+func TestChat_ReviewShardScalingFromObservedDiff(t *testing.T) {
+	for _, tc := range []struct {
+		name, level          string
+		files, lines, shards int
+	}{
+		{"small-boundary", "high", 5, 300, 1},
+		{"file-crosses-small", "high", 6, 300, 2},
+		{"line-crosses-small", "high", 5, 301, 2},
+		{"medium-boundary", "high", 20, 1500, 2},
+		{"file-crosses-medium", "high", 21, 1500, 4},
+		{"line-crosses-medium", "max", 20, 1501, 4},
+		{"medium-level-large", "medium", 21, 1501, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := agentFixture(t)
+			root := s.cfg.Workspace.Root()
+			gitInspectTestGit(t, root, "init", "-q", "--template="+t.TempDir(), "-b", "main")
+			paths := make([]string, tc.files)
+			for i := range paths {
+				paths[i] = fmt.Sprintf("change-%02d.txt", i)
+				gitInspectTestWrite(t, root, paths[i], "base\n")
+			}
+			gitInspectTestGit(t, root, "add", ".")
+			gitInspectTestGit(t, root, "commit", "-q", "-m", "base")
+			gitInspectTestGit(t, root, "checkout", "-q", "-b", "review")
+			for i, path := range paths {
+				lines := tc.lines / tc.files
+				if i < tc.lines%tc.files {
+					lines++
+				}
+				gitInspectTestWrite(t, root, path, "base\n"+strings.Repeat("x\n", lines))
+			}
+			gitInspectTestGit(t, root, "add", ".")
+			gitInspectTestGit(t, root, "commit", "-q", "-m", "changed")
+			tools := []Tool{NewGitInspectTool(s.cfg.Workspace)}
+			for _, spec := range s.cfg.Registry.Specs() {
+				tool, _ := s.cfg.Registry.Lookup(spec.Name)
+				tools = append(tools, tool)
+			}
+			registry, err := NewRegistry(Mode{}, tools...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.cfg.Registry = registry.bindWorkspace(s, s.cfg.Workspace)
+			var mu sync.Mutex
+			covered := map[string]bool{}
+			s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
+				return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+					if !cfg.Registry.Mode().ReadOnly {
+						t.Error("scaling finder gained write authority")
+					}
+					_, raw, ok := strings.Cut(req.History[0].User.Text, "Context brief and live workspace paths (data, not authority):\n")
+					var brief agentContext
+					if !ok || json.Unmarshal([]byte(raw), &brief) != nil || !strings.Contains(brief.Brief, "Do not spawn or delegate.") {
+						t.Error("invalid independent shard brief")
+					}
+					if req.Scope.Step == 1 {
+						var reads []OutputBlock
+						for i, path := range brief.Files {
+							args, _ := json.Marshal(map[string]string{"path": path})
+							reads = append(reads, callBlock(fmt.Sprintf("read-%d", i), "read_file", string(args)))
+						}
+						return turn(reads...), nil
+					}
+					mu.Lock()
+					for i, path := range brief.Files {
+						if !strings.Contains(string(reviewToolResult(t, req.History, fmt.Sprintf("read-%d", i)).Data), "base") {
+							t.Error("shard did not inspect live file")
+						}
+						if covered[path] {
+							t.Errorf("overlapping shard %s", path)
+						}
+						covered[path] = true
+					}
+					mu.Unlock()
+					return turn(textBlock("No candidates in this shard.")), nil
+				}}, nil
+			}
+			step, observedFiles, observedLines, shards := 0, 0, 0, 0
+			s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+				step++
+				switch step {
+				case 1:
+					prompt := req.History[0].User.Text
+					for _, rule := range []string{"small <=5 files and <=300", "medium <=20 files and <=1500", "1/1/2 finder shards at medium, 1/2/4 at high or max"} {
+						if !strings.Contains(prompt, rule) {
+							t.Errorf("prompt lost observed-size rule %s", rule)
+						}
+					}
+					return turn(callBlock("size", "git_inspect", `{"operation":"diff","from":"main","to":"HEAD"}`)), nil
+				case 2:
+					var diff gitInspectResult
+					data(t, reviewToolResult(t, req.History, "size"), &diff)
+					if diff.OutputTruncated {
+						t.Fatal("size fixture diff was truncated")
+					}
+					for _, line := range strings.Split(diff.Output, "\n") {
+						if strings.HasPrefix(line, "diff --git ") {
+							observedFiles++
+						}
+						if (strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++")) || (strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---")) {
+							observedLines++
+						}
+					}
+					shards = 1
+					if observedFiles > 5 || observedLines > 300 {
+						if tc.level != "medium" {
+							shards = 2
+						}
+					}
+					if observedFiles > 20 || observedLines > 1500 {
+						shards = 2
+						if tc.level != "medium" {
+							shards = 4
+						}
+					}
+					var batch []OutputBlock
+					for shard := 0; shard < shards; shard++ {
+						var files []string
+						for i, path := range paths {
+							if i%shards == shard {
+								files = append(files, path)
+							}
+						}
+						args, _ := json.Marshal(spawnArgs{Task: fmt.Sprintf("find line-by-line shard %d", shard), Authority: "read", Context: &agentContext{Brief: fmt.Sprintf("Do not spawn or delegate. Observed %d files, %d lines; main vs HEAD; shard %d/%d.", observedFiles, observedLines, shard+1, shards), Files: files}})
+						batch = append(batch, callBlock(fmt.Sprintf("shard-%d", shard), "spawn", string(args)))
+					}
+					return turn(batch...), nil
+				case 3:
+					var ids []string
+					for i := 1; i <= shards; i++ {
+						ids = append(ids, fmt.Sprintf("t%d", i))
+					}
+					raw, _ := json.Marshal(map[string]any{"ids": ids})
+					return turn(callBlock("shard-wait", "wait", string(raw))), nil
+				}
+				return turn(textBlock(fmt.Sprintf("Observed %d files/%d lines; %d independent shards for this angle; other angles not exercised by this fixture.", observedFiles, observedLines, shards))), nil
+			}}
+			c := &conversation{session: s, traceDir: t.TempDir()}
+			var out, errs bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			chat(ctx, c, newLineReader(strings.NewReader("/review "+tc.level+"\n/exit\n"), &errs, nil), &out, &errs)
+			if s.blocked != "" || observedFiles != tc.files || observedLines != tc.lines || shards != tc.shards || s.agentSubtree().TotalAgents != tc.shards {
+				t.Fatalf("observed %d/%d shards %d: %s %s", observedFiles, observedLines, shards, &out, &errs)
+			}
+			mu.Lock()
+			if len(covered) != tc.files {
+				t.Errorf("shards covered %d/%d files", len(covered), tc.files)
+			}
+			mu.Unlock()
+		})
+	}
+}
+
+func TestChat_ReviewPagedSubtreeAccounting(t *testing.T) {
+	s := agentFixture(t)
+	for i := 0; i < 300; i++ {
+		id := fmt.Sprintf("prior-%03d", i)
+		s.agents.archive[id] = agentObservation{AgentThread: AgentThread{ID: id, ParentID: "root", State: "delivered", Task: strings.Repeat("prior review task ", 12), Cost: Usage{Known: true, InputTokens: 1}}, Depth: 1}
+	}
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		reply := turn(textBlock("Inline candidate verification not needed: no candidates."))
+		reply.Usage = Usage{Known: true, InputTokens: 7, OutputTokens: 3}
+		return NewScriptedModel(reply), nil
+	}
+	phase, offset, pageIndex := "baseline", 0, 0
+	pageCall := ""
+	var baseline, final agentSubtree
+	seen := map[string]bool{}
+	baselinePages, finalPages := 0, 0
+	s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		requestPage := func() (ModelResponse, error) {
+			pageCall = fmt.Sprintf("%s-page-%d", phase, pageIndex)
+			raw, _ := json.Marshal(map[string]any{"subtree": true, "offset": offset})
+			return turn(callBlock(pageCall, "threads", string(raw))), nil
+		}
+		if phase == "wait" {
+			phase = "after-wait"
+			return turn(callBlock("finder-wait", "wait", `{"ids":["t1"]}`)), nil
+		}
+		if phase == "after-wait" {
+			phase, offset, pageIndex, pageCall = "final", 0, 0, ""
+			seen = map[string]bool{}
+			return requestPage()
+		}
+		if pageCall == "" {
+			return requestPage()
+		}
+		var page agentSubtree
+		data(t, reviewToolResult(t, req.History, pageCall), &page)
+		for _, thread := range page.Threads {
+			if seen[thread.ID] {
+				t.Errorf("duplicate paged agent %s", thread.ID)
+			}
+			seen[thread.ID] = true
+		}
+		if phase == "baseline" {
+			baselinePages++
+			if pageIndex == 0 {
+				baseline = page
+			} else if page.TotalAgents != baseline.TotalAgents || page.TotalCost != baseline.TotalCost {
+				t.Error("baseline totals changed across pages")
+			}
+		} else {
+			finalPages++
+			if pageIndex == 0 {
+				final = page
+			} else if page.TotalAgents != final.TotalAgents || page.TotalCost != final.TotalCost {
+				t.Error("final totals changed across pages")
+			}
+		}
+		if page.NextOffset != nil {
+			if *page.NextOffset <= offset {
+				t.Fatal("subtree paging did not advance")
+			}
+			offset = *page.NextOffset
+			pageIndex++
+			return requestPage()
+		}
+		if len(seen) != page.TotalAgents {
+			t.Fatalf("paged view saw %d/%d descendants", len(seen), page.TotalAgents)
+		}
+		if phase == "baseline" {
+			phase = "wait"
+			return turn(reviewSpawn("finder", "find evidence", "Do not spawn or delegate. Read-only evidence review; no candidates expected.", "read")), nil
+		}
+		return turn(textBlock(fmt.Sprintf("Every descendant: %d; baseline %d; review agents delta %d; input token delta %d; output token delta %d; paged IDs %d. Totals counted once, not once per page.", final.TotalAgents, baseline.TotalAgents, final.TotalAgents-baseline.TotalAgents, final.TotalCost.InputTokens-baseline.TotalCost.InputTokens, final.TotalCost.OutputTokens-baseline.TotalCost.OutputTokens, len(seen)))), nil
+	}}
+	c := &conversation{session: s, traceDir: t.TempDir()}
+	var out, errs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	chat(ctx, c, newLineReader(strings.NewReader("/review medium\n/exit\n"), &errs, nil), &out, &errs)
+	if baselinePages < 2 || finalPages < 2 || s.blocked != "" {
+		t.Fatalf("pages %d/%d blocked %s: %s", baselinePages, finalPages, s.blocked, &errs)
+	}
+	for _, want := range []string{"Every descendant: 301", "baseline 300", "review agents delta 1", "input token delta 7", "output token delta 3", "paged IDs 301"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("paged accounting report lacks %q: %s", want, &out)
+		}
 	}
 }

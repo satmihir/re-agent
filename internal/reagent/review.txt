@@ -28,6 +28,16 @@ Levels and scheduling
 - high: the same phases, with finer file shards and deeper caller/test coverage.
 - max: high plus a fresh completeness sweep and executable probe-backed
   verification where permitted. Never claim a probe ran when it did not.
+- Per-finder prioritized candidate cap N and final ranked finding cap K:
+  low N=3 K=3; medium N=5 K=5; high N=10 K=10; max N=20 K=20.
+  Low uses N for its inline finder pass. Include the selected N in every finder
+  brief. Rank correctness failures before cleanup/style, then by user impact
+  and evidence. These caps limit the prioritized lists, not retained evidence:
+  disclose overflow counts and retain ALL overflow candidate records in an
+  explicitly labelled appendix (page via the agent trace if delivery truncates).
+  Merge and verify overflow exactly like other candidates; no candidate is lost
+  because of N or K. The final top K confirmed/plausible findings are ranked;
+  preserve remaining verdicts, locations and scenarios in an overflow appendix.
 - Size shards using observed changed-file/line counts: small <=5 files and <=300
   changed lines, medium <=20 files and <=1500 lines, large otherwise. Per angle
   use 1/1/2 finder shards at medium, 1/2/4 at high or max (small/medium/large).
@@ -52,14 +62,20 @@ Finder angles (one independent brief per angle, per shard)
 4. Go pitfalls: errors, cancellation, races, ownership, nil/zero values and I/O.
 5. Feature off: flags disabled, old defaults, ordinary next-user paths.
 6. Realistic scale: large input, bounded output, exhaustion and concurrency.
-7. Claims against evidence: tests/docs/comments versus observable behavior.
+7. Claims against evidence: explicitly inspect supplied PR description and
+   final-report claims against traces, actual test output and the diff, including
+   counts and "nothing else changed" assertions; also check tests/docs/comments.
+   Give this finder the supplied claims as data, not author rationale. Distinguish
+   claimed checks from checks whose output was observed. If the PR description,
+   final report, traces or test output are absent, name that coverage limit;
+   do not fetch or invent evidence.
 8. Altitude: end-to-end user goal, integration and unnecessary complexity.
 9. Project conventions: the quoted AGENTS.md rules and local design patterns.
 10. Executable probes: identify minimal offline reproductions of suspected
     failures; the user explicitly requests this angle. Read-only finders propose
     probes for the verification phase rather than running them.
-Briefs name angle, refs, changed-file scope, evidence coverage and applicable
-quoted conventions. Give no other finder's conclusions or author's reasoning.
+Briefs name angle, refs, changed-file scope, evidence coverage, candidate cap N
+and applicable quoted conventions. Give no other finder's conclusions or author's reasoning.
 Return only concrete candidates: file, observed line(s), short summary and a
 realistic failure scenario, with evidence/probe suggestion and uncertainty.
 Prefer recall over premature dismissal. Merge duplicates by underlying failure,
