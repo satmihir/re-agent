@@ -475,13 +475,14 @@ func TestAgents_NativeForkTracePrefixAndGrowingSuffixCache(t *testing.T) {
 	}
 	s.cfg.agentPrefix = &agentRequestPrefix{Instructions: instructions(s.cfg), Tools: s.cfg.Registry.Specs(), CacheEntries: []int{1, 3}}
 	var first ModelRequest
+	followupSeen := false
 	s.agentModel = func(Config, *Trace) (Model, error) {
 		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
 			body, err := EncodeAnthropicRequest(req)
 			if err != nil {
 				t.Error(err)
 			}
-			if req.Scope.Step == 1 {
+			if first.Scope.RunID == "" {
 				first = req
 				if len(req.CacheEntries) != 3 || bytes.Count(body, []byte(`"cache_control"`)) != 4 {
 					t.Error("first request lost inherited markers")
@@ -490,6 +491,12 @@ func TestAgents_NativeForkTracePrefixAndGrowingSuffixCache(t *testing.T) {
 			}
 			if len(req.CacheEntries) != 0 || bytes.Count(body, []byte(`"cache_control"`)) != 2 || !bytes.Contains(body, []byte(`"cache_control":{"type":"ephemeral"}`)) {
 				t.Error("subsequent request failed to cache growing suffix")
+			}
+			if req.Scope.RunID != first.Scope.RunID {
+				followupSeen = true
+				if req.Scope.Step != 1 || req.History[len(req.History)-1].User.Text != "continue reading" {
+					t.Error("named follow-up not an ordinary retained turn")
+				}
 			}
 			return contextResponse(anthropicName, textBlock("done")), nil
 		}}, nil
@@ -523,7 +530,15 @@ func TestAgents_NativeForkTracePrefixAndGrowingSuffixCache(t *testing.T) {
 	if bytes.Contains(dispatch, []byte(`"name":"write_file"`)) || !bytes.Contains(headerTools, []byte(`"name":"write_file"`)) {
 		t.Fatal("trace does not distinguish declaration from dispatch")
 	}
-	// Follow-up named turns must keep rolling caches, not reinstate old markers.
+	if _, err := s.sendAgent(context.Background(), agentTargetArgs{Name: "cached"}, "continue reading"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.waitAgents(context.Background(), []string{n.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if !followupSeen {
+		t.Fatal("named follow-up request never ran")
+	}
 	if child.cfg.agentPrefix == nil || len(child.cfg.agentPrefix.CacheEntries) != 0 {
 		t.Fatal("frozen cache markers survived first request")
 	}
