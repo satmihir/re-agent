@@ -143,6 +143,7 @@ func assertRefOnlySnapshot(t *testing.T, raw json.RawMessage, branch string) {
 }
 
 func TestSnapshot_RefOnlyUnbornDetachedAndUnavailableGit(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	workspaceGit(t, root, "init", "--template="+t.TempDir(), "-b", "main")
 	var state workspaceState
@@ -161,11 +162,7 @@ func TestSnapshot_RefOnlyUnbornDetachedAndUnavailableGit(t *testing.T) {
 	if state.Counts != "" || state.Git == nil || state.Git.Staged == nil || *state.Git.Staged != 0 || state.Git.Modified == nil || *state.Git.Modified != 0 || state.Git.Untracked == nil || *state.Git.Untracked != 0 {
 		t.Fatalf("known zero counts omitted: %+v", state)
 	}
-	if err := os.WriteFile(filepath.Join(root, "f"), []byte("text"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	workspaceGit(t, root, "add", ".")
-	workspaceGit(t, root, "commit", "-m", "fixture")
+	workspaceGit(t, root, "commit", "--allow-empty", "-m", "fixture")
 	workspaceGit(t, root, "checkout", "--detach")
 	state = decode(root, true)
 	if state.Git == nil || state.Git.Branch != "(detached)" || state.Git.Untracked != nil || state.Git.Upstream != "" {

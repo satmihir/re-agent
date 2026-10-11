@@ -45,7 +45,8 @@ func workspaceGit(t *testing.T, root string, args ...string) {
 		t.Skip("git unavailable")
 	}
 	command := exec.Command("git", append([]string{"-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "user.name=Test", "-c", "user.email=test@invalid"}, args...)...)
-	command.Dir, command.Env = root, childEnvironment()
+	command.Dir = root
+	command.Env = append(childEnvironment(), "HOME="+root, "TMPDIR="+root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}

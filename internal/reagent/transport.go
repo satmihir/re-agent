@@ -110,6 +110,7 @@ type transport struct {
 	requestIDHeader string
 	client          *http.Client
 	trace           *Trace
+	waitRetry       func(context.Context, time.Duration) error
 }
 
 // modelRetryKey scopes the opt-in policy to generative requests, including summaries.
@@ -137,6 +138,10 @@ func (t *transport) call(ctx context.Context, step int, body []byte, headers map
 // callModel owns retry admission. A provider-specific classifier may identify an
 // explicit transient error in a complete 200 stream, without moving decoding into transport.
 func (t *transport) callModel(ctx context.Context, step int, body []byte, headers map[string]string, transient func([]byte) (bool, Usage)) (int, []byte, Usage, error) {
+	wait := t.waitRetry
+	if wait == nil {
+		wait = waitBeforeRetry
+	}
 	policy, overnight := ctx.Value(modelRetryKey{}).(modelRetry)
 	deadline := time.Now().Add(policy.window)
 	prior := Usage{Known: true}
@@ -163,7 +168,7 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 			if attempt >= maxAttempts {
 				return status, raw, prior, nil
 			}
-			if err := waitBeforeRetry(ctx); err != nil {
+			if err := wait(ctx, retryDelay); err != nil {
 				return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry"}
 			}
 			continue
@@ -191,12 +196,8 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 		if policy.display != nil {
 			policy.display.modelRetry(attempt, delay, reason)
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if err := wait(ctx, delay); err != nil {
 			return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry", Usage: prior}
-		case <-timer.C:
 		}
 		if time.Until(deadline) <= 0 {
 			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
@@ -323,8 +324,8 @@ func retryable(status int) bool {
 	return status == http.StatusTooManyRequests || (status >= 500 && status <= 599)
 }
 
-func waitBeforeRetry(ctx context.Context) error {
-	timer := time.NewTimer(retryDelay)
+func waitBeforeRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:

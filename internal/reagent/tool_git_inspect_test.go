@@ -64,6 +64,7 @@ func gitInspectTestRepo(t *testing.T) *Workspace {
 }
 
 func TestGitInspect_OperationsAndLiteralPaths(t *testing.T) {
+	t.Parallel()
 	ws := gitInspectTestRepo(t)
 	for _, tc := range []struct{ args, want, absent string }{
 		{`{"operation":"diff","from":"main","to":"review"}`, "+after", "SECRET"},
@@ -99,6 +100,7 @@ func TestGitInspect_OperationsAndLiteralPaths(t *testing.T) {
 }
 
 func TestGitInspect_RefusesInjectionAndWithheldPaths(t *testing.T) {
+	t.Parallel()
 	ws := gitInspectTestRepo(t)
 	for _, args := range []string{
 		`{"operation":"show","rev":"--help"}`, `{"operation":"show","rev":"HEAD:path"}`, `{"operation":"show","rev":"main..HEAD"}`,
@@ -183,6 +185,7 @@ func TestGitInspect_NeverRunsRepositoryPrograms(t *testing.T) {
 }
 
 func TestGitInspect_Truncation(t *testing.T) {
+	t.Parallel()
 	ws := gitInspectTestRepo(t)
 	gitInspectTestWrite(t, ws.Root(), "large", strings.Repeat("\x00\xff\n", MaxResultBytes))
 	gitInspectTestGit(t, ws.Root(), "add", "large")
@@ -248,6 +251,7 @@ func TestGitInspect_CLIPlanAgentsOff(t *testing.T) {
 }
 
 func TestGitInspect_AllTextOperationsTruncateEncodedOutput(t *testing.T) {
+	t.Parallel()
 	ws := gitInspectTestRepo(t)
 	gitInspectTestWrite(t, ws.Root(), "large.txt", strings.Repeat("<\"\\ λ\n", MaxResultBytes))
 	gitInspectTestGit(t, ws.Root(), "add", "large.txt")

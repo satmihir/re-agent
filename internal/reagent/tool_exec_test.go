@@ -3,10 +3,15 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -29,6 +34,86 @@ func execArgsJSON(argv, cwd string, timeoutMS int) string {
 func itoa(n int) string {
 	out, _ := json.Marshal(n)
 	return string(out)
+}
+
+func execDescendantScript(t *testing.T, ws *Workspace) string {
+	t.Helper()
+	// Register cleanup before execution so a failed assertion cannot leak children.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		for _, name := range []string{"descendant.pid", "sleeper.pid"} {
+			contents, _ := os.ReadFile(filepath.Join(ws.Root(), name))
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(contents))); err == nil && pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	return `(trap '' TERM; sleep 30 & echo $! > sleeper.pid; wait; touch late) & echo $! > descendant.pid; ` +
+		`while [ ! -s sleeper.pid ]; do sleep 0.01; done; touch ready; `
+}
+
+func waitExecPIDs(t *testing.T, ws *Workspace) []int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err := os.Stat(filepath.Join(ws.Root(), "ready"))
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) || time.Now().After(deadline) {
+			t.Fatalf("descendants did not publish readiness: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var pids []int
+	for _, name := range []string{"descendant.pid", "sleeper.pid"} {
+		contents, err := os.ReadFile(filepath.Join(ws.Root(), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+		if err != nil || pid <= 0 {
+			t.Fatalf("invalid PID in %s: %q (%v)", name, contents, err)
+		}
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+func waitExecStopped(t *testing.T, pid int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		err := syscall.Kill(pid, 0)
+		if err == syscall.ESRCH {
+			return
+		}
+		if err != nil {
+			t.Fatalf("probe descendant %d: %v", pid, err)
+		}
+		// Linux can retain a killed orphan as a zombie; it cannot mutate files.
+		ps, err := exec.LookPath("ps")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := exec.CommandContext(ctx, ps, "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+		text := strings.TrimSpace(string(state))
+		if err == nil && strings.HasPrefix(text, "Z") {
+			return
+		}
+		var exitErr *exec.ExitError
+		if text == "" && (err == nil || (errors.As(err, &exitErr) && exitErr.ExitCode() == 1)) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("read descendant %d state: %v", pid, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("descendant %d is still alive after cleanup", pid)
 }
 
 func TestExec_SuccessfulCommandReportsItsOutput(t *testing.T) {
@@ -204,8 +289,9 @@ func TestExec_TimeoutLeavesUncertainEffects(t *testing.T) {
 
 func TestExec_InheritedPipeWaitFailureIsNotStartFailure(t *testing.T) {
 	ws := testWorkspace(t, nil)
-	// The shell exits successfully, while its child holds stdout open and plans a later write.
-	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell("(sleep 2; touch late) & exit 0"), ".", 5000))
+	// The shell exits successfully, while its descendants hold output open.
+	script := execDescendantScript(t, ws) + "exit 0"
+	outcome := runTool(t, execTool{ws: ws, outputWait: 150 * time.Millisecond}, execArgsJSON(shell(script), ".", 5000))
 	var got execResult
 	if err := json.Unmarshal(outcome.Data, &got); err != nil {
 		t.Fatal(err)
@@ -216,7 +302,9 @@ func TestExec_InheritedPipeWaitFailureIsNotStartFailure(t *testing.T) {
 	if got.ExitCode == nil || *got.ExitCode != 0 || !got.OutputMayBeIncomplete || got.StdoutTruncated || got.StderrTruncated {
 		t.Fatalf("the shell exited but output may be incomplete without byte trimming: %+v", got)
 	}
-	time.Sleep(1200 * time.Millisecond)
+	for _, pid := range waitExecPIDs(t, ws) {
+		waitExecStopped(t, pid)
+	}
 	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
 		t.Fatalf("descendant survived wait failure: %v", err)
 	}
@@ -224,7 +312,8 @@ func TestExec_InheritedPipeWaitFailureIsNotStartFailure(t *testing.T) {
 
 func TestExec_NonzeroExitWithInheritedPipeLeavesUncertainEffects(t *testing.T) {
 	ws := testWorkspace(t, nil)
-	outcome := runTool(t, NewExecTool(ws), execArgsJSON(shell("(sleep 2; touch late) & exit 3"), ".", 5000))
+	script := execDescendantScript(t, ws) + "exit 3"
+	outcome := runTool(t, execTool{ws: ws, outputWait: 150 * time.Millisecond}, execArgsJSON(shell(script), ".", 5000))
 	var got execResult
 	if err := json.Unmarshal(outcome.Data, &got); err != nil {
 		t.Fatal(err)
@@ -232,7 +321,9 @@ func TestExec_NonzeroExitWithInheritedPipeLeavesUncertainEffects(t *testing.T) {
 	if outcome.Code != "output_wait_failed" || outcome.Effect != EffectUnknown || got.ExitCode == nil || *got.ExitCode != 3 || !got.OutputMayBeIncomplete || got.StdoutTruncated || got.StderrTruncated {
 		t.Fatalf("nonzero leader with live group: code=%s effect=%s data=%+v", outcome.Code, outcome.Effect, got)
 	}
-	time.Sleep(1200 * time.Millisecond)
+	for _, pid := range waitExecPIDs(t, ws) {
+		waitExecStopped(t, pid)
+	}
 	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
 		t.Fatalf("descendant survived a nonzero exit: %v", err)
 	}
@@ -281,8 +372,16 @@ func TestLoop_InheritedPipeWaitFailureStopsTheRun(t *testing.T) {
 	if result.Status != StatusEffectUnknown || result.Steps != 1 || runs != 0 {
 		t.Fatalf("status=%s steps=%d subsequent calls=%d", result.Status, result.Steps, runs)
 	}
-	if got := results(run); len(got) != 2 || got[1].Outcome.Code != "not_executed" {
+	got := results(run)
+	if len(got) != 2 || got[1].Outcome.Code != "not_executed" {
 		t.Fatalf("unexpected results: %+v", got)
+	}
+	var first execResult
+	if err := json.Unmarshal(got[0].Outcome.Data, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.DurationMS < 1000 {
+		t.Fatalf("default output wait returned before one second: %+v", first)
 	}
 }
 
@@ -373,14 +472,17 @@ func TestExec_InvalidArguments(t *testing.T) {
 
 func TestExec_TimeoutStopsDescendantDelayedMutation(t *testing.T) {
 	ws := testWorkspace(t, nil)
-	outcome := runTool(t, execTool{ws: ws}, execArgsJSON(shell("touch started; (sleep 1; touch late) & sleep 30"), ".", 300))
+	script := execDescendantScript(t, ws) + "touch started; wait"
+	outcome := runTool(t, execTool{ws: ws}, execArgsJSON(shell(script), ".", 300))
 	if outcome.Code != "timeout" || outcome.Effect != EffectUnknown {
 		t.Fatalf("got %s (%s) effect=%s", outcome.Code, outcome.Message, outcome.Effect)
 	}
 	if _, err := os.Stat(filepath.Join(ws.Root(), "started")); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(1100 * time.Millisecond)
+	for _, pid := range waitExecPIDs(t, ws) {
+		waitExecStopped(t, pid)
+	}
 	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
 		t.Fatalf("descendant survived timeout: %v", err)
 	}
@@ -389,14 +491,30 @@ func TestExec_TimeoutStopsDescendantDelayedMutation(t *testing.T) {
 func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
 	t.Parallel()
 	ws := testWorkspace(t, nil)
+	script := execDescendantScript(t, ws) + "wait"
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(100 * time.Millisecond)
+	var outcome ToolOutcome
+	var err error
+	var execution sync.WaitGroup
+	execution.Add(1)
+	defer func() {
 		cancel()
+		execution.Wait()
 	}()
-
-	outcome, err := NewExecTool(ws).Execute(ctx,
-		json.RawMessage(execArgsJSON(shell("(sleep 1; touch late) & sleep 30"), ".", 130000)))
+	go func() {
+		defer execution.Done()
+		outcome, err = NewExecTool(ws).Execute(ctx,
+			json.RawMessage(execArgsJSON(shell(script), ".", 130000)))
+	}()
+	// Both children ignore TERM before readiness, so cleanup needs KILL.
+	pids := waitExecPIDs(t, ws)
+	for _, pid := range pids {
+		if err := syscall.Kill(pid, 0); err != nil {
+			t.Fatalf("descendant %d was not alive before cancellation: %v", pid, err)
+		}
+	}
+	cancel()
+	execution.Wait()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +528,9 @@ func TestExec_CancellationLeavesUncertainEffects(t *testing.T) {
 	if got.TimeoutMS != 130000 {
 		t.Fatalf("explicit long timeout was capped: %+v", got)
 	}
-	time.Sleep(1100 * time.Millisecond)
+	for _, pid := range pids {
+		waitExecStopped(t, pid)
+	}
 	if _, err := os.Stat(filepath.Join(ws.Root(), "late")); !os.IsNotExist(err) {
 		t.Fatalf("descendant survived cancellation: %v", err)
 	}

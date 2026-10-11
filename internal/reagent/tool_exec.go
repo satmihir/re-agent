@@ -40,6 +40,8 @@ type execTool struct {
 	session *Session
 	// minTimeout is minExecTimeout; tests set zero to reach a timeout quickly.
 	minTimeout time.Duration
+	// outputWait bounds post-exit pipe reads; zero keeps the one-second default.
+	outputWait time.Duration
 }
 
 // NewExecTool returns the process execution tool. It is registered only in exec
@@ -274,7 +276,11 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 		runErr = command.Wait()
 		// v0 §9: only a reader still waiting for EOF reveals a held pipe;
 		// process-group probes mistake unreaped Linux zombies for live children.
-		pipeDeadline := time.Now().Add(time.Second)
+		outputWait := t.outputWait
+		if outputWait == 0 {
+			outputWait = time.Second
+		}
+		pipeDeadline := time.Now().Add(outputWait)
 		if stdoutRead.SetReadDeadline(pipeDeadline) != nil {
 			outputIncomplete = true
 			stdoutRead.Close()
