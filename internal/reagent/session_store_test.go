@@ -12,7 +12,7 @@ import (
 
 func testSessionStore(t *testing.T, id string) *sessionStore {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	st, err := openSessionStore(id, true)
 	if err != nil {
 		t.Fatal(err)

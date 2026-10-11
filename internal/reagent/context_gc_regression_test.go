@@ -219,7 +219,7 @@ func TestContextGC_SecondPassRebuildsSwitchedViewAndFork(t *testing.T) {
 }
 
 func TestContextGC_CLIResumeUsesSavedGCViewAndRecallDeclaration(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	s := gcFixture(t, openaiName)
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}}
 	out, _ := okOutcome(strings.Repeat("OLD", 5000))

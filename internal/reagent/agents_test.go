@@ -25,7 +25,7 @@ func (m agentTestModel) Generate(ctx context.Context, req ModelRequest) (ModelRe
 
 func agentFixture(t *testing.T) *Session {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	ws, err := OpenWorkspace(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

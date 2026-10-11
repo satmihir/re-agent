@@ -233,7 +233,7 @@ func TestGitInspect_ReadAgentReviewAndRootPlan(t *testing.T) {
 }
 
 func TestGitInspect_CLIPlanAgentsOff(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("API_PROXY_URL", "")
 	t.Setenv("API_PROXY_PROVIDER", "")
 	ws := gitInspectTestRepo(t)

@@ -54,7 +54,7 @@ func TestSessionResume_RoundTripHandoffPlanSummaryAndDedup(t *testing.T) {
 }
 
 func TestChat_ResetPrintsNewIDAndScriptedHasNone(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "test")
 	var out, errOut bytes.Buffer
 	if code := Main(context.Background(), []string{"chat", "--workspace", t.TempDir()}, strings.NewReader("/reset\n/exit\n"), &out, &errOut); code != exitOK {

@@ -73,6 +73,7 @@ class Fixture:
     def env(self):
         env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
         env["HOME"] = self.home
+        env["XDG_CACHE_HOME"] = os.path.join(self.home, ".cache")
         env["PATH"] = os.path.join(self.home, "bin") + os.pathsep + os.environ["PATH"]
         return env
 

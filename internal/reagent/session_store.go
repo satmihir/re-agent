@@ -83,7 +83,11 @@ func checkpointDirectory(id string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("find user cache: %w", err)
 	}
-	return filepath.Join(root, "reagent", "sessions", id), nil
+	dir := filepath.Join(root, "reagent", "sessions", id)
+	if testCachePath != nil {
+		testCachePath(dir)
+	}
+	return dir, nil
 }
 
 func privateDirectory(path string, create bool) error {
@@ -139,6 +143,10 @@ func (st *sessionStore) close() {
 }
 
 func (st *sessionStore) save(cp chatCheckpoint) error {
+	if testCachePath != nil {
+		testCachePath(st.dir)
+		testCachePath(filepath.Join(st.dir, "checkpoint.json"))
+	}
 	cp.Version = checkpointVersion
 	var state bytes.Buffer
 	if err := gob.NewEncoder(&state).Encode(cp); err != nil {
@@ -179,6 +187,10 @@ func (st *sessionStore) save(cp chatCheckpoint) error {
 }
 
 func (st *sessionStore) load(id string) (chatCheckpoint, error) {
+	if testCachePath != nil {
+		testCachePath(st.dir)
+		testCachePath(filepath.Join(st.dir, "checkpoint.json"))
+	}
 	var cp chatCheckpoint
 	path := filepath.Join(st.dir, "checkpoint.json")
 	info, err := os.Lstat(path)

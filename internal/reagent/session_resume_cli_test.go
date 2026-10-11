@@ -16,7 +16,7 @@ import (
 )
 
 func TestChat_ResumeRestoresNativeHistoryAndID(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("API_PROXY_PROVIDER", "openai")
 	var requests []string
@@ -69,7 +69,7 @@ func TestChat_ResumeRestoresNativeHistoryAndID(t *testing.T) {
 }
 
 func TestChat_ResumeRejectsConflictsAndMissingCredentials(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "test")
 	root := t.TempDir()
 	var out, errOut bytes.Buffer
@@ -91,7 +91,7 @@ func TestChat_ResumeRejectsConflictsAndMissingCredentials(t *testing.T) {
 }
 
 func TestChat_ResumeStartsAtLaunchNotLastActiveWorkspace(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "test")
 	launch, elsewhere := t.TempDir(), t.TempDir()
 	var out, errOut bytes.Buffer
@@ -121,7 +121,7 @@ func TestChat_ResumeStartsAtLaunchNotLastActiveWorkspace(t *testing.T) {
 }
 
 func TestChat_AgentsResumeEndsRosterWithoutRestart(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("API_PROXY_PROVIDER", "openai")
 	var mu sync.Mutex
