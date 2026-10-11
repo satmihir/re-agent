@@ -192,7 +192,11 @@ func (c *conversation) switchTo(info modelInfo) {
 	previous := c.session
 	c.session = NewSession(cfg, model, c.trace, c.progress)
 	c.session.snapshot, c.session.planMode = previous.snapshot, previous.planMode
-	c.session.childModel = previous.childModel
+	c.session.agentModel = previous.agentModel
+	c.session.agentProxy = previous.agentProxy
+	c.session.agentTraceDir = previous.agentTraceDir
+	c.session.agentReceipts = previous.agentReceipts
+	c.session.agents = previous.agents
 	c.session.launchInstructions = previous.launchInstructions
 	c.session.workspaceConsent = previous.workspaceConsent
 	if previous.workspace != nil {
@@ -911,7 +915,7 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 
 	if c.shouldAutoCompact() {
 		if c.session.store != nil {
-			pending := &UserTurn{Text: text, Plan: planMarkerFor(c.session.history, c.session.planMode)}
+			pending := &UserTurn{Text: text, Roster: c.session.rosterJSON(), Plan: planMarkerFor(c.session.history, c.session.planMode)}
 			if c.session.snapshot != nil {
 				pending.Workspace = c.session.snapshot(ctx, c.session.cfg.WorkspacePath, c.session.refsOnlySnapshot(c.session.cfg.WorkspacePath))
 			}

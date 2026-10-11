@@ -303,6 +303,14 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 		summary = markText + ansiDim + summary[len(markText):] + ansiReset
 	}
 	fmt.Fprintln(d.w, summary)
+	if result.TreeCost != nil {
+		cost := result.TreeCost
+		known := ""
+		if !cost.Known || cost.UnreportedAttempts > 0 {
+			known = " (incomplete)"
+		}
+		fmt.Fprintf(d.w, "  tree cost: %s input · %s output tokens%s\n", formatCount(cost.InputTokens), formatCount(cost.OutputTokens), known)
+	}
 	var reads []string
 	if len(d.readFiles) > 0 {
 		reads = append(reads, "read "+plural(len(d.readFiles), "file", "files"))

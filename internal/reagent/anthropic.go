@@ -181,6 +181,9 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 			if len(entry.User.Workspace) > 0 {
 				appendUserText(workspacePreamble + string(entry.User.Workspace))
 			}
+			if len(entry.User.Roster) > 0 {
+				appendUserText(agentRosterPreamble + string(entry.User.Roster))
+			}
 			if marker := planText(entry.User.Plan); marker != "" {
 				appendUserText(marker)
 			}

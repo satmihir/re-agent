@@ -88,7 +88,7 @@ func planMarkerFor(history []Entry, on bool) string {
 		return "on"
 	}
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Kind == EntryUser {
+		if history[i].Kind == EntryUser && history[i].User.Source == "" {
 			if history[i].User.Plan == "on" {
 				return "ended"
 			}

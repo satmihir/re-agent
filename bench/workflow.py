@@ -67,7 +67,7 @@ def proof(record, candidate):
     attached(record["log"], candidate)
 
 
-def trace(review, candidate):
+def trace(review, candidate, version=1):
     path = attached(review["trace"], candidate)
     try:
         with path.open("r", encoding="utf-8") as stream:
@@ -88,11 +88,44 @@ def trace(review, candidate):
          set(history[0]) == {"kind", "user"} and isinstance(history[0]["user"].get("text"), str),
          "child first request contains extra history")
     task = history[0]["user"]["text"]
-    need(review["checkpoint_id"] in task and review["child_snapshot_id"] in task,
+    subset_key = "child_snapshot_id" if version == 1 else "review_snapshot_id"
+    need(review["checkpoint_id"] in task and review[subset_key] in task,
          "child first request lacks checkpoint or approved snapshot identity")
+    if version == 2:
+        need(all(event.get("parent_id") == review["parent_id"] and event.get("agent_id") == review["agent_id"] for event in events),
+             "agent trace lacks matching parent identity")
+        expected = {file["path"]: file["sha256"] for file in review["review_files"]}
+        observed, totals = {}, {}
+        for event in events:
+            need(event.get("type") not in ("agent.spawn", "agent.send", "agent.result"),
+                 "reviewer delegated or received another agent's findings")
+            if event.get("type") != "tool.finished":
+                continue
+            tool = event.get("data", {})
+            outcome = tool.get("outcome", {})
+            if tool.get("name") == "read_file" and outcome.get("ok"):
+                data = outcome.get("data", {})
+                path = data.get("path")
+                need(path in expected and data.get("sha256") == expected[path],
+                     "reviewer read live bytes outside or different from checkpoint")
+                total = data.get("total_lines")
+                lines = data.get("lines")
+                need(type(total) is int and total >= 0 and isinstance(lines, list) and
+                     totals.get(path, total) == total, "invalid or inconsistent read coverage")
+                totals[path] = total
+                coverage = observed.setdefault(path, set())
+                for line in lines:
+                    number = line.get("number")
+                    need(type(number) is int and 1 <= number <= total, "invalid read line number")
+                    coverage.add(number)
+        need(set(observed) == set(expected) and all(len(observed[path]) == totals[path] for path in observed),
+             "reviewer did not inspect every selected file completely")
+        terminal = events[-1]["data"]
+        need(terminal.get("reply") == review["result"].get("reply"),
+             "agent result differs from terminal trace")
 
 
-def review_files(review, checkpoint):
+def review_files(review, checkpoint, version=1):
     files = review["review_files"]
     need(isinstance(files, list) and files and len(files) <= 20, "review requires 1–20 selected files")
     selected = set()
@@ -104,14 +137,16 @@ def review_files(review, checkpoint):
         selected.add(path)
     need(any(checkpoint[path]["role"] == "test" for path in selected), "review omitted every test")
     raw = "".join(f"{len(f['path'].encode())}:{f['path']}:{f['sha256']}\n" for f in files).encode()
-    need(hashlib.sha256(raw).hexdigest() == review["child_snapshot_id"], "review subset digest differs from child snapshot")
+    subset_key = "child_snapshot_id" if version == 1 else "review_snapshot_id"
+    need(hashlib.sha256(raw).hexdigest() == review[subset_key], "review subset digest differs from selected snapshot")
     return files
 
 
 def audit(contract, record, candidate):
     keys(contract, {"version", "task_id", "reference_revision", "objective", "tests_first",
                     "reviewers_per_gate", "reference_files", "scaffolding_paths", "required_checks", "comparison_required"}, label="controller contract")
-    need(contract["version"] == 1 and isinstance(contract["task_id"], str) and contract["task_id"] and
+    version = contract["version"]
+    need(version in (1, 2) and isinstance(contract["task_id"], str) and contract["task_id"] and
          isinstance(contract["objective"], str) and contract["objective"].strip() and
          isinstance(contract["reference_revision"], str) and behavior.REVISION.fullmatch(contract["reference_revision"]) and
          contract["tests_first"] is True and type(contract["comparison_required"]) is bool and
@@ -137,7 +172,7 @@ def audit(contract, record, candidate):
 
     keys(record, {"version", "task_id", "reference_revision", "run_status", "requirements_map", "checkpoints", "reviews",
                   "dispositions", "checks", "final_snapshot_id", "final_tree", "test_changes"}, {"comparison"}, "task evidence")
-    need(record["version"] == 1 and record["task_id"] == contract["task_id"] and
+    need(record["version"] == version and record["task_id"] == contract["task_id"] and
          record["reference_revision"] == contract["reference_revision"] and
          isinstance(record["run_status"], str) and record["run_status"], "task evidence does not match contract")
     mapping = behavior.read_json(attached(record["requirements_map"], candidate))
@@ -195,30 +230,48 @@ def audit(contract, record, candidate):
          tree_files == checkpoints[tree_id][2], "final tree differs from reviewed implementation")
 
     need(isinstance(record["reviews"], list) and isinstance(record["dispositions"], list), "missing review evidence")
-    sessions, runs, grouped, findings = set(), set(), {}, {}
+    sessions, runs, grouped, findings, reports = set(), set(), {}, {}, {}
     for review in record["reviews"]:
-        keys(review, {"gate", "checkpoint_id", "child_snapshot_id", "review_files", "session_id", "run_id", "trace", "result"}, label="review")
+        subset_key = "child_snapshot_id" if version == 1 else "review_snapshot_id"
+        required_review = {"gate", "checkpoint_id", subset_key, "review_files", "session_id", "run_id", "trace", "result"}
+        if version == 2:
+            required_review |= {"agent_id", "parent_id"}
+        keys(review, required_review, label="review")
+        if version == 2:
+            need(isinstance(review["agent_id"], str) and review["agent_id"] and
+                 isinstance(review["parent_id"], str) and review["parent_id"], "review lacks agent identity")
         gate, cp_id, run_id = review["gate"], review["checkpoint_id"], review["run_id"]
         need(cp_id in checkpoints and gate == checkpoints[cp_id][1] and
              isinstance(review["session_id"], str) and review["session_id"] not in sessions and
              isinstance(run_id, str) and run_id not in runs and
-             isinstance(review["child_snapshot_id"], str) and behavior.DIGEST.fullmatch(review["child_snapshot_id"]),
+             isinstance(review[subset_key], str) and behavior.DIGEST.fullmatch(review[subset_key]),
              "review is stale, duplicated or lacks a fresh child identity")
         sessions.add(review["session_id"])
         runs.add(run_id)
-        files = review_files(review, checkpoints[cp_id][2])
+        files = review_files(review, checkpoints[cp_id][2], version)
         group = grouped.setdefault(cp_id, [])
         if group:
-            need(files == group[0]["review_files"] and review["child_snapshot_id"] == group[0]["child_snapshot_id"],
+            need(files == group[0]["review_files"] and review[subset_key] == group[0][subset_key],
                  "reviewers at the same checkpoint saw different evidence")
         group.append(review)
-        trace(review, candidate)
+        trace(review, candidate, version)
         outcome = review["result"]
-        keys(outcome, {"status", "report_valid", "snapshot_id", "report"}, label="child result")
-        need(outcome["status"] == "completed" and outcome["report_valid"] is True and
-             outcome["snapshot_id"] == review["child_snapshot_id"], "child did not return valid completed report")
-        report = outcome["report"]
+        if version == 1:
+            # Historical frozen-child records remain auditable, not generatable by --agents.
+            keys(outcome, {"status", "report_valid", "snapshot_id", "report"}, label="child result")
+            need(outcome["status"] == "completed" and outcome["report_valid"] is True and
+                 outcome["snapshot_id"] == review[subset_key], "child did not return valid completed report")
+            report = outcome["report"]
+        else:
+            keys(outcome, {"status", "reply"}, {"reason", "steps", "tool_calls", "usage", "trace_path", "effects", "resumable"}, "agent result")
+            need(outcome["status"] == "completed" and isinstance(outcome["reply"], str) and
+                 len(outcome["reply"].encode()) <= 16384, "agent did not return a completed bounded report")
+            try:
+                report = json.loads(outcome["reply"])
+            except ValueError as exc:
+                raise Incomplete("agent report is not JSON") from exc
         keys(report, {"summary", "findings", "verdict"}, label="review report")
+        reports[run_id] = report
         need(isinstance(report["summary"], str) and report["summary"].strip() and
              report["verdict"] in ("no_findings", "concerns") and
              isinstance(report["findings"], list) and len(report["findings"]) <= 20,
@@ -258,8 +311,7 @@ def audit(contract, record, candidate):
     need(addressed == set(findings), "unresolved reviewer finding")
     for cp_id in (latest["tests"], latest["implementation"]):
         for review in grouped.get(cp_id, []):
-            need(not review["result"]["report"]["findings"] or
-                 all(f["severity"] in ("minor", "low", "info") for f in review["result"]["report"]["findings"]),
+            need(all(f["severity"] in ("minor", "low", "info") for f in reports[review["run_id"]]["findings"]),
                  "latest checkpoint still has blocking findings")
 
     need(isinstance(record["checks"], list), "missing final checks")

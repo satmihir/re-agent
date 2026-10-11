@@ -28,8 +28,8 @@ type Config struct {
 	MaxToolCalls        int
 	ModelRetryWindow    time.Duration
 	InRunCompact        bool
-	ChildRuns           bool
-	child               bool
+	Agents              bool
+	agent               bool
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -62,19 +62,22 @@ type Run struct {
 	routingOff                                                      bool
 	routingPostSwitch                                               bool
 	// v0 §10.4: the submitted task survives lossy in-run summaries.
-	task         *UserTurn
-	window       int64
-	compactions  int
-	compactOff   bool
-	children     childState
-	reportRepair bool
+	task           *UserTurn
+	window         int64
+	compactions    int
+	compactOff     bool
+	agentCostStart Usage
 }
 
 func newRun(session *Session, runID string) *Run {
-	return &Run{
+	r := &Run{
 		session: session, cfg: session.cfg, model: session.model, trace: session.trace,
 		runID: runID, usage: Usage{Known: true}, window: contextWindow(session.cfg.Model),
 	}
+	if session.agents != nil {
+		r.agentCostStart = session.agents.usage()
+	}
+	return r
 }
 
 // NewID returns a random local identifier for a session or a run.
@@ -110,7 +113,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"tools":               r.cfg.Registry.Specs(),
 		"initial_history":     s.history,
 	})
-	r.task = &UserTurn{Text: prompt, Workspace: workspace, Plan: plan}
+	r.task = &UserTurn{Text: prompt, Workspace: workspace, Roster: s.rosterJSON(), Plan: plan}
 	s.history = append(s.history, Entry{Kind: EntryUser, User: r.task})
 	s.pendingSubmission = nil
 	if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
@@ -123,6 +126,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.finish(StatusCancelled, "cancelled before the next model request", "")
 		}
 
+		r.deliverAgents()
 		previousModel := r.cfg.Model
 		if err := r.routeNext(ctx); err != nil {
 			r.resumable = true
@@ -138,14 +142,14 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 			return r.persistenceFailure(err)
 		}
-		if s.isChild && r.steps >= r.cfg.MaxSteps {
-			return r.finish(StatusLimitExceeded, "child model step budget exhausted", "")
+		if s.agentID != "" && r.steps >= r.cfg.MaxSteps {
+			return r.finish(StatusLimitExceeded, "agent model step budget exhausted", "")
 		}
-		if s.childBudget != nil && r.usage.Known && s.childBudget.usage.Known &&
-			r.usage.InputTokens+r.usage.OutputTokens+s.childBudget.usage.InputTokens+s.childBudget.usage.OutputTokens >= maxChildTokens {
-			return r.finish(StatusLimitExceeded, "reported child usage threshold reached", "")
+		if s.agentID != "" && agentTokenLimit(r.usage) {
+			return r.finish(StatusLimitExceeded, "agent reported token cap reached", "")
 		}
 		r.steps++
+		r.meterAgent(Usage{Known: true})
 		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
 		r.trace.Write("model.requested", r.steps, req)
 
@@ -158,8 +162,12 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			// A failed request can still have cost tokens, so account what the
 			// provider reported before stopping.
 			status, usage := classifyModelError(err)
+			if ctx.Err() != nil {
+				status = StatusCancelled
+			}
 			s.lastRequest = usage
 			r.usage.Add(usage)
+			r.meterAgent(usage)
 			r.recordRouteUsage(usage)
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": err.Error()})
 			// Nothing was appended, so the transcript still ends where this
@@ -177,8 +185,10 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			}
 		}
 		r.usage.Add(resp.Usage)
+		r.meterAgent(resp.Usage)
 		if resp.retryUsage != (Usage{}) {
 			r.usage.Add(resp.retryUsage)
+			r.meterAgent(resp.retryUsage)
 		}
 		if reason := r.validateResponse(resp); reason != "" {
 			r.trace.Write("model.failed", r.steps, map[string]any{"error": reason, "response": resp})
@@ -197,23 +207,21 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 
 		calls := toolCalls(resp)
 		if len(calls) == 0 {
+			ids := s.runningAgents()
+			if len(ids) > 0 {
+				message := strings.Join(ids, ", ") + " still running; wait for their results before finishing."
+				s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Source: "agent", Text: message}})
+				_, _ = s.waitAgents(ctx, ids)
+				r.deliverAgents()
+				continue
+			}
+			if r.deliverAgents() {
+				continue
+			}
 			if text := blockText(resp, BlockRefusal); text != "" {
 				return r.finish(StatusRefused, "the model refused the task", text)
 			}
 			text := blockText(resp, BlockText)
-			if s.isChild {
-				if _, err := childReport(text); err != nil {
-					if r.reportRepair {
-						return r.finish(StatusProtocolError, "invalid child report after correction: "+err.Error(), "")
-					}
-					if r.steps >= r.cfg.MaxSteps {
-						return r.finish(StatusLimitExceeded, "no model step remains to correct the child report: "+err.Error(), "")
-					}
-					r.reportRepair = true
-					s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: "Your report was invalid: " + err.Error() + " Return only a report in the exact JSON format specified in the initial task. Do not repeat any tools."}})
-					continue // v0 §3: one report correction, never a tool retry.
-				}
-			}
 			return r.finish(StatusCompleted, "", text)
 		}
 		if text := blockText(resp, BlockText); text != "" {
@@ -411,9 +419,21 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 		Steps: r.steps, ToolCalls: r.calls, Usage: r.usage, TracePath: r.trace.Path(),
 		Effects: r.effects, Resumable: r.resumable, RouterUsage: r.routerUsage,
 	}
-	if r.children.children > 0 {
-		result.ChildUsage = &r.children.usage
-		result.Children, result.ChildSteps, result.ChildCalls, result.ChildAttempts = r.children.children, r.children.steps, r.children.calls, r.children.attempts
+	if r.session.agents != nil {
+		if status != StatusCompleted && status != StatusRefused {
+			r.session.stopAgents()
+			r.deliverAgents()
+		}
+		if r.session.agentID == "" {
+			cost := r.session.agents.usage()
+			cost.InputTokens -= r.agentCostStart.InputTokens
+			cost.CachedInputTokens -= r.agentCostStart.CachedInputTokens
+			cost.OutputTokens -= r.agentCostStart.OutputTokens
+			cost.ReasoningTokens -= r.agentCostStart.ReasoningTokens
+			cost.UnreportedAttempts -= r.agentCostStart.UnreportedAttempts
+			cost.Add(r.usage)
+			result.TreeCost = &cost
+		}
 	}
 	r.trace.Write("run.finished", r.steps, result)
 	if r.persistenceErr != nil {

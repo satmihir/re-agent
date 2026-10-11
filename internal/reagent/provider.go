@@ -152,6 +152,9 @@ func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, 
 // collected by the caller before encoding (v0 §6 amendment, 2026-09-27).
 func PreviewRequest(cfg Config, prompt string, workspace json.RawMessage) ([]byte, error) {
 	history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: prompt, Workspace: workspace, Plan: planMarkerFor(nil, cfg.PlanMode)}}}
+	if cfg.Agents {
+		history[0].User.Roster = encodeAgentRoster(nil)
+	}
 	return encodeRequest(cfg, BuildContext(cfg, RequestScope{Step: 1}, history))
 }
 

@@ -19,6 +19,8 @@ type event struct {
 	Seq           int    `json:"seq"`
 	SessionID     string `json:"session_id"`
 	RunID         string `json:"run_id"`
+	ParentID      string `json:"parent_id,omitempty"`
+	AgentID       string `json:"agent_id,omitempty"`
 	Time          string `json:"time"`
 	Type          string `json:"type"`
 	Step          int    `json:"step"`
@@ -33,13 +35,16 @@ type event struct {
 // recording for that run, and lets the run continue (v1 §16.5 restores
 // fail-closed recording).
 type Trace struct {
-	warn      io.Writer
-	sessionID string
-	runID     string
-	path      string
-	file      *os.File
-	seq       int
-	off       bool
+	warn       io.Writer
+	parentID   string
+	agentID    string
+	persistent bool
+	sessionID  string
+	runID      string
+	path       string
+	file       *os.File
+	seq        int
+	off        bool
 }
 
 // NewTrace makes a recorder with nothing open. Nothing is recorded until Open.
@@ -58,6 +63,10 @@ func OpenTrace(path, sessionID, runID string, warn io.Writer) *Trace {
 // failure to create the file is reported once and recording for this run is
 // skipped; the next Open tries again.
 func (t *Trace) Open(sessionID, runID, path string) {
+	if t.persistent && t.path != "" {
+		t.sessionID, t.runID = sessionID, runID
+		return
+	}
 	t.Close()
 	t.sessionID, t.runID, t.path = sessionID, runID, path
 	t.seq, t.off = 0, false
@@ -95,6 +104,8 @@ func (t *Trace) Write(kind string, step int, data any) {
 		Seq:           t.seq,
 		SessionID:     t.sessionID,
 		RunID:         t.runID,
+		ParentID:      t.parentID,
+		AgentID:       t.agentID,
 		Time:          time.Now().UTC().Format(time.RFC3339Nano),
 		Type:          kind,
 		Step:          step,
@@ -119,6 +130,9 @@ func (t *Trace) Path() string {
 
 // Close finishes the current run's file, if one is open.
 func (t *Trace) Close() {
+	if t.persistent && !t.off {
+		return
+	}
 	if t.file != nil {
 		t.file.Close()
 		t.file = nil

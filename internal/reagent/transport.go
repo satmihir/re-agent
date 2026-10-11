@@ -252,9 +252,6 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 	if ctx.Err() != nil {
 		return 0, nil, "", ctx.Err()
 	}
-	if meter, ok := ctx.Value(childAttemptKey{}).(*childState); ok && !meter.admitAttempt() {
-		return 0, nil, "", &ModelError{Status: StatusLimitExceeded, Message: "aggregate child HTTP attempts exhausted"}
-	}
 	digest := sha256.Sum256(body)
 	t.trace.Write("api.attempt.started", step, map[string]any{
 		"attempt":        attempt,
