@@ -117,3 +117,40 @@ func TestTrace_WrittenEventTypesDocumented(t *testing.T) {
 		t.Fatal("found no event writers")
 	}
 }
+
+func TestTrace_AgentEventsAreParentLocalAndTraceContinues(t *testing.T) {
+	s := agentFixture(t)
+	s.model = NewScriptedModel(turn(spawnBlock("spawn", "private-child-task", "named")), turn(callBlock("wait", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))
+	result := agentTurn(t, s, "task")
+	childPath := s.agentRoster()[0].TracePath
+	s.model = NewScriptedModel(turn(callBlock("send", "send", `{"name":"named","message":"follow-up"}`)), turn(callBlock("wait2", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))
+	second := agentTurn(t, s, "later")
+	kinds := map[string]int{}
+	for _, path := range []string{result.TracePath, second.TracePath} {
+		for _, e := range readEvents(t, path) {
+			kinds[e.Type]++
+			if e.ParentID != "" {
+				t.Fatal("root trace marked as child")
+			}
+			if e.Type == "model.requested" {
+				data := e.Data.(map[string]any)
+				if data["scope"].(map[string]any)["session_id"] != s.ID {
+					t.Fatal("child request leaked to parent trace")
+				}
+			}
+		}
+	}
+	if kinds["agent.spawn"] != 1 || kinds["agent.send"] != 1 || kinds["agent.result"] != 2 {
+		t.Fatalf("parent events %+v", kinds)
+	}
+	runs := map[string]bool{}
+	for i, e := range readEvents(t, childPath) {
+		if e.Seq != i+1 || e.ParentID != "root" {
+			t.Fatalf("agent envelope %+v", e)
+		}
+		runs[e.RunID] = true
+	}
+	if len(runs) != 2 || s.agentRoster()[0].TracePath != childPath {
+		t.Fatal("named agent did not keep one trace")
+	}
+}

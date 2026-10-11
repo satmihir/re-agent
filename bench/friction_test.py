@@ -58,6 +58,15 @@ class FrictionTest(unittest.TestCase):
         self.assertEqual(review["build"], "unknown")
         self.assertEqual(review["reply"], "No other friction.")
 
+    def test_agent_lifetime_traces_do_not_become_operator_reports_or_reviews(self):
+        events = fixture("report") + fixture("review")
+        for event in events:
+            event.update(agent_id="t1", parent_id="root")
+        path = self.write_trace("agent", events)
+        records, incomplete = friction.read_trace(path)
+        self.assertEqual(records, [])
+        self.assertFalse(incomplete)
+
     def test_initial_history_resolves_calls_without_reemitting_reports(self):
         events = fixture("report")
         events[0]["data"]["initial_history"] = [

@@ -50,6 +50,9 @@ def read_trace(path):
                     event = json.loads(line)
                     if not isinstance(event, dict) or event.get("schema_version") != 1:
                         raise ValueError("expected trace schema_version 1")
+                    # Agent lifetime traces can contain several turns; agents have no friction reporter.
+                    if event.get("agent_id"):
+                        continue
                     kind, data = event["type"], event["data"]
                     if not isinstance(data, dict):
                         raise ValueError("event data must be an object")

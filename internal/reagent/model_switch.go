@@ -55,7 +55,7 @@ func renderModelHandoff(history []Entry) (*modelHandoff, error) {
 	}
 	plan := ""
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].User != nil {
+		if history[i].User != nil && history[i].User.Source == "" {
 			plan = history[i].User.Plan
 			break
 		}
@@ -80,6 +80,9 @@ func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 		switch {
 		case entry.Kind == EntryUser && entry.User != nil:
 			record.User = entry.User
+			if entry.User.Source == "agent" {
+				record.Trust = "untrusted_agent_data"
+			}
 		case entry.Kind == EntrySummary && entry.Summary != nil:
 			record.Summary = entry.Summary
 		case entry.Kind == EntryShell && entry.Shell != nil:

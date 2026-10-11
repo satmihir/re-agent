@@ -12,8 +12,8 @@ import (
 //go:embed instructions.txt
 var defaultInstructions string
 
-//go:embed child_instructions.txt
-var childInstructions string
+//go:embed agent_instructions.txt
+var agentInstructions string
 
 const frictionInstructions = `
 # Friction reports
@@ -61,8 +61,8 @@ func instructions(cfg Config) string {
 	// The model named here is the one requested. A provider may serve a dated
 	// snapshot of it, which the trace records separately from the response.
 	fixed := defaultInstructions
-	if cfg.child {
-		fixed = childInstructions // v0 §6: child rules omit parent-only tools and state.
+	if cfg.agent {
+		fixed = agentInstructions
 	}
 	text := fixed + fmt.Sprintf(
 		"\n# Runtime\n\nProvider: %s\nModel: %s\nReasoning effort: %s\nPlatform: %s\n"+

@@ -53,11 +53,11 @@ func buildRoutingPacket(cfg Config, history []Entry, planMode bool, routes []jev
 	critical := make(map[int]bool)
 	hasUser, lastAssistant := false, len(entries)
 	for i, entry := range entries {
-		if entry.Kind == EntryUser || entry.Kind == EntrySummary {
+		if entry.Kind == EntryUser && entry.User.Source == "" || entry.Kind == EntrySummary {
 			state.Critical = append(state.Critical, entry)
 			critical[i] = true
 		}
-		if entry.User != nil && strings.TrimSpace(entry.User.Text) != "" {
+		if entry.User != nil && entry.User.Source == "" && strings.TrimSpace(entry.User.Text) != "" {
 			hasUser = true
 		}
 		if entry.Assistant != nil {

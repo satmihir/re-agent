@@ -62,6 +62,22 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "agents-tree-cost": {
+        "agents": True,
+        "steps": [
+            ("idle", 0.5), ("type", "delegate two tasks"), ("key", "enter"),
+            ("wait", "Agent results received.", 8),
+            ("show", "parallel agents and tree token cost"),
+            ("expect", "screen_has", "tree cost: 50 input"),
+            ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
+            ("expect", "status_row_last"),
+            ("type", "ask my tests agent again"), ("key", "enter"),
+            ("wait", "Named agent reused.", 8),
+            ("show", "named agent reused in another chat turn"),
+            ("expect", "screen_has", "tree cost: 40 input"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "exec-timeout-continues": {
         "script": [tool("Running a slow check.", "slow", "exec",
                         {"argv": ["sleep", "30"], "cwd": ".", "timeout_ms": 1000}),
@@ -280,7 +296,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "esc": "\x1b",
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -292,7 +308,9 @@ class Session:
             env.pop("NO_COLOR", None)
             env.update(extra_env or {})
             args = [binary, "chat", "--workspace", workspace]
-            if retry:
+            if agents:
+                args += ["--agents", "--no-project-instructions", "--model", "gpt-6-sol"]
+            elif retry:
                 args += ["--model-retry-window", "5s", "--no-project-instructions"]
             elif script_path is None:
                 args += ["--auto", "--no-project-instructions"]
@@ -455,6 +473,54 @@ def run(binary, name, scenario, workspace):
             script_path = f.name
     extra_env = {}
     server = None
+    if scenario.get("agents"):
+        class AgentHandler(http.server.BaseHTTPRequestHandler):
+            root_requests = 0
+            lock = threading.Lock()
+
+            def do_POST(self):
+                request = self.rfile.read(int(self.headers["Content-Length"]))
+                is_child = b"read-only agent working" in request
+                if is_child:
+                    time.sleep(0.05)
+                    output = [{"type": "message", "status": "completed", "content": [
+                        {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                else:
+                    with self.lock:
+                        type(self).root_requests += 1
+                        number = type(self).root_requests
+                    calls = {
+                        1: [("spawn", {"task": "check tests", "context": {"brief": "independent"}, "name": "tests"}),
+                            ("spawn", {"task": "research", "context": {"brief": "independent"}})],
+                        2: [("wait", {"ids": ["t1", "t2"]})],
+                        4: [("send", {"name": "tests", "message": "check again"})],
+                        5: [("wait", {"ids": ["tests"]})],
+                    }.get(number, [])
+                    output = [{"type": "function_call", "call_id": f"c{number}-{index}",
+                               "name": name, "arguments": json.dumps(arguments)}
+                              for index, (name, arguments) in enumerate(calls)]
+                    if not output:
+                        text = "Agent results received." if number == 3 else "Named agent reused."
+                        output = [{"type": "message", "status": "completed", "content": [
+                            {"type": "output_text", "text": text}]}]
+                result = {"id": "r", "model": "test", "status": "completed", "output": output,
+                          "usage": {"input_tokens": 10, "output_tokens": 5,
+                                    "input_tokens_details": {"cached_tokens": 0}}}
+                body = ("event: response.completed\ndata: " + json.dumps(
+                    {"type": "response.completed", "response": result}) + "\n\n").encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AgentHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL=f"http://127.0.0.1:{server.server_port}/v1/responses",
+                         OPENAI_API_KEY="", HOME=workspace)
     if scenario.get("retry"):
         class RetryHandler(http.server.BaseHTTPRequestHandler):
             attempts = 0
@@ -493,7 +559,7 @@ def run(binary, name, scenario, workspace):
             editor.write(scenario["editor"])
         os.chmod(editor_path, 0o700)
         extra_env["VISUAL"] = editor_path
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]

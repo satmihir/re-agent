@@ -110,8 +110,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, "--scripted replays recorded responses, so it takes no --model or --provider")
 	case options.auto && (options.script != "" || options.showContext):
 		return usage(stderr, command, "--auto cannot be combined with --scripted or --show-context")
-	case options.script != "" && options.childRuns:
-		return usage(stderr, command, "--child-runs cannot be combined with --scripted")
+	case options.script != "" && options.agents:
+		return usage(stderr, command, "--agents cannot be combined with --scripted")
 	case options.script != "" && options.showContext:
 		return usage(stderr, command, "--show-context previews a live request, so it cannot be combined with --scripted")
 	}
@@ -143,7 +143,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		options.reasoning, options.readOnly, options.plan = saved.Effort, saved.ReadOnly, saved.Plan
 		options.maxSteps, options.maxToolCalls = saved.MaxSteps, saved.MaxToolCalls
 		options.noProjectInstructions, options.reportFriction, options.auto = saved.NoProjectInstructions, saved.ReportFriction, saved.Auto
-		options.inRunCompact, options.childRuns = saved.InRunCompact, saved.ChildRuns
+		options.inRunCompact, options.agents = saved.InRunCompact, saved.Agents
 		options.modelRetryWindow = saved.ModelRetryWindow
 	}
 	if options.promptFile != "" {
@@ -165,8 +165,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws),
 		NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool(),
 	}
-	if options.childRuns {
-		tools = append(tools, NewChildRunTool())
+	if options.agents {
+		tools = append(tools, NewAgentTools()...)
 	}
 	// v0 §10 amendment (2026-09-30): one instance keeps its cap across chat sessions.
 	if options.reportFriction {
@@ -227,7 +227,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		Registry: registry, WorkspacePath: ws.Root(), Workspace: ws, NoProjectInstructions: options.noProjectInstructions,
 		ProjectInstructions: projectInstructions,
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls, ModelRetryWindow: options.modelRetryWindow,
-		PlanMode: options.plan, ReportFriction: options.reportFriction, InRunCompact: options.inRunCompact, ChildRuns: options.childRuns,
+		PlanMode: options.plan, ReportFriction: options.reportFriction, InRunCompact: options.inRunCompact, Agents: options.agents,
 	}
 	for _, path := range options.allowedWorkspaces {
 		destination, bad := workspaceDestinationAt(ctx, path, true)
@@ -287,10 +287,15 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		live = scripted
 	}
 	session := NewSession(cfg, live, trace, stderr)
-	if options.childRuns {
-		session.childModel = func(provider string, childTrace *Trace) Model {
-			return newLiveModel(provider, keys[provider], proxy, client, childTrace)
+	if options.agents {
+		session.agentProxy = proxy
+		session.agentModel = func(agentCfg Config, agentTrace *Trace) (Model, error) {
+			if keys[agentCfg.Provider] == "" && !proxy.serves(agentCfg.Provider) {
+				return nil, fmt.Errorf("%s is not configured", agentCfg.Provider)
+			}
+			return newLiveModel(agentCfg.Provider, keys[agentCfg.Provider], proxy, client, agentTrace), nil
 		}
+		defer func() { session.closeAgents() }()
 	}
 	if options.resume != "" {
 		session.restore(saved)
@@ -408,7 +413,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir, resume, gitDo string
 	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction                     bool
-	auto, inRunCompact, childRuns                                                                 bool
+	auto, inRunCompact, agents                                                                    bool
 	maxSteps, maxToolCalls                                                                        int
 	modelRetryWindow                                                                              time.Duration
 	allowedWorkspaces                                                                             []string
@@ -428,7 +433,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6-sol/medium")
 	fs.BoolVar(&o.inRunCompact, "in-run-compact", false, "opt in to bounded compaction within a long run; default off")
 	fs.DurationVar(&o.modelRetryWindow, "model-retry-window", 0, "keep retrying transient model failures within this window (e.g. 12h); 0 disables")
-	fs.BoolVar(&o.childRuns, "child-runs", false, "offer bounded read-only fresh-context child runs")
+	fs.BoolVar(&o.agents, "agents", false, "offer concurrent read-only agents with names and nesting")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")
@@ -451,7 +456,7 @@ var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "child-runs"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "agents"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-file", "report-friction"}},
 	{"Experimental", []string{"git-do"}},
@@ -462,7 +467,7 @@ var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "child-runs"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "agents"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir", "report-friction"}},
 	{"Experimental", []string{"git-do"}},

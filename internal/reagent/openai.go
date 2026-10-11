@@ -176,6 +176,9 @@ func encodeHistory(history []Entry) ([]any, error) {
 			if len(entry.User.Workspace) > 0 {
 				parts = append(parts, responsesContent{Type: "input_text", Text: workspacePreamble + string(entry.User.Workspace)})
 			}
+			if len(entry.User.Roster) > 0 {
+				parts = append(parts, responsesContent{Type: "input_text", Text: agentRosterPreamble + string(entry.User.Roster)})
+			}
 			if marker := planText(entry.User.Plan); marker != "" {
 				parts = append(parts, responsesContent{Type: "input_text", Text: marker})
 			}

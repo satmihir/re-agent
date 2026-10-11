@@ -82,7 +82,7 @@ func (r *Registry) bindWorkspace(s *Session, ws *Workspace) *Registry {
 		switch t := tool.(type) {
 		case workspaceBoundTool:
 			tool = t.withWorkspace(ws)
-		case childRunTool:
+		case agentTool:
 			t.session = s
 			tool = t
 		case switchWorkspaceTool:

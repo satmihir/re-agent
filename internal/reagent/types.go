@@ -40,6 +40,8 @@ type Summary struct {
 type UserTurn struct {
 	Text      string          `json:"text"`
 	Workspace json.RawMessage `json:"workspace,omitempty"`
+	Roster    json.RawMessage `json:"roster,omitempty"`
+	Source    string          `json:"source,omitempty"`
 	Plan      string          `json:"plan,omitempty"`
 }
 
@@ -276,13 +278,9 @@ type RunResult struct {
 	Usage     Usage     `json:"usage"`
 	// RouterUsage is separate from generative-model accounting and omitted without attempts.
 	RouterUsage *Usage `json:"router_usage,omitempty"`
-	// ChildUsage is distinct from this run's own model generations.
-	ChildUsage    *Usage `json:"child_usage,omitempty"`
-	ChildSteps    int    `json:"child_steps,omitempty"`
-	ChildCalls    int    `json:"child_calls,omitempty"`
-	ChildAttempts int    `json:"child_attempts,omitempty"`
-	Children      int    `json:"children,omitempty"`
-	TracePath     string `json:"trace_path,omitempty"`
+	// TreeCost includes this run and descendant tokens charged during it.
+	TreeCost  *Usage `json:"tree_cost,omitempty"`
+	TracePath string `json:"trace_path,omitempty"`
 	// Effects lists what the run actually changed, so a failed run still
 	// reports the edits it made before stopping.
 	Effects []EffectRecord `json:"effects,omitempty"`

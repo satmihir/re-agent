@@ -83,6 +83,9 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 			if len(entry.User.Workspace) > 0 {
 				add("workspace snapshots", encodedSize(workspacePreamble+string(entry.User.Workspace)))
 			}
+			if len(entry.User.Roster) > 0 {
+				add("agent rosters", encodedSize(agentRosterPreamble+string(entry.User.Roster)))
+			}
 			if marker := planText(entry.User.Plan); marker != "" {
 				add("plan mode markers", encodedSize(marker))
 			}

@@ -13,10 +13,11 @@ type Session struct {
 	ID               string
 	cfg              Config
 	model            Model
-	childModel       func(string, *Trace) Model
+	agentModel       func(Config, *Trace) (Model, error)
+	agentProxy       apiProxy
 	currentRun       *Run
-	isChild          bool
-	childBudget      *childState
+	agents           *agentTree
+	agentID          string
 	trace            *Trace
 	display          *Display
 	progress         io.Writer
@@ -58,6 +59,9 @@ func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Sess
 		launchInstructions: cfg.ProjectInstructions, checkpointUsage: Usage{Known: true},
 		seenCalls: make(map[string]bool), planMode: cfg.PlanMode,
 	}
+	if cfg.Agents {
+		s.agents = newAgentTree()
+	}
 	if cfg.Workspace != nil {
 		s.workspace = newWorkspaceSelection(cfg.Workspace, cfg.approvedWorkspaces)
 		s.cfg.Workspace = s.workspace.active
@@ -82,7 +86,7 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		Launch: launch, Active: s.cfg.WorkspacePath, ReadOnly: s.cfg.Registry.Mode().ReadOnly,
 		Plan: s.planMode, NoProjectInstructions: s.cfg.NoProjectInstructions,
 		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
-		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, ChildRuns: s.cfg.ChildRuns,
+		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, Agents: s.cfg.Agents, AgentRoster: s.agentRoster(),
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
 		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
 		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
@@ -126,7 +130,18 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.checkpointAutoCompactOff = cp.AutoCompactOff
 	s.cfg.InRunCompact = cp.InRunCompact
 	s.cfg.ModelRetryWindow = cp.ModelRetryWindow
-	s.cfg.ChildRuns = cp.ChildRuns
+	s.cfg.Agents = cp.Agents
+	if cp.Agents {
+		s.agents = newAgentTree()
+		for _, record := range cp.AgentRoster {
+			record.State = "ended at resume"
+			s.agents.nodes[record.ID] = &agentThread{AgentThread: record, ended: true}
+			var number int
+			if _, err := fmt.Sscanf(record.ID, "t%d", &number); err == nil {
+				s.agents.next = max(s.agents.next, number)
+			}
+		}
+	}
 	s.launchInstructions = cp.LaunchInstructions
 	if cp.Active == cp.Launch {
 		s.launchInstructions = cp.ProjectInstructions
@@ -294,7 +309,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	}
 	// Repeated compaction with no turn retains the last real user's marker.
 	for i := len(s.history) - 1; i >= 0; i-- {
-		if s.history[i].Kind == EntryUser {
+		if s.history[i].Kind == EntryUser && s.history[i].User.Source == "" {
 			s.compactedPlan = s.history[i].User.Plan
 			break
 		}
@@ -367,7 +382,7 @@ func (s *Session) SetEffort(effort string) { s.pinAuto(); s.cfg.ReasoningEffort 
 func (s *Session) Turns() int {
 	turns := 0
 	for _, entry := range s.history {
-		if entry.Kind == EntryUser {
+		if entry.Kind == EntryUser && entry.User.Source == "" {
 			turns++
 		}
 	}

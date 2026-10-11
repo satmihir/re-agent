@@ -191,6 +191,46 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(workflow.Incomplete):
             self.check(contract, record)
 
+    def agent_records(self):
+        contract, record = self.records()
+        contract["version"] = record["version"] = 2
+        for review in record["reviews"]:
+            review["review_snapshot_id"] = review.pop("child_snapshot_id")
+            review["parent_id"], review["agent_id"] = "root", "t" + review["run_id"]
+            report = review["result"]["report"]
+            review["result"] = {"status": "completed", "reply": json.dumps(report)}
+            events = [json.loads(line) for line in Path(review["trace"]["path"]).read_text().splitlines()]
+            events[1]["data"]["history"][0]["user"]["roster"] = {"kind": "agent_roster", "threads": []}
+            reads = [{"type": "tool.finished", "data": {"name": "read_file", "outcome": {"ok": True,
+                      "data": {**file, "total_lines": 1, "lines": [{"number": 1, "text": "evidence"}], "eof": True}}}}
+                     for file in review["review_files"]]
+            events = events[:-1] + reads + events[-1:]
+            events[-1]["data"]["reply"] = review["result"]["reply"]
+            for number, event in enumerate(events, 1):
+                event.update(seq=number, session_id=review["session_id"], run_id=review["run_id"], parent_id="root", agent_id=review["agent_id"])
+            review["trace"] = self.attach(f"agents/{review['run_id']}.jsonl", "".join(json.dumps(e) + "\n" for e in events).encode())
+        return contract, record
+
+    def test_agents_evidence_requires_fresh_matching_live_reads_and_report(self):
+        contract, record = self.agent_records()
+        self.assertEqual(self.check(contract, record)["status"], "evidence_complete")
+        for name in ("changed bytes", "missing read", "partial read", "wrong parent", "different reply", "delegation", "malformed report"):
+            with self.subTest(name=name):
+                c, r = copy.deepcopy((contract, record))
+                review = r["reviews"][0]
+                events = [json.loads(line) for line in Path(review["trace"]["path"]).read_text().splitlines()]
+                if name == "changed bytes": events[2]["data"]["outcome"]["data"]["sha256"] = sha(b"changed live file")
+                if name == "missing read": events[2]["data"]["outcome"]["ok"] = False
+                if name == "partial read": events[2]["data"]["outcome"]["data"]["total_lines"] = 2
+                if name == "wrong parent": events[0]["parent_id"] = "another parent"
+                if name == "different reply": events[-1]["data"]["reply"] = "other report"
+                if name == "delegation": events[2]["type"] = "agent.spawn"
+                if name == "malformed report":
+                    events[-1]["data"]["reply"] = review["result"]["reply"] = "not JSON"
+                review["trace"] = self.attach(f"agents/bad-{name}.jsonl", "".join(json.dumps(e) + "\n" for e in events).encode())
+                with self.assertRaises(workflow.Incomplete):
+                    self.check(c, r)
+
     def test_small_task_does_not_need_checker_and_cli_reports_incomplete(self):
         contract, record = self.records()
         contract["tests_first"] = False

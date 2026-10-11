@@ -20,7 +20,7 @@ One Go binary, `cmd/reagent`, over one package, `internal/reagent`. It talks to 
 | `edit_file`, `write_file`, `delete_file` | Change files by digest-checked snapshot and atomic rename |
 | `exec` | Run an argv (no shell) with a timeout, optionally chained with `then` |
 | `request_workspace_access`, `switch_workspace` | Ask the human for another root, and move to it |
-| `child_run` | With `--child-runs`: start a read-only child on a frozen file snapshot |
+| `spawn`, `send`, `wait`, `threads`, `cancel`, `dismiss`, `reset` | With `--agents`: concurrent read-only agents, operated only by their parent |
 | `report_friction` | With `--report-friction`: let the model report harness friction |
 | `git_do` | With `--git-do jev\|recipe`: run one of twelve fixed git recipes and return proof |
 
@@ -30,13 +30,13 @@ Paths stay inside the active root and skip `.git`, `.env` and `.env.*`; these ar
 
 **exec.** Runs in its own process group, which is signalled on timeout (default two minutes) or Ctrl-C. Output keeps the start and end of each stream. Effects are reported as none, applied or unknown; a timeout or a cancelled command is unknown.
 
-**Children.** `child_run` starts a fresh Session with only the read tools over up to 20 snapshotted files, its own instructions and the project's `AGENTS.md`, and nothing from the parent's transcript. A parent run may start four, synchronously, each with six steps and twelve calls, sharing 24 steps, 48 calls, 48 attempts, ten minutes and about 200k tokens. A child returns a JSON report (summary, findings, verdict) and gets one chance to fix a malformed one.
+**Agents.** `--agents` is off by default. `spawn` returns immediately and starts a fresh Session with a task, context brief and optional live-workspace paths, never parent history. Agents inherit a fixed workspace and plan setting and get only the parent's available file-read tools plus delegation. Their workspace snapshots probe Git refs only: status can execute configured clean filters. Nesting is capped at depth 3 and 8 live agents; a full tree refuses spawn without waiting. Each task has 32 model steps, 128 tool calls and a 200,000 reported-token cap (checked before the next logical request, so a generation including its retries can overshoot). Results are labelled harness-origin user entries appended only at step boundaries, after tool batches. Every agent, including the root, waits for running children before its final reply; abnormal exits cancel and join outstanding work. Anonymous agents end after result delivery. Lowercase-slug names are parent-local; named agents retain history while idle and accept queued `send` messages in later turns. `wait` accepts a timeout in seconds (default 120); `threads` lists current work, steps, token cost and trace path. Cancellation stops the whole subtree; `dismiss` releases its slot/name; `reset` clears a blocked agent before new work. The run summary meters root plus descendant token cost, not dollars (no price catalog is configured). There is no background wake in this stage.
 
 **git_do.** In `recipe` mode the model names the recipe; in `jev` mode a TypeSafe Jev classifier picks it from the model's English intent and declines below a confidence threshold or when the request includes non-git work. Recipes never push the default branch, check their own result, and can be scoped with `paths`. `make git-do-eval` measures selection against real and hand-written cases.
 
 ## Context
 
-Instructions are, in order: fixed embedded text (`instructions.txt`; children use `child_instructions.txt`), a runtime section of session-fixed facts, the optional friction paragraph, then the workspace root's `AGENTS.md` (up to 32 KiB, off with `--no-project-instructions`). Nothing that changes per request goes in the instructions, so providers can cache the prefix. Each user message also carries a `workspace_state` snapshot: date, workspace, and Git branch, upstream and change counts.
+Instructions are, in order: fixed embedded text (`instructions.txt`; agents use `agent_instructions.txt`), a runtime section of session-fixed facts, the optional friction paragraph, then the workspace root's `AGENTS.md` (up to 32 KiB, off with `--no-project-instructions`). Nothing that changes per request goes in the instructions, so providers can cache the prefix. Each user message also carries a `workspace_state` snapshot: date, workspace, and Git branch, upstream and change counts. With agents enabled, a sibling `agent_roster` text part holds IDs, names, states and one-line tasks; it is collected afresh after compaction or model switching, not stored in the cached instructions.
 
 `BuildContext` is pure, and `run --show-context` prints the exact first request without a key or network.
 
@@ -52,13 +52,13 @@ Instructions are, in order: fixed embedded text (`instructions.txt`; children us
 - **Context.** `/status` and `/context` show use of the model's window. At 60% chat suggests `/compact`, and at 80% compacts before the next message. `--in-run-compact` also summarizes inside a long run.
 - **Model switches.** `/model` keeps the conversation and sends earlier history as a labelled text block to the new model; `/model NAME fresh` starts over.
 - **Auto** (`--auto`, `/auto on`) asks TypeSafe Jev which model and effort to use at each turn and some mid-run boundaries, among `gpt-6-luna`, `gpt-6-sol` and the configured model.
-- **Resume.** Live chat prints a session ID; `--resume ID` restores the checkpointed history. Nothing in flight is retried: interrupted tools are reported as unknown effects.
+- **Resume.** Live chat prints a session ID; `--resume ID` restores the checkpointed history. Nothing in flight is retried: interrupted tools are reported as unknown effects. Agents end with the process; resumed rosters label them `ended at resume`, never restart them.
 
 Replies go to stdout and everything else to stderr; on a styled terminal replies render as Markdown. `NO_COLOR` turns styling off.
 
 ## Traces
 
-One JSONL file per run (and per compaction or model-switch attempt), mode 0600, with exact request and response bytes. Writing is best effort: a failure warns and the run goes on. Event fields and `jq` recipes are in `docs/reagent-trace-format.md`.
+One JSONL file per root run (and per compaction or model-switch attempt), and one lifetime trace per agent with its thread and parent IDs, mode 0600, with exact request and response bytes. Parent traces record spawn, send and delivered results, not child histories. Writing is best effort: a failure warns and the run goes on. Event fields and `jq` recipes are in `docs/reagent-trace-format.md`.
 
 ## Checking changes
 
