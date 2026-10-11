@@ -211,7 +211,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			if len(ids) > 0 {
 				message := strings.Join(ids, ", ") + " still running; wait for their results before finishing."
 				s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Source: "agent", Text: message}})
+				s.display.agentWaitStarted(ids)
 				_, _ = s.waitAgents(ctx, ids)
+				s.display.stopStatus()
 				r.deliverAgents()
 				continue
 			}

@@ -63,6 +63,9 @@ func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Sess
 	}
 	if cfg.Agents {
 		s.agents = newAgentTree()
+		if !cfg.agent {
+			s.display.agents = s.agents
+		}
 	}
 	if cfg.Workspace != nil {
 		s.workspace = newWorkspaceSelection(cfg.Workspace, cfg.approvedWorkspaces)
@@ -135,6 +138,7 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.cfg.Agents = cp.Agents
 	if cp.Agents {
 		s.agents = newAgentTree()
+		s.display.agents = s.agents
 		for _, record := range cp.AgentRoster {
 			if record.State == "running" {
 				record.EffectsUnknown = true

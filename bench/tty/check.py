@@ -63,6 +63,25 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "agents-live-wait": {
+        "agents": True,
+        "agents_progress": True,
+        "steps": [
+            ("idle", 0.5), ("type", "delegate research"), ("key", "enter"),
+            ("wait", "waiting on t1 research (step 1)", 8),
+            ("wait", "waiting on t1 research (step 3)", 8),
+            ("wait_status", "2 agents", 8),
+            ("idle", 1.1), ("show", "live wait, nested count and elapsed clock"),
+            ("expect", "screen_has", "waiting on t1 research (step 3) · 1."),
+            ("expect", "screen_has", "2 agents"),
+            ("wait", "t1 research results delivered", 8),
+            ("wait_status", "gpt-6-sol / low", 8),
+            ("show", "finished and delivered notices"),
+            ("expect", "all_lines", ["t1 research finished · completed", "t1 research results delivered"]),
+            ("expect", "all_lack", ["t2 nested finished", "PRIVATE CHILD REPLY"]),
+            ("expect", "status_row_last"),
+        ],
+    },
     "agents-write-recap": {
         "agents": True,
         "agents_write": True,
@@ -513,7 +532,29 @@ def run(binary, name, scenario, workspace):
                     with self.lock:
                         type(self).child_requests += 1
                         child_number = type(self).child_requests
-                    if scenario.get("agents_write") and child_number == 1:
+                    if scenario.get("agents_progress"):
+                        decoded = json.loads(request)
+                        texts = [part.get("text", "") for item in decoded.get("input", [])
+                                 for part in item.get("content", []) if isinstance(part, dict)]
+                        nested = any(text.startswith("nested task\n") for text in texts)
+                        if nested:
+                            time.sleep(3)
+                            output = [{"type": "message", "status": "completed", "content": [
+                                {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                        elif child_number == 1:
+                            time.sleep(0.4)
+                            output = [{"type": "function_call", "call_id": "nested-spawn", "name": "spawn",
+                                       "arguments": json.dumps({"task": "nested task", "context": {"brief": "independent"}, "name": "nested"})}]
+                        elif b"child-probe" not in request:
+                            output = [{"type": "function_call", "call_id": "child-probe", "name": "read_file",
+                                       "arguments": json.dumps({"path": "absent.txt"})}]
+                        elif b"nested-wait" not in request:
+                            output = [{"type": "function_call", "call_id": "nested-wait", "name": "wait",
+                                       "arguments": json.dumps({"ids": ["nested"]})}]
+                        else:
+                            output = [{"type": "message", "status": "completed", "content": [
+                                {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                    elif scenario.get("agents_write") and child_number == 1:
                         output = [{"type": "function_call", "call_id": "child-create", "name": "write_file",
                                    "arguments": json.dumps({"path": "agent.txt", "content": "written by an agent"})}]
                     else:
@@ -530,6 +571,9 @@ def run(binary, name, scenario, workspace):
                         4: [("send", {"name": "tests", "message": "check again"})],
                         5: [("wait", {"ids": ["tests"]})],
                     }.get(number, [])
+                    if scenario.get("agents_progress"):
+                        calls = [("spawn", {"task": "research task", "context": {"brief": "independent"}, "name": "research"}),
+                                 ("wait", {"ids": ["research"]})] if number == 1 else []
                     if scenario.get("agents_write"):
                         calls = [("spawn", {"task": "create a file", "context": {"brief": "independent"},
                                             "name": "writer", "authority": "write"}),

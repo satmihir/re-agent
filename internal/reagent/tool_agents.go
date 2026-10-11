@@ -27,16 +27,17 @@ func (t agentTool) Spec() ToolSpec {
 	schema := `{"type":"object","properties":{},"additionalProperties":false}`
 	switch t.name {
 	case "spawn":
-		description = "Start a concurrent agent with a fresh Session, no parent history, a prose brief and optional live workspace file paths to read. Authority defaults to read; write grants only your available edit_file, write_file, delete_file and exec. Read-only launch and plan mode remain inherited. Only the root has git_do or workspace access/switching. File writes reject stale observations; overlapping exec returns a notice, not a block. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
+		description = "Delegate substantial independent implementation, research or review, not tiny lookups you can do in a few reads. Start a concurrent agent with a fresh Session, no parent history, a prose brief and optional live workspace file paths to read. Authority defaults to read; write grants only your available edit_file, write_file, delete_file and exec. Read-only launch and plan mode remain inherited. Only the root has git_do or workspace access/switching. File writes reject stale observations; overlapping exec returns a notice, not a block. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
 		schema = `{"type":"object","properties":{"task":{"type":"string"},"context":{"type":"object","properties":{"brief":{"type":"string"},"files":{"type":"array","items":{"type":"string"}}},"additionalProperties":false},"name":{"type":"string"},"model":{"type":"string"},"authority":{"type":"string","enum":["read","write"]}},"required":["task","context"],"additionalProperties":false}`
 	case "send":
 		description = "Queue a follow-up message to your own child by ID or name; idle named agents retain their Session across chat turns. Busy agents handle messages sequentially. Blocked agents require reset. In plan mode, new work for a non-planning writer is refused."
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"message":{"type":"string"}},"required":["message"],"additionalProperties":false}`
 	case "wait":
-		description = "Wait for your given children (IDs or names) to finish current and queued work; returns statuses only; results arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened; bounded file effects and exec uncertainty survive reply truncation). Recent delivered IDs return their delivery run and step. Optional timeout is in seconds (default 120, maximum 600); a timeout does not cancel children."
+		description = "Wait for your given children (IDs or names) to finish current and queued work; returns statuses only; results arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened; bounded file effects and exec uncertainty survive reply truncation). Recent delivered IDs return their delivery run and step. Omit timeout to wait until done (cancellation still works). An explicit timeout is opt-in polling, in seconds (0–600); it does not cancel children. If timed_out is true, do other useful work and wait again before relying on their results."
 		schema = `{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"timeout":{"type":"integer","minimum":0,"maximum":600}},"required":["ids"],"additionalProperties":false}`
 	case "threads":
-		description = "List only your children: state, current task, steps, cost in reported tokens and trace path; never blocks on their work."
+		schema = `{"type":"object","properties":{"subtree":{"type":"boolean"}},"additionalProperties":false}`
+		description = "List your direct children by default. With subtree=true, list every descendant, including delivered/dismissed agents retained for lifetime accounting, with parent, depth, state, own cost and trace path, plus total_cost excluding you. Never blocks. Use the subtree view to report every agent used and costs."
 	default:
 		description = map[string]string{"cancel": "Cancel current and queued work in your child and its whole subtree. The named child can accept later send unless uncertain effects block its Session; then reset it first and inspect before retrying.", "dismiss": "End your child and its whole subtree; releases live capacity and the name. Also removes ended-at-resume roster observations.", "reset": "Clear a blocked, stopped child's history, preserving its name, fixed workspace and authority; dismisses its descendants. Then send new work."}[t.name]
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}`
@@ -124,13 +125,19 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		if bad := decodeArgs(raw, &a); bad != nil {
 			return *bad, nil
 		}
-		seconds, bad := optionalInt(a.Timeout, "timeout", 120, 0)
+		seconds := -1
+		var bad *ToolOutcome
+		if len(a.Timeout) != 0 {
+			seconds, bad = optionalInt(a.Timeout, "timeout", 0, 0)
+		}
 		if bad != nil {
 			return *bad, nil
 		}
 		if len(a.IDs) == 0 || len(a.IDs) > 8 || seconds > 600 {
 			return failOutcome("invalid_arguments", "wait requires 1–8 children and timeout 0–600 seconds"), nil
 		}
+		s.display.agentWaitStarted(a.IDs)
+		defer s.display.stopStatus()
 		waitCtx, cancel := agentWaitContext(ctx, seconds)
 		defer cancel()
 		statuses, err := s.waitAgents(waitCtx, a.IDs)
@@ -143,9 +150,18 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		}
 		return out, e
 	case "threads":
-		var a struct{}
+		var a struct {
+			Subtree json.RawMessage `json:"subtree"`
+		}
 		if bad := decodeArgs(raw, &a); bad != nil {
 			return *bad, nil
+		}
+		subtree, bad := optionalBool(a.Subtree, "subtree")
+		if bad != nil {
+			return *bad, nil
+		}
+		if subtree {
+			return okOutcome(s.agentSubtree())
 		}
 		return okOutcome(s.agentRoster())
 	default:
