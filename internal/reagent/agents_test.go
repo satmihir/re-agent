@@ -30,7 +30,7 @@ func agentFixture(t *testing.T) *Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := append(NewAgentTools(), NewReadFileTool(ws), NewListFilesTool(ws), NewSearchTextTool(ws), NewWriteFileTool(ws), NewExecTool(ws))
+	tools := append(NewAgentTools(), NewReadFileTool(ws), NewListFilesTool(ws), NewSearchTextTool(ws), NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws))
 	registry, err := NewRegistry(Mode{}, tools...)
 	if err != nil {
 		t.Fatal(err)

@@ -98,7 +98,7 @@ func (deleteFileTool) Spec() ToolSpec {
 	}
 }
 
-func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcome, error) {
+func (t writeFileTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcome, error) {
 	// encoding/json repairs malformed UTF-8 in strings; reject it before decoding.
 	if !utf8.Valid(args) {
 		return failOutcome("invalid_utf8", "content is not valid UTF-8"), nil
@@ -128,6 +128,11 @@ func (t writeFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOut
 		return *bad, nil
 	}
 	hasDigest := len(a.ExpectedSHA256) != 0
+	t.ws.publishMu.Lock()
+	defer t.ws.publishMu.Unlock()
+	if ctx.Err() != nil {
+		return failOutcome("not_executed", "cancelled before file publication"), nil
+	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {
 		return *bad, nil
@@ -258,7 +263,7 @@ func removeEmptyDirs(created []string) {
 	}
 }
 
-func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcome, error) {
+func (t deleteFileTool) Execute(ctx context.Context, args json.RawMessage) (ToolOutcome, error) {
 	var a deleteFileArgs
 	if bad := decodeArgs(args, &a); bad != nil {
 		return *bad, nil
@@ -266,6 +271,11 @@ func (t deleteFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	expected, bad := expectedDigest(a.ExpectedSHA256)
 	if bad != nil {
 		return *bad, nil
+	}
+	t.ws.publishMu.Lock()
+	defer t.ws.publishMu.Unlock()
+	if ctx.Err() != nil {
+		return failOutcome("not_executed", "cancelled before file publication"), nil
 	}
 	abs, bad := t.ws.resolve(a.Path)
 	if bad != nil {

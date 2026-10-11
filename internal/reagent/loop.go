@@ -389,10 +389,23 @@ func (r *Run) recordResult(call *ToolCall, outcome ToolOutcome) {
 	if outcome.Effect != EffectNone {
 		// Recorded from the outcome, so a failed run still reports what it
 		// actually changed (v1 §19.3).
-		r.effects = append(r.effects, EffectRecord{
+		record := EffectRecord{
 			Step: r.steps, CallID: call.CallID, Tool: call.Name, Workspace: outcome.Workspace,
 			Summary: argumentSummary(call.Arguments), Effect: outcome.Effect,
-		})
+		}
+		if r.session.agentID != "" {
+			record.AgentID, record.RunID = r.session.agentID, r.runID
+		}
+		if call.Name == "edit_file" || call.Name == "write_file" || call.Name == "delete_file" {
+			var file struct {
+				Path      string `json:"path"`
+				Operation string `json:"operation"`
+			}
+			if json.Unmarshal(outcome.Data, &file) == nil {
+				record.Path, record.Operation = file.Path, file.Operation
+			}
+		}
+		r.effects = append(r.effects, record)
 	}
 	r.trace.Write("tool.finished", r.steps, result)
 	r.session.history = append(r.session.history, Entry{Kind: EntryTool, Tool: &result})
@@ -435,6 +448,7 @@ func (r *Run) finish(status RunStatus, reason, reply string) RunResult {
 			result.TreeCost = &cost
 		}
 	}
+	result.Effects = r.effects
 	r.trace.Write("run.finished", r.steps, result)
 	if r.persistenceErr != nil {
 		result.Status, result.Reason = StatusPersistenceError, r.persistenceErr.Error()

@@ -336,6 +336,15 @@ func (d *Display) summary(result RunResult, elapsed time.Duration, showTrace, sh
 		fmt.Fprintf(d.w, "  %s\n", sanitize(reason))
 	}
 	if showRecap {
+		for _, effect := range result.Effects {
+			if effect.AgentID != "" {
+				line := effect.Summary
+				if effect.Path != "" {
+					line = effect.Operation + " " + effect.Path
+				}
+				fmt.Fprintf(d.w, "  agent %s: %s (%s) [%s]\n", sanitize(effect.AgentID), sanitize(line), effect.Effect, sanitize(effect.Workspace))
+			}
+		}
 		for _, line := range d.recap {
 			if strings.HasPrefix(line, "ran ") {
 				line = "ran     " + strings.TrimPrefix(line, "ran ")

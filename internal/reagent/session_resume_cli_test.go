@@ -130,7 +130,7 @@ func TestChat_AgentsResumeEndsRosterWithoutRestart(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		mu.Lock()
-		child := strings.Contains(string(raw), "read-only agent working")
+		child := strings.Contains(string(raw), "authority granted by your parent")
 		number := 0
 		if child {
 			childRequests++

@@ -27,13 +27,13 @@ func (t agentTool) Spec() ToolSpec {
 	schema := `{"type":"object","properties":{},"additionalProperties":false}`
 	switch t.name {
 	case "spawn":
-		description = "Start a concurrent read-only agent with a fresh Session, no parent history, a prose brief and optional live workspace file paths to read. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
-		schema = `{"type":"object","properties":{"task":{"type":"string"},"context":{"type":"object","properties":{"brief":{"type":"string"},"files":{"type":"array","items":{"type":"string"}}},"additionalProperties":false},"name":{"type":"string"},"model":{"type":"string"}},"required":["task","context"],"additionalProperties":false}`
+		description = "Start a concurrent agent with a fresh Session, no parent history, a prose brief and optional live workspace file paths to read. Authority defaults to read; write grants only your available edit_file, write_file, delete_file and exec. Read-only launch and plan mode remain inherited. Only the root has git_do or workspace access/switching. File writes reject stale observations; overlapping exec returns a notice, not a block. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
+		schema = `{"type":"object","properties":{"task":{"type":"string"},"context":{"type":"object","properties":{"brief":{"type":"string"},"files":{"type":"array","items":{"type":"string"}}},"additionalProperties":false},"name":{"type":"string"},"model":{"type":"string"},"authority":{"type":"string","enum":["read","write"]}},"required":["task","context"],"additionalProperties":false}`
 	case "send":
 		description = "Queue a follow-up message to your own child by ID or name; idle named agents retain their Session across chat turns. Busy agents handle messages sequentially. Blocked agents require reset."
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"message":{"type":"string"}},"required":["message"],"additionalProperties":false}`
 	case "wait":
-		description = "Wait for your given children (IDs or names) to finish current and queued work; returns statuses only; results arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened). Recent delivered IDs return their delivery run and step. Optional timeout is in seconds (default 120, maximum 600); a timeout does not cancel children."
+		description = "Wait for your given children (IDs or names) to finish current and queued work; returns statuses only; results arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened; bounded file effects and exec uncertainty survive reply truncation). Recent delivered IDs return their delivery run and step. Optional timeout is in seconds (default 120, maximum 600); a timeout does not cancel children."
 		schema = `{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"timeout":{"type":"integer","minimum":0,"maximum":600}},"required":["ids"],"additionalProperties":false}`
 	case "threads":
 		description = "List only your children: state, current task, steps, cost in reported tokens and trace path; never blocks on their work."
@@ -45,10 +45,11 @@ func (t agentTool) Spec() ToolSpec {
 }
 
 type spawnArgs struct {
-	Task    string        `json:"task"`
-	Context *agentContext `json:"context"`
-	Name    string        `json:"name"`
-	Model   string        `json:"model"`
+	Task      string        `json:"task"`
+	Context   *agentContext `json:"context"`
+	Name      string        `json:"name"`
+	Model     string        `json:"model"`
+	Authority string        `json:"authority,omitempty"`
 }
 
 type agentContext struct {
@@ -81,6 +82,9 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		}
 		if strings.TrimSpace(a.Task) == "" || len(a.Task) > 8192 || a.Context == nil || len(a.Context.Brief) > 32768 || len(a.Context.Files) > 20 || a.Name != "" && (len(a.Name) > 64 || !agentNamePattern.MatchString(a.Name)) {
 			return failOutcome("invalid_arguments", "task, context or name is missing, invalid or oversized"), nil
+		}
+		if a.Authority != "" && a.Authority != "read" && a.Authority != "write" {
+			return failOutcome("invalid_arguments", "authority must be read or write"), nil
 		}
 		for _, path := range a.Context.Files {
 			if _, bad := s.workspace.active.resolve(path); bad != nil {

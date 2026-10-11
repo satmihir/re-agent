@@ -36,7 +36,8 @@ const (
 //
 // A timeout keeps unknown effects visible to the next model step (v0 §9).
 type execTool struct {
-	ws *Workspace
+	ws      *Workspace
+	session *Session
 	// minTimeout is minExecTimeout; tests set zero to reach a timeout quickly.
 	minTimeout time.Duration
 }
@@ -58,22 +59,23 @@ type execArgs struct {
 }
 
 type execResult struct {
-	Argv                  []string `json:"argv"`
-	ResolvedExecutable    string   `json:"resolved_executable"`
-	Cwd                   string   `json:"cwd"`
-	ExitCode              *int     `json:"exit_code"`
-	Signal                *string  `json:"signal"`
-	Stdout                string   `json:"stdout"`
-	Stderr                string   `json:"stderr"`
-	StdoutBytesSeen       int      `json:"stdout_bytes_seen"`
-	StderrBytesSeen       int      `json:"stderr_bytes_seen"`
-	StdoutTruncated       bool     `json:"stdout_truncated"`
-	StderrTruncated       bool     `json:"stderr_truncated"`
-	OutputMayBeIncomplete bool     `json:"output_may_be_incomplete"`
-	EncodingReplaced      bool     `json:"encoding_replaced"`
-	DurationMS            int64    `json:"duration_ms"`
-	TimeoutMS             int64    `json:"timeout_ms"`
-	TerminationReason     *string  `json:"termination_reason"`
+	Argv                  []string    `json:"argv"`
+	ResolvedExecutable    string      `json:"resolved_executable"`
+	Cwd                   string      `json:"cwd"`
+	ExitCode              *int        `json:"exit_code"`
+	Signal                *string     `json:"signal"`
+	Stdout                string      `json:"stdout"`
+	Stderr                string      `json:"stderr"`
+	StdoutBytesSeen       int         `json:"stdout_bytes_seen"`
+	StderrBytesSeen       int         `json:"stderr_bytes_seen"`
+	StdoutTruncated       bool        `json:"stdout_truncated"`
+	StderrTruncated       bool        `json:"stderr_truncated"`
+	OutputMayBeIncomplete bool        `json:"output_may_be_incomplete"`
+	EncodingReplaced      bool        `json:"encoding_replaced"`
+	DurationMS            int64       `json:"duration_ms"`
+	TimeoutMS             int64       `json:"timeout_ms"`
+	TerminationReason     *string     `json:"termination_reason"`
+	ConcurrentExec        []agentExec `json:"concurrent_exec,omitempty"`
 }
 
 func (execTool) Spec() ToolSpec {
@@ -241,6 +243,11 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	// Bound inherited-pipe waits even if a descendant has left the group.
 	command.WaitDelay = time.Second
 
+	var concurrent []agentExec
+	if t.session != nil && t.session.agents != nil {
+		concurrent = boundConcurrentExec(t.session.agents.startExec(t.session.agentParent(), t.ws.Root(), a), budget)
+		defer t.session.agents.endExec(t.session.agentParent())
+	}
 	started := time.Now()
 	startErr := command.Start()
 	if startErr == nil {
@@ -286,6 +293,7 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	result := execResult{
 		Argv: a.Argv, ResolvedExecutable: command.Path, Cwd: a.Cwd,
 		DurationMS: time.Since(started).Milliseconds(), TimeoutMS: timeout.Milliseconds(),
+		ConcurrentExec: concurrent,
 	}
 	stdoutText := stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
 	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
