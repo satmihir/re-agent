@@ -17,7 +17,7 @@ One Go binary, `cmd/reagent`, over one package, `internal/reagent`. It talks to 
 | Tool | What it does |
 |---|---|
 | `list_files`, `read_file`, `search_text` | Read the active workspace; results fit a 32 KiB budget and say when they are incomplete |
-| `edit_file`, `write_file`, `delete_file` | Change files by digest-checked snapshot and atomic rename |
+| `edit_file`, `write_file`, `delete_file` | Guarded text edits, creation and deletion; opt-in recursive deletion |
 | `exec` | Run an argv (no shell) with a timeout, optionally chained with `then` |
 | `request_workspace_access`, `switch_workspace` | Ask the human for another root, and move to it |
 | `spawn`, `send`, `wait`, `threads`, `cancel`, `dismiss`, `reset` | With `--agents`: concurrent agents with per-spawn read/write authority, operated only by their parent |
@@ -26,7 +26,7 @@ One Go binary, `cmd/reagent`, over one package, `internal/reagent`. It talks to 
 
 Paths stay inside the active root and skip `.git`, `.env` and `.env.*`; these are ordinary checks, not a sandbox, and `exec` is not bound by them. `--read-only` withholds the writers and `exec`; plan mode refuses them at dispatch.
 
-**Files.** Reads are capped at 1 MiB and requests at 10 MiB. Writers check an optional `expected_sha256`, or the last digest that conversation saw. With agents enabled, file-tool checks and publication share a tree-wide guard; observations remain local, and deleted observed files require an absence read before recreation. Exec and external editors do not participate. `edit_file` supports exact replacements, `edits`, `replace_all` and `append_text`; near misses report candidate lines rather than fuzzy-applying.
+**Files.** Reads are capped at 1 MiB and requests at 10 MiB. Writers check an optional `expected_sha256`, or the last digest that conversation saw. With agents enabled, file-tool checks and publication share a tree-wide guard; observations remain local, and deleted observed files require an absence read before recreation. Exec and external editors do not participate. `edit_file` supports exact replacements, `edits`, `replace_all` and `append_text`; near misses report candidate lines rather than fuzzy-applying. Explicit digests let `delete_file` stream-hash large binaries; `recursive:true` deletes trees without following symlinks and reports actual removals, including partial failure.
 
 **exec.** Runs in its own process group, which is signalled on timeout (default two minutes) or Ctrl-C. Output keeps the start and end of each stream. Effects are reported as none, applied or unknown; a timeout or a cancelled command is unknown. With agents enabled, starting exec while another agent (including the root) has exec running in the same or overlapping canonical workspace roots returns `concurrent_exec` notices identifying the agent, argv and cwd. Notices are bounded and may be marked truncated. Commands are not blocked; each chain step reports its own overlaps.
 
