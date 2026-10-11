@@ -73,7 +73,7 @@ type messagesOutputConfig struct {
 // to the Messages API. The live adapter and --show-context both call it, so
 // the preview is the request itself (v0 §6.1).
 func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
-	messages, err := encodeAnthropicHistory(req.History)
+	messages, err := encodeAnthropicHistoryWithCache(req.History, req.CacheEntries)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,11 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 		outputConfig = &messagesOutputConfig{Effort: req.ReasoningEffort}
 	}
 
-	markCachePoint(messages)
+	// Keep inherited markers byte-identical, within the provider's four-point
+	// limit (one system point and at most three history points).
+	if len(req.CacheEntries) < 3 {
+		markCachePoint(messages)
+	}
 
 	// Permit several tool_use blocks per response; dispatch remains sequential.
 	body, err := json.Marshal(messagesRequest{
@@ -136,6 +140,10 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 // another user message, such as a ! command or a turn whose request failed,
 // joins that message, so user and assistant messages still alternate.
 func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
+	return encodeAnthropicHistoryWithCache(history, nil)
+}
+
+func encodeAnthropicHistoryWithCache(history []Entry, cacheEntries []int) ([]messagesMessage, error) {
 	var messages []messagesMessage
 	var pendingResults []messagesToolResult
 
@@ -170,7 +178,7 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 		messages = append(messages, messagesMessage{Role: "user", Content: []messagesTextBlock{block}})
 	}
 
-	for _, entry := range history {
+	for i, entry := range history {
 		switch entry.Kind {
 		case EntrySummary:
 			// v0 §10 amendment (2026-09-28): adjacent user text joins without changing the summary.
@@ -215,6 +223,12 @@ func encodeAnthropicHistory(history []Entry) ([]messagesMessage, error) {
 				Content:   string(outcome),
 				IsError:   !entry.Tool.Outcome.OK,
 			})
+		}
+		for _, boundary := range cacheEntries {
+			if boundary == i+1 {
+				flushResults()
+				markCachePoint(messages)
+			}
 		}
 	}
 	flushResults()

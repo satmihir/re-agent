@@ -30,6 +30,7 @@ type Config struct {
 	InRunCompact        bool
 	Agents              bool
 	agent               bool
+	agentPrefix         *agentRequestPrefix
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -97,7 +98,8 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 	defer s.display.stopStatus()
 	// The history a run starts from is embedded so its trace can be read on
 	// its own, without the traces of the turns before it (v1 §6.2).
-	r.trace.Write("run.started", 0, map[string]any{
+	prefix := BuildContext(r.cfg, RequestScope{}, nil)
+	header := map[string]any{
 		"model":      r.model.Name(),
 		"provider":   r.cfg.Provider,
 		"configured": r.cfg.Model,
@@ -109,10 +111,15 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"max_tool_calls":      r.cfg.MaxToolCalls,
 		"in_run_compact":      r.cfg.InRunCompact,
 		"prompt":              prompt,
-		"instructions":        instructions(r.cfg),
-		"tools":               r.cfg.Registry.Specs(),
+		"instructions":        prefix.Instructions,
+		"tools":               prefix.Tools,
 		"initial_history":     s.history,
-	})
+	}
+	if r.cfg.agentPrefix != nil {
+		header["dispatch_tools"] = r.cfg.Registry.Specs()
+		header["dispatch_mode"] = r.cfg.Registry.Mode().String()
+	}
+	r.trace.Write("run.started", 0, header)
 	r.task = &UserTurn{Text: prompt, Workspace: workspace, Roster: s.rosterJSON(), Plan: plan}
 	s.history = append(s.history, Entry{Kind: EntryUser, User: r.task})
 	s.pendingSubmission = nil
@@ -150,7 +157,15 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		}
 		r.steps++
 		r.meterAgent(Usage{Known: true})
+		if p := r.cfg.agentPrefix; p != nil && p.Requested {
+			// Only the first request needs inherited markers byte-for-byte.
+			// Later requests cache the growing suffix at their current end.
+			p.CacheEntries = nil
+		}
 		req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
+		if r.cfg.agentPrefix != nil {
+			r.cfg.agentPrefix.Requested = true
+		}
 		r.trace.Write("model.requested", r.steps, req)
 
 		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)
@@ -322,11 +337,15 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			return StatusCancelled, "cancelled during tool dispatch"
 		}
 
+		if r.cfg.agent && (call.Name == "git_do" || call.Name == "request_workspace_access" || call.Name == "switch_workspace") {
+			r.recordResult(call, failOutcome("permission_denied", call.Name+" is root-only; ask your parent to perform this operation"))
+			continue
+		}
 		tool, found := r.cfg.Registry.Lookup(call.Name)
 		if !found {
 			// A tool this build has but this mode withholds is refused for that
 			// reason; only an unknown name is reported as missing (v1 §10.3).
-			if r.cfg.Registry.known(call.Name) {
+			if r.cfg.Registry.known(call.Name) || r.cfg.agentPrefix.declares(call.Name) {
 				r.recordResult(call, failOutcome("permission_denied",
 					call.Name+" is not enabled; the run was started in "+r.cfg.Registry.Mode().String()+" mode"))
 			} else {

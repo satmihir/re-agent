@@ -33,7 +33,7 @@ In particular, if you use exec (a script, sed, cat, grep, or similar) to do some
 // the run. Successive requests therefore differ only where the conversation
 // differs, which is what makes two recorded requests worth comparing.
 func BuildContext(cfg Config, scope RequestScope, history []Entry) ModelRequest {
-	return ModelRequest{
+	req := ModelRequest{
 		Scope:           scope,
 		Model:           cfg.Model,
 		ReasoningEffort: cfg.ReasoningEffort,
@@ -43,6 +43,12 @@ func BuildContext(cfg Config, scope RequestScope, history []Entry) ModelRequest 
 		History: append([]Entry(nil), history...),
 		Tools:   cfg.Registry.Specs(),
 	}
+	if cfg.agentPrefix != nil {
+		req.Instructions = cfg.agentPrefix.Instructions
+		req.Tools = cfg.agentPrefix.Tools
+		req.CacheEntries = append([]int(nil), cfg.agentPrefix.CacheEntries...)
+	}
+	return req
 }
 
 // instructions is the embedded text plus a labelled runtime section, which is
