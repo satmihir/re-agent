@@ -30,6 +30,7 @@ type Config struct {
 	InRunCompact        bool
 	Agents              bool
 	agent               bool
+	agentPrefix         *agentRequestPrefix
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -326,7 +327,7 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 		if !found {
 			// A tool this build has but this mode withholds is refused for that
 			// reason; only an unknown name is reported as missing (v1 §10.3).
-			if r.cfg.Registry.known(call.Name) {
+			if r.cfg.Registry.known(call.Name) || r.cfg.agentPrefix.declares(call.Name) {
 				r.recordResult(call, failOutcome("permission_denied",
 					call.Name+" is not enabled; the run was started in "+r.cfg.Registry.Mode().String()+" mode"))
 			} else {

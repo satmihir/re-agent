@@ -378,6 +378,9 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 func (s *Session) Reset() {
 	s.ID = NewID()
 	s.history = nil
+	if s.cfg.agent {
+		s.cfg.agentPrefix = nil
+	}
 	s.pendingSubmission = nil
 	s.handoff = nil
 	s.tokensPerByte = 0

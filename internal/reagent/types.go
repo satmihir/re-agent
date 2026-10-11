@@ -99,6 +99,8 @@ type ModelRequest struct {
 	Instructions    string       `json:"instructions"`
 	History         []Entry      `json:"history"`
 	Tools           []ToolSpec   `json:"tools"`
+	// CacheEntries preserves inherited Anthropic breakpoints at history boundaries.
+	CacheEntries []int `json:"cache_entries,omitempty"`
 }
 
 // RequestScope identifies which step of which run produced a request.

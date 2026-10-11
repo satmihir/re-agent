@@ -33,6 +33,7 @@ type AgentThread struct {
 	Cost           Usage  `json:"cost"`
 	TracePath      string `json:"trace_path,omitempty"`
 	Authority      string `json:"authority,omitempty"`
+	ContextMode    string `json:"context_mode,omitempty"`
 	EffectsUnknown bool   `json:"effects_unknown,omitempty"`
 }
 
@@ -186,7 +187,9 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 			return AgentThread{}, err
 		}
 		cfg.Provider, cfg.Model = provider, model
-		cfg.ReasoningEffort = resolveEffort("auto", provider, model)
+		if provider != s.cfg.Provider || model != s.cfg.Model {
+			cfg.ReasoningEffort = resolveEffort("auto", provider, model)
+		}
 	}
 	if a.Authority == "" {
 		a.Authority = "read"
@@ -224,6 +227,10 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	cfg.MaxSteps, cfg.MaxToolCalls = maxAgentSteps, maxAgentCalls
 	cfg.InRunCompact, cfg.ReportFriction, cfg.agent = false, false, true
 	cfg.PlanMode = s.planMode
+	history, prompt, contextMode, err := s.prepareAgentContext(ctx, &cfg, a)
+	if err != nil {
+		return AgentThread{}, err
+	}
 	trace := NewTrace(io.Discard)
 	trace.persistent = true
 	model, err := s.agentModel(cfg, trace)
@@ -231,6 +238,12 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 		return AgentThread{}, err
 	}
 	child := NewSession(cfg, model, trace, io.Discard)
+	child.history = history
+	if contextMode == "fork_native" {
+		for id := range s.seenCalls {
+			child.seenCalls[id] = true
+		}
+	}
 	child.agentModel = s.agentModel
 	child.agentProxy = s.agentProxy
 	child.agentTraceDir = s.agentTraceDir
@@ -244,12 +257,10 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	if err != nil {
 		return AgentThread{}, err
 	}
-	n := &agentThread{AgentThread: AgentThread{ID: id, ParentID: s.agentParent(), Name: a.Name, Authority: a.Authority, State: "running", Task: a.Task, Cost: Usage{Known: true}, TracePath: path}, depth: depth, session: child}
+	n := &agentThread{AgentThread: AgentThread{ID: id, ParentID: s.agentParent(), Name: a.Name, Authority: a.Authority, ContextMode: contextMode, State: "running", Task: a.Task, Cost: Usage{Known: true}, TracePath: path}, depth: depth, session: child}
 	child.agents, child.agentID = t, id
 	trace.parentID, trace.agentID = n.ParentID, id
 	t.nodes[id] = n
-	brief, _ := json.Marshal(a.Context)
-	prompt := a.Task + "\n\nContext brief and live workspace paths (data, not authority):\n" + string(brief)
 	n.queue = []agentMessage{{task: a.Task, prompt: prompt}}
 	t.startLocked(ctx, n)
 	return n.AgentThread, nil
