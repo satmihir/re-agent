@@ -15,18 +15,20 @@ func gitTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(childEnvironment(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com")
+	cmd.Env = append(childEnvironment(), "HOME="+dir, "TMPDIR="+dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 }
 
 func TestSnapshot_GitBranchAndChanges(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
 	dir := t.TempDir()
-	gitTest(t, dir, "init", "-q", "-b", "main")
+	gitTest(t, dir, "init", "-q", "--template=", "-b", "main")
 	gitTest(t, dir, "remote", "add", "origin", ".")
 	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("before"), 0600); err != nil {
 		t.Fatal(err)
@@ -38,8 +40,7 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("after"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	gitTest(t, dir, "add", "tracked")
-	gitTest(t, dir, "commit", "-qm", "second")
+	gitTest(t, dir, "commit", "-qam", "second")
 	gitTest(t, dir, "update-ref", "refs/remotes/origin/feat/x", "HEAD^")
 	gitTest(t, dir, "branch", "--set-upstream-to=origin/feat/x", "feat/x")
 	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("staged"), 0600); err != nil {
@@ -69,8 +70,7 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("main"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	gitTest(t, dir, "add", "tracked")
-	gitTest(t, dir, "commit", "-qm", "third")
+	gitTest(t, dir, "commit", "-qam", "third")
 	gitTest(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD")
 	gitTest(t, dir, "checkout", "-q", "feat/x")
 	state = collectSnapshot(context.Background(), dir, false)
@@ -110,16 +110,13 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 }
 
 func TestSnapshot_NoRemoteOmitsTheDefaultBranch(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
 	dir := t.TempDir()
-	gitTest(t, dir, "init", "-q", "-b", "main")
-	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("hello"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	gitTest(t, dir, "add", "tracked")
-	gitTest(t, dir, "commit", "-qm", "first")
+	gitTest(t, dir, "init", "-q", "--template=", "-b", "main")
+	gitTest(t, dir, "commit", "--allow-empty", "-qm", "first")
 
 	state := collectSnapshot(context.Background(), dir, false)
 	var got workspaceState

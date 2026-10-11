@@ -22,6 +22,16 @@ func gitDoRepo(t *testing.T) *Workspace {
 		t.Skip("git not installed")
 	}
 	base := t.TempDir()
+	// Setup and recipe commands use the same isolated identity, without host hooks or signing.
+	home := filepath.Join(base, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := "[user]\n\tname = Test\n\temail = test@example.com\n[core]\n\thooksPath = " + os.DevNull + "\n[commit]\n\tgpgSign = false\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
 	run := func(dir string, argv ...string) {
 		t.Helper()
 		command := exec.Command(argv[0], argv[1:]...)
@@ -31,10 +41,8 @@ func gitDoRepo(t *testing.T) *Workspace {
 		}
 	}
 	origin, work := filepath.Join(base, "origin.git"), filepath.Join(base, "work")
-	run(base, "git", "init", "-q", "--bare", "-b", "main", origin)
-	run(base, "git", "clone", "-q", origin, work)
-	run(work, "git", "config", "user.name", "Test")
-	run(work, "git", "config", "user.email", "test@example.com")
+	run(base, "git", "init", "-q", "--template=", "--bare", "-b", "main", origin)
+	run(base, "git", "clone", "-q", "--template=", origin, work)
 	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -70,15 +78,6 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	// The child environment keeps HOME; commits need an identity there too.
-	home := filepath.Join(base, "home")
-	if err := os.MkdirAll(home, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n\tname = Test\n\temail = test@example.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
 	ws, err := OpenWorkspace(work)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +184,8 @@ func TestGitDo_ArgumentsMatchTheMode(t *testing.T) {
 	}{
 		{NewGitDoTool(ws, nil), `{"recipe":"nope"}`},
 		{NewGitDoTool(ws, nil), `{"recipe":"status","intent":"x"}`},
+		{NewGitDoTool(ws, nil), `{"recipe":"commit","paths":["/tmp/file"]}`},
+		{NewGitDoTool(ws, nil), `{"recipe":"commit","paths":["../file"]}`},
 		{NewGitDoTool(ws, newJevClient("k", "", nil)), `{"recipe":"status"}`},
 		{NewGitDoTool(ws, newJevClient("k", "", nil)), `{"intent":"show status","recipe":"nope"}`},
 	} {
@@ -685,13 +686,13 @@ func gitDoWrite(t *testing.T, dir, name string) {
 }
 
 func TestGitDo_EmbeddedWorktreeDeclinesBeforeAnyMutation(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+	gitDoWrite(t, ws.Root(), "intended.txt")
+	gitDoNestedWorktree(t, ws)
+	before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
 	for _, recipe := range []string{"ship_pr", "commit_push", "split_commits"} {
 		t.Run(recipe, func(t *testing.T) {
-			ws := gitDoRepo(t)
-			gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
-			gitDoWrite(t, ws.Root(), "intended.txt")
-			gitDoNestedWorktree(t, ws)
-			before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
 			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"`+recipe+`"}`)
 			if outcome.Code != "declined" || !strings.Contains(outcome.Message, "nested") || !strings.Contains(outcome.Message, "paths") || len(gitDoData(t, outcome).Steps) != 0 {
 				t.Fatalf("%+v", outcome)
@@ -761,8 +762,6 @@ func TestGitDo_PathsValidation(t *testing.T) {
 		name, selected string
 		allowed        bool
 	}{
-		{"absolute", "/tmp/file", false},
-		{"parent", "../file", false},
 		{"nonexistent", "missing.txt", false},
 		{"deleted tracked", "README.md", true},
 	} {
@@ -846,13 +845,17 @@ func TestGitDo_JevCommitRespectsLiteralPaths(t *testing.T) {
 }
 
 func TestGitDo_PathsCannotSelectAnEmbeddedWorktree(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoNestedWorktree(t, ws)
+	before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
 	for _, selected := range []string{"nested", "nested/README.md"} {
 		t.Run(selected, func(t *testing.T) {
-			ws := gitDoRepo(t)
-			gitDoNestedWorktree(t, ws)
 			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit","paths":["`+selected+`"]}`)
-			if outcome.Code != "declined" || !strings.Contains(outcome.Message, "nested") || len(gitDoData(t, outcome).Steps) != 0 {
+			if outcome.Code != "declined" || outcome.Effect != EffectNone || !strings.Contains(outcome.Message, "nested") || len(gitDoData(t, outcome).Steps) != 0 {
 				t.Fatalf("%+v", outcome)
+			}
+			if gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "diff", "--cached", "--name-only") != "" || gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/main") != before+"\trefs/heads/main" {
+				t.Fatal("declined path changed HEAD, index or remote")
 			}
 		})
 	}
