@@ -237,7 +237,7 @@ func TestAgents_ForkAuthorityAndReset(t *testing.T) {
 }
 
 func TestAgents_ContextArgumentIndices(t *testing.T) {
-	for _, context := range []string{`{"fork":true,"entries":[1]}`, `{"entries":[0]}`, `{"entries":[2]}`, `{"entries":[1,1]}`, `{"fork":"yes"}`, `{"fork":null}`} {
+	for _, context := range []string{`{"fork":true,"entries":[1]}`, `{"entries":[0]}`, `{"entries":[2]}`, `{"entries":[1,1]}`, `{"fork":"yes"}`, `{"fork":null}`, `{"entries":null}`, `{"entries":[null]}`} {
 		t.Run(context, func(t *testing.T) {
 			s := agentFixture(t)
 			s.model = NewScriptedModel(turn(callBlock("spawn", "spawn", `{"task":"inspect","context":`+context+`}`)), turn(textBlock("done")))
@@ -247,7 +247,7 @@ func TestAgents_ContextArgumentIndices(t *testing.T) {
 					if entry.Tool.Outcome.OK {
 						t.Fatal("invalid context admitted")
 					}
-					if context == `{"fork":null}` && entry.Tool.Outcome.Code != "invalid_arguments" {
+					if (context == `{"fork":null}` || context == `{"entries":null}`) && entry.Tool.Outcome.Code != "invalid_arguments" {
 						t.Fatalf("null accepted: %+v", entry.Tool)
 					}
 				}

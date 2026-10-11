@@ -54,10 +54,10 @@ type spawnArgs struct {
 }
 
 type agentContext struct {
-	Brief   string    `json:"brief"`
-	Files   []string  `json:"files,omitempty"`
-	Fork    agentFork `json:"fork,omitempty"`
-	Entries []int     `json:"entries,omitempty"`
+	Brief   string       `json:"brief"`
+	Files   []string     `json:"files,omitempty"`
+	Fork    agentFork    `json:"fork,omitempty"`
+	Entries agentEntries `json:"entries,omitempty"`
 }
 
 type agentFork bool
@@ -68,6 +68,20 @@ func (f *agentFork) UnmarshalJSON(raw []byte) error {
 		return fmt.Errorf("%s", bad.Message)
 	}
 	*f = agentFork(value)
+	return nil
+}
+
+type agentEntries []int
+
+func (e *agentEntries) UnmarshalJSON(raw []byte) error {
+	if string(raw) == "null" {
+		return fmt.Errorf("entries must be omitted rather than null")
+	}
+	var indices []int
+	if err := json.Unmarshal(raw, &indices); err != nil {
+		return fmt.Errorf("entries must be an array of integer indices: %w", err)
+	}
+	*e = indices
 	return nil
 }
 
