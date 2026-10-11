@@ -250,13 +250,10 @@ func TestAgents_WriteAuthorityOnlyShrinks(t *testing.T) {
 
 func TestAgents_WriteChildGetsOnlyParentsAvailableToolsAndNoWorkspaceOrGitTools(t *testing.T) {
 	s := agentFixture(t)
-	registry, err := NewRegistry(Mode{}, append(NewAgentTools(), NewReadFileTool(s.cfg.Workspace), NewWriteFileTool(s.cfg.Workspace), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool())...)
+	registry, err := NewRegistry(Mode{}, append(NewAgentTools(), NewReadFileTool(s.cfg.Workspace), NewWriteFileTool(s.cfg.Workspace), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool(), NewGitDoTool(s.cfg.Workspace, nil))...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// An active root-only capability must not leak through spawn's subset selection.
-	registry.byName["git_do"] = NewEchoTool()
-	registry.specs = append(registry.specs, ToolSpec{Name: "git_do"})
 	s.cfg.Registry = registry.bindWorkspace(s, s.workspace.active)
 	s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
 		for _, name := range []string{"edit_file", "delete_file", "exec", "git_do", "switch_workspace", "request_workspace_access"} {
