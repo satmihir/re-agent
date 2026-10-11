@@ -194,6 +194,8 @@ func (c *conversation) switchTo(info modelInfo) {
 	c.session.snapshot, c.session.planMode = previous.snapshot, previous.planMode
 	c.session.agentModel = previous.agentModel
 	c.session.agentProxy = previous.agentProxy
+	c.session.agentTraceDir = previous.agentTraceDir
+	c.session.agentReceipts = previous.agentReceipts
 	c.session.agents = previous.agents
 	c.session.launchInstructions = previous.launchInstructions
 	c.session.workspaceConsent = previous.workspaceConsent

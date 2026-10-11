@@ -241,6 +241,11 @@ func TestAgents_NamedHistoryAndBusyMessagesSurviveLaterTurn(t *testing.T) {
 	if s.Turns() != 2 || len(agentResults(s.history)) != 3 {
 		t.Fatal("results duplicated or counted as user turns")
 	}
+	for _, result := range results(s) {
+		if result.Name == "wait" && strings.Contains(string(result.Outcome.Data), "remembered result") {
+			t.Fatal("wait duplicated a queued-turn result")
+		}
+	}
 }
 
 func TestAgents_WaitTimeoutDoesNotCancelAndSubtreeCancellation(t *testing.T) {
@@ -849,5 +854,202 @@ func TestAgents_WorkspaceSnapshotCannotExecuteCleanFilters(t *testing.T) {
 	agentTurn(t, s, "no commands in metadata collection")
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("agent metadata executed a configured clean filter")
+	}
+}
+
+func TestAgents_CachedGrowingContextReachesStepCap(t *testing.T) {
+	s := agentFixture(t)
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			resp := turn(callBlock(fmt.Sprintf("read-%d", req.Scope.Step), "list_files", `{"path":"."}`))
+			input := int64(6000 + 4000*req.Scope.Step)
+			resp.Usage = Usage{Known: true, InputTokens: input, CachedInputTokens: input - 4000, OutputTokens: 100}
+			return resp, nil
+		}}, nil
+	}
+	s.model = NewScriptedModel(turn(spawnBlock("s", "growing context", "cached"), callBlock("w", "wait", `{"ids":["cached"]}`)), turn(textBlock("done")))
+	result := agentTurn(t, s, "cached reads")
+	child := agentResults(s.history)[0].Result
+	if child.Steps != maxAgentSteps || child.Status != StatusLimitExceeded || child.Usage.InputTokens <= maxAgentTokens || child.Usage.CachedInputTokens == 0 || result.TreeCost.InputTokens != child.Usage.InputTokens+result.Usage.InputTokens {
+		t.Fatalf("cached usage/cap: %+v %+v", child, result)
+	}
+	if agentTokenLimit(Usage{InputTokens: 1, CachedInputTokens: 9, OutputTokens: maxAgentTokens}) == false {
+		t.Fatal("anomalous cache count subtracted output usage")
+	}
+}
+
+func TestAgents_WaitAfterOtherWorkUsesReceiptAndDoesNotDuplicateReply(t *testing.T) {
+	s := agentFixture(t)
+	step := 0
+	s.model = agentTestModel{generate: func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		step++
+		switch step {
+		case 1:
+			return turn(spawnBlock("s", "inspect", "")), nil
+		case 2:
+			// Child completes while the parent's request is doing unrelated work.
+			if _, err := s.waitAgents(ctx, []string{"t1"}); err != nil {
+				t.Error(err)
+			}
+			return turn(callBlock("other", "list_files", `{"path":"."}`)), nil
+		case 3:
+			if len(agentResults(req.History)) != 1 || len(s.agentRoster()) != 0 {
+				t.Error("anonymous delivery/cleanup missing")
+			}
+			return turn(callBlock("later", "wait", `{"ids":["t1"],"timeout":0}`)), nil
+		default:
+			return turn(textBlock("done")), nil
+		}
+	}}
+	agentTurn(t, s, "other work")
+	out := results(s)[2].Outcome
+	var data struct {
+		Statuses []agentWaitStatus `json:"statuses"`
+		TimedOut bool              `json:"timed_out"`
+	}
+	if err := json.Unmarshal(out.Data, &data); err != nil || !out.OK || data.TimedOut || len(data.Statuses) != 1 || data.Statuses[0].DeliveryStep == nil || *data.Statuses[0].DeliveryStep != 2 || data.Statuses[0].DeliveryRunID == "" || !strings.Contains(data.Statuses[0].Message, "already delivered at step 2") || strings.Contains(string(out.Data), "child done") || len(agentResults(s.history)) != 1 {
+		t.Fatalf("receipt/outcome: %+v %+v", out, data)
+	}
+	if _, err := s.waitAgents(context.Background(), []string{"t999"}); err == nil || !strings.Contains(err.Error(), `ID or name "t999"`) {
+		t.Fatalf("misleading unknown target: %v", err)
+	}
+	s.agents.mu.Lock()
+	child := NewSession(s.cfg, s.model, NewTrace(io.Discard), io.Discard)
+	child.agents, child.agentID = s.agents, "other-parent"
+	s.agents.mu.Unlock()
+	if _, err := child.waitAgents(context.Background(), []string{"t1"}); err == nil {
+		t.Fatal("foreign receipt visible")
+	}
+}
+
+func TestAgents_WaitAndBoundaryBoundEscapedReply(t *testing.T) {
+	s := agentFixture(t)
+	reply := strings.Repeat("雪\x00\"\\<", 20000)
+	s.agentModel = func(Config, *Trace) (Model, error) { return NewScriptedModel(turn(textBlock(reply))), nil }
+	s.model = NewScriptedModel(turn(spawnBlock("s", "large", "large"), callBlock("w", "wait", `{"ids":["large"]}`)), turn(textBlock("done")))
+	agentTurn(t, s, "oversized result")
+	if strings.Contains(string(results(s)[1].Outcome.Data), "雪") || strings.Contains(string(results(s)[1].Outcome.Data), `"results"`) {
+		t.Fatal("wait included content")
+	}
+	all := agentResults(s.history)
+	if len(all) != 1 || !all[0].Truncated || all[0].Result.TracePath == "" || all[0].Result.Reply == reply {
+		t.Fatalf("unbounded result: %+v", all)
+	}
+	for _, e := range s.history {
+		if e.User != nil && e.User.Source == "agent" {
+			raw, _ := json.Marshal(e.User)
+			if len(raw) > MaxResultBytes || !json.Valid(raw) {
+				t.Fatalf("encoded entry bytes=%d", len(raw))
+			}
+		}
+	}
+	found := false
+	for _, e := range readEvents(t, all[0].Result.TracePath) {
+		if e.Type == "run.finished" && e.Data.(map[string]any)["reply"] == reply {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("full reply missing from lifetime trace")
+	}
+}
+
+func TestAgents_ReceiptsAreBoundedAndReleaseCapacity(t *testing.T) {
+	s := agentFixture(t)
+	for i := 0; i < maxAgentReceipts+2; i++ {
+		s.model = NewScriptedModel(turn(spawnBlock(fmt.Sprintf("s%d", i), "one", ""), callBlock(fmt.Sprintf("w%d", i), "wait", fmt.Sprintf(`{"ids":["t%d"]}`, i+1))), turn(textBlock("done")))
+		agentTurn(t, s, "collect")
+	}
+	if len(s.agentReceipts) != maxAgentReceipts || len(s.agentRoster()) != 0 {
+		t.Fatal("unbounded receipts or retained capacity")
+	}
+	if _, err := s.waitAgents(context.Background(), []string{"t1"}); err == nil {
+		t.Fatal("old receipt not evicted")
+	}
+	if _, err := s.waitAgents(context.Background(), []string{"t66"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgents_ResumedTombstonesDismissByIDAndName(t *testing.T) {
+	for _, target := range []agentTargetArgs{{ID: "t1"}, {Name: "tests"}} {
+		t.Run(fmt.Sprint(target), func(t *testing.T) {
+			s := agentFixture(t)
+			s.restore(chatCheckpoint{ID: s.ID, Agents: true, AgentRoster: []AgentThread{{ID: "t1", ParentID: "root", Name: "tests"}}})
+			s.store = testSessionStore(t, s.ID)
+			if _, err := s.sendAgent(context.Background(), target, "no restart"); err == nil {
+				t.Fatal("restarted tombstone")
+			}
+			if err := s.controlAgent(context.Background(), target, "reset"); err == nil {
+				t.Fatal("reset tombstone")
+			}
+			if err := s.controlAgent(context.Background(), target, "dismiss"); err != nil {
+				t.Fatal(err)
+			}
+			if len(s.agentRoster()) != 0 {
+				t.Fatal("dismiss retained roster observation")
+			}
+			s.model = NewScriptedModel(turn(textBlock("done")))
+			agentTurn(t, s, "next message")
+			cp, err := s.store.load(s.ID)
+			if err != nil || len(cp.AgentRoster) != 0 {
+				t.Fatalf("dismiss not persisted: %+v %v", cp.AgentRoster, err)
+			}
+			if strings.Contains(string(s.history[0].User.Roster), "tests") {
+				t.Fatal("next message retained tombstone")
+			}
+			s.model = NewScriptedModel(turn(spawnBlock("s", "replacement", "tests"), callBlock("w", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
+			agentTurn(t, s, "reuse name")
+			if s.agentRoster()[0].ID != "t2" {
+				t.Fatal("ID reused")
+			}
+		})
+	}
+}
+
+func TestAgents_CustomTraceDirectorySurvivesNestingAndFreshSwitch(t *testing.T) {
+	s := agentFixture(t)
+	s.agentTraceDir = t.TempDir()
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			if req.Scope.Step == 1 && strings.HasPrefix(req.History[0].User.Text, "parent") {
+				return turn(spawnBlock("nested", "leaf", "leaf"), callBlock("w", "wait", `{"ids":["leaf"]}`)), nil
+			}
+			return turn(textBlock("done")), nil
+		}}, nil
+	}
+	s.model = NewScriptedModel(turn(spawnBlock("s", "parent", "parent"), callBlock("w", "wait", `{"ids":["parent"]}`)), turn(textBlock("done")))
+	agentTurn(t, s, "nested")
+	c := &conversation{session: s, trace: s.trace, progress: io.Discard, client: NewHTTPClient(), keys: map[string]string{openaiName: "test"}}
+	info, _ := findModel("gpt-6-luna")
+	c.switchTo(info)
+	statuses, err := c.session.waitAgents(context.Background(), []string{"parent"})
+	if err != nil || len(statuses) != 1 || statuses[0].DeliveryRunID == "" {
+		t.Fatalf("fresh switch lost delivery receipt: %+v %v", statuses, err)
+	}
+	c.session.model = NewScriptedModel(turn(spawnBlock("new", "new agent", "new"), callBlock("w", "wait", `{"ids":["new"]}`)), turn(textBlock("done")))
+	agentTurn(t, c.session, "after fresh switch")
+	s.agents.mu.Lock()
+	defer s.agents.mu.Unlock()
+	if len(s.agents.nodes) != 3 {
+		t.Fatal("missing nested or fresh agent")
+	}
+	for _, n := range s.agents.nodes {
+		if filepath.Dir(filepath.Dir(n.TracePath)) != s.agentTraceDir {
+			t.Fatalf("trace outside override: %s", n.TracePath)
+		}
+		if _, err := os.Stat(n.TracePath); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAgents_LiveNameWinsOverResumedTombstone(t *testing.T) {
+	s := agentFixture(t)
+	s.restore(chatCheckpoint{ID: s.ID, Agents: true, AgentRoster: []AgentThread{{ID: "t1", ParentID: "root", Name: "tests"}}})
+	s.model = NewScriptedModel(turn(spawnBlock("s", "replacement", "tests"), callBlock("w", "wait", `{"ids":["tests"]}`), callBlock("dismiss-old", "dismiss", `{"id":"t1"}`)), turn(textBlock("done")))
+	agentTurn(t, s, "reuse ended name")
+	if !results(s)[1].Outcome.OK || !results(s)[2].Outcome.OK || len(s.agentRoster()) != 1 || s.agentRoster()[0].ID != "t2" {
+		t.Fatalf("live name/tombstone targeting: %+v %+v", results(s), s.agentRoster())
 	}
 }

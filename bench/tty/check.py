@@ -57,6 +57,7 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("key", name)               enter, ctrl-c, ctrl-u, esc, left, up
 #   ("paste", text)             a bracketed paste
 #   ("wait", text, seconds)     until text is on screen or in scrollback
+#   ("wait_status", text, seconds) wait for text below the last drawn prompt rule
 #   ("idle", seconds)           let output settle
 #   ("resize", rows, cols)
 #   ("show", label)             print the screen
@@ -66,13 +67,15 @@ SCENARIOS = {
         "agents": True,
         "steps": [
             ("idle", 0.5), ("type", "delegate two tasks"), ("key", "enter"),
-            ("wait", "Agent results received.", 8),
+            ("wait", "tree cost: 50 input", 8),
+            ("wait_status", "gpt-6-sol / low", 8),
             ("show", "parallel agents and tree token cost"),
             ("expect", "screen_has", "tree cost: 50 input"),
             ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
             ("expect", "status_row_last"),
             ("type", "ask my tests agent again"), ("key", "enter"),
-            ("wait", "Named agent reused.", 8),
+            ("wait", "tree cost: 40 input", 8),
+            ("wait_status", "gpt-6-sol / low", 8),
             ("show", "named agent reused in another chat turn"),
             ("expect", "screen_has", "tree cost: 40 input"),
             ("expect", "status_row_last"),
@@ -103,6 +106,7 @@ SCENARIOS = {
             ("show", "waiting before the next model attempt"),
             ("expect", "status_row_last"),
             ("wait", "Hello after retry", 6),
+            ("wait_status", "gpt-6-luna / low", 6),
             ("show", "model reply after retry"),
             ("expect", "screen_has", "1 unreported retry"),
             ("expect", "status_row_last"),
@@ -343,13 +347,21 @@ class Session:
             os.write(self.fd, ch.encode())
             self.pump(0.01)
 
-    def wait_for(self, text, seconds):
+    def wait_for(self, text, seconds, status=False):
+        def drawn():
+            if not status:
+                return any(text in line for line in self.term.text())
+            screen = self.term.screen()
+            rules = region_rows(screen)
+            return bool(rules and rules[-1] + 1 < len(screen) and
+                        text in screen[rules[-1] + 1])
+
         end = time.time() + seconds
         while time.time() < end and self.alive:
-            if any(text in line for line in self.term.text()):
+            if drawn():
                 return True
             self.pump(0.05)
-        return any(text in line for line in self.term.text())
+        return drawn()
 
     def resize(self, rows, cols):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -572,6 +584,9 @@ def run(binary, name, scenario, workspace):
             elif kind == "wait":
                 if not s.wait_for(args[0], args[1]):
                     failures.append("timed out waiting for %r" % args[0])
+            elif kind == "wait_status":
+                if not s.wait_for(args[0], args[1], status=True):
+                    failures.append("timed out waiting for the prompt status row")
             elif kind == "idle":
                 s.pump(args[0])
             elif kind == "resize":

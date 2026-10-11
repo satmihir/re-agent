@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -153,8 +155,16 @@ func TestChat_AgentsResumeEndsRosterWithoutRestart(t *testing.T) {
 	defer server.Close()
 	t.Setenv("API_PROXY_URL", server.URL)
 	var out, errOut bytes.Buffer
-	if code := Main(context.Background(), []string{"chat", "--agents", "--workspace", t.TempDir()}, strings.NewReader("before\n/exit\n"), &out, &errOut); code != exitOK {
+	traceDir := t.TempDir()
+	if code := Main(context.Background(), []string{"chat", "--agents", "--trace-dir", traceDir, "--workspace", t.TempDir()}, strings.NewReader("before\n/exit\n"), &out, &errOut); code != exitOK {
 		t.Fatalf("first %d %s", code, errOut.String())
+	}
+	paths, err := filepath.Glob(filepath.Join(traceDir, "agent-*", "events.jsonl"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("custom agent traces: %v %v", paths, err)
+	}
+	if _, err := os.Stat(paths[0]); err != nil {
+		t.Fatal(err)
 	}
 	match := regexp.MustCompile(`session ID: ([0-9a-f]{16})`).FindStringSubmatch(errOut.String())
 	if len(match) != 2 {

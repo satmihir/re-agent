@@ -15,6 +15,8 @@ type Session struct {
 	model            Model
 	agentModel       func(Config, *Trace) (Model, error)
 	agentProxy       apiProxy
+	agentTraceDir    string
+	agentReceipts    []agentWaitStatus
 	currentRun       *Run
 	agents           *agentTree
 	agentID          string

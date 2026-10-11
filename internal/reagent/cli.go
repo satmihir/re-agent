@@ -287,6 +287,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		live = scripted
 	}
 	session := NewSession(cfg, live, trace, stderr)
+	session.agentTraceDir = options.traceDir
 	if options.agents {
 		session.agentProxy = proxy
 		session.agentModel = func(agentCfg Config, agentTrace *Trace) (Model, error) {

@@ -27,18 +27,18 @@ func (t agentTool) Spec() ToolSpec {
 	schema := `{"type":"object","properties":{},"additionalProperties":false}`
 	switch t.name {
 	case "spawn":
-		description = "Start a concurrent read-only agent with a fresh Session, no parent history, a prose brief and optional live workspace file paths to read. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported-token cap. You cannot finish while children are running."
+		description = "Start a concurrent read-only agent with a fresh Session, no parent history, a prose brief and optional live workspace file paths to read. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
 		schema = `{"type":"object","properties":{"task":{"type":"string"},"context":{"type":"object","properties":{"brief":{"type":"string"},"files":{"type":"array","items":{"type":"string"}}},"additionalProperties":false},"name":{"type":"string"},"model":{"type":"string"}},"required":["task","context"],"additionalProperties":false}`
 	case "send":
 		description = "Queue a follow-up message to your own child by ID or name; idle named agents retain their Session across chat turns. Busy agents handle messages sequentially. Blocked agents require reset."
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"message":{"type":"string"}},"required":["message"],"additionalProperties":false}`
 	case "wait":
-		description = "Wait for your given children (IDs or names) to finish current and queued work; returns latest results without consuming boundary delivery. Optional timeout is in seconds (default 120, maximum 600); a timeout does not cancel children."
+		description = "Wait for your given children (IDs or names) to finish current and queued work; returns statuses only; results arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened). Recent delivered IDs return their delivery run and step. Optional timeout is in seconds (default 120, maximum 600); a timeout does not cancel children."
 		schema = `{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"timeout":{"type":"integer","minimum":0,"maximum":600}},"required":["ids"],"additionalProperties":false}`
 	case "threads":
 		description = "List only your children: state, current task, steps, cost in reported tokens and trace path; never blocks on their work."
 	default:
-		description = map[string]string{"cancel": "Cancel current and queued work in your child and its whole subtree. The named child can accept later send.", "dismiss": "End your child and its whole subtree; releases live capacity and the name.", "reset": "Clear a blocked, stopped child's history, preserving its name, fixed workspace and authority; dismisses its descendants. Then send new work."}[t.name]
+		description = map[string]string{"cancel": "Cancel current and queued work in your child and its whole subtree. The named child can accept later send.", "dismiss": "End your child and its whole subtree; releases live capacity and the name. Also removes ended-at-resume roster observations.", "reset": "Clear a blocked, stopped child's history, preserving its name, fixed workspace and authority; dismisses its descendants. Then send new work."}[t.name]
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}`
 	}
 	return ToolSpec{Name: t.name, Description: description, InputSchema: json.RawMessage(schema), Effect: EffectClassRead}
@@ -129,11 +129,11 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		}
 		waitCtx, cancel := agentWaitContext(ctx, seconds)
 		defer cancel()
-		results, err := s.waitAgents(waitCtx, a.IDs)
+		statuses, err := s.waitAgents(waitCtx, a.IDs)
 		out, e := okOutcome(struct {
-			Results  []agentResult `json:"results"`
-			TimedOut bool          `json:"timed_out"`
-		}{results, errors.Is(err, context.DeadlineExceeded)})
+			Statuses []agentWaitStatus `json:"statuses"`
+			TimedOut bool              `json:"timed_out"`
+		}{statuses, errors.Is(err, context.DeadlineExceeded)})
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			return failOutcome("wait_denied", err.Error()), nil
 		}
