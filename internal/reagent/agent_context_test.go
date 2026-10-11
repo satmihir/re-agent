@@ -611,3 +611,132 @@ func TestAgents_SharingRetainsDescendantUncertaintyAsModelSwitchData(t *testing.
 		}
 	}
 }
+
+func TestAgents_RootOnlyRefusalsExplainAuthorityForFreshAndForkedAgents(t *testing.T) {
+	for _, fork := range []bool{false, true} {
+		for _, authority := range []string{"read", "write"} {
+			t.Run(fmt.Sprintf("fork=%t/%s", fork, authority), func(t *testing.T) {
+				s := agentFixture(t)
+				tools := []Tool{NewGitDoTool(s.cfg.Workspace, nil), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool()}
+				for _, spec := range s.cfg.Registry.Specs() {
+					tool, _ := s.cfg.Registry.Lookup(spec.Name)
+					tools = append(tools, tool)
+				}
+				registry, err := NewRegistry(Mode{}, tools...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.cfg.Registry = registry.bindWorkspace(s, s.workspace.active)
+				s.agentModel = func(Config, *Trace) (Model, error) {
+					return NewScriptedModel(turn(callBlock("git", "git_do", `{}`)), turn(callBlock("grant", "request_workspace_access", `{"path":"/tmp"}`)), turn(callBlock("switch", "switch_workspace", `{"path":"/tmp"}`)), turn(textBlock("done"))), nil
+				}
+				s.model = NewScriptedModel(turn(forkBlock("spawn", "", authority, &agentContext{Fork: agentFork(fork)})), turn(callBlock("wait", "wait", `{"ids":["fork"]}`)), turn(textBlock("done")))
+				agentTurn(t, s, "authority")
+				child := s.agents.nodes["t1"].session
+				count := 0
+				for _, entry := range child.history {
+					if entry.Tool == nil {
+						continue
+					}
+					out := entry.Tool.Outcome
+					if out.Code != "permission_denied" || out.Effect != EffectNone || !strings.Contains(out.Message, "root-only") || !strings.Contains(out.Message, "parent") || strings.Contains(out.Message, "started in") {
+						t.Fatalf("contradictory refusal: %+v", out)
+					}
+					count++
+				}
+				if count != 3 {
+					t.Fatalf("missing refusals: %d", count)
+				}
+			})
+		}
+	}
+	s := agentFixture(t)
+	s.cfg.Agents = false
+	s.model = NewScriptedModel(turn(callBlock("git", "git_do", `{}`)), turn(textBlock("done")))
+	agentTurn(t, s, "ordinary root")
+	if out := results(s)[0].Outcome; out.Code != "tool_unavailable" || strings.Contains(out.Message, "root-only") {
+		t.Fatalf("root behavior changed: %+v", out)
+	}
+}
+
+func TestAgents_ForkedReadsDoNotAuthorizeWritesUntilReread(t *testing.T) {
+	s := agentFixture(t)
+	gitInspectTestWrite(t, s.cfg.WorkspacePath, "inherited.txt", "before")
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			switch req.Scope.Step {
+			case 1:
+				inheritedRead := false
+				for _, entry := range req.History {
+					if entry.Tool != nil && entry.Tool.Name == "read_file" {
+						inheritedRead = true
+					}
+				}
+				if !inheritedRead || !strings.Contains(req.History[len(req.History)-1].User.Text, "Forked history does not copy remembered file digests") {
+					t.Error("fork lacks inherited read or reread guidance")
+				}
+				return turn(callBlock("try", "edit_file", `{"path":"inherited.txt","old_text":"before","new_text":"after"}`)), nil
+			case 2:
+				if out := results(&Session{history: req.History})[1].Outcome; out.Code != "invalid_arguments" {
+					t.Errorf("inherited read authorized edit: %+v", out)
+				}
+				return turn(callBlock("reread", "read_file", `{"path":"inherited.txt"}`)), nil
+			case 3:
+				return turn(callBlock("edit", "edit_file", `{"path":"inherited.txt","old_text":"before","new_text":"after"}`)), nil
+			default:
+				reviewToolResult(t, req.History, "edit")
+				return turn(textBlock("reread then changed")), nil
+			}
+		}}, nil
+	}
+	// The inherited assistant response must carry native state for native admission.
+	s.model = NewScriptedModel(contextResponse(openaiName, callBlock("read", "read_file", `{"path":"inherited.txt"}`)), contextResponse(openaiName, forkBlock("spawn", "", "write", &agentContext{Fork: true})), turn(callBlock("wait", "wait", `{"ids":["fork"]}`)), turn(textBlock("done")))
+	agentTurn(t, s, "fork read observations")
+	if got := fileContent(t, s.cfg.Workspace, "inherited.txt"); got != "after" {
+		t.Fatal(got)
+	}
+}
+
+func TestAgents_NativeForkUsesDestinationWindowAdmission(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		for _, reserve := range []int{256, 40_000} {
+			t.Run(fmt.Sprintf("%s/reserve=%d", provider, reserve), func(t *testing.T) {
+				s := agentFixture(t)
+				s.cfg.Provider = provider
+				if provider == anthropicName {
+					s.cfg.Model = DefaultAnthropicModel
+				}
+				s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: ""}}}
+				base, err := encodeRequest(s.cfg, BuildContext(s.cfg, RequestScope{}, s.history))
+				if err != nil {
+					t.Fatal(err)
+				}
+				window, rate := contextWindow(s.cfg.Model), s.admissionRate(provider)
+				allowed := int(float64(window-16_000) / rate)
+				s.history[0].User.Text = strings.Repeat("x", allowed-len(base)-reserve)
+				if _, err := validateDestination(s.cfg, s.history, window, rate); err != nil {
+					t.Fatal("parent must fit:", err)
+				}
+				n, err := s.spawnAgent(context.Background(), spawnArgs{Task: strings.Repeat("t", 8192), Name: "near-window", Context: &agentContext{Fork: true}})
+				if reserve == 256 {
+					if err == nil || !strings.Contains(err.Error(), "window allowance") || len(s.agentRoster()) != 0 {
+						t.Fatalf("native window overflow admitted: %+v %v", n, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal("fork with room should fit:", err)
+				}
+				if _, err := s.waitAgents(context.Background(), []string{n.ID}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+	s := agentFixture(t)
+	s.cfg.Model = "custom-unknown-window"
+	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "history"}}}
+	if _, err := s.spawnAgent(context.Background(), spawnArgs{Task: "fork", Context: &agentContext{Fork: true}}); err == nil || !strings.Contains(err.Error(), "window is unknown") {
+		t.Fatalf("unknown native window: %v", err)
+	}
+}

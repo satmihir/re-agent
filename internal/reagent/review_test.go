@@ -1140,3 +1140,257 @@ func TestChat_ReviewChangedPagedBaselineDisclosesUnknownDelta(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewPrompt_BudgetsModelChoiceAndUncoveredPolicy(t *testing.T) {
+	text := strings.Join(strings.Fields(reviewPrompt), " ")
+	for _, rule := range []string{
+		"low: 0 agents, 0 delegated tokens, 0 agent task turns",
+		"medium: at most 16 total agents, 600,000 delegated uncached-input plus output tokens, and 32 agent task turns",
+		"high: at most 24 total agents, 1,200,000 delegated uncached-input plus output tokens, and 48 agent task turns",
+		"max: at most 40 total agents, 2,000,000 delegated uncached-input plus output tokens, and 80 agent task turns",
+		"Finder caps are 10/12/16", "Allocate one finder to each of the ten angles before extra shards",
+		"Reserve two agent slots and 100,000 tokens", "Before EVERY spawn, send or batch",
+		"Root inline model usage is additional", "in-flight calls can overshoot",
+		"STOP new work", "unverified (never plausible/confirmed by default)",
+		"Do not bypass the stop by replacing agents with inline work", "has unreported attempts",
+		"Keep verifiers and the sweep on the current review model",
+		`spawn.model="gpt-6-luna"`, `spawn.model="claude-haiku-4-5"`,
+	} {
+		if !strings.Contains(text, rule) {
+			t.Errorf("missing review budget rule: %s", rule)
+		}
+	}
+	if strings.Contains(text, "24/48/64") {
+		t.Fatal("obsolete unbounded finder schedule retained")
+	}
+}
+
+// The model decisions are scripted; actual spawn/model selection, usage,
+// lifecycle tools and stopped reports exercise the budget's protocol feasibility.
+func TestChat_ReviewBudgetStopsWithUnverifiedCandidates(t *testing.T) {
+	for _, stop := range []string{"agents", "tokens", "unknown usage"} {
+		t.Run(stop, func(t *testing.T) {
+			s := agentFixture(t)
+			cheap, strong := 0, 0
+			s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
+				if cfg.Model == DefaultOpenAIModel {
+					cheap++
+				} else if cfg.Model == s.cfg.Model {
+					strong++
+				} else {
+					t.Errorf("unexpected review model %s", cfg.Model)
+				}
+				return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+					task := req.History[0].User.Text
+					var reply string
+					if strings.HasPrefix(task, "find ") {
+						if cfg.Model != DefaultOpenAIModel {
+							t.Error("finder not on cheaper model")
+						}
+						var index int
+						fmt.Sscanf(task, "find %d", &index)
+						var records []string
+						for i := 0; i < 5; i++ {
+							records = append(records, fmt.Sprintf("candidate-%02d-%02d", index, i))
+						}
+						raw, _ := json.Marshal(records)
+						reply = string(raw)
+					} else {
+						if cfg.Model != s.cfg.Model || !strings.HasPrefix(task, "verify candidate-") {
+							t.Error("verification model or candidate changed")
+						}
+						reply = "confirmed " + strings.Fields(task)[1]
+					}
+					response := turn(textBlock(reply))
+					response.Usage = Usage{Known: true, InputTokens: 100, CachedInputTokens: 90}
+					if stop == "tokens" {
+						response.Usage = Usage{Known: true, InputTokens: 80_000, CachedInputTokens: 20_000}
+					}
+					if stop == "unknown usage" {
+						response.Usage = Usage{}
+					}
+					return response, nil
+				}}, nil
+			}
+			stage, meterID := "start", ""
+			var baseline agentSubtree
+			finders, verified := 0, 0
+			var candidates, verdicts, batchNames []string
+			collected := map[string]bool{}
+			s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+				id := func(label string) string { return fmt.Sprintf("%s-%d", label, req.Scope.Step) }
+				if stage == "start" {
+					if !strings.Contains(req.History[0].User.Text, "Review budget and model choice") {
+						t.Error("ordinary review turn lost budget prompt")
+					}
+					stage, meterID = "decide", id("baseline")
+					return turn(callBlock(meterID, "threads", `{"subtree":true}`)), nil
+				}
+				if stage == "wait" {
+					raw, _ := json.Marshal(map[string]any{"ids": batchNames})
+					stage = "meter"
+					return turn(callBlock(id("wait"), "wait", string(raw))), nil
+				}
+				if stage == "meter" {
+					stage, meterID = "decide", id("budget")
+					return turn(callBlock(meterID, "threads", `{"subtree":true}`)), nil
+				}
+				var current agentSubtree
+				data(t, reviewToolResult(t, req.History, meterID), &current)
+				if finders == 0 {
+					baseline = current
+				}
+				for _, result := range agentResults(req.History) {
+					if collected[result.ID] {
+						continue
+					}
+					collected[result.ID] = true
+					if strings.HasPrefix(result.Name, "finder-") {
+						var records []string
+						if err := json.Unmarshal([]byte(result.Result.Reply), &records); err != nil {
+							t.Fatal(err)
+						}
+						candidates = append(candidates, records...)
+					} else {
+						verdicts = append(verdicts, result.Result.Reply)
+					}
+				}
+				agents := current.TotalAgents - baseline.TotalAgents
+				used := current.TotalCost.InputTokens - baseline.TotalCost.InputTokens - current.TotalCost.CachedInputTokens + baseline.TotalCost.CachedInputTokens + current.TotalCost.OutputTokens - baseline.TotalCost.OutputTokens
+				reason := ""
+				if !current.TotalCost.Known {
+					reason = "unknown usage"
+				}
+				if used >= 600_000 {
+					reason = "tokens"
+				}
+				if agents >= 16 {
+					reason = "agents"
+				}
+				if reason != "" {
+					if len(verdicts) != verified {
+						t.Fatal("budget check preceded verifier delivery")
+					}
+					remaining := candidates[verified:]
+					return turn(textBlock(fmt.Sprintf("Stopped: %s budget; agents=%d; delegated uncached+output=%d; unverified=%d; uncovered angles=%d\nPreserved verdicts:\n%s\nUnverified candidates (not plausible or confirmed):\n%s", reason, agents, used, len(remaining), 10-finders, strings.Join(verdicts, "\n"), strings.Join(remaining, "\n")))), nil
+				}
+				var calls []OutputBlock
+				for i, name := range batchNames {
+					raw, _ := json.Marshal(agentTargetArgs{Name: name})
+					calls = append(calls, callBlock(id(fmt.Sprintf("dismiss-%d", i)), "dismiss", string(raw)))
+				}
+				batchNames = nil
+				count := 8
+				if finders < 10 {
+					if count > 10-finders {
+						count = 10 - finders
+					}
+					if stop == "unknown usage" {
+						count = 1
+					}
+				} else {
+					count = 16 - agents
+				}
+				if stop == "tokens" && used+int64(count)*60_000 > 600_000 {
+					t.Fatal("script would launch beyond reserved token budget")
+				}
+				for i := 0; i < count; i++ {
+					var name, task, model string
+					if finders < 10 {
+						name, task, model = fmt.Sprintf("finder-%02d", finders), fmt.Sprintf("find %d", finders), DefaultOpenAIModel
+						finders++
+					} else {
+						name, task, model = fmt.Sprintf("verifier-%02d", verified), "verify "+candidates[verified], s.cfg.Model
+						verified++
+					}
+					args, _ := json.Marshal(spawnArgs{Task: task, Name: name, Model: model, Authority: "read", Context: &agentContext{Brief: "Do not spawn or delegate. Independent candidate work; respect remaining medium budget."}})
+					calls = append(calls, callBlock(id(name), "spawn", string(args)))
+					batchNames = append(batchNames, name)
+				}
+				stage = "wait"
+				return turn(calls...), nil
+			}}
+			c := &conversation{session: s, traceDir: t.TempDir()}
+			var out, errs bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			chat(ctx, c, newLineReader(strings.NewReader("/review medium\n/exit\n"), &errs, nil), &out, &errs)
+			wantFinders, wantVerifiers, wantUnverified := 10, 6, 44
+			if stop == "tokens" {
+				wantVerifiers, wantUnverified = 0, 50
+			}
+			if stop == "unknown usage" {
+				wantFinders, wantVerifiers, wantUnverified = 1, 0, 5
+			}
+			if s.blocked != "" || cheap != wantFinders || strong != wantVerifiers || s.agentSubtree().TotalAgents != wantFinders+wantVerifiers || !strings.Contains(out.String(), "Stopped: "+stop+" budget") || !strings.Contains(out.String(), fmt.Sprintf("unverified=%d", wantUnverified)) {
+				t.Fatalf("budget not honored: models=%d/%d report=%s errors=%s", cheap, strong, &out, &errs)
+			}
+			if len(candidates) != wantFinders*5 || len(verdicts) != wantVerifiers {
+				t.Fatal("budget stop lost collected evidence")
+			}
+		})
+	}
+}
+
+func TestChat_ReviewTaskTurnBudgetStopsNamedPaging(t *testing.T) {
+	s := agentFixture(t)
+	s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
+		if cfg.Model != DefaultOpenAIModel {
+			t.Error("paging finder not on cheaper model")
+		}
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			var cursor int
+			fmt.Sscanf(req.History[len(req.History)-1].User.Text, "page %d", &cursor)
+			raw, _ := json.Marshal(map[string]int{"cursor": cursor, "next_cursor": cursor + 1, "total": 40})
+			response := turn(textBlock(string(raw)))
+			response.Usage = Usage{Known: true, InputTokens: 2, CachedInputTokens: 1}
+			return response, nil
+		}}, nil
+	}
+	stage, turns, collected := "start", 0, 0
+	seenRuns := map[string]bool{}
+	s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		id := func(name string) string { return fmt.Sprintf("%s-%d", name, req.Scope.Step) }
+		if stage == "start" {
+			args, _ := json.Marshal(spawnArgs{Task: "page 0", Name: "pages", Model: DefaultOpenAIModel, Context: &agentContext{Brief: "Do not spawn or delegate. Retain bounded pages; medium task-turn budget 32."}})
+			turns, stage = 1, "wait"
+			return turn(callBlock(id("finder"), "spawn", string(args))), nil
+		}
+		if stage == "wait" {
+			stage = "collect"
+			return turn(callBlock(id("wait"), "wait", `{"ids":["pages"]}`)), nil
+		}
+		for _, result := range agentResults(req.History) {
+			if seenRuns[result.RunID] {
+				continue
+			}
+			seenRuns[result.RunID] = true
+			var page map[string]int
+			if err := json.Unmarshal([]byte(result.Result.Reply), &page); err != nil {
+				t.Fatal(err)
+			}
+			if page["cursor"] != collected || page["next_cursor"] != collected+1 || page["total"] != 40 {
+				t.Fatal("paging lost its cursor")
+			}
+			collected++
+		}
+		if turns >= 32 {
+			return turn(textBlock(fmt.Sprintf("Stopped: task-turn budget 32; collected=%d/40; missing=%d; collected candidates remain unverified; no inline bypass.", collected, 40-collected))), nil
+		}
+		raw, _ := json.Marshal(map[string]string{"name": "pages", "message": fmt.Sprintf("page %d", collected)})
+		turns++
+		stage = "wait"
+		return turn(callBlock(id("page"), "send", string(raw))), nil
+	}}
+	c := &conversation{session: s, traceDir: t.TempDir()}
+	var out, errs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	chat(ctx, c, newLineReader(strings.NewReader("/review medium\n/exit\n"), &errs, nil), &out, &errs)
+	if s.blocked != "" || turns != 32 || collected != 32 || s.agentSubtree().TotalAgents != 1 || !strings.Contains(out.String(), "missing=8") || !strings.Contains(out.String(), "remain unverified") {
+		t.Fatalf("paging exceeded budget: %s %s", &out, &errs)
+	}
+	if child := s.agents.nodes["t1"].session; child.Turns() != 32 {
+		t.Fatalf("actual task turns %d", child.Turns())
+	}
+}

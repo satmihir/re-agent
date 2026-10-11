@@ -337,6 +337,10 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			return StatusCancelled, "cancelled during tool dispatch"
 		}
 
+		if r.cfg.agent && (call.Name == "git_do" || call.Name == "request_workspace_access" || call.Name == "switch_workspace") {
+			r.recordResult(call, failOutcome("permission_denied", call.Name+" is root-only; ask your parent to perform this operation"))
+			continue
+		}
 		tool, found := r.cfg.Registry.Lookup(call.Name)
 		if !found {
 			// A tool this build has but this mode withholds is refused for that

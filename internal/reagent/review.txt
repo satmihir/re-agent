@@ -36,16 +36,17 @@ Levels and scheduling
   disclose overflow counts and retain ALL overflow candidate records that were
   actually collected in an explicitly labelled appendix. Use the bounded output
   protocol below; missing pages are missing evidence, not retained candidates.
-  Merge and verify overflow exactly like other candidates; no candidate is lost
-  because of N or K. The final top K confirmed/plausible findings are ranked;
+  Merge overflow like other candidates and verify it while the review budget
+  allows; preserve unverified records with an explicit budget-stop reason. The final top K confirmed/plausible findings are ranked;
   preserve remaining verdicts, locations and scenarios in an overflow appendix.
 - Size shards using observed changed-file/line counts: small <=5 files and <=300
   changed lines, medium <=20 files and <=1500 lines, large otherwise. Per angle
   use 1/1/2 finder shards at medium, 1/2/4 at high or max (small/medium/large).
   Each shard covers named disjoint files plus their dependencies; rotate through
-  remaining files if necessary. Caps are 24/48/64 finder launches respectively
-  for medium/high/max. These are finder caps, NOT candidate caps: verify every
-  merged candidate. Disclose any files/angles left uncovered at a cap.
+  remaining files if necessary. Finder caps are 10/12/16 for medium/high/max,
+  within the total review budget below. Allocate one finder to each of the ten
+  angles before extra shards; nominal shard counts never override the caps.
+  Disclose uninspected shards/files/angles rather than increasing the budget.
 - Finders run independently in parallel by angle; only the root coordinates.
   All review agents must be told "Do not spawn or delegate." No nesting. Finder
   authority is read. Respect the eight-live-agent tree cap and other active work:
@@ -56,6 +57,42 @@ Levels and scheduling
 - If agents are disabled/unavailable, do these phases inline with separate
   passes and state that verification is not independent. Read-only/plan mode
   never gains writers or exec. Do not change mode just to run a review.
+
+Review budget and model choice
+- low: 0 agents, 0 delegated tokens, 0 agent task turns; keep the inline pass small.
+- medium: at most 16 total agents, 600,000 delegated uncached-input plus output
+  tokens, and 32 agent task turns (initial tasks plus ALL send/paging turns).
+- high: at most 24 total agents, 1,200,000 delegated uncached-input plus output
+  tokens, and 48 agent task turns.
+- max: at most 40 total agents, 2,000,000 delegated uncached-input plus output
+  tokens, and 80 agent task turns. Reserve two agent slots and 100,000 tokens for
+  the sweep and verification of a sweep candidate; disclose further gaps if spent.
+- These are prompt-directed stop budgets, NOT runtime billing guarantees. Tokens
+  exclude cached input but include output, probes, paging and failed-attempt usage
+  when reported. Root inline model usage is additional: report it when observed,
+  otherwise explicitly say unknown. Do not quote token budgets as dollar prices.
+- At the start record the limits and a stable threads(subtree=true) baseline.
+  Before EVERY spawn, send or batch, update observed review costs and task-turn
+  count; include live agents and reserve their estimated remaining work. Estimate
+  cold instructions/briefs plus realistic multi-step input/output, not a tiny
+  first reply. Launch smaller batches when uncertain; do not reserve zero for
+  in-flight work. Budget checks happen between requests, so in-flight calls can
+  overshoot: cancel unnecessary work and disclose actual usage and any overrun.
+- When any budget is spent or the next task would exceed it, STOP new work and
+  report uncovered angles/files, missing pages, and each unverified candidate as
+  unverified (never plausible/confirmed by default). Retain collected evidence and
+  earlier verdicts. Do not bypass the stop by replacing agents with inline work,
+  nesting, reusing a verifier for new candidates, resetting counters, or silently
+  raising limits. Finish the report within the remaining context.
+- If usage is unknown, has unreported attempts, or a changing baseline prevents
+  attribution, stop new delegation and disclose that the token budget could not
+  be established; don't pretend reported lower bounds are a spending ceiling.
+- Keep verifiers and the sweep on the current review model recorded at entry.
+  Finders should use spawn.model="gpt-6-luna" for an OpenAI review or
+  spawn.model="claude-haiku-4-5" for an Anthropic review, when available. If the
+  cheaper model is unavailable, disclose it, recompute the planned cost on the
+  available model, and proceed only within budget; no automatic launch retry.
+  Minimize briefs, name concrete file shards, and do not fork author reasoning.
 
 Finder angles (one independent brief per angle, per shard)
 1. Line by line: inspect every changed line against surrounding invariants.
@@ -94,7 +131,8 @@ and uses send to that SAME named agent for the next page. If delivery truncates,
 send a new explicit smaller-page request at the last confirmed cursor; this is
 new work, not an automatic retry. Request data from the child's retained history,
 not reconstruction from the truncated parent copy. Wait, collect the new result,
-and continue until counts/IDs and end cursor prove all records were collected.
+and continue within the task-turn/token budget until counts/IDs and end cursor
+prove all records were collected; otherwise disclose the missing records.
 Dismiss only then; verifier sends may retrieve pages, never rejudge a candidate.
 A trace reference is not necessarily readable: traces may be outside the granted
 workspace, and giant JSONL lines cannot be paged by read_file. Use a trace only
@@ -104,7 +142,7 @@ disclose the missing IDs/count (or unknown count), unverified candidates and
 incomplete coverage. Do not claim missing candidates were retained or verified.
 
 Fresh verification
-For EACH merged candidate launch ONE new verifier Session (never use a finder
+For EACH merged candidate selected within the remaining budget, launch ONE new verifier Session (never use a finder
 as the verifier or reuse a verifier for another candidate; page retrieval alone
 is permitted). Its brief contains only the candidate record,
 refs/diff access, relevant live files, applicable quoted conventions and these
@@ -136,7 +174,8 @@ After verification, launch a NEW read-only sweep agent, with refs/files and the
 verified list (candidate, verdict, evidence; not author's reasoning). Ask what
 was missed: missing guards, default/disabled paths, setup/teardown imbalance and
 integration gaps. Do not delegate. Any new candidates go through the same ONE
-fresh verifier each, with max probe policy. Do not recursively repeat sweeps.
+fresh verifier each while the reserved budget allows, with max probe policy.
+Report additional candidates as unverified when exhausted; do not repeat sweeps.
 If agents are unavailable, label the sweep inline and non-independent.
 
 Report and accounting

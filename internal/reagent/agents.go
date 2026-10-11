@@ -256,11 +256,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	if sharing {
 		user := &UserTurn{Text: prompt, Workspace: initialWorkspace, Roster: child.rosterJSON(), Plan: planMarkerFor(history, cfg.PlanMode)}
 		projected := append(append([]Entry(nil), history...), Entry{Kind: EntryUser, User: user})
-		if contextMode == "fork_native" {
-			_, err = encodeRequest(cfg, BuildContext(cfg, RequestScope{}, projected))
-		} else {
-			_, err = validateDestination(cfg, projected, contextWindow(cfg.Model), s.admissionRate(cfg.Provider))
-		}
+		_, err = validateDestination(cfg, projected, contextWindow(cfg.Model), s.admissionRate(cfg.Provider))
 		if err != nil {
 			return AgentThread{}, err
 		}
