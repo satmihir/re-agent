@@ -36,8 +36,8 @@ func (t agentTool) Spec() ToolSpec {
 		description = "Wait for your given children (IDs or names) to finish current and queued work; returns statuses only; results arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened; bounded file effects and exec uncertainty survive reply truncation). Recent delivered IDs return their delivery run and step. Omit timeout to wait until done (cancellation still works). An explicit timeout is opt-in polling, in seconds (0–600); it does not cancel children. If timed_out is true, do other useful work and wait again before relying on their results."
 		schema = `{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"timeout":{"type":"integer","minimum":0,"maximum":600}},"required":["ids"],"additionalProperties":false}`
 	case "threads":
-		schema = `{"type":"object","properties":{"subtree":{"type":"boolean"}},"additionalProperties":false}`
-		description = "List your direct children by default. With subtree=true, list every descendant, including delivered/dismissed agents retained for lifetime accounting, with parent, depth, state, own cost and trace path, plus total_cost excluding you. Never blocks. Use the subtree view to report every agent used and costs."
+		schema = `{"type":"object","properties":{"subtree":{"type":"boolean"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}`
+		description = "List your direct children by default. With subtree=true, list every descendant, including delivered/dismissed agents retained for lifetime accounting, with parent, depth, state, own cost and trace path, plus total_agents and total_cost excluding you. Follow next_offset with subtree=true and offset to page bounded output. Never blocks. Use the subtree view to report every agent used and costs."
 	default:
 		description = map[string]string{"cancel": "Cancel current and queued work in your child and its whole subtree. The named child can accept later send unless uncertain effects block its Session; then reset it first and inspect before retrying.", "dismiss": "End your child and its whole subtree; releases live capacity and the name. Also removes ended-at-resume roster observations.", "reset": "Clear a blocked, stopped child's history, preserving its name, fixed workspace and authority; dismisses its descendants. Then send new work."}[t.name]
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}`
@@ -152,6 +152,7 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 	case "threads":
 		var a struct {
 			Subtree json.RawMessage `json:"subtree"`
+			Offset  json.RawMessage `json:"offset"`
 		}
 		if bad := decodeArgs(raw, &a); bad != nil {
 			return *bad, nil
@@ -160,8 +161,15 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		if bad != nil {
 			return *bad, nil
 		}
+		offset, bad := optionalInt(a.Offset, "offset", 0, 0)
+		if bad != nil {
+			return *bad, nil
+		}
 		if subtree {
-			return okOutcome(s.agentSubtree())
+			return s.agentSubtreePage(offset)
+		}
+		if len(a.Offset) > 0 {
+			return failOutcome("invalid_arguments", "offset requires subtree=true"), nil
 		}
 		return okOutcome(s.agentRoster())
 	default:

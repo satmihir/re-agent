@@ -12,8 +12,10 @@ type agentObservation struct {
 }
 
 type agentSubtree struct {
-	Threads   []agentObservation `json:"threads"`
-	TotalCost Usage              `json:"total_cost"`
+	Threads     []agentObservation `json:"threads"`
+	TotalCost   Usage              `json:"total_cost"`
+	TotalAgents int                `json:"total_agents"`
+	NextOffset  *int               `json:"next_offset,omitempty"`
 }
 
 // Retain accounting, not Sessions, when anonymous or dismissed agents release capacity.
@@ -45,6 +47,7 @@ func (t *agentTree) subtreeLocked(parent string) agentSubtree {
 		out.TotalCost.Add(n.Cost)
 	}
 	sort.Slice(out.Threads, func(i, j int) bool { return out.Threads[i].ID < out.Threads[j].ID })
+	out.TotalAgents = len(out.Threads)
 	return out
 }
 
@@ -121,4 +124,22 @@ func (d *Display) agentWaitStarted(ids []string) {
 	}
 	d.refreshAgentsLocked()
 	d.mu.Unlock()
+}
+
+func (s *Session) agentSubtreePage(offset int) (ToolOutcome, error) {
+	tree := s.agentSubtree()
+	threads := tree.Threads[min(offset, len(tree.Threads)):]
+	build := func(n int) any {
+		page := tree
+		page.Threads = threads[:n]
+		if offset+n < tree.TotalAgents {
+			next := offset + n
+			page.NextOffset = &next
+		}
+		return page
+	}
+	n := fitElements(len(threads), build, "")
+	out, err := okOutcome(build(n))
+	out.Truncated = offset+n < tree.TotalAgents
+	return out, err
 }

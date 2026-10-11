@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -131,5 +132,40 @@ func TestAgents_PlainNoticesAndExplicitTimeout(t *testing.T) {
 	defer cancel()
 	if ctx.Err() != context.DeadlineExceeded {
 		t.Fatal("explicit zero timeout no longer polls")
+	}
+}
+
+func TestAgents_SubtreePagingRetainsFullCost(t *testing.T) {
+	s := agentFixture(t)
+	for i := 1; i <= 300; i++ {
+		id := fmt.Sprintf("t%d", i)
+		s.agents.archive[id] = agentObservation{AgentThread: AgentThread{ID: id, ParentID: "root", Task: strings.Repeat("task", 40), Cost: Usage{Known: true, InputTokens: 1}}, Depth: 1}
+	}
+	tool, _ := s.cfg.Registry.Lookup("threads")
+	offset, seen := 0, 0
+	for {
+		raw := json.RawMessage(fmt.Sprintf(`{"subtree":true,"offset":%d}`, offset))
+		out, err := tool.Execute(context.Background(), raw)
+		if err != nil || !out.OK || encodedSize(out) > MaxResultBytes {
+			t.Fatalf("out %+v %v", out, err)
+		}
+		var page agentSubtree
+		if err := json.Unmarshal(out.Data, &page); err != nil {
+			t.Fatal(err)
+		}
+		if page.TotalCost.InputTokens != 300 || page.TotalAgents != 300 {
+			t.Fatalf("total %+v", page)
+		}
+		seen += len(page.Threads)
+		if page.NextOffset == nil {
+			break
+		}
+		if *page.NextOffset <= offset {
+			t.Fatal("paging stuck")
+		}
+		offset = *page.NextOffset
+	}
+	if seen != 300 {
+		t.Fatalf("saw %d agents", seen)
 	}
 }
