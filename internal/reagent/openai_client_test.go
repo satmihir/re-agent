@@ -304,7 +304,12 @@ func TestOpenAI_RetriesOnceThenSucceeds(t *testing.T) {
 			api := newFakeAPI(t,
 				apiReply{status: status, body: `{"error":{"message":"try again"}}`},
 				okReply(textReply))
-			_, _, result := runAgainst(t, api, NewHTTPClient())
+			cfg := testConfig(t)
+			cfg.Provider, cfg.Model = openaiName, "test-model"
+			trace := NewTrace(io.Discard)
+			model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
+			model.transport.waitRetry = recordRetryWait(t, false, 500*time.Millisecond)
+			_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "find the marker")
 
 			if result.Status != StatusCompleted {
 				t.Fatalf("got %s: %s", result.Status, result.Reason)
@@ -464,10 +469,13 @@ func TestOpenAI_CancellationDuringRetryStopsTheRun(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
+	defer cancel()
+	check := recordRetryWait(t, false, 500*time.Millisecond)
+	model.transport.waitRetry = func(ctx context.Context, delay time.Duration) error {
+		check(ctx, delay)
 		cancel()
-	}()
+		return ctx.Err()
+	}
 	_, result := oneTurn(t, ctx, testConfig(t), model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "task")
 
 	if result.Status != StatusCancelled {
@@ -595,6 +603,7 @@ func TestOpenAI_OvernightRetryPreservesRequestAndDoesNotRepeatTools(t *testing.T
 	cfg.Provider, cfg.Model, cfg.ModelRetryWindow = openaiName, "test-model", 6*time.Second
 	trace := NewTrace(io.Discard)
 	model := NewOpenAIModel("sk", api.server.URL, NewHTTPClient(), trace)
+	model.transport.waitRetry = recordRetryWait(t, true, time.Second, 2*time.Second)
 	session, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "find the marker")
 	if result.Status != StatusCompleted || result.ToolCalls != 1 || result.Steps != 2 {
 		t.Fatalf("run %+v", result)
@@ -625,6 +634,11 @@ func TestOpenAI_OvernightRetryClassifiesTransportAndPermanentErrors(t *testing.T
 			cfg.Provider, cfg.Model, cfg.ModelRetryWindow = openaiName, "test-model", 3*time.Second
 			trace := NewTrace(io.Discard)
 			model := NewOpenAIModel("sk", api.server.URL, newHTTPClient(35*time.Millisecond, time.Second), trace)
+			var delays []time.Duration
+			if tc.attempts == 2 {
+				delays = []time.Duration{time.Second}
+			}
+			model.transport.waitRetry = recordRetryWait(t, true, delays...)
 			_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "test")
 			if result.Status != tc.want || len(api.received()) != tc.attempts {
 				t.Fatalf("got %s and %d attempts: %s", result.Status, len(api.received()), result.Reason)
@@ -641,6 +655,7 @@ func TestOpenAI_OvernightRetryStreamOverloadAccountsUsage(t *testing.T) {
 	cfg.Provider, cfg.Model, cfg.Proxied, cfg.ModelRetryWindow = openaiName, "test-model", true, 3*time.Second
 	trace := NewTrace(io.Discard)
 	model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+	model.(*OpenAIModel).transport.waitRetry = recordRetryWait(t, true, time.Second)
 	session, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "test")
 	requests := api.received()
 	if result.Status != StatusCompleted || len(requests) != 2 || !result.Usage.Known || result.Usage.InputTokens != 1728 || session.lastRequest.InputTokens != 864 || !session.lastRequest.Known || session.tokensPerByte <= 0 || session.tokensPerByte*float64(len(requests[0])) > 865 {

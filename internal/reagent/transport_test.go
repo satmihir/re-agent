@@ -146,7 +146,7 @@ func TestTransport_OvernightRetryConnectionFailureIsRetried(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}, nil
 	})}
-	tr := &transport{endpoint: "http://localhost/model", client: client, trace: NewTrace(io.Discard)}
+	tr := &transport{endpoint: "http://localhost/model", client: client, trace: NewTrace(io.Discard), waitRetry: recordRetryWait(t, true, time.Second)}
 	status, raw, err := tr.call(withModelRetry(context.Background(), 3*time.Second, nil), 1, []byte(`{}`), nil)
 	if err != nil || status != 200 || string(raw) != "ok" || attempts.Load() != 2 {
 		t.Fatalf("status %d body %s attempts %d error %v", status, raw, attempts.Load(), err)
@@ -166,7 +166,7 @@ func TestTransport_OvernightWindowDoesNotCutOffInFlightAttempt(t *testing.T) {
 		want       int32
 	}{
 		{"first attempt", 60 * time.Millisecond, 120 * time.Millisecond, false, 1},
-		{"retry near window end", 1400 * time.Millisecond, 700 * time.Millisecond, true, 2},
+		{"retry outlasts window", 200 * time.Millisecond, 250 * time.Millisecond, true, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var attempts atomic.Int32
@@ -181,10 +181,152 @@ func TestTransport_OvernightWindowDoesNotCutOffInFlightAttempt(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			tr := &transport{endpoint: server.URL, client: server.Client(), trace: NewTrace(io.Discard)}
+			var delays []time.Duration
+			if tc.firstFault {
+				tr.waitRetry = func(ctx context.Context, delay time.Duration) error {
+					delays = append(delays, delay)
+					if delay <= 0 || delay > tc.window {
+						t.Fatalf("delay %s, want within %s window", delay, tc.window)
+					}
+					return waitBeforeRetry(ctx, 50*time.Millisecond)
+				}
+			}
 			start := time.Now()
 			status, raw, err := tr.call(withModelRetry(context.Background(), tc.window, nil), 1, []byte(`{}`), nil)
+			if len(delays) != int(tc.want)-1 {
+				t.Fatalf("retry delays %v, want %d waits", delays, tc.want-1)
+			}
 			if err != nil || status != http.StatusOK || string(raw) != "ok" || attempts.Load() != tc.want || time.Since(start) <= tc.window {
 				t.Fatalf("after %s: status %d, body %q, attempts %d, error %v", time.Since(start), status, raw, attempts.Load(), err)
+			}
+		})
+	}
+}
+
+// recordRetryWait skips only the wait; requests still cross the HTTP boundary.
+func recordRetryWait(t *testing.T, jitter bool, want ...time.Duration) func(context.Context, time.Duration) error {
+	t.Helper()
+	var delays []time.Duration
+	t.Cleanup(func() {
+		if len(delays) != len(want) {
+			t.Errorf("retry delays %v, want %d waits", delays, len(want))
+		}
+	})
+	return func(ctx context.Context, delay time.Duration) error {
+		t.Helper()
+		index := len(delays)
+		delays = append(delays, delay)
+		if index >= len(want) {
+			t.Fatalf("unexpected retry delay %s", delay)
+		}
+		low, high := want[index], want[index]
+		if jitter {
+			low, high = low*8/10, high*12/10
+		}
+		if delay < low || delay > high {
+			t.Fatalf("retry %d delay %s, want [%s, %s]", index+1, delay, low, high)
+		}
+		return ctx.Err()
+	}
+}
+
+func TestTransport_DefaultRetryWaitThenSucceeds(t *testing.T) {
+	api := newFakeAPI(t, apiReply{status: 503, body: "busy"}, apiReply{status: 200, body: "ok"})
+	tr := &transport{endpoint: api.server.URL, client: api.server.Client(), trace: NewTrace(io.Discard)}
+	start := time.Now()
+	status, raw, err := tr.call(context.Background(), 1, []byte(`{}`), nil)
+	if err != nil || status != 200 || string(raw) != "ok" || len(api.received()) != 2 || time.Since(start) < 500*time.Millisecond {
+		t.Fatalf("after %s: status %d, body %q, attempts %d, error %v", time.Since(start), status, raw, len(api.received()), err)
+	}
+}
+
+func TestTransport_RetryDelaysAndAttemptLimit(t *testing.T) {
+	date := time.Now().Add(30 * time.Second).UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name      string
+		overnight bool
+		header    string
+		jitter    bool
+		delays    []time.Duration
+	}{
+		{"ordinary stops at two", false, "60", false, []time.Duration{500 * time.Millisecond}},
+		{"overnight backoff and cap", true, "", true, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 64 * time.Second, 2 * time.Minute, 2 * time.Minute}},
+		{"integer Retry-After", true, "60", false, []time.Duration{time.Minute}},
+		{"date Retry-After", true, date.Format(http.TimeFormat), true, []time.Duration{30 * time.Second}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replies := make([]apiReply, len(tc.delays)+1)
+			for i := range replies {
+				replies[i] = apiReply{status: 503, body: "busy", header: map[string]string{"Retry-After": tc.header}}
+			}
+			if tc.overnight {
+				replies[len(replies)-1] = apiReply{status: 200, body: "ok"}
+			}
+			api := newFakeAPI(t, replies...)
+			tr := &transport{endpoint: api.server.URL, client: api.server.Client(), trace: NewTrace(io.Discard), waitRetry: recordRetryWait(t, tc.jitter, tc.delays...)}
+			if tc.name == "date Retry-After" {
+				check := tr.waitRetry
+				tr.waitRetry = func(ctx context.Context, delay time.Duration) error {
+					if remaining := time.Until(date); delay < remaining || delay > remaining+time.Second {
+						t.Fatalf("date delay %s, remaining %s", delay, remaining)
+					}
+					return check(ctx, delay)
+				}
+			}
+			ctx := context.Background()
+			wantStatus, wantBody, wantUsage := 503, "busy", Usage{Known: true}
+			if tc.overnight {
+				ctx = withModelRetry(ctx, time.Hour, nil)
+				wantStatus, wantBody = 200, "ok"
+				wantUsage.UnreportedAttempts = len(tc.delays)
+			}
+			status, raw, usage, err := tr.callModel(ctx, 1, []byte(`{}`), nil, nil)
+			if err != nil || status != wantStatus || string(raw) != wantBody || usage != wantUsage || len(api.received()) != len(replies) {
+				t.Fatalf("status %d body %q usage %+v attempts %d error %v", status, raw, usage, len(api.received()), err)
+			}
+		})
+	}
+}
+
+func TestTransport_RetryWaitCancellationRetainsUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overnight bool
+		stream    bool
+	}{
+		{"ordinary", false, false},
+		{"overnight unreported", true, false},
+		{"overnight stream", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status := 503
+			if tc.stream {
+				status = 200
+			}
+			api := newFakeAPI(t, apiReply{status: status, body: "busy"}, apiReply{status: 200, body: "ok"})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			wantUsage, wantErrorUsage := Usage{Known: true}, Usage{}
+			wantDelay := 500 * time.Millisecond
+			if tc.overnight {
+				ctx = withModelRetry(ctx, time.Hour, nil)
+				wantDelay = time.Second
+				wantUsage.UnreportedAttempts = 1
+				if tc.stream {
+					wantUsage = Usage{Known: true, InputTokens: 10, OutputTokens: 5}
+				}
+				wantErrorUsage = wantUsage
+			}
+			check := recordRetryWait(t, tc.overnight, wantDelay)
+			tr := &transport{endpoint: api.server.URL, client: api.server.Client(), trace: NewTrace(io.Discard), waitRetry: func(ctx context.Context, delay time.Duration) error {
+				check(ctx, delay)
+				cancel()
+				return ctx.Err()
+			}}
+			_, _, usage, err := tr.callModel(ctx, 1, []byte(`{}`), nil, func([]byte) (bool, Usage) { return true, wantUsage })
+			me, ok := err.(*ModelError)
+			if !ok || me.Status != StatusCancelled || me.Message != "cancelled before a retry" || me.Usage != wantErrorUsage || usage != wantUsage || len(api.received()) != 1 {
+				t.Fatalf("usage %+v attempts %d error %+v", usage, len(api.received()), err)
 			}
 		})
 	}

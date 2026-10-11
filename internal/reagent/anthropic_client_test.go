@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const anthropicCallReply = `{
@@ -285,7 +286,12 @@ func TestAnthropic_RetriesOnOverloadThenSucceeds(t *testing.T) {
 	api := newFakeAPI(t,
 		apiReply{status: 529, body: `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`},
 		okReply(anthropicTextReply))
-	_, _, result := runAnthropic(t, api)
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model = anthropicName, "claude-haiku-4-5"
+	trace := NewTrace(io.Discard)
+	model := NewAnthropicModel("sk-ant-secret", api.server.URL, NewHTTPClient(), trace)
+	model.transport.waitRetry = recordRetryWait(t, false, 500*time.Millisecond)
+	_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "find the marker")
 
 	if result.Status != StatusCompleted || len(api.received()) != 2 {
 		t.Fatalf("got %s after %d attempts: %s", result.Status, len(api.received()), result.Reason)
