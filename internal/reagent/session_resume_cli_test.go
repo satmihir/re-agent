@@ -181,3 +181,37 @@ func TestChat_AgentsResumeEndsRosterWithoutRestart(t *testing.T) {
 		t.Fatalf("resume root=%d child=%d request=%s", rootRequests, childRequests, resumedRequest)
 	}
 }
+
+func checkWritingAgentCLIResume(t *testing.T, session *Session) {
+	t.Helper()
+	// The checkpoint was taken while an actual writer was working; stopping its
+	// goroutine after that snapshot stands in for process death without replay.
+	session.store.close()
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("API_PROXY_PROVIDER", "openai")
+	var mu sync.Mutex
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests = append(requests, string(raw))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, streamedTextReply())
+	}))
+	defer server.Close()
+	t.Setenv("API_PROXY_URL", server.URL)
+	var out, errOut bytes.Buffer
+	if code := Main(context.Background(), []string{"chat", "--resume", session.ID}, strings.NewReader("inspect writer changes\n/exit\n"), &out, &errOut); code != exitOK {
+		t.Fatalf("writer CLI resume %d: %s", code, errOut.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 1 || strings.Contains(requests[0], "authority granted by your parent") || !strings.Contains(requests[0], `\"effects_unknown\":true`) || !strings.Contains(requests[0], `\"authority\":\"write\"`) || !strings.Contains(requests[0], "ended at resume") {
+		t.Fatalf("writer restarted or uncertainty missing from actual request bytes: %v", requests)
+	}
+	content, err := os.ReadFile(filepath.Join(session.cfg.WorkspacePath, "left-behind"))
+	if err != nil || string(content) != "may survive" {
+		t.Fatalf("resume changed surviving file: %s %v", content, err)
+	}
+}

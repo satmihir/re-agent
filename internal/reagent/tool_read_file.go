@@ -79,6 +79,12 @@ func (t readFileTool) Execute(_ context.Context, args json.RawMessage) (ToolOutc
 	}
 	snap, bad := readSnapshot(abs)
 	if bad != nil {
+		if bad.Code == "not_found" {
+			// Observing absence allows an intentional later recreation.
+			t.ws.mu.Lock()
+			delete(t.ws.seen, missingPath(abs))
+			t.ws.mu.Unlock()
+		}
 		return *bad, nil
 	}
 

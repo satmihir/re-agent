@@ -157,6 +157,23 @@ func withheldPath(path string) bool {
 	return false
 }
 
+// Preserve aliases in observation keys even after the leaf or its parents disappear.
+func missingPath(abs string) string {
+	probe, suffix := abs, ""
+	for {
+		canonical, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			return filepath.Join(canonical, suffix)
+		}
+		parent := filepath.Dir(probe)
+		if !os.IsNotExist(err) || parent == probe {
+			return abs
+		}
+		suffix = filepath.Join(filepath.Base(probe), suffix)
+		probe = parent
+	}
+}
+
 // relative renders an absolute path the way the model should refer to it.
 func (w *Workspace) relative(abs string) string {
 	rel, err := filepath.Rel(w.root, abs)

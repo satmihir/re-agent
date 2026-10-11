@@ -50,7 +50,7 @@ func TestAgents_ConcurrentPublicationNeverLosesUpdate(t *testing.T) {
 	s.agents.mu.Lock()
 	handles := []*Workspace{s.agents.nodes["t1"].session.workspace.active, s.agents.nodes["t2"].session.workspace.active}
 	s.agents.mu.Unlock()
-	for iteration := 0; iteration < 100; iteration++ {
+	for iteration := 0; iteration < 400; iteration++ {
 		path := fmt.Sprintf("shared-%d", iteration)
 		if err := os.WriteFile(filepath.Join(s.cfg.WorkspacePath, path), []byte("original"), 0600); err != nil {
 			t.Fatal(err)
@@ -62,16 +62,34 @@ func TestAgents_ConcurrentPublicationNeverLosesUpdate(t *testing.T) {
 				t.Fatalf("read: %+v %v", out, err)
 			}
 		}
+		participants := append([]*Workspace(nil), handles...)
+		if iteration%3 == 0 {
+			participants[0] = s.workspace.active
+			args, _ := json.Marshal(map[string]string{"path": path})
+			if out, err := NewReadFileTool(participants[0]).Execute(context.Background(), args); err != nil || !out.OK {
+				t.Fatalf("root read: %+v %v", out, err)
+			}
+		}
 		var wg sync.WaitGroup
 		start := make(chan struct{})
 		outcomes := make([]ToolOutcome, 2)
-		for i, ws := range handles {
+		for i, ws := range participants {
 			wg.Add(1)
 			go func(i int, ws *Workspace) {
 				defer wg.Done()
 				<-start
-				args, _ := json.Marshal(map[string]string{"path": path, "content": fmt.Sprintf("writer-%d", i)})
-				out, err := NewWriteFileTool(ws).Execute(context.Background(), args)
+				tool := NewWriteFileTool(ws)
+				fields := map[string]string{"path": path, "content": fmt.Sprintf("writer-%d", i), "expected_sha256": digestOf("original")}
+				if iteration%4 == 1 || iteration%4 == 2 && i == 0 {
+					tool = NewEditFileTool(ws)
+					fields = map[string]string{"path": path, "old_text": "original", "new_text": fmt.Sprintf("writer-%d", i)}
+				}
+				if iteration%4 == 3 && i == 0 {
+					tool = NewDeleteFileTool(ws)
+					fields = map[string]string{"path": path}
+				}
+				args, _ := json.Marshal(fields)
+				out, err := tool.Execute(context.Background(), args)
 				if err != nil {
 					t.Error(err)
 				}
@@ -85,12 +103,26 @@ func TestAgents_ConcurrentPublicationNeverLosesUpdate(t *testing.T) {
 			if out.OK {
 				applied++
 			}
-			if out.Code == "stale_file" {
+			if out.Code == "stale_file" || iteration%4 == 3 && out.Code == "not_found" {
 				stale++
 			}
 		}
 		if applied != 1 || stale != 1 {
 			t.Fatalf("iteration %d silently lost an update: %+v", iteration, outcomes)
+		}
+		content, err := os.ReadFile(filepath.Join(s.cfg.WorkspacePath, path))
+		if iteration%4 == 3 && outcomes[0].OK {
+			if !os.IsNotExist(err) {
+				t.Fatalf("deleted file recreated: %s %v", content, err)
+			}
+			continue
+		}
+		winner := 0
+		if outcomes[1].OK {
+			winner = 1
+		}
+		if err != nil || string(content) != fmt.Sprintf("writer-%d", winner) {
+			t.Fatalf("winner's contents lost: %s %v", content, err)
 		}
 	}
 }
@@ -360,6 +392,7 @@ func TestAgents_ResumeWorkingWriterMarksUnknownEffectsInNextChatRoster(t *testin
 	if _, err := os.Stat(filepath.Join(s.cfg.WorkspacePath, "left-behind")); err != nil {
 		t.Fatal(err)
 	}
+	checkWritingAgentCLIResume(t, s)
 	// A second resume must not clear the uncertainty tombstone.
 	resumed.store = testSessionStore(t, resumed.ID)
 	if err := resumed.checkpoint("idle", ""); err != nil {
@@ -372,5 +405,57 @@ func TestAgents_ResumeWorkingWriterMarksUnknownEffectsInNextChatRoster(t *testin
 	resumed.restore(cp)
 	if !resumed.agentRoster()[0].EffectsUnknown {
 		t.Fatal("second resume cleared uncertainty")
+	}
+}
+
+func TestAgents_DeletionMakesOmittedDigestOverwriteStaleUntilAbsenceRead(t *testing.T) {
+	for _, writer := range []string{"root", "sibling"} {
+		t.Run(writer, func(t *testing.T) {
+			s := agentFixture(t)
+			path := filepath.Join(s.cfg.WorkspacePath, "shared")
+			if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			recreate := []ModelResponse{
+				turn(callBlock("stale", "write_file", `{"path":"shared","content":"based on original"}`)),
+				turn(callBlock("absent", "read_file", `{"path":"shared"}`)),
+				turn(callBlock("recreate", "write_file", `{"path":"shared","content":"intentional recreation"}`)),
+				turn(textBlock("done")),
+			}
+			created := 0
+			s.agentModel = func(Config, *Trace) (Model, error) {
+				created++
+				if writer == "sibling" && created == 1 {
+					responses := []ModelResponse{turn(callBlock("read", "read_file", `{"path":"shared"}`)), turn(textBlock("read done"))}
+					return NewScriptedModel(append(responses, recreate...)...), nil
+				}
+				return NewScriptedModel(turn(callBlock("read", "read_file", `{"path":"shared"}`), callBlock("delete", "delete_file", `{"path":"shared"}`)), turn(textBlock("deleted"))), nil
+			}
+			first := turn(callBlock("read", "read_file", `{"path":"shared"}`))
+			if writer == "sibling" {
+				first = turn(writeSpawnBlock("reader", "read", "writer"), callBlock("w1", "wait", `{"ids":["writer"]}`))
+			}
+			responses := []ModelResponse{first, turn(writeSpawnBlock("deleter", "delete", "deleter"), callBlock("w2", "wait", `{"ids":["deleter"]}`))}
+			if writer == "root" {
+				responses = append(responses, recreate...)
+			} else {
+				responses = append(responses, turn(callBlock("send", "send", `{"name":"writer","message":"recreate"}`), callBlock("w3", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
+			}
+			s.model = NewScriptedModel(responses...)
+			agentTurn(t, s, "deletion conflict")
+			target := s
+			if writer == "sibling" {
+				target = s.agents.nodes["t1"].session
+			}
+			got := results(target)
+			last := got[len(got)-3:]
+			if last[0].Outcome.Code != "stale_file" || last[1].Outcome.Code != "not_found" || !last[2].Outcome.OK {
+				t.Fatalf("deletion flow: %+v", last)
+			}
+			content, err := os.ReadFile(path)
+			if err != nil || string(content) != "intentional recreation" {
+				t.Fatalf("recreation: %s %v", content, err)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,4 +307,177 @@ func TestAgents_DismissAndResetKeepUndeliveredEffects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgents_ConcurrentExecChainKeepsBoundedNoticesForEveryStep(t *testing.T) {
+	s := agentFixture(t)
+	created := 0
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		created++
+		argv := []string{"sh", "-c", fmt.Sprintf("touch ready-%d; while ! test -f release; do sleep 0.01; done", created), "unused", strings.Repeat("<", 16000)}
+		for i := 0; i < 6000; i++ {
+			argv = append(argv, "unused")
+		}
+		args, _ := json.Marshal(map[string]any{"argv": argv, "cwd": "."})
+		return NewScriptedModel(turn(callBlock("slow", "exec", string(args))), turn(textBlock("done"))), nil
+	}
+	step := 0
+	s.model = agentTestModel{generate: func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		step++
+		if step == 1 {
+			var calls []OutputBlock
+			for i := 1; i <= 8; i++ {
+				calls = append(calls, writeSpawnBlock(fmt.Sprintf("spawn-%d", i), "slow", fmt.Sprintf("slow-%d", i)))
+			}
+			return turn(calls...), nil
+		}
+		if step == 2 {
+			for i := 1; i <= 8; i++ {
+				if err := waitForAgentFile(ctx, filepath.Join(s.cfg.WorkspacePath, fmt.Sprintf("ready-%d", i))); err != nil {
+					return ModelResponse{}, err
+				}
+			}
+			return turn(callBlock("chain", "exec", `{"argv":["printf","one"],"then":[["printf","two"],["printf","three"],["printf","four"],["printf","five"],["printf","six"],["printf","seven"],["printf","eight"]],"cwd":"."}`)), nil
+		}
+		if step == 3 {
+			out := req.History[len(req.History)-1].Tool.Outcome
+			if encodedSize(out) > MaxResultBytes {
+				t.Errorf("unbounded chain: %d", encodedSize(out))
+			}
+			var chain execChainResult
+			if err := json.Unmarshal(out.Data, &chain); err != nil {
+				t.Error(err)
+			}
+			if len(chain.Steps) != 8 {
+				t.Errorf("steps: %d", len(chain.Steps))
+			}
+			for _, raw := range chain.Steps {
+				var result execResult
+				if err := json.Unmarshal(raw, &result); err != nil {
+					t.Error(err)
+					continue
+				}
+				if len(result.ConcurrentExec) != 8 {
+					t.Errorf("notices: %d", len(result.ConcurrentExec))
+				}
+				for _, notice := range result.ConcurrentExec {
+					if !notice.Truncated || !strings.HasPrefix(notice.AgentID, "t") {
+						t.Errorf("chain notice: %+v", notice)
+					}
+				}
+			}
+			if err := os.WriteFile(filepath.Join(s.cfg.WorkspacePath, "release"), nil, 0600); err != nil {
+				t.Error(err)
+			}
+			return turn(callBlock("wait", "wait", `{"ids":["slow-1","slow-2","slow-3","slow-4","slow-5","slow-6","slow-7","slow-8"]}`)), nil
+		}
+		return turn(textBlock("done")), nil
+	}}
+	agentTurn(t, s, "overlapping chain")
+}
+
+func TestAgents_ChildReadsDoNotAuthorizeUnreadParentOrSibling(t *testing.T) {
+	s := agentFixture(t)
+	if err := os.WriteFile(filepath.Join(s.cfg.WorkspacePath, "existing"), []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	created := 0
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		created++
+		if created == 1 {
+			return NewScriptedModel(turn(callBlock("read", "read_file", `{"path":"existing"}`)), turn(textBlock("read done"))), nil
+		}
+		return NewScriptedModel(turn(callBlock("write", "write_file", `{"path":"existing","content":"unread overwrite"}`)), turn(textBlock("done"))), nil
+	}
+	s.model = NewScriptedModel(turn(spawnBlock("read", "read", "reader"), callBlock("wait", "wait", `{"ids":["reader"]}`)), turn(callBlock("write", "write_file", `{"path":"existing","content":"unread parent overwrite"}`), writeSpawnBlock("sibling", "write", "writer"), callBlock("w2", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
+	result := agentTurn(t, s, "read evidence stays local")
+	if results(s)[2].Outcome.Code != "invalid_arguments" || results(s.agents.nodes["t2"].session)[0].Outcome.Code != "invalid_arguments" || len(result.Effects) != 0 {
+		t.Fatalf("read widened authority: %+v %+v", results(s), result.Effects)
+	}
+}
+
+func TestAgents_CancelExecKeepsUncertaintyAndRequiresResetBeforeSend(t *testing.T) {
+	s := agentFixture(t)
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return NewScriptedModel(turn(callBlock("sleep", "exec", `{"argv":["sh","-c","touch ready; sleep 30"],"cwd":"."}`)), turn(callBlock("inspect", "read_file", `{"path":"ready"}`)), turn(textBlock("inspected"))), nil
+	}
+	step := 0
+	s.model = agentTestModel{generate: func(ctx context.Context, _ ModelRequest) (ModelResponse, error) {
+		step++
+		if step == 1 {
+			return turn(writeSpawnBlock("spawn", "sleep", "writer")), nil
+		}
+		if step == 2 {
+			if err := waitForAgentFile(ctx, filepath.Join(s.cfg.WorkspacePath, "ready")); err != nil {
+				return ModelResponse{}, err
+			}
+			return turn(callBlock("cancel", "cancel", `{"name":"writer"}`), callBlock("blocked", "send", `{"name":"writer","message":"inspect"}`), callBlock("reset", "reset", `{"name":"writer"}`), callBlock("send", "send", `{"name":"writer","message":"inspect, do not repeat the command"}`), callBlock("wait", "wait", `{"ids":["writer"]}`)), nil
+		}
+		return turn(textBlock("done")), nil
+	}}
+	result := agentTurn(t, s, "cancel command")
+	got := results(s)
+	if !got[1].Outcome.OK || got[2].Outcome.Code != "send_denied" || !got[3].Outcome.OK || !got[4].Outcome.OK {
+		t.Fatalf("cancel recovery: %+v", got)
+	}
+	all := agentResults(s.history)
+	if len(all) != 2 || !all[0].Effects.ExecUnknown || all[1].Effects.ExecUnknown || all[1].Result.Reply != "inspected" || len(result.Effects) != 1 || result.Effects[0].Effect != EffectUnknown {
+		t.Fatalf("uncertainty/recovery lost: %+v %+v", all, result.Effects)
+	}
+	s.agents.mu.Lock()
+	defer s.agents.mu.Unlock()
+	if len(s.agents.execs) != 0 {
+		t.Fatal("cancelled exec registration leaked")
+	}
+}
+
+func TestAgents_ExecNoticeSurvivesRootSwitchIntoChildWorkingDirectory(t *testing.T) {
+	s := agentFixture(t)
+	root := s.cfg.WorkspacePath
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var tools []Tool
+	for _, spec := range s.cfg.Registry.Specs() {
+		tool, _ := s.cfg.Registry.Lookup(spec.Name)
+		tools = append(tools, tool)
+	}
+	registry, err := NewRegistry(Mode{}, append(tools, NewSwitchWorkspaceTool())...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.Registry = registry.bindWorkspace(s, s.workspace.active)
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return NewScriptedModel(turn(callBlock("slow", "exec", `{"argv":["sh","-c","touch ready; while ! test -f release; do sleep 0.01; done"],"cwd":"sub"}`)), turn(textBlock("done"))), nil
+	}
+	step := 0
+	s.model = agentTestModel{generate: func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		step++
+		switch step {
+		case 1:
+			return turn(writeSpawnBlock("spawn", "slow", "slow")), nil
+		case 2:
+			if err := waitForAgentFile(ctx, filepath.Join(root, "sub", "ready")); err != nil {
+				return ModelResponse{}, err
+			}
+			args, _ := json.Marshal(map[string]string{"path": filepath.Join(root, "sub")})
+			return turn(callBlock("switch", "switch_workspace", string(args))), nil
+		case 3:
+			return turn(callBlock("exec", "exec", `{"argv":["printf","same directory"],"cwd":"."}`)), nil
+		case 4:
+			var result execResult
+			if err := json.Unmarshal(req.History[len(req.History)-1].Tool.Outcome.Data, &result); err != nil {
+				t.Error(err)
+			}
+			if len(result.ConcurrentExec) != 1 || result.ConcurrentExec[0].AgentID != "t1" {
+				t.Errorf("switched-root notice: %+v", result)
+			}
+			if err := os.WriteFile(filepath.Join(root, "sub", "release"), nil, 0600); err != nil {
+				t.Error(err)
+			}
+			return turn(callBlock("wait", "wait", `{"ids":["slow"]}`)), nil
+		}
+		return turn(textBlock("done")), nil
+	}}
+	agentTurn(t, s, "same directory through different workspace roots")
 }

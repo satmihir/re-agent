@@ -142,6 +142,12 @@ func (t writeFileTool) Execute(ctx context.Context, args json.RawMessage) (ToolO
 		if hasDigest {
 			return failOutcome("not_found", "no such path in the workspace"), nil
 		}
+		t.ws.mu.Lock()
+		_, previouslySeen := t.ws.seen[missingPath(abs)]
+		t.ws.mu.Unlock()
+		if previouslySeen {
+			return failOutcome("stale_file", "the file you read or wrote was deleted; read_file must observe its absence before recreating it"), nil
+		}
 		// v0 §8: preserve existing-parent behavior; create only missing parents.
 		parent := filepath.Dir(abs)
 		parentInfo, err := os.Stat(parent)
