@@ -51,11 +51,14 @@ func (s *Session) agentHistory() ([]Entry, []transcriptEntry, error) {
 			break
 		}
 	}
+	if s.cfg.ContextGC {
+		validation = gcHistory(validation, s.gc.Dropped)
+	}
 	records, _, err := visibleHistory(validation)
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.history[:boundary], records[:boundary], nil
+	return s.gcHistory()[:boundary], records[:boundary], nil
 }
 
 func (s *Session) prepareAgentContext(ctx context.Context, cfg *Config, a spawnArgs) ([]Entry, string, string, error) {

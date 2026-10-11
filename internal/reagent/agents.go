@@ -203,7 +203,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	var tools []Tool
 	for _, spec := range s.cfg.Registry.Specs() {
 		switch spec.Name {
-		case "read_file", "list_files", "search_text", "git_inspect":
+		case "read_file", "list_files", "search_text", "git_inspect", "recall":
 			tool, _ := s.cfg.Registry.Lookup(spec.Name)
 			tools = append(tools, tool)
 		case "edit_file", "write_file", "delete_file", "exec":
@@ -236,6 +236,37 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	}
 	child := NewSession(cfg, model, trace, io.Discard)
 	child.history = history
+	if bool(sharing) && cfg.ContextGC {
+		child.gc = s.copyGC()
+		if !a.Context.Fork {
+			selected := make(map[string]bool)
+			for _, number := range a.Context.Entries {
+				if tool := s.history[number-1].Tool; tool != nil {
+					selected[tool.CallID] = true
+				}
+			}
+			for id := range child.gc.Dropped {
+				if !selected[id] {
+					delete(child.gc.Dropped, id)
+					delete(child.gc.Inherited, id)
+					delete(child.gc.Paths, id)
+				}
+			}
+		}
+		// Native forks store originals; only their request view has placeholders.
+		for i, entry := range child.history {
+			if entry.Tool == nil {
+				continue
+			}
+			if original, ok := child.gc.Inherited[entry.Tool.CallID]; ok {
+				result := *entry.Tool
+				result.Outcome = original
+				child.history[i].Tool = &result
+				delete(child.gc.Inherited, result.CallID)
+			}
+		}
+		_, child.gc.LastPass, _ = gcResults(child.history, child.gc.Paths)
+	}
 	if contextMode == "fork_native" {
 		for id := range s.seenCalls {
 			child.seenCalls[id] = true

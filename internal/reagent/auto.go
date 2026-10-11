@@ -135,7 +135,7 @@ func stageAutoCandidate(ctx context.Context, s *Session, route jevRoute) (autoCa
 		handoff = nil
 		size, err = validateDestination(cfg, s.history, info.ContextWindow, s.admissionRate(cfg.Provider))
 	} else {
-		handoff, size, err = stageModelSwitch(ctx, s.history, cfg, info.ContextWindow, s.admissionRate(cfg.Provider))
+		handoff, size, err = stageModelSwitch(ctx, s.gcHistory(), cfg, info.ContextWindow, s.admissionRate(cfg.Provider))
 	}
 	if err != nil {
 		return autoCandidate{}, err

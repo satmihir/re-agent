@@ -29,6 +29,7 @@ type Session struct {
 	snapshot func(context.Context, string, bool) json.RawMessage
 
 	history []Entry
+	gc      contextGCState
 	// v0 §10 amendment (2026-10-02): a fixed request view, never accepted history.
 	auto      *autoRouting
 	handoff   *modelHandoff
@@ -93,6 +94,7 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
 		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, Agents: s.cfg.Agents,
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
+		ContextGC: s.cfg.ContextGC, GC: s.gc,
 		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
 		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
 		Usage: s.checkpointUsage, AutoCompactOff: s.checkpointAutoCompactOff,
@@ -135,6 +137,7 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.tokensPerByte, s.checkpointUsage = cp.TokensPerByte, cp.Usage
 	s.checkpointAutoCompactOff = cp.AutoCompactOff
 	s.cfg.InRunCompact = cp.InRunCompact
+	s.cfg.ContextGC, s.gc = cp.ContextGC, cp.GC
 	s.cfg.ModelRetryWindow = cp.ModelRetryWindow
 	s.cfg.Agents = cp.Agents
 	if cp.Agents {
@@ -352,6 +355,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	}
 	summary := Summary{Text: text, ReplacedEntries: len(s.history), Model: s.cfg.Model}
 	s.history = []Entry{{Kind: EntrySummary, Summary: &summary}}
+	s.gc = contextGCState{}
 	// v0 §8: the compacted conversation no longer contains file evidence.
 	if s.workspace != nil {
 		for _, ws := range s.workspace.handles {
@@ -378,6 +382,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 func (s *Session) Reset() {
 	s.ID = NewID()
 	s.history = nil
+	s.gc = contextGCState{}
 	if s.cfg.agent {
 		s.cfg.agentPrefix = nil
 	}

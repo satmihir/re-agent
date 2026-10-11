@@ -144,6 +144,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		options.maxSteps, options.maxToolCalls = saved.MaxSteps, saved.MaxToolCalls
 		options.noProjectInstructions, options.reportFriction, options.auto = saved.NoProjectInstructions, saved.ReportFriction, saved.Auto
 		options.inRunCompact, options.agents = saved.InRunCompact, saved.Agents
+		options.contextGC = saved.ContextGC
 		options.modelRetryWindow = saved.ModelRetryWindow
 	}
 	if options.promptFile != "" {
@@ -164,6 +165,9 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewGitInspectTool(ws),
 		NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws),
 		NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool(),
+	}
+	if options.contextGC {
+		tools = append(tools, recallTool{})
 	}
 	if options.agents {
 		tools = append(tools, NewAgentTools()...)
@@ -227,7 +231,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		Registry: registry, WorkspacePath: ws.Root(), Workspace: ws, NoProjectInstructions: options.noProjectInstructions,
 		ProjectInstructions: projectInstructions,
 		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls, ModelRetryWindow: options.modelRetryWindow,
-		PlanMode: options.plan, ReportFriction: options.reportFriction, InRunCompact: options.inRunCompact, Agents: options.agents,
+		PlanMode: options.plan, ReportFriction: options.reportFriction, InRunCompact: options.inRunCompact, ContextGC: options.contextGC, Agents: options.agents,
 	}
 	for _, path := range options.allowedWorkspaces {
 		destination, bad := workspaceDestinationAt(ctx, path, true)
@@ -414,7 +418,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir, resume, gitDo string
 	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction                     bool
-	auto, inRunCompact, agents                                                                    bool
+	auto, inRunCompact, contextGC, agents                                                         bool
 	maxSteps, maxToolCalls                                                                        int
 	modelRetryWindow                                                                              time.Duration
 	allowedWorkspaces                                                                             []string
@@ -433,6 +437,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
 	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6-sol/medium")
 	fs.BoolVar(&o.inRunCompact, "in-run-compact", false, "opt in to bounded compaction within a long run; default off")
+	fs.BoolVar(&o.contextGC, "context-gc", false, "opt in to lossless context GC with recall; default off")
 	fs.DurationVar(&o.modelRetryWindow, "model-retry-window", 0, "keep retrying transient model failures within this window (e.g. 12h); 0 disables")
 	fs.BoolVar(&o.agents, "agents", false, "offer concurrent agents with names, nesting and per-spawn read/write authority")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
@@ -457,7 +462,7 @@ var runFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "agents"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "context-gc", "agents"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-file", "report-friction"}},
 	{"Experimental", []string{"git-do"}},
@@ -468,7 +473,7 @@ var chatFlagGroups = []flagGroup{
 	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
-	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "agents"}},
+	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "context-gc", "agents"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir", "report-friction"}},
 	{"Experimental", []string{"git-do"}},

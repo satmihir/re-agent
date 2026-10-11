@@ -139,11 +139,12 @@ func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 
 // requestHistory keeps the accepted record separate from the destination's view.
 func (s *Session) requestHistory() []Entry {
+	view := s.gcHistory()
 	if s.handoff == nil {
-		return s.history
+		return view
 	}
 	history := []Entry{{Kind: EntryUser, User: &UserTurn{Text: s.handoff.Text, Plan: s.handoff.Plan}}}
-	return append(history, s.history[s.handoff.Entries:]...)
+	return append(history, view[s.handoff.Entries:]...)
 }
 
 func stageModelSwitch(ctx context.Context, history []Entry, cfg Config, window int64, tokensPerByte float64) (*modelHandoff, int, error) {
@@ -245,7 +246,7 @@ func (c *conversation) transitionModel(ctx context.Context, info modelInfo, fres
 		"fresh": fresh,
 	}
 	s.trace.Write("model.switch.requested", 0, metadata)
-	history := s.history
+	history := s.gcHistory()
 	if fresh {
 		history = nil
 	}

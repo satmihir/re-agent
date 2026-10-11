@@ -64,6 +64,21 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "context-gc": {
+        "context_gc": True,
+        "steps": [
+            ("idle", 0.5), ("type", "inspect repeatedly"), ("key", "enter"),
+            ("wait", "context GC: dropped 1 results", 15),
+            ("wait", "GC turn complete.", 10),
+            ("wait_status", "gpt-6-sol / low", 5),
+            ("show", "lossless GC notice and restored prompt"),
+            ("expect", "screen_has", "context GC: dropped 1 results"),
+            ("expect", "status_row_last"),
+            ("type", "next question"), ("key", "enter"),
+            ("wait", "Next turn works.", 5),
+            ("expect", "status_row_last"),
+        ],
+    },
     "review-command": {
         "script": [tool("Reviewing inline.", "review-read", "list_files", {"path": "."}),
                    reply("Review complete; zero review agents; inline verification."),
@@ -359,7 +374,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "esc": "\x1b",
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -371,7 +386,9 @@ class Session:
             env.pop("NO_COLOR", None)
             env.update(extra_env or {})
             args = [binary, "chat", "--workspace", workspace]
-            if agents:
+            if context_gc:
+                args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6-sol"]
+            elif agents:
                 args += ["--agents", "--recap", "--no-project-instructions", "--model", "gpt-6-sol"]
             elif retry:
                 args += ["--model-retry-window", "5s", "--no-project-instructions"]
@@ -545,7 +562,10 @@ def run(binary, name, scenario, workspace):
     extra_env = {}
     server = None
     gates = {name: threading.Event() for name in ("advance", "finish")}
-    if scenario.get("agents"):
+    if scenario.get("context_gc"):
+        with open(os.path.join(workspace, "gc.txt"), "w") as f:
+            f.write("x" * 25000 + "\n")
+    if scenario.get("agents") or scenario.get("context_gc"):
         class AgentHandler(http.server.BaseHTTPRequestHandler):
             root_requests = 0
             child_requests = 0
@@ -605,6 +625,8 @@ def run(binary, name, scenario, workspace):
                         calls = [("spawn", {"task": "create a file", "context": {"brief": "independent"},
                                             "name": "writer", "authority": "write"}),
                                  ("wait", {"ids": ["writer"]})] if number == 1 else []
+                    if scenario.get("context_gc"):
+                        calls = [("read_file", {"path": "gc.txt"})] if number <= 2 else [("list_files", {"path": "."})] if number <= 16 else []
                     output = [{"type": "function_call", "call_id": f"c{number}-{index}",
                                "name": name, "arguments": json.dumps(arguments)}
                               for index, (name, arguments) in enumerate(calls)]
@@ -612,10 +634,12 @@ def run(binary, name, scenario, workspace):
                         text = "Agent results received." if number == 3 else "Named agent reused."
                         if scenario.get("agents_write"):
                             text = "Agent changed a file."
+                        if scenario.get("context_gc"):
+                            text = "GC turn complete." if number == 17 else "Next turn works."
                         output = [{"type": "message", "status": "completed", "content": [
                             {"type": "output_text", "text": text}]}]
                 result = {"id": "r", "model": "test", "status": "completed", "output": output,
-                          "usage": {"input_tokens": 10, "output_tokens": 5,
+                          "usage": {"input_tokens": 60000 if scenario.get("context_gc") else 10, "output_tokens": 5,
                                     "input_tokens_details": {"cached_tokens": 0}}}
                 body = ("event: response.completed\ndata: " + json.dumps(
                     {"type": "response.completed", "response": result}) + "\n\n").encode()
@@ -670,7 +694,7 @@ def run(binary, name, scenario, workspace):
             editor.write(scenario["editor"])
         os.chmod(editor_path, 0o700)
         extra_env["VISUAL"] = editor_path
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]
