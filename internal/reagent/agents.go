@@ -151,40 +151,31 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	if s.agentModel == nil || s.workspace == nil {
 		return AgentThread{}, fmt.Errorf("agents are unavailable here")
 	}
+	if ctx.Err() != nil {
+		return AgentThread{}, ctx.Err()
+	}
+	t := s.agents
 	var initialWorkspace json.RawMessage
 	sharing := a.Context.Fork || len(a.Context.Entries) != 0
 	if sharing {
-		// Collect before taking the tree lock; Git probes can block.
+		t.mu.Lock()
+		_, err := s.agentAdmissionLocked(a.Name)
+		t.mu.Unlock()
+		if err != nil {
+			return AgentThread{}, err
+		}
+		// Collect without the tree lock; Git probes can block. Recheck admission
+		// afterwards because other branches can spawn while collection runs.
 		initialWorkspace = collectSnapshot(ctx, s.cfg.WorkspacePath, true)
 	}
-	t := s.agents
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if ctx.Err() != nil {
 		return AgentThread{}, ctx.Err()
 	}
-	depth := 1
-	if s.agentID != "" {
-		depth = t.nodes[s.agentID].depth + 1
-	}
-	if depth > maxAgentDepth {
-		return AgentThread{}, fmt.Errorf("maximum agent depth is 3")
-	}
-	live := 0
-	for _, n := range t.nodes {
-		if !n.ended || n.working {
-			live++
-		}
-	}
-	if live >= maxLiveAgents {
-		return AgentThread{}, fmt.Errorf("at capacity: wait for or dismiss an agent")
-	}
-	if a.Name != "" {
-		for _, n := range t.childrenLocked(s.agentParent()) {
-			if n.Name == a.Name && !n.ended {
-				return AgentThread{}, fmt.Errorf("name %q is already live", a.Name)
-			}
-		}
+	depth, err := s.agentAdmissionLocked(a.Name)
+	if err != nil {
+		return AgentThread{}, err
 	}
 	cfg := s.cfg
 	if a.Model != "" {
@@ -287,6 +278,34 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	n.queue = []agentMessage{{task: a.Task, prompt: prompt}}
 	t.startLocked(ctx, n)
 	return n.AgentThread, nil
+}
+
+func (s *Session) agentAdmissionLocked(name string) (int, error) {
+	t := s.agents
+	depth := 1
+	if s.agentID != "" {
+		depth = t.nodes[s.agentID].depth + 1
+	}
+	if depth > maxAgentDepth {
+		return 0, fmt.Errorf("maximum agent depth is 3")
+	}
+	live := 0
+	for _, n := range t.nodes {
+		if !n.ended || n.working {
+			live++
+		}
+	}
+	if live >= maxLiveAgents {
+		return 0, fmt.Errorf("at capacity: wait for or dismiss an agent")
+	}
+	if name != "" {
+		for _, n := range t.childrenLocked(s.agentParent()) {
+			if n.Name == name && !n.ended {
+				return 0, fmt.Errorf("name %q is already live", name)
+			}
+		}
+	}
+	return depth, nil
 }
 
 func (t *agentTree) startLocked(ctx context.Context, n *agentThread) {
