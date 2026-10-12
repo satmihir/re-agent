@@ -6,6 +6,8 @@ import (
 	"math"
 )
 
+const inRunCompactFraction = 0.4
+
 const inRunCompactFocus = "Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls."
 
 // compactWithinRun acts only at a settled pre-request boundary (v0 §10.4).
@@ -20,7 +22,7 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 	}
 	scope := RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps + 1}
 	rate := s.admissionRate(r.cfg.Provider)
-	threshold := float64(r.window) * 0.4
+	threshold := float64(r.window) * inRunCompactFraction
 	next := BuildContext(r.cfg, scope, s.requestHistory())
 	size, err := admissionRequestBytes(r.cfg, next)
 	if err != nil {

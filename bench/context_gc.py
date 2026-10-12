@@ -2,8 +2,9 @@
 """Replay context GC on private traces; print aggregates, never trace content.
 
 The cache model is deliberately conservative: removed old input would have cost
-0.1 of full-price input on every request; rebuilding the changed suffix costs an
-extra 0.9 once per pass. Native reasoning bytes are excluded from calibration.
+0.1 of full-price input on every request; rebuilding all retained input except
+encoded instructions and tool declarations costs an extra 0.9 once per pass
+(1.15 for Anthropic's 1.25x cache writes). Native reasoning bytes are excluded.
 External filesystem changes cannot be reconstructed offline. Recorded successful
 file-tool mutations are evidence; the evaluator never reads today's workspace.
 Older traces lack dispatch-time canonical identities: matching their workspace
@@ -25,10 +26,13 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Policy:
-    min_tokens: int = 32_000
+    window_floor: float = 0.0625
     fraction: float = 0.15
     interval: int = 16
     recent: int = 3
+    remaining_floor: int = 16
+    remaining_cap: int = 48
+    compact_close: float = 0.9
 
 
 def encoded(value):
@@ -38,6 +42,37 @@ def encoded(value):
                           ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
         text = text.replace(char, escaped)
     return text.encode("utf-8")
+
+
+def fixed_prefix_bytes(body, provider=None):
+    """Measure encoded fixed values, not a position in the serialized body."""
+    text = body.decode("utf-8")
+    request = json.loads(text)
+    if not isinstance(request, dict):
+        return 0
+    fixed_key = "system" if provider == "anthropic" or (provider is None and "system" in request) else "instructions"
+    decoder, offset, size = json.JSONDecoder(), 1, 0
+    # Preserve RawMessage spellings and escaping instead of reserializing values.
+    while True:
+        while text[offset].isspace() or text[offset] == ',':
+            offset += 1
+        if text[offset] == '}':
+            return size
+        key, offset = decoder.raw_decode(text, offset)
+        while text[offset].isspace() or text[offset] == ':':
+            offset += 1
+        start = offset
+        _, offset = decoder.raw_decode(text, offset)
+        if key in (fixed_key, "tools"):
+            size += len(text[start:offset].encode("utf-8"))
+
+
+def expected_remaining(completed, policy=Policy()):
+    return max(policy.remaining_floor, min(policy.remaining_cap, completed))
+
+
+def rebuild_surcharge(provider):
+    return (1.25 if provider == "anthropic" else 1.0) - 0.1
 
 
 def content_size(outcome):
@@ -207,6 +242,15 @@ class Frame:
     assistant_steps: int
     compaction_before: bool = False
     known: bool = True
+    fixed_bytes: int = 0
+    provider: str = "openai"
+    in_run_compact: bool = False
+    window: int = 1_050_000
+    recorded_drops: list = field(default_factory=list)
+    completed_requests: int = None
+    max_steps: int = 0
+    compactions: int = 0
+    compact_off: bool = False
 
 
 def trace_events(path):
@@ -221,20 +265,62 @@ def load_frames(path):
     request = None
     body = None
     compaction = False
+    originals = {}
+    recorded_drops = []
+    provider, in_run_compact, window = "openai", False, 0
+    completed_requests, max_steps, compactions, compact_off = 0, 0, 0, False
     for event in trace_events(path):
         kind, data = event["type"], event["data"]
+        if kind == "auto.route" and data.get("action") == "switch":
+            raise ValueError("context GC evaluator does not support traces with automatic model switches")
+        if kind == "run.started":
+            provider = data.get("provider", "openai")
+            in_run_compact = bool(data.get("in_run_compact"))
+            completed_requests = data.get("gc_requests")
+            if completed_requests is None:
+                completed_requests = sum(entry["kind"] == "assistant" for entry in (data.get("initial_history") or []))
+            max_steps, compactions, compact_off = data.get("max_steps", 0), 0, False
+            model = data.get("configured", data.get("model"))
+            window = {"gpt-6-luna": 1_050_000, "gpt-6-sol": 1_050_000,
+                      "gpt-6.1-sol": 1_050_000, "claude-haiku-4-5": 200_000,
+                      "claude-sonnet-5-5": 1_000_000, "claude-opus-5-5": 1_000_000}.get(model, 0)
+        if kind == "context.gc":
+            recorded_drops = data["dropped"]
+        if kind == "tool.finished":
+            originals[data["call_id"]] = data["outcome"]
+        if kind == "compaction.skipped":
+            compact_off = True
         if kind == "compaction.finished":
             compaction = True
+            compactions += 1
+            originals = {}
         if kind == "model.requested":
             request, body = event, None
         elif kind == "api.attempt.started" and request is not None and body is None:
             body = data.get("request_body", "").encode("utf-8")
         elif kind in ("model.accepted", "model.failed") and request is not None:
             history = request["data"].get("history") or []
-            results, steps, settled = records(history)
             native = reasoning_bytes(history)
             if body is None:
                 raise ValueError("trace has model requests without recorded HTTP bodies")
+            measured_size = len(body) - native
+            fixed = fixed_prefix_bytes(body, provider)
+            # Restore recorded GC outcomes to replay the policy against the
+            # original input. Usage is rescaled with this request's measured rate.
+            for entry in history:
+                tool = entry.get("tool")
+                if tool is None or tool.get("outcome", {}).get("code") != "context_gc":
+                    continue
+                original = originals.get(tool["call_id"])
+                if original is None:
+                    raise ValueError("trace lacks original behind recorded GC placeholder")
+                old = encoded(encoded(tool["outcome"]).decode())
+                new = encoded(encoded(original).decode())
+                if old not in body:
+                    raise ValueError("cannot restore projected GC outcome in HTTP body")
+                body = body.replace(old, new, 1)
+                tool["outcome"] = original
+            results, steps, settled = records(history)
             native_positions = []
             for entry in history:
                 for item in entry.get("assistant", {}).get("native", {}).get("items") or []:
@@ -260,9 +346,12 @@ def load_frames(path):
                 result.args = {}
             usage = data.get("usage") or data.get("response", {}).get("usage") or {}
             frames.append(Frame(request["step"], len(body) - native, native,
-                                usage.get("input_tokens", 0), results, settled, steps, compaction,
-                                bool(usage.get("known"))))
-            request, body, compaction = None, None, False
+                                usage.get("input_tokens", 0) * (len(body) - native) / measured_size,
+                                results, settled, steps, compaction, bool(usage.get("known")),
+                                fixed, provider, in_run_compact, window, recorded_drops,
+                                completed_requests, max_steps, compactions, compact_off))
+            completed_requests += 1
+            request, body, compaction, recorded_drops = None, None, False, []
     return frames
 
 
@@ -283,6 +372,8 @@ class Pass:
     full_price_tokens: float
     reasons: dict
     net_saving: float = 0
+    trigger: str = "break_even"
+    expected_remaining_requests: int = 0
 
 
 @dataclass
@@ -298,7 +389,7 @@ class Evaluation:
     actual_compactions: int = 0
 
 
-def evaluate(frames, policy=Policy(), window=1_050_000):
+def evaluate(frames, policy=Policy(), window=None, recorded=False):
     rate = measured_rate(frames)
     report = Evaluation(len(frames), 1 / rate)
     dropped = {}
@@ -308,42 +399,55 @@ def evaluate(frames, policy=Policy(), window=1_050_000):
     previous_rate = 0
     previous_known = False
     last_pass = 0
-    for frame in frames:
+    for completed, frame in enumerate(frames):
+        frame_window = frame.window if window is None else window
+        threshold = frame_window * 0.4
         if frame.compaction_before:
             dropped = {}
             savings_owner = {}
             last_pass = 0
             previous_tokens = previous_original_tokens = previous_rate = 0
             previous_known = False
+        admission_rate = max(0.25, previous_rate * 1.5) if previous_rate > 0 else 0.5
         gc_ran = False
         active_ids = {result.id for result in frame.results}
         dropped = {call_id: value for call_id, value in dropped.items() if call_id in active_ids}
         existing = sum(value for value in dropped.values())
         candidate = candidates(frame.results, frame.assistant_steps, dropped, policy.recent)
+        if recorded:
+            by_id = {result.id: result for result in frame.results}
+            candidate = {item["call_id"]: (by_id[item["call_id"]], item["reason"], item["step"])
+                         for item in frame.recorded_drops}
         changes = {}
         for call_id, (result, reason, step) in candidate.items():
             freed = result.size - content_size(placeholder(result, reason, step))
             if freed > 0:
                 changes[call_id] = freed
         freed = sum(changes.values())
-        if (frame.settled and previous_known and previous_tokens >= policy.min_tokens
-                and frame.assistant_steps - last_pass >= policy.interval
-                and previous_rate > 0 and freed * previous_rate >= policy.fraction * previous_tokens):
+        rebuild = max(0, frame.size - existing - freed - frame.fixed_bytes)
+        remaining = expected_remaining(completed if frame.completed_requests is None else frame.completed_requests, policy)
+        surcharge = rebuild_surcharge(frame.provider)
+        break_even = freed * remaining * 0.1 > rebuild * surcharge
+        near_compaction = (frame.in_run_compact and frame.step > 1 and not frame.compact_off
+                           and frame.compactions < 8 and (frame.max_steps <= 0 or frame.step + 1 <= frame.max_steps)
+                           and math.ceil((frame.size - existing) * admission_rate) >= policy.compact_close * threshold and
+                           math.ceil((frame.size - existing - freed) * admission_rate) < threshold)
+        fires = (frame_window > 0 and frame.settled and previous_known and changes
+                 and previous_tokens >= frame_window * policy.window_floor
+                 and frame.assistant_steps - last_pass >= policy.interval
+                 and previous_rate > 0 and freed * previous_rate >= policy.fraction * previous_tokens
+                 and (break_even or near_compaction))
+        if changes and (recorded or fires):
             first = min(candidate[call_id][0].entry for call_id in changes)
-            offset = min(candidate[call_id][0].offset for call_id in changes)
-            # Wire suffix minus native reasoning and all dropped result content.
-            # Include old drops only if they are in the suffix being rebuilt.
-            suffix = frame.size - offset
-            suffix -= sum(value for call_id, value in dropped.items()
-                          if next(r.offset for r in frame.results if r.id == call_id) >= offset)
-            suffix -= freed
-            full_price = max(0, suffix) * rate
+            full_price = rebuild * rate
             item = Pass(frame.step, len(changes), freed, freed * rate, first,
                         full_price, dict(Counter(candidate[key][1] for key in changes)),
-                        net_saving=-0.9 * full_price)
+                        net_saving=-surcharge * full_price,
+                        trigger="recorded" if recorded else "break_even" if break_even else "near_compaction",
+                        expected_remaining_requests=remaining)
             report.passes.append(item)
             report.full_price_tokens += full_price
-            report.net_saving -= 0.9 * full_price
+            report.net_saving -= surcharge * full_price
             for call_id, value in changes.items():
                 dropped[call_id] = value
                 savings_owner[call_id] = item
@@ -360,8 +464,6 @@ def evaluate(frames, policy=Policy(), window=1_050_000):
                         if frame.known and frame.tokens > 0 else 0)
         # Only past measurements affect admission; the run-wide rate above is
         # for reporting savings, never for deciding an earlier trigger.
-        admission_rate = max(0.25, previous_rate * 1.5) if previous_rate > 0 else 0.5
-        threshold = window * 0.4
         before_trigger = previous_known and previous_original_tokens > 0 and (
             previous_original_tokens >= threshold or math.ceil(frame.size * admission_rate) >= threshold)
         after_trigger = previous_known and previous_tokens > 0 and (
@@ -382,19 +484,27 @@ def evaluate(frames, policy=Policy(), window=1_050_000):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("traces", nargs="+", type=Path)
-    parser.add_argument("--min-tokens", type=int, default=Policy.min_tokens)
+    parser.add_argument("--window-floor", type=float, default=Policy.window_floor)
+    parser.add_argument("--remaining-floor", type=int, default=Policy.remaining_floor)
+    parser.add_argument("--remaining-cap", type=int, default=Policy.remaining_cap)
+    parser.add_argument("--compact-close", type=float, default=Policy.compact_close)
     parser.add_argument("--fraction", type=float, default=Policy.fraction)
     parser.add_argument("--interval", type=int, default=Policy.interval)
     parser.add_argument("--recent", type=int, default=Policy.recent)
-    parser.add_argument("--window", type=int, default=1_050_000)
+    parser.add_argument("--window", type=int, help="override the traced model's catalog window")
     parser.add_argument("--json", action="store_true", help="aggregate machine-readable report")
+    parser.add_argument("--recorded-passes", action="store_true", help="cost the trace's actual GC passes instead of replaying the trigger")
     args = parser.parse_args(argv)
-    if args.min_tokens < 0 or not 0 < args.fraction <= 1 or args.interval < 1 or args.recent < 1:
+    if (not 0 <= args.window_floor <= 1 or not 0 < args.fraction <= 1
+            or args.interval < 1 or args.recent < 1 or args.remaining_floor < 1
+            or args.remaining_cap < args.remaining_floor or not 0 < args.compact_close <= 1
+            or (args.window is not None and args.window < 1)):
         parser.error("invalid policy thresholds")
-    policy = Policy(args.min_tokens, args.fraction, args.interval, args.recent)
+    policy = Policy(args.window_floor, args.fraction, args.interval, args.recent,
+                    args.remaining_floor, args.remaining_cap, args.compact_close)
     summaries = []
     for path in args.traces:
-        report = evaluate(load_frames(path), policy, args.window)
+        report = evaluate(load_frames(path), policy, args.window, args.recorded_passes)
         summary = {"run": path.parent.name, "policy": vars(policy), **vars(report)}
         summary["passes"] = [vars(item) for item in report.passes]
         summaries.append(summary)
@@ -410,10 +520,11 @@ def main(argv=None):
         for item in row["passes"]:
             print(f"  step {item['step']}: {item['dropped']} results, "
                   f"{item['tokens_freed']/1000:.1f}k tokens freed, "
-                  f"{item['full_price_tokens']/1000:.1f}k suffix at full price, "
+                  f"{item['full_price_tokens']/1000:.1f}k full rebuild, "
                   f"{item['net_saving']/1000:.1f}k net over remaining requests; "
+                  f"{item['trigger']}, expected remaining {item['expected_remaining_requests']}; "
                   f"cache break entry {item['cache_break_entry']}, reasons {item['reasons']}")
-    print("Estimates: cached input 0.1x; suffix rebuild surcharge 0.9x; no model calls.")
+    print("Estimates: cached input 0.1x; full rebuild surcharge OpenAI 0.9x, Anthropic 1.15x; no model calls.")
     print("Compaction columns are first predicted 40% crossings (not a simulated model summary).")
     print("Trigger usage after simulated drops: retained bytes times the latest measured rate (predicted).")
     print("Identity approximation: old traces lack dispatch-time aliases; lexical result paths only.")

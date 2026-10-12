@@ -641,7 +641,7 @@ def run(binary, name, scenario, workspace):
                         output = [{"type": "message", "status": "completed", "content": [
                             {"type": "output_text", "text": text}]}]
                 result = {"id": "r", "model": "test", "status": "completed", "output": output,
-                          "usage": {"input_tokens": 60000 if scenario.get("context_gc") else 10, "output_tokens": 5,
+                          "usage": {"input_tokens": 120000 if scenario.get("context_gc") else 10, "output_tokens": 5,
                                     "input_tokens_details": {"cached_tokens": 0}}}
                 body = ("event: response.completed\ndata: " + json.dumps(
                     {"type": "response.completed", "response": result}) + "\n\n").encode()
