@@ -329,7 +329,7 @@ func (r *Run) collectContext() bool {
 		// the same conservative trigger used by compactWithinRunAfterGC.
 		threshold := float64(r.window) * inRunCompactFraction
 		admissionRate := s.admissionRate(r.cfg.Provider)
-		near := r.cfg.InRunCompact && r.steps > 0 && !r.compactOff && r.compactions < 8 &&
+		near := r.cfg.InRunCompact && r.steps > 0 && !r.compactOff && r.compactions < inRunCompactLimit &&
 			(r.cfg.MaxSteps <= 0 || r.steps+2 <= r.cfg.MaxSteps) &&
 			math.Ceil(float64(oldBytes)*admissionRate) >= contextGCNearCompact*threshold &&
 			math.Ceil(float64(newBytes)*admissionRate) < threshold

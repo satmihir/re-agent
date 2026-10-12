@@ -79,21 +79,26 @@ func TestContextGC_BreakEvenAndAnthropicWrites(t *testing.T) {
 
 func TestContextGC_NearCompactionException(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		near    bool
-		enabled bool
-		blocked bool
-		want    bool
+		name        string
+		near        bool
+		enabled     bool
+		blocked     bool
+		compactions int
+		want        bool
 	}{
-		{"near", true, true, false, true},
-		{"far", false, true, false, false},
-		{"off", true, false, false, false},
-		{"compact disabled after failure", true, true, true, false},
+		{"near", true, true, false, 0, true},
+		{"far", false, true, false, 0, false},
+		{"off", true, false, false, 0, false},
+		{"compact disabled after failure", true, true, true, 0, false},
+		{"below summary cap", true, true, false, inRunCompactLimit - 1, true},
+		{"at summary cap", true, true, false, inRunCompactLimit, false},
+		{"above summary cap", true, true, false, inRunCompactLimit + 1, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s, r := gcEconomicFixture(t, openaiName, 16)
 			r.cfg.InRunCompact = test.enabled
 			r.compactOff = test.blocked
+			r.compactions = test.compactions
 			r.steps = 17
 			size, err := admissionRequestBytes(r.cfg, BuildContext(r.cfg, RequestScope{}, s.history))
 			if err != nil {

@@ -6,7 +6,10 @@ import (
 	"math"
 )
 
-const inRunCompactFraction = 0.4
+const (
+	inRunCompactFraction = 0.4
+	inRunCompactLimit    = 8
+)
 
 const inRunCompactFocus = "Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls."
 
@@ -38,8 +41,8 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 		r.compactOff = true
 		return "", ""
 	}
-	if r.compactions >= 8 {
-		return skip("within-run continuation reached eight summaries")
+	if r.compactions >= inRunCompactLimit {
+		return skip(fmt.Sprintf("within-run continuation reached %d summaries", inRunCompactLimit))
 	}
 	if r.cfg.MaxSteps > 0 && r.steps+2 > r.cfg.MaxSteps {
 		return skip("within-run continuation has no spare summary and follow-up steps")
