@@ -4,16 +4,40 @@ Design for [#138](https://github.com/satmihir/re-agent/issues/138), step 1 of
 [#143](https://github.com/satmihir/re-agent/issues/143). Implementation and its
 approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 
-**Status:** proposed for human approval. Research and two independent reviews
-are recorded below; neither is a substitute for that approval. No suite is
-implemented by this document.
+**Status:** revised for human approval following the owner's confirmed decisions
+on PR #148. Research and independent reviews are recorded below; no suite or
+reference hardening is implemented by this document.
 
 Reference inspected: `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492` (Go main).
-Freeze an actual reference and oracle digest in #139. Changes landing meanwhile,
-especially #140's compaction prerequisite and working-tree review, need an
-explicit matrix update before freezing; do not silently refresh goldens.
+That commit establishes the inventory, **not the final oracle**. Freeze the
+reference and capture goldens only after the separate Go hardening prerequisite,
+#140 and #136 have landed. Reconcile their changes against this matrix first;
+do not freeze the old library quirks or silently refresh candidate goldens.
 
 ## 1. Harness architecture
+
+### Required Go reference hardening before the freeze
+
+The owner confirmed three reference changes in the PR #148 design review.
+Track them in **one separate Go hardening prerequisite issue/PR under #143**;
+creating that tracking issue and landing its PR are scheduling gates, not work
+performed by this design change. Its acceptance checklist is:
+
+| Reference change | Required contract and parity dependents |
+| --- | --- |
+| Native endpoint configuration | Add base-URL environment variables for OpenAI, Anthropic and Jev, useful for gateways as well as tests; W53 and all native/Auto/git-do/model-switch/agent cases use loopback on Linux and macOS |
+| Canonical JSON v2 checkpoints | Go writes deterministic JSON v2 and still reads v1 gob; Rust reads/writes v2 only. C19/A32/A34/A37 compare canonical JSON bytes and recovery; legacy v1 import is a Go-only migration check |
+| re:agent-owned model-visible errors | Wrap JSON/regexp and other library-generated errors at the model boundary in stable project messages, without changing validation/dialect. T01/T09/T59/W17–W18 and every failure outcome compare these messages exactly |
+| Configurable transport timeouts (recommended in the same PR) | Add positive-duration environment overrides for response-header/read-idle limits, with unchanged 10min/5min defaults; W54 uses seconds without injecting clocks or changing retry/cancellation semantics |
+
+The hardening PR owns the exact env names, URL composition/precedence, v2
+schema/canonical writer/checksum rules, owned-error catalog and timeout validation.
+Recommendations below make those interfaces concrete; reconcile final spellings
+and fixtures with that reviewed PR before recording any oracle goldens. It must
+update the overview/trace-format documentation wherever behavior or recorded
+configuration changes, run offline tests, and demonstrate its new boundaries
+through the executable. This is useful behavior hardening, not a ban on reference changes. The parity
+runner still uses only public executable boundaries, not private constructors.
 
 ### An oracle outside both implementations
 
@@ -24,7 +48,8 @@ and stderr bytes, exit status/signals, HTTP requests, JSONL traces, checkpoint
 files, terminal state, and filesystem/process effects. Model replies are inputs,
 not expected judgments about whether the task succeeded.
 
-Record Go observations once, review them, and freeze them as goldens. Ordinary
+After all freeze prerequisites land, record Go observations once, review them,
+and freeze them as goldens. Ordinary
 candidate testing requires only the configured binary, Python, Git, and the
 explicit platform tools below—not the Go source or a Go compiler. A separate
 compatibility lane takes a protected reference binary as `REF_BIN` for reverse
@@ -36,11 +61,11 @@ Proposed ownership in #139 (not files added by #138):
 
 | Path | Owns |
 | --- | --- |
-| `parity/run.py` | Case selection, worker processes, artifact/report lifecycle, environment isolation and egress preflight |
-| `parity/provider.py` | Recording HTTP/SSE server, CONNECT/TLS interception, keyed response scripts and barriers |
+| `parity/run.py` | Case selection, worker processes, artifact/report lifecycle, environment isolation and loopback endpoint preflight |
+| `parity/provider.py` | Recording loopback HTTP/SSE endpoints for both providers and Jev, keyed response scripts and barriers |
 | `parity/observe.py` | Lossless JSON token spans, allowed substitutions, invariants, trace correlation and diffs |
-| `parity/cases/{cli,wire,tools,agents}.py` | Inputs and assertions for this matrix; no implementation-specific branching |
-| `parity/fixtures/`, `parity/golden/` | Scripts, test certificates, Go checkpoints, raw/normalized expected observations and platform manifests |
+| `parity/cases/{cli,wire,tools,agents}.py` | Shared inputs/assertions; only explicitly selected legacy-v1 policy overlays differ, never hidden binary-name detection |
+| `parity/fixtures/`, `parity/golden/` | Scripts, canonical JSON v2 checkpoints, Go-only legacy migration inputs, raw/normalized expectations and platform manifests |
 | Existing `bench/tty/{check,vt}.py` | External PTY evaluator; adapt its scenarios to stronger synchronization and selectable binary |
 | Existing `Makefile` | `parity` entry point only, added when #139 asks for implementation |
 
@@ -58,9 +83,20 @@ parameter suffixes are selectable; unknown selections fail with harness exit 2.
 Harness exit 0 means all selected required cases passed, 1 means case failure,
 2 means bad invocation/missing prerequisites. Reports state platform, selected
 and omitted cases, reference commit, suite digest and every accepted gap. A
-fast/developer selection is useful but is **not** the approval gate. The full
-Linux lane includes long transport timeout cases. Run macOS's portable/PTY lane
-as well; its manifest must say which native TLS cases it cannot execute.
+fast/developer selection is useful but is **not** the approval gate. Run the
+full native/proxy/Jev/PTY matrix on both Linux and macOS; there is no native
+transport platform exclusion. W54 uses configured short timeouts. Exec lifecycle
+cases retain the real 10s minimum and remain selectable as slower cases.
+
+Default `make parity BIN=…` runs the identical common-v2 oracle on either binary.
+The sole confirmed compatibility-policy divergence uses explicit overlays:
+`LEGACY_V1=migrate` exercises hardened Go's v1→v2 reader/writer, while
+`LEGACY_V1=reject` checks the v2-only port's v1 unsupported-version/no-replay
+behavior. Go approval includes the migration overlay; Rust approval includes
+the rejection overlay, and both include the entire common suite. Report overlay
+case counts/expectations separately—never infer them from executable names or
+silently waive a common case. The Rust legacy-rejection expectation is the
+approved switchover policy, not a Go-v1 acceptance golden.
 
 Each case gets its own working directory, HOME, XDG cache, artifacts directory,
 server port and process group. Artifacts are outside the Git workspace so tracing
@@ -80,7 +116,7 @@ terminate process groups, reap owned helpers and retain bounded raw artifacts.
 Normal completion is graceful, especially in coverage runs. Test failures are
 not automatically retried; a diagnostic rerun is reported separately.
 
-### Three fake-provider forms, not one imaginary endpoint flag
+### Three fake-provider forms through public configuration
 
 `--scripted` reads normalized ModelResponse fixtures, rejects unknown fields,
 and reports exhaustion as protocol_error (`internal/reagent/scripted.go:18–56`).
@@ -94,36 +130,40 @@ The recording fake supports:
 1. **Application proxy:** `API_PROXY_URL=http://127.0.0.1:PORT/v1/responses`,
    `API_PROXY_PROVIDER=openai`, no provider key. This selects streaming OpenAI
    encoding and SSE decoding. It is not the direct Responses adapter.
-2. **Direct adapters and Jev on Linux:** existing endpoints are hard-coded.
-   `NewHTTPClient` clones the default HTTP transport (`transport.go:41–49`);
-   use standard `HTTPS_PROXY` and `SSL_CERT_FILE`/`SSL_CERT_DIR`. A local CONNECT
-   server accepts only `api.openai.com:443`, `api.anthropic.com:443`, and
-   `api.typesafe.ai:443`, terminates TLS with a fixture CA and matching SANs,
-   advertises HTTP/1.1, and **never forwards or resolves those hosts**. Native
-   OpenAI stays non-streaming; Anthropic uses Messages; Jev uses systemone.
-   Supply clearly fake sentinel tokens solely to pass credential validation.
-   “No API key” means no real key, account or public API access.
+2. **Native adapters and Jev, both platforms:** the inspected Go commit still
+   hard-codes endpoints (`provider.go:135–145`); the hardening PR changes that
+   before the oracle freezes. Recommend `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`
+   and `TYPESAFE_BASE_URL`, each including the API prefix (normally `/v1`).
+   Append `/responses`, `/messages` or `/systemone` without dropping a gateway's
+   path prefix; normalize one trailing slash. Fixture URLs use
+   `http://127.0.0.1:PORT/CASE/PROVIDER/v1`. Empty/unset keeps production defaults;
+   unsupported schemes, relative/missing-host URLs, query/fragment or userinfo
+   fail with owned, credential-safe errors. The existing OpenAI application
+   proxy takes precedence and retains its SSE/no-provider-key semantics.
+   Native OpenAI remains non-streaming, Anthropic remains Messages, and Jev
+   remains a separate one-attempt classifier. All clients—including children,
+   compaction, switches, Auto and git_do—must honor the selected endpoint.
+   Supply clearly fake sentinel tokens only to pass credential validation;
+   “no API key” means no real key, account or public API access.
 3. **Fault scripts:** fixed statuses/headers/body bytes, split writes/EOF/reset,
    wrong content length, stalled headers/reads, redirects, complete SSE overload
    and malformed/incomplete streams. Capture each method, authority, path,
    meaningful headers and raw body before releasing a scripted response.
 
-Use committed test-only PEM fixtures with documented expiry/fingerprint, not a
-host keychain change. A helper may generate replacements with declared `openssl`
-when #139 creates fixtures; runtime Python does not need a certificate library.
-Linux runs inside an external network namespace/container denying non-loopback
-egress. Provisioning that environment is a declared prerequisite, not a tool
-inside the binary. macOS application-proxy cases use loopback and empty real
-keys; network denial requires an externally supplied runner, not firewall edits.
+No TLS interception, CONNECT proxy, certificate fixtures, SSL_CERT_FILE,
+host trust-store edits, network namespace or container is required. Clear
+inherited proxy settings and point every active provider/router at the per-case
+loopback server. It never forwards requests; unexpected routes fail. This is
+an offline test configuration, not an OS egress sandbox for arbitrary binaries.
 
-**W53 is a mandatory preflight:** prove native exchanges and CA/hostname
-rejection on Go and candidate. Rust with rustls must explicitly support the
-external CA/environment used by this lane; do not assume reqwest does it.
-This mechanism was not run on Linux in #138. Failure is a failed/unsupported
-lane, never a passing skip. macOS's Go verifier has no documented equivalent
-SSL_CERT_FILE override; native/Jev interception is an accepted macOS gap.
-No endpoint flags, shortened clock controls or injectable model constructors
-are invented for this design.
+**W53 is a mandatory endpoint preflight on both platforms:** prove native
+OpenAI, Anthropic and Jev exchanges, custom path-prefix/trailing-slash handling,
+proxy precedence, invalid-config/no-request behavior, redaction and propagation
+to nested clients. Compare actual method/path/headers/body/trace endpoint;
+an ignored override is a failure, not a skipped lane. Defaults are checked via
+owned configuration diagnostics/preview without making public API requests.
+These new reference controls are prerequisites, not claims about today's binary.
+No injected clock or private model constructor is needed.
 
 Scripts key requests by unique task/history marker, destination model/provider,
 and logical step, not global arrival order. Retries repeat the same logical
@@ -132,36 +172,50 @@ child detection must use the appended agent task/guidance and observed spawn
 identity, not merely search for any task substring. Nested and reused children
 get distinct markers. Ambiguous routing fails with the captured request.
 
-### Checkpoints: format compatibility, not a JSON fiction
+### Checkpoints: canonical JSON v2, with Go-only v1 migration
 
-`session_store.go:66–72,151–156,208–233` shows a compact JSON envelope in order
-`version,id,state,sha256`; state is base64 **Go gob**, and SHA-256 covers decoded
-state. Gob preserves native RawMessage bytes and contains maps. Independently
-saved Go checkpoints are not reproducibly byte-equal. Generic JSON
-canonicalization cannot fix this, nor can Serde alone read them.
+The inspected reference uses a JSON envelope with base64 Go gob state
+(`session_store.go:66–72,151–156,208–233`). That discovery motivates a reference
+format change, not a Rust gob codec. **Confirmed:** Go writes canonical JSON v2
+and continues reading v1 itself; Rust supports v2 only. Old v1 Go sessions do
+not resume directly under Rust. This is an accepted switchover break; users can
+resume/save with hardened Go to obtain v2 first. The suite separates Go-only
+migration checks from language-neutral v2 cases rather than making Rust fail
+for an intentionally unsupported legacy format.
 
-Require Rust to **read and write version-1 Go-compatible checkpoints**, and keep
-the trace format. Test envelope spelling/order/escaping/base64/digest exactly
-against its own payload. Do not mask a bad digest. Freeze Go-produced checkpoint
-files as exact fixture inputs, without decoding/re-encoding them. Tests cover
-Go→candidate import, candidate self-resume and candidate→protected-Go import;
-compare subsequent requests, restored settings, IDs/call ledger, native data,
-GC originals, plan/workspace state, rosters, blocking and accounting. Same
-absolute fixture paths must exist when importing. Fixtures should be generated
-under a controlled runner root (see §3), with each fixture's schema/phase and
-behavior documented. Trace/schema observations plus all recovery cases expose
-state; no Go helper is imported by Python at runtime.
+Recommend a v2 JSON envelope containing `id`, `sha256`, `state` (a JSON object),
+and `version:2`, with SHA-256 over the canonical UTF-8 bytes of state. The
+hardening PR freezes exact field presence and schema. Canonical checkpoint
+serialization recursively sorts **all object keys**, including struct-derived
+objects; keeps array order, defined number spellings, Go-compatible string
+escaping, null/omission distinctions; and emits compact UTF-8 without a trailing
+LF. No new time/random field is introduced beyond already recorded state/IDs.
+This checkpoint-only key rule does not reorder provider requests or traces.
+Raw native/schema/outcome bytes that must survive resume should be stored as
+JSON strings in the v2 persistence schema, not silently parsed/reordered JSON
+objects; prove next-request identity with whitespace/order-sensitive native
+fixtures. The hardening PR must explicitly document such representations.
 
-Corrupt envelope/base64/checksum/gob fixtures are frozen inputs. Valid-checksum
-malformed-state fixtures may be prepared during #139's fixture-authoring step,
-clearly marked as synthetic, not claimed as reachable crash states. Do not
-implement an entire general-purpose gob interpreter in the oracle merely to
-obtain canonical snapshots. A small schema-specific gob implementation or a
-separately reviewed dependency is a **Rust prerequisite decision**, not included
-implicitly in the proposed crate list. Raw gob byte equality is an explicitly
-accepted weakness; two-way import is stronger on compatibility but weaker on
-unexercised state fields. #139 must publish a persisted-field-to-case crosswalk
-for every field in `chatCheckpoint` and its nested GC/handoff/agent records.
+Checkpoint bytes for the **same recorded state** are compared B, including
+canonical key order, escapes and checksum. Frozen v2 input fixtures and
+fixed-state rewrite/roundtrip cases are raw B. Live-generated checkpoints
+still contain different Session/Run IDs, paths and stored durations: validate
+raw canonicality/checksum first, then apply only §3's typed substitutions to
+compare those cases N. This does not excuse unordered serialization or omitted
+fields. A canonical state digest after substitutions is a separate derived
+artifact; it never replaces validation of the real on-disk digest.
+
+Test Go-v2→candidate, candidate self-resume and candidate-v2→protected-Go import;
+compare bytes plus subsequent requests/settings/call ledger/native data/GC/plan/
+workspace/rosters/blocking/accounting. Preserve permissions, locking and atomic
+checkpoint execution barriers. Use the same controlled absolute paths when
+importing. Python can now author malformed JSON/schema/phase/checksum fixtures
+directly, marking synthetic states as such; no gob interpreter in Python or Rust.
+Go-only tests import frozen v1 inputs, save v2 and check the same behavior; Rust
+rejects v1 with an owned unsupported-version message without replay/mutation.
+
+#139 must publish a persisted-field-to-case crosswalk for every v2 state field,
+using `chatCheckpoint` and nested GC/handoff/agent records as the migration audit.
 Include launch/active root, frozen project/launch instructions, effort/authority/
 plan, retry window, all budgets/features, Auto enabled/fallback/usage/attempts/
 compact-off state, accepted-call ledger, pending submission/phase/in-flight,
@@ -171,14 +225,35 @@ consequence in C19/A32/A34/A37 or is individually listed as unexercised with a
 source-review obligation. Trace paths alone do not prove history preservation.
 Enumerate untested file-fsync/rename/directory-fsync/power-loss windows separately.
 
+### Owned model-visible errors
+
+The current decoder forwards `err.Error()` (`tools.go:128–129`), and search
+includes regexp compiler prose (`tool_search_text.go:105–107`). The hardening
+PR replaces such text at the observation boundary, not by hiding it in the
+comparator. Publish a catalog of error code/message templates covering JSON
+syntax/type/unknown-field failures, regexp compilation, URL parsing, provider
+normalization/transport, file/exec failures, context/projection and persistence
+errors that reach the model. Safe field names or positions may be retained;
+Go type names, compiler wording and raw implementation-error suffixes are not
+contracts. Audit each exposed path, including errors forwarded through agent
+results/recall/model-switch text, rather than changing just one decoder helper.
+
+T01/T09/T59/W17–W18 and the corresponding failure families check every catalog
+category's exact owned message and unchanged rejection/no-effect behavior.
+Include several different library causes mapping to each category so a port
+cannot pass by special-casing one example. External provider diagnostics and
+command stdout/stderr remain bounded task data, not library-generated messages
+to rewrite. No comparator normalization is allowed to disguise a library leak.
+
 ## 2. Comparison matrix
 
 A row is a **case family**, not one shallow smoke test. Every listed variant is
 a manifest leaf case in #139. Use boundary triples (below/exactly/above) for each
 numeric/byte limit. Every tool gets common malformed-object/type/null/unknown
-field tables plus its specific rows; preserve Go's observed decoder behavior,
-including accepted oddities. Cases assert no request/no tool/no mutation where
-refusal occurs and exercise the **next user/model action**, not just the failure.
+field tables plus its specific rows; compare the hardened reference's accepted
+and rejected input behavior, including documented oddities, but its owned error
+messages rather than Go decoder/compiler prose. Cases assert no request/no
+tool/no mutation where refusal occurs and exercise the **next user/model action**, not just the failure.
 
 Comparison notation:
 
@@ -189,8 +264,8 @@ Comparison notation:
   S is additional to B/N unless a row states a specific byte exception.
 - **P**: fixed-size PTY screen/cursor/style/scrollback assertion, not raw redraw
   byte order. Pipe tests still establish stdout/stderr separation.
-- **L**: requires the verified Linux native TLS lane; portable preview portions
-  of such rows run everywhere. Slow cases remain in the full gate.
+- **L**: native **loopback** provider/Jev exchange using the hardening PR's
+  endpoint variables; runs on both Linux and macOS, not a platform exemption.
 
 Source anchors are observed at the reference commit. Inventories were bounded
 research, not proofs of exhaustive coverage; #139 must reconcile its manifest
@@ -223,7 +298,7 @@ Primary evidence: `internal/reagent/cli.go:19–117,121–198,427–453,662–74
 | C16 | --plan, /plan toggle, /plan text and inline marker; reply `<plan>` | Plan marker, dispatch refusals, Implement here/fresh/Keep planning transitions and next turn; N/P |
 | C17 | `!` success/nonzero/empty/truncated/invalid UTF-8; read-only/plan | Human shell differs from exec: merged output as shell history, effects, next request; N/S |
 | C18 | /edit and VISUAL/EDITOR selection; edit accept/empty/nonzero/missing executable | Editor handoff/temporary file cleanup, submitted bytes, prompt recovery; N/P |
-| C19 | Live chat checkpoint/resume idle/model/tool/terminal; lock/corrupt/permissions/version; multiple launches sharing isolated HOME | File envelope and permissions, two-way import/no replay, persisted-field crosswalk; raw Session/Run/trace IDs distinct across launches, earlier chats independently resumable; N/S |
+| C19 | JSON v2 checkpoint/resume idle/model/tool/terminal; lock/corrupt/checksum/version; shared-HOME launches; Go-only v1 migration | Canonical fixed-state bytes B, live state N (§3), v2 cross-import/no replay/permissions/field crosswalk, raw IDs unique and independently resumable; Rust v1 refusal S |
 | C20 | Trace path exists/unwritable; checkpoint save fails before model/tool publication | Trace best-effort warning versus persistence barrier failure/no external action; N/S |
 | C21 | Existing PTY `context-gc` | One dim notice, restored status and next turn; P plus A29–A32 |
 | C22 | `review-command` | Completion, invalid syntax, actual tool loop and subsequent ordinary turn; P |
@@ -287,7 +362,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W24 | error/response.failed/nested error/overflow/incomplete, known failed usage | Nested precedence, status/message and retained usage; N |
 | W25 | Completion followed by malformed/error events; delayed EOF/content-type variants | First terminal assembly wins, no live delta rendering, whole body read before decoding; N/S |
 | W26 | 429/500/529/599 then success/twice; 400/401/403/408/201/204/3xx | Default two attempts only on 429/5xx, same request bytes, ~500ms delay, exactly 200 success; N/S |
-| W27 | Connection/reset/partial-body/redirect; valid/corrupt/truncated gzip JSON/SSE/error bodies on direct and proxy forms | Default failure/retry behavior, no redirect/key forwarding; decoded adapter/trace body versus raw compressed server artifact, Accept-Encoding and status classification; N/S |
+| W27 | Connection/reset/partial-body/redirect; valid/corrupt/truncated gzip JSON/SSE/error bodies on direct and proxy forms | Owned transport failure categories/retry behavior, no redirect/key forwarding; decoded adapter/trace body versus raw compressed server artifact, Accept-Encoding and status classification; N/S |
 | W28 | Retry window transport/429/5xx/complete overload versus bad/incomplete stream | Four transient stream codes admitted only in window mode; metadata cannot disable retry; attempt identity N/S |
 | W29 | Short window; Retry-After integer/date/invalid; long successful first attempt | Admission deadline not in-flight deadline, scheduled/exhausted sequence N; only actual delay values/derived countdown wording S with policy bounds (§3/4) |
 | W30 | SIGINT at request receipt/partial-read/retry-wait barrier | Cancelled/resumable status, no further attempt/tool, following chat turn; N/S |
@@ -313,8 +388,8 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W50 | Fresh/same-model fresh/unavailable/numeric/bad selection | Different-model fresh resets; same-model fresh is Go's pinning no-op; N |
 | W51 | L cross-provider round trips; applied/unknown/unacknowledged timeout | Projection/uncertainty gate then later assistant acknowledgment permits timeout sharing; N/S |
 | W52 | After switch: effort/reset/compact/workspace/plan/GC | Next request uses correct handoff, prefix/cache and authority; N |
-| W53 | Linux CONNECT/CA/hostname/egress preflight for three native endpoints | Real binary exchanges, wrong trust fails before request delivery, no internet possible; S and N bodies |
-| W54 | Slow header stall, body-idle stall, progressing body beyond total idle duration | Fixed 10min header/5min idle limits; reads reset idle, no total response deadline; S/N reason; §4 |
+| W53 | Native provider/Jev base-URL overrides on both OSes: path prefix/trailing slash/default/invalid URL/proxy precedence; child/switch/Auto/git_do | Loopback method/path/headers/body/trace endpoint N, no request on invalid settings/redaction S; default diagnostics without public requests |
+| W54 | Header/read-idle env overrides, unset defaults/invalid durations; stalled headers/body and progressing body beyond short idle limit | Defaults 10min/5min in diagnostics, shortened real limits exercised in seconds, reads reset idle/no total deadline, owned errors and cancellation; S/N §4 |
 
 **Show-context expansion:** run direct OpenAI, proxy OpenAI and Anthropic with
 all catalog models plus unknown names; effort auto/empty/supported/unsupported;
@@ -324,8 +399,8 @@ mode combinations, then deterministic pairwise secondary combinations with the
 combination manifest committed. `--auto --show-context` is **invalid**, not a
 missing preview golden: cover rejection in C05 and capture actual Auto requests
 in W35–W45. Nonempty roster/history is likewise a live agent case, not something
-a fresh preview flag can synthesize. L cases fill the native-decoder gap rather
-than counting proxy tests twice.
+a fresh preview flag can synthesize. L cases exercise native decoders on both
+platforms rather than counting proxy tests twice; W53 covers the new env schema.
 
 ### Tools and workspace — T01–T60 (60 families)
 
@@ -338,7 +413,7 @@ in another matrix area.
 
 | ID | Inputs | Compared observations / method |
 | --- | --- | --- |
-| T01 | Each tool: nonobject/bad JSON/trailing token/unknown field/wrong type/null/missing required | Exact decoder/schema message/code/outcome field order, no effects; N; A02 covers agent shapes |
+| T01 | Each tool: nonobject/bad JSON/trailing token/unknown field/wrong type/null/missing required | Exact re:agent-owned error/code/outcome field order, not library prose; no effects N; A02 covers agent shapes |
 | T02 | Every numeric/bool optional omitted/null/fraction/zero/negative/overflow/string | Default/minimum behavior and exact errors, not inferred JSON-schema enforcement; N |
 | T03 | Relative/root/empty/absolute/../NUL/Unicode paths; case variants .git/.env/.env.* and .environment | Path grammar and withheld-name boundaries, no external sentinel access; N/S |
 | T04 | In-root/outside/broken symlink, symlink ancestor/root alias/replaced root | Canonical containment and write refusal; no follow on recursive delete; N/S; race gaps §7 |
@@ -346,7 +421,7 @@ in another matrix area.
 | T06 | `read_file` empty/LF/CRLF/no final LF/range/default/large page/EOF/bad range | One-based numbered lines, total/eof/next_line and whole-file SHA-256; N/B digest |
 | T07 | Read binary/NUL/invalid UTF-8/directory/special/missing/permission/large file/one huge line | Exact distinctions, 1 MiB and result boundaries, failure does not authorize write; N/S |
 | T08 | Literal search case/pipe/no matches; RE2 alternation/anchors/Unicode/classes/case flag | Matching lines/order/literal pipe hint and scan counters; N |
-| T09 | Invalid/empty-matching regex; query LF/NUL; path xor paths/1–20; duplicates | Exact regex and argument errors, ordered paths/deduplication behavior; N |
+| T09 | Invalid/empty-matching regex; accepted/rejected RE2 dialect; query LF/NUL; path xor paths/1–20; duplicates | Exact project-owned regex/argument errors, preserved dialect/matching semantics and ordered path/deduplication behavior; N |
 | T10 | Search directory exclusion versus explicit target, symlink/binary/unreadable/large file | Named errors versus traversal skips, files/bytes/skipped/complete; N/S |
 | T11 | Search exact max-results and byte-budget thresholds/long multibyte matching line | Incomplete at exact max, bounded previews and encoding-safe truncation; N |
 | T12 | Write create empty/nonempty/nested parents; existing unread/read/ranged-read/written | Publication, content bytes/digest/operation, unread overwrite refusal; N/B files |
@@ -406,7 +481,7 @@ JSON; it is not public GitHub. Exercise real Git mutation and remote verificatio
 including stubbed gh failure and independent postcondition checks. Maintain a
 manifest of **every command/proof** per recipe from Go; do not merely assert
 `status:done`. Host Git version noise is pinned or explicitly allowlisted in §3.
-Classifier calls still require the native Linux Jev lane. Offline tests do not
+Classifier calls use the Jev loopback base URL on both platforms. Offline tests do not
 prove GitHub permissions or hosting reliability.
 
 ### Agents and context — A01–A40 (40 families)
@@ -455,7 +530,7 @@ Evidence: `tool_agents.go:65–181`, `agent_context.go:27–130`,
 | A34 | Crash at model receipt/tool helper start/idle/terminal, live+undelivered children; resume twice | No automatic replay; in-flight unknown/unstarted not_executed, ended-at-resume/effects_unknown persist, reused names/new IDs/accounting; N/S |
 | A35 | Root trace/child lifetime trace/retries/GC/compaction/switch/Auto/git_do | All schema fields/event types, per-file seq/step/run boundaries, accepted-before-dispatch and batch-before-delivery; N/S |
 | A36 | Trace existing/private permissions/unwritable/write failure and restore | 0700/0600/exclusive files, warning not fatal; independent server/files prove work despite missing trace; N/S |
-| A37 | Frozen legacy checkpoint without subtree/old fields; corrupt valid-checksum state variants | accounting_complete:false, compatible omissions/defaults, no fabricated lifetime totals; import errors; N/S |
+| A37 | JSON v2 legacy-field omissions and corrupt valid-checksum states; Go-only v1→v2 rewrite; Rust v1 input | Canonical v2 bytes B/owned errors N, accounting_complete:false without invented totals; Go migration preserves state, Rust rejects v1/no replay S |
 | A38 | History sharing/model switch size exactly at encoded/window limits, large opaque reasoning | Byte/estimated-token admission uses nonreasoning calibration and reserve, no child published on fail; N/S |
 | A39 | Reverse child release order then root wait for both; independently ready boundaries; terminal no background wake | After wait publication witness, lexical child-ID delivery order and per-child queue order exactly once N; truly unconstrained ready subsets causal S (§4) |
 | A40 | Fork/reset/compact/resume call IDs plus file mutation and recalled outcomes | No replay after compact/switch/resume; reset's deliberate ledger clearing; histories/digests/GC restrictions consistent; N/S |
@@ -500,12 +575,14 @@ unreachable/legacy variant; no global cross-thread timestamp ordering required.
 
 Store raw bytes and a machine-readable **substitution ledger** beside every
 normalized artifact. A rule is registered by case and field path/token location;
-unexpected dynamic content fails. No blanket UUID regex, JSON reserialization,
-string trimming, recursive sorting or error-message replacement is permitted.
+unexpected dynamic content fails. No blanket UUID regex, JSON reserialization
+to repair comparison, string trimming, recursive sorting or error-message
+replacement is permitted.
 B/N comparisons use a JSON lexer preserving original token spans. Embedded JSON
 strings (tool output, handoff, Jev state) are processed at explicitly declared
 layers, with replacement string tokens emitted using Go escaping; untouched
-lexemes remain untouched.
+lexemes remain untouched. The checkpoint format's independent canonicality
+check below is an invariant, not a general reserialization normalization.
 
 | Variable | Exact rule | What must still be checked / why permitted |
 | --- | --- | --- |
@@ -518,9 +595,9 @@ lexemes remain untouched.
 | Roots and ports | Use a runner-owned fixed **same absolute case root** sequentially for Go capture/candidate/import, e.g. `PARITY_ROOT/case-ID/workspace`, with per-job unique IDs. If environments differ, replace only canonical allocated root prefixes and allocated server authority in registered path/URL/text spans by `<ROOT>`/`<SERVER>` | Longest-prefix first, path-component boundaries, JSON-string escaping retained; relative paths, separator form, case, `..`, symlink resolution, outside sentinel relationships remain exact. Do not replace arbitrary substrings in file contents |
 | Build metadata | Version suffix and trace run.started.build have a typed build sentinel; stable name/schema stays exact | Compiler/revision differs by design; not instruction/tool descriptions or arbitrary headers |
 | Map order | **No normalization on JSON wire/tool outcomes/trace objects**: Go map keys sorted and struct order are contracts | S assertions can parse objects for invariants but cannot replace byte comparison; arrays always ordered unless case states allowed ready-set permutation |
-| Gob state | Frozen input bytes exact. Output JSON envelope field order/encoding checked; SHA-256 validated on actual decoded payload. Do not compare new gob payload/digest to independently saved Go bytes | Gob maps/type numbering and random IDs make those bytes noncanonical; self-resume and two-way import expose semantics (§1). Accepted exception, not a JSON sorting rule |
+| JSON v2 checkpoint | Validate raw canonical sorted keys/encoding and SHA-256 over actual canonical state first; fixed recorded-state files compare B. Live-state N substitutes only separately allowlisted IDs/paths/times/durations; compute canonical substituted-state digest for comparison | No gob exclusion, no field dropping or key-order normalization; schema/opaque strings preserved. Go-only v1 migration fixtures are exact inputs, never Rust requirements |
 | Host platform | Compare within Linux or Darwin lanes, with separate explicitly reviewed goldens for platform fact, cache directory and declared OS-error suffixes | No slash conversion or cross-OS error prose substitution. Windows unsupported (§7). Git/tool executable locations normalize only allocated/pinned roots |
-| OS/library errors | For unavoidable kernel/network suffix, assert an allowlisted category and exact framework prefix; retain raw suffix. Fixture-derived tool, provider, JSON decoder and regex errors remain exact even if Rust libraries phrase them differently | Errors the model uses are contract. Each suffix exception named in manifest; no catch-all “contains error” |
+| Errors | Model-visible library/OS failures map to the hardening PR's re:agent-owned messages/categories, compared exactly; no Go decoder/regexp prose goldens. Only explicitly non-model-facing platform diagnostics may have allowlisted OS suffixes with exact prefix | Preserve rejection/matching behavior and safe field/position information, not library names. Provider/command diagnostic text is external data, kept bounded verbatim; no generic “contains error” |
 | Terminal | Fixed dimensions/TERM and emulator; compare final synchronized cells, cursor, style and required ordered scrollback. Do not compare redraw sequence/spinner phase | No whitespace/line removal. Normalize only registered elapsed status field/IDs/paths; raw UTF-8 must decode, terminal modes restored, reply lines exactly once |
 
 ### Derived values must not be washed away
@@ -543,6 +620,15 @@ a root substitution must not move a case across a byte/admission threshold.
 For GC/admission arithmetic, use captured unnormalized request bytes and fixed
 synthetic usage; compare exact integer ceil/floor and only allow floating-point
 tolerance where Go itself computes it. No generic numeric epsilon.
+
+For JSON v2, the independent canonical writer checks that the raw state span
+and whole checkpoint already equal their canonical encoding; it must not repair
+unsorted keys, duplicate keys, altered number spelling or added whitespace.
+Validate the raw state checksum before substitution. Only for live N comparisons,
+replace the envelope's `.sha256` token by SHA-256 of the **substituted canonical
+state**, recording raw/substituted digests and each typed substitution in the
+ledger. Fixed-state B comparisons do neither substitution nor digest replacement.
+Opaque native JSON strings remain strings, not recursively canonicalized objects.
 
 **Timing-sensitive exec size exception (T33/T60):** Go measures encoded outcome
 size with actual duration_ms before trimming (`tool_exec.go:299–309,384–406`).
@@ -573,8 +659,9 @@ seek an explicit reference change before the oracle freezes.
 
 ## 4. Determinism under concurrency and time
 
-No new injected clock is assumed. Go tests' retry-wait callbacks and shortened
-client timeouts are private constructors, not executable controls.
+No injected clock is assumed. The hardening PR adds public transport-duration
+overrides, not a fake clock. Go tests' retry-wait callbacks remain private;
+retry-window jitter/deadlines and exec's 10s minimum are unchanged.
 
 **Provider barriers:** every logical request emits a controller event
 `received(worker,step,attempt)` and waits for a named release. Wait until a
@@ -636,18 +723,21 @@ the deadline; use separated milestones. Test cancellation during scheduled wait
 at the scheduled event and assert no next attempt. Router's separate 2s deadline
 and one-attempt policy remain distinct.
 
-**Long transport cases W54:** use real 10-minute header and 5-minute read-idle
-bounds, with timeout error witnesses and broad maximum wall-clock deadlines.
-A progressing response emits observed chunks sufficiently below the idle bound,
-finishes after total elapsed time exceeds it, and still succeeds. These are
-explicit slow cases, parallelized in isolated jobs; no claim of exact boundary
-nanoseconds or private injected clocks. Fast selection omits them visibly.
-Use one representative per shared transport timeout mechanism, not a cross-product
-of providers/flags. Budget three W54 leaves: ~10min header, ~5min idle and >5min
-progressing-body; parallel critical path ~10–12min, serial >20min. Approval runs
-W54 twice in parallel plus once serial (roughly ≥40min total for this lane), while
-fast cases run three parallel passes plus one serial. #139 reports actual elapsed
-critical path/job resources and avoids rerunning W54 for unrelated mutations.
+**Configured transport cases W54:** recommend
+`REAGENT_RESPONSE_HEADER_TIMEOUT` and `REAGENT_RESPONSE_IDLE_TIMEOUT`, accepting
+positive Go-style duration strings. Unset retains 10min/5min; invalid/zero/negative/
+overflow values fail before I/O with owned errors. The hardening PR must expose
+resolved limits through owned configuration diagnostics or trace fields so the
+suite can check defaults without waiting minutes; freeze any trace additions.
+Use e.g. 3s header and 2s idle limits, timeout witnesses and broad completion
+deadlines. Send progressing chunks well inside the idle bound, with controller
+write milestones, then complete after total time exceeds that bound. Keep
+cancellation and retry-window admission distinct; do not shrink Jev's separate
+2s deadline or exec's minimum. Representatives for each shared transport path
+run in seconds on both platforms and join the normal three-parallel/one-serial
+repeatability gate. Default-duration diagnostics are checked independently of
+short-duration behavior; an optional long default-timer smoke is supplementary,
+not a required ~40min lane or a claim of exact timer nanoseconds.
 
 **PTY:** reuse the independent emulator and terminal-query replies, but replace
 existing correctness sleeps/global child counters with barriers, ready status,
@@ -673,7 +763,7 @@ success scenarios gracefully before forced cleanup.
 | Map sorting vs struct order | W02–W05/T59/A35: deliberately unsorted schema/map inputs versus struct declarations; compare token order, not canonical parsed maps |
 | RawMessage re-encoding | W14/W16/A04/C19: pretty native input spacing need not survive request marshaling, but opaque content and argument strings do; checkpoint preserves native bytes for next request |
 | UTF-8 boundaries | T11/T33/T59/W31/W39/A21: 2/3/4-byte codepoints straddling each start/end/preview/reply bound, replacement flags and byte counts; no broken string/JSON |
-| Error wording | T01/T09/T13/T16/W17/W31: one changed word/punctuation/quoted field in model-visible errors fails; port decoder/regexp error adapters required |
+| Error wording | T01/T09/T13/T16/W17/W31: one changed word/punctuation/quoted field in re:agent-owned model-visible messages fails. Hardening wraps decoder/regexp/other library failures before freeze; Rust does not reproduce Go library prose |
 | Numbers | T02/T59/W32/W42/A30: integer fractions/exponent/overflow, int64 token counts >2^53, negative zero and Go float exponent thresholds in emitted numeric fields; exact lexemes where emitted |
 | Null/absent/empty | T01/T02/W17/W18/W32/A35: omitted optional field, explicit null, empty array/object/string differ; scripted strictness differs from provider permissiveness |
 | Decoder oddities | T01/T59/C10/W17: duplicate keys/case-variant keys, trailing tokens, invalid UTF-8 and unpaired surrogate replacements; freeze observed Go handling, not ideal JSON behavior |
@@ -685,8 +775,8 @@ success scenarios gracefully before forced cleanup.
 | SSE precedence and nil final | W22–W25: done-item duplicate/gaps/nonempty final precedence and `response:null` adversarial probe. If Go panics, record as a reference defect—not a Rust panic requirement |
 | Root snapshot nuance | W08/T27: preview collects ordinary snapshot; read-only/plan refs-only live snapshots only after leaving launch root; no implied count suppression |
 | Same-model fresh | W50: observed same-model `fresh` pinning no-op, distinct-model fresh resets; footer prose cannot define behavior |
-| Gob behind JSON | C19/A34/A37: envelope/base64/digest and two-way recovery, not naive serde transcript serialization |
-| RE2 dialect | T08/T09: Go regexp accepts/rejects its dialect and reports Go-visible errors; Rust's engine default semantics cannot silently redefine it |
+| Checkpoint canonical JSON | C19/A34/A37: sorted keys, exact escapes/numbers/schema/checksum and preserved opaque native strings; B for fixed recorded state, v2 cross-import/no replay. Go-only v1 migration and Rust v1 rejection explicitly distinct |
+| RE2 dialect | T08/T09: preserve Go regexp's accepted/rejected syntax and match semantics; malformed-pattern messages are re:agent-owned. Rust engine defaults cannot redefine the dialect; Go compiler error text is not the oracle |
 | Encoded size not characters | W09/W40/T60/A21: escaping-heavy data crosses wire/delivery bound earlier, preserving flags/effects and valid UTF-8 |
 
 If a reference defect is found during these probes, attach the raw reproduction,
@@ -745,7 +835,7 @@ Expected shortfalls, each to quantify in #139:
 | Area | Expected unreachable or weakly exercised statements |
 | --- | --- |
 | CLI/storage | OS allocation/read/write/fsync/rename failures and narrow crash phases; successful PTY coverage needs graceful exits |
-| Provider transport | Native/Jev absent from macOS portable lane; Linux TLS preflight still unproven here; exact timer/jitter edges and kernel read errors |
+| Provider transport | Native/Jev loopback now reachable on both platforms; remeasure after W53/W54 and hardening land. Remaining expected gaps: exact timer/jitter edges, kernel read/TLS-library failures, external hosting behavior |
 | Tools/Git | Permission/fs races inside publication locks, disk-full/interrupted rename, uncommon Git/gh failures and huge repositories |
 | Agents/context | Internal-error injection, lock-wait cancellation races, malformed in-memory histories, timing-dependent teardown branches |
 | Display | Real-terminal quirks and certain Unicode/cursor fallback branches emulator cannot faithfully exercise |
@@ -821,9 +911,9 @@ Accepted limitations, with the nearest defenses:
 | --- | --- |
 | Arbitrary internal failures/races | No public pause/injection at lock acquisition, publication, accepted-before-dispatch or fsync. Use ordered writers/crash barriers/permission faults; retain Go unit tests and source review as additional evidence |
 | Go panic/crash on malformed provider input | Do not require Rust to panic. Freeze typed behavior for noncrashing cases; record any demonstrated reference crash as defect needing disposition before freeze |
-| Gob output byte equality | Noncanonical map encoding/IDs; envelope/hash strict plus Go↔candidate/self-resume. Fields not observed by any recovery fixture remain a risk |
-| Native/Jev on macOS | Trust-store isolation unavailable via existing controls; Linux full lane mandatory. No claim of complete macOS native transport parity |
-| Timers at exact deadline / random jitter distribution | Real clocks/no public injection. Check policy ranges/causality and slow timeout cases, not distribution quality or exact nanoseconds |
+| Legacy Go v1 under Rust | Confirmed switchover break: Rust supports JSON v2 only; hardened Go still reads v1 and can rewrite v2. Test migration on Go and explicit no-replay rejection on Rust, not gob compatibility |
+| Production TLS/hosting integration | Loopback checks both native protocols/Jev on Linux and macOS, not TLS trust-store/library behavior or real gateways; no interception infrastructure is required |
+| Timers at exact deadline / random jitter distribution | Real clocks with public duration settings, no clock injection. Check policy ranges/causality and short configured timeouts, not distribution quality or exact nanoseconds |
 | Detached exec descendants | Process groups are cleanup mechanism, not sandbox. New sessions escaping the group and host-wide scheduling are not promised |
 | Kernel/storage failure atomicity exhaustiveness | Check mode/lock/corruption and reachable failures; accepted-before-dispatch and file-fsync/rename/directory-fsync crash windows individually listed in #139. No comprehensive power-loss proof or race-dependent mutation kill |
 | Identifier randomness quality | C19 asserts raw uniqueness across independent shared-HOME launches; format/links/private artifact identities tested. Finite black-box runs cannot prove entropy or cryptographic unpredictability |
@@ -837,20 +927,25 @@ Version build suffix, trace build revision and OS-specific error suffix exceptio
 are in §3. Embedded prompts, declarations, tool messages and model projection
 are in scope even if they look like documentation: the model relies on them.
 
-## 8. Decisions to confirm
+## 8. Confirmed decisions and remaining recommendations
 
-| Recommendation | Reason and consequence |
+The owner confirmed the first three decisions in PR #148; they supersede the
+initial TLS-interception/v1-gob/library-error proposals, not just optional lanes.
+
+| Decision / recommendation | Reason and consequence |
 | --- | --- |
-| Python executable oracle, passing Go first, protected from port | Same independent scenarios face either binary, like HAProxy regression tests. Baseline defects get explicit dispositions; source/unit tests are supplementary |
-| Keep Go trace and checkpoint version-1 formats, **bidirectional** checkpoint compatibility | Preserve human traces/resume workflows. Gob is real extra work; do not silently substitute a Rust JSON state format or test self-resume only |
-| Base crates: tokio, tokio-util, reqwest with rustls, serde/serde_json with Go-compatible formatter, crossterm, nix, sha2 | Matches I/O, cancellation, wire/tty/process/digest needs; serde formatting alone must add Go escaping/map sorting/struct order/numbers and library error translation |
-| tokio tasks with CancellationToken, mirroring goroutines/context | Parent-scoped lifetimes, subtree cancellation/joining and sequential child queues preserve loop semantics. Async scheduling is not allowed to change accepted-before-dispatch, batch/delivery boundaries or process cleanup |
-| Treat proposed crate list as baseline, not demonstrated sufficient | It supplies neither a Go gob checkpoint codec nor Go RE2 dialect/error behavior. Prefer small schema-specific gob support and a separately evaluated regexp strategy; propose any extra dependency before #141, not ad hoc in the long run |
-| Verified Linux native TLS lane plus Darwin portable/PTY lane | Full wire coverage without new binary test APIs or host trust edits. Rust must honor lane proxy/CA configuration or provide an approved equivalent production transport control |
+| Confirmed: configurable native OpenAI/Anthropic/Jev base URLs in a separate Go hardening prerequisite | Gateways and offline loopback on both OSes, with existing native/proxy semantics. No CONNECT/CA/SSL_CERT_FILE/network-namespace burden on suite or port |
+| Confirmed: canonical JSON v2 writes, Go retains v1 reads, Rust v2 only | Byte-comparable recorded state, no Rust gob codec; explicit old-v1 switchover break. Keep trace format and test v2 in both import directions |
+| Confirmed: implementation-neutral, re:agent-owned model-visible errors | Exactly compare stable harness messages/categories, preserving decoder validation and RE2 dialect rather than Go library prose |
+| Recommended: public header/idle-duration env overrides in the same hardening PR | Preserve production defaults and run transport boundaries in seconds on both platforms; no injected clock/changed retry policy |
+| Python executable oracle, passing Go first, protected from port | Same independent scenarios face either binary. Final reference/goldens wait for hardening, #140 and #136; source/unit tests supplementary |
+| Base crates: tokio, tokio-util, reqwest with rustls, serde/serde_json with Go-compatible formatter, crossterm, nix, sha2 | Match I/O/wire/tty/process/digests; canonical checkpoint writer plus existing Go-compatible request escaping/map sorting/struct order/numbers remain required, but no gob dependency or library-error emulator |
+| tokio tasks with CancellationToken, mirroring goroutines/context | Preserve subtree cancellation/joining, child queues and batch/delivery/process boundaries regardless of async scheduling |
+| Separately evaluate regexp strategy before #141 | Accepted/rejected RE2 syntax and matching still require compatibility; owned errors remove compiler-text emulation, not dialect work. Ask before any extra dependency |
 
-Tokio and crates are proposed implementation choices, not observable suite
-requirements: a different implementation passing all contracts may be correct.
-No dependencies were installed or evaluated in this design session.
+Tokio and crates remain implementation recommendations, not black-box contracts;
+a different implementation passing them may be correct. No dependencies were
+installed or evaluated, and the hardening PR is not implemented in #138.
 
 ## 9. Build and approval plan for #139
 
@@ -867,57 +962,84 @@ A case count is a planning aid, not proof of strength. #139 publishes exact
 counts by area/platform/slow/compatibility and a schema/flag/test inventory
 crosswalk; redundant variants can share fixtures but not disappear unreported.
 
-Build in this order:
+### Prerequisites and freeze barrier
 
-1. Isolated runner/environment/artifacts, network denial and W53 native TLS
-   preflight. Verify direct OpenAI, Anthropic, Jev and SSE proxy with Go before
-   assuming full provider coverage is feasible.
-2. Lossless byte comparator, substitution ledger, independent hashes/lengths/
-   cache-key calculations, helper protocols; test oracle itself with broken
-   artifacts (wrong digest/order/missing event/invalid UTF-8) so normalization
-   cannot excuse failures.
-3. Preview/CLI and tool validation tables; filesystem guards, real Git/bare
-   remotes and recorded gh fixtures; first output goldens reviewed.
-4. Full provider decoder/error/retry/usage/Auto and switch scenarios, including
-   long timeout lane. Port fixture content, not Go constructors or echo hooks.
-5. Agents/context barriers/authority/budgets/effects/GC/compaction; then
-   checkpoint fixture capture and all three import directions/recovery phases.
-6. Existing 20 tty scenarios and new picker/render/input assertions. Upgrade
-   synchronization without weakening scenarios; test graceful coverage exits.
-7. Instrumented Go run, uncovered-range reconciliation and all 36 independent
-   mutation builds. Run fast cases three parallel passes and once serially;
-   W54 twice parallel and once serial with the explicit §4 wall-clock budget.
-   Differences outside named semantic exceptions are bugs, not refreshed goldens.
-8. Adversarial review of oracle/gaps and human approval. Freeze suite tree digest,
-   fixture/golden digests, reference commit/binary digest, platform/tool versions,
-   commands/reports, accepted deviations and reproducible runner environment.
+Create the separate Go hardening issue/PR under #143 and land §1's endpoint,
+JSON-v2/Go-v1-reader and owned-error contracts (recommended timeout controls in
+the same PR). **Hardening, #140 and #136 must all land before the reference is
+frozen or any golden outputs are captured.** #140 may contain #136's integration,
+but record both landed commits explicitly. Runner/input-fixture work can start
+earlier; temporary observations are exploratory evidence, not oracle goldens.
+Audit schema/flags/traces/compaction/review against the landed code and update
+the matrix, then pin one protected Go reference commit/binary and capture
+reviewed goldens once. Do not use today's inspected commit as that final freeze.
 
-Before asking for #139 approval, prove: every required case passes on Go; no
-public network/real keys; native TLS preflight passed; both platforms' manifests
-reported honestly; two-way checkpoint import tested with reference (Go→Go first);
-≥85% combined and internal statement coverage or explicit human exception;
-36/36 mutations killed by intended assertions; serial/parallel repeatability;
-raw artifacts/screens for reviewed cases and no hidden skips. Protect the oracle
-from #141's writers; changes require a separate reviewed baseline update.
+### Four reviewable implementation PRs under #139
 
-## 10. Open questions and recommendations
+Each area PR runs against that same hardened Go reference and passes all cases
+it introduces plus previously landed areas. It reports its actual case count,
+coverage contribution and targeted mutation results; no area claims final
+approval or 85% coverage independently. Keep stable IDs/shared runner contracts.
 
-These are approval decisions, not unanswered code lookups. No answer was needed
-to produce the design; each can change the implementation plan.
+| Order / PR | Owns and proves before review |
+| --- | --- |
+| 1. Runner and wire | Isolated environment/artifacts; lossless comparator/substitution ledger and independent hashes/lengths/cache keys; loopback provider/barrier scripts, W53 endpoints and W54 duration overrides; W01–W54 and shared oracle self-tests for bad digests/order/missing events/UTF-8 |
+| 2. Tools and workspace | T01–T60 argument/owned-error tables, path/digest/file guards, actual exec lifecycle/helpers, real Git/bare remotes and recorded gh, cleanup and safety postconditions |
+| 3. CLI and tty | C01–C44 command/flag/chat behavior, existing20 and added picker/render/input PTY cases, event-driven synchronization and graceful coverage exits; checkpoint-dependent leaves are completed in PR4 and explicitly listed pending here |
+| 4. Agents and checkpoints | A01–A40 context/authority/budgets/effects/delivery/GC/compaction, canonical v2 B/N comparisons, all v2 import/recovery directions and Go-only v1 migration; complete pending C19/C20 and cross-area leaves |
+
+Cross-area leaves may require later fixtures; each earlier PR names those
+unimplemented dependencies, while its implemented cases pass on Go. The final
+PR completes the whole manifest rather than leaving optional green skips.
+
+Final #139 acceptance: instrumented black-box Go run with missed-source-range
+reconciliation, all **36 independent mutations** killed by intended assertions,
+three full parallel passes and one serial pass on both platforms (W54 in seconds,
+exec's real minimum unchanged). Differences outside named semantic exceptions
+are bugs, not refreshed goldens. Recheck transport coverage expectations: native
+and Jev are now reachable on macOS as well as Linux. Obtain adversarial/human
+suite approval and freeze the final suite/fixture/golden tree digests, reference
+commit/binary digest, platform/tool versions, reports and accepted deviations.
+
+Before approval prove every required case passes on Go, all intended API traffic
+is loopback with no real keys, both-platform W53/W54 and v2 cross-import pass,
+≥85% combined **and** internal statement coverage (or explicit human exception),
+36/36 mutation kills, repeated determinism, reviewed raw artifacts/screens,
+per-field checkpoint/schema/flag crosswalk and no hidden skips. Protect the
+oracle from #141; changes require a separate reviewed baseline update.
+
+## 10. Remaining open questions and recommendations
+
+Endpoint configuration, canonical JSON v2/Rust-v2-only and owned model-visible
+errors are **confirmed**, not open questions. The following implementation
+choices are recommendations for the hardening/area PRs, not unexplained lookups.
 
 | Question | Options | Recommendation |
 | --- | --- | --- |
-| Does keeping checkpoint format include gob output import by Go? | Bidirectional v1; Rust only reads v1 then migrates; no legacy support | Bidirectional v1 as §1/8. Accept cost explicitly; migration is a real scope/format change requiring its own approval |
-| How to supply native offline transport on developer macOS? | Modify trust store; new endpoint/root-control flags; Linux full lane + mac portable | Linux full lane, no host trust edits. If a production offline-endpoint capability is desired, approve separately; not needed to design/build this suite |
-| What if native TLS interception fails on Rust/rustls? | Skip native cases; approved CA/env compatibility; new transport seam | Implement explicit proxy/CA environment support matching lane requirements; preflight failure blocks approval, never skip |
-| Are 10min/5min transport tests required by default? | Full make parity; slow separate approval gate; injected clocks | Full approval includes them, fast selection explicit. Keep slow lane selectable; no new clock hooks solely for tests |
-| What if reachable black-box coverage remains below85%? | Add tests; lower denominator/merge unit coverage; explicit target exception | Add reachable cases first, publish exact missing ranges, ask human for exception only after reviews; never silently change denominator |
-| How much regexp/gob machinery may the Rust port add? | Baseline list only; small codecs; separately approved dependencies/migration | Decide/prove bounded Go-compatible support in prerequisites, including dialect/error fixtures. Listed crates are not a magic solution |
-| Preserve strange Go behavior or fix it? | Exact quirks; permissive alternatives; reference fix before freeze | Preserve observed noncrashing behavior unless a separately reviewed reference fix updates cases. Crashes/security defects require explicit disposition, not goldens demanding them |
-| How strictly does trace JSON object order count? | Shape-only traces; exact token order except typed variables | Exact as N, because external tools/checkpoints and embedded wire strings rely on stable representation. Causal ordering only relaxed for genuinely unconstrained cross-thread events |
-| Can Git/gh process details change in the port? | Effects only; exact recipe argv/proof with semantic OS exceptions | Recipe argv/proofs plus independent effects; arbitrary different pushes/checks could look correct on happy path but lose safety |
+| Exact base-URL env names and path handling? | Full endpoint URLs; provider API-prefix base URLs | OPENAI_BASE_URL/ANTHROPIC_BASE_URL/TYPESAFE_BASE_URL with /v1 prefix and appended route, trailing-slash normalization, invalid URL/redaction and application-proxy precedence tests. Freeze hardening PR's reviewed names/contracts before goldens |
+| Canonical v2 envelope and opaque native storage? | Inline parsed objects; raw byte strings for opaque parts | Sorted-key JSON state with SHA-256 and explicit raw JSON strings where lexical preservation matters; validate identical fixed-state bytes and resumed request identity. No gob in Rust |
+| Include header/idle env controls in hardening? | Positive duration controls; retain slow default-only executable tests | Include public REAGENT_RESPONSE_HEADER_TIMEOUT/REAGENT_RESPONSE_IDLE_TIMEOUT, unchanged defaults and owned resolved-limit diagnostics; W54 seconds. If deferred, revise W54 execution budget explicitly before freezing, never skip it |
+| Additional model-visible library errors? | Wrap just JSON/regexp; inventory every internal library leak | Hardening audits all tool/provider/loop/projection/persistence paths that feed the model, publishes owned error categories/messages, retains bounded provider/command text as data. No Go library prose obligation |
+| What if coverage remains below85% with both-platform native loopback? | Add cases; silently lower denominator/merge unit counters; human exception | Add reachable cases, publish exact missed ranges, seek exception only after review; coverage/mutation methodology unchanged |
+| Which regexp implementation? | Existing crates alone; separately reviewed compatible engine/translation | Preserve RE2 dialect/matching and project errors; evaluate fixtures and ask before extra dependency. Gob and compiler-text emulation are no longer requirements |
+| Other reference quirks/defects discovered before freeze? | Preserve all library behavior; explicit hardening/fix | re:agent defines behavior, not Go libraries. Review reference fixes first, then reconcile cases and freeze; never loosen candidate goldens silently |
+| Trace order and Git/gh proof strictness? | Shape/effects only; token/argv/proofs with named dynamic exceptions | Keep strict N traces and exact recipe commands/proofs plus independent effects; canonical checkpoint key sorting does not rewrite those formats |
 
 ### Review and verification record
+
+Owner's confirmed review changes on PR #148, addressed by this revision:
+
+| Requested change | Disposition |
+| --- | --- |
+| Replace TLS interception with endpoint variables | §1/8/10 public base URLs; W53 checks loopback routing/precedence/validation/propagation on both OSes, no TLS/namespace tooling prerequisite |
+| Consider short public transport timeouts | §1/4 recommends header/idle env durations with unchanged defaults and owned diagnostics; W54 seconds, exec/retry rules unchanged |
+| JSON v2 instead of bidirectional gob | §1/3/5/8 canonical v2 fixed-state bytes B and dynamic-state N, v2 cross-import and Go-only v1 migration; Rust v1 switchover break explicit, no gob codec/exclusion |
+| Implementation-neutral errors | §1 owned-error catalog/audit and exact checks, §3/5 RE2 dialect retained without Go library prose |
+| Hardening prerequisite and area PRs, then freeze | §9 separate hardening issue/PR under #143; hardening+#140+#136 landed before reference freeze/golden capture; four Go-passing PRs in requested order |
+| Retain strength plan, reconsider coverage gaps | Same ≥85% overall/internal denominator and36 mutations; native/Jev platform shortfall removed, remaining transport gaps explicitly remeasured |
+
+The following agent review/accounting record describes the **initial design**;
+no agents were launched or reused for this owner-feedback revision.
 
 Four fresh read-only research agents were assigned CLI/chat, providers/wire,
 tools/workspace and agents/context; all forbidden to spawn descendants. CLI and
@@ -927,7 +1049,10 @@ inform §7 and #139's inventory crosswalk requirement, not a claim of exhaustive
 audit. Two additional fresh read-only reviewers read the draft, original issue
 texts and source without fork/delegation. Their numbered findings were all
 addressed or explicitly accepted below. Both reviewers then approved the revised
-design subject to these gaps and human confirmation; human approval is pending.
+initial design subject to its then-accepted gaps and human confirmation.
+The owner's subsequent PR #148 review confirmed the simpler reference-hardening
+contracts now reflected here; the initial gob/TLS recommendations and associated
+gaps are superseded. Approval of this revised document is still pending.
 `threads(subtree=true)` and all six lifetime traces agreed: **6 agents**, all
 read-only/fresh/direct children, no descendants, 16 task runs (14 completed,
 2 initial research cap failures). Resets/follow-ups did not create new agents.
@@ -948,7 +1073,7 @@ made file changes or executed commands.
 | Feasibility3: duration affects exec trim before normalization | T33/T60 actual-metadata independent expected trimming; deterministic outcomes for exact byte thresholds; GC/admission margins; no permissive arbitrary-short-output rule |
 | Feasibility4: crash race cannot guarantee mutation7 kill | Replaced mutation7 by deterministic checksum-validation mutation; narrow accepted/fsync crash phases explicitly accepted, helper-held recovery still tested |
 | Feasibility5: zombie/reaping and signal mismatch | T34/§4 TERM-resistant helper, direct reaping versus no executing descendants, zombie-aware checks/PID reuse/owned cleanup |
-| Feasibility6: long suite repetition expensive | §4/9 explicit three slow leaves/repeat counts/~40min minimum lane budget; shared-transport representatives avoid redundant multiplication |
+| Feasibility6: long suite repetition expensive | Superseded by owner's hardening direction: public header/idle overrides run W54 in seconds, shared-path representatives and full repeatability retained |
 
 Verification actually run for this design: coverage spike above, and the
 repository gate (no source changed):
@@ -959,6 +1084,6 @@ $ go build ./... && go vet ./... && go test ./...
 ok  github.com/satmihir/re-agent/internal/reagent 43.029s
 ```
 
-Build and vet exited 0 with no output. No live provider, Linux interception,
-parity suite, mutation run or tty-check was run in #138. This documentation change
+Build and vet exited 0 with no output. No live provider, parity suite, hardening
+implementation, mutation run or tty-check was run in #138. This documentation change
 does not alter terminal behavior; the proposed tty changes belong to #139.
