@@ -31,7 +31,7 @@ func gitDoRepo(t *testing.T) *Workspace {
 	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	run := func(dir string, argv ...string) {
 		t.Helper()
 		command := exec.Command(argv[0], argv[1:]...)

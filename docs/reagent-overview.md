@@ -70,6 +70,7 @@ One JSONL file per root run (and per compaction or model-switch attempt), and on
 ## Checking changes
 
 - `make check`: gofmt, vet and the offline tests. `go test ./...` never reaches the internet.
+- Go tests use a disposable HOME and XDG cache; trace/checkpoint access under the original user cache panics with test stacks. Tests with their own homes isolate both variables. Each tty scenario also has a disposable HOME and XDG cache.
 - `make tty-check`: drives the built binary in a pseudo-terminal through `bench/tty` scenarios; run it for input or display changes.
 - `make live`: opt-in live tests for providers whose key is present.
 - `bench/` holds offline checkers for friction, behavior comparison and workflow evidence (`docs/reagent-requirement-discovery.md`, `docs/reagent-task-workflow.md`).

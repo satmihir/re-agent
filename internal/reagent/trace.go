@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// testCachePath is installed only by TestMain; production keeps best-effort tracing.
+var testCachePath func(string)
+
 // traceSchemaVersion is the version of the event envelope, not of the payloads.
 const traceSchemaVersion = 1
 
@@ -63,6 +66,10 @@ func OpenTrace(path, sessionID, runID string, warn io.Writer) *Trace {
 // failure to create the file is reported once and recording for this run is
 // skipped; the next Open tries again.
 func (t *Trace) Open(sessionID, runID, path string) {
+	if testCachePath != nil {
+		testCachePath(path)
+		testCachePath(filepath.Dir(path))
+	}
 	if t.persistent && t.path != "" {
 		t.sessionID, t.runID = sessionID, runID
 		return
@@ -89,7 +96,11 @@ func DefaultTracePath(runID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "reagent", "runs", runID, "events.jsonl"), nil
+	path := filepath.Join(dir, "reagent", "runs", runID, "events.jsonl")
+	if testCachePath != nil {
+		testCachePath(path)
+	}
+	return path, nil
 }
 
 // Write appends one event. Callers do not check for failure: recording is best

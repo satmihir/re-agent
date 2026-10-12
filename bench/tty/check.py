@@ -386,6 +386,7 @@ class Session:
             env = dict(os.environ, TERM="xterm-256color")
             env.pop("NO_COLOR", None)
             env.update(extra_env or {})
+            env.update(HOME=workspace, XDG_CACHE_HOME=os.path.join(workspace, ".cache"))
             args = [binary, "chat", "--workspace", workspace]
             if context_gc:
                 args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6-sol"]
@@ -656,7 +657,7 @@ def run(binary, name, scenario, workspace):
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AgentHandler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL=f"http://127.0.0.1:{server.server_port}/v1/responses",
-                         OPENAI_API_KEY="", HOME=workspace)
+                         OPENAI_API_KEY="")
     if scenario.get("retry"):
         class RetryHandler(http.server.BaseHTTPRequestHandler):
             attempts = 0
@@ -764,12 +765,14 @@ def main():
     if unknown:
         print("unknown scenarios: %s; known: %s" % (", ".join(unknown), ", ".join(SCENARIOS)))
         return 2
-    workspace = tempfile.mkdtemp(prefix="reagent-tty-")
-    subprocess.run(["git", "init", "-q", workspace], check=True)
     failed = 0
     for name in names:
         print("● %s" % name)
-        failures = run(binary, name, SCENARIOS[name], workspace)
+        with tempfile.TemporaryDirectory(prefix="reagent-tty-" + name + "-") as workspace:
+            env = dict(os.environ, HOME=workspace, XDG_CACHE_HOME=os.path.join(workspace, ".cache"),
+                       GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+            subprocess.run(["git", "init", "-q", workspace], env=env, check=True)
+            failures = run(binary, name, SCENARIOS[name], workspace)
         for failure in failures:
             print("  ✗ %s" % failure)
         print("  %s" % ("FAIL" if failures else "ok"))
