@@ -113,6 +113,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"in_run_compact":      r.cfg.InRunCompact,
 		"context_gc":          r.cfg.ContextGC,
 		"gc_state":            s.gc,
+		"gc_requests":         s.gcRequests,
 		"prompt":              prompt,
 		"instructions":        prefix.Instructions,
 		"tools":               prefix.Tools,
@@ -176,6 +177,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		// v0 §10 amendment (2026-09-28): meter the last request, not the turn.
 		s.lastRequest = Usage{}
 		resp, err := r.model.Generate(withModelRetry(ctx, r.cfg.ModelRetryWindow, s.display), req)
+		if r.cfg.ContextGC {
+			s.gcRequests++
+		}
 		s.display.modelFinished()
 		if err != nil {
 			// A failed request can still have cost tokens, so account what the

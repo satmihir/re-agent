@@ -11,10 +11,14 @@ import (
 )
 
 const (
-	contextGCMinTokens   = 32_000
-	contextGCFraction    = 0.15
-	contextGCInterval    = 16
-	contextGCRecentSteps = 3
+	contextGCWindowFloor    = 1.0 / 16
+	contextGCFraction       = 0.15
+	contextGCInterval       = 16
+	contextGCRecentSteps    = 3
+	contextGCRemainingFloor = 16
+	contextGCRemainingCap   = 48
+	contextGCNearCompact    = 0.90
+	contextGCCachedRatio    = 0.10
 )
 
 type contextGCDrop struct {
@@ -252,7 +256,7 @@ func (s *Session) gcDigest(abs string) string {
 
 func (r *Run) collectContext() bool {
 	s := r.session
-	if !r.cfg.ContextGC || !s.lastRequest.Known || s.lastRequest.InputTokens < contextGCMinTokens {
+	if !r.cfg.ContextGC || r.window <= 0 || !s.lastRequest.Known || float64(s.lastRequest.InputTokens) < float64(r.window)*contextGCWindowFloor {
 		return false
 	}
 	_, steps, settled := gcResults(s.history, s.gc.Paths)
@@ -295,8 +299,44 @@ func (r *Run) collectContext() bool {
 	if rate <= 0 {
 		return false
 	}
-	if float64(freed)*rate < float64(s.lastRequest.InputTokens)*contextGCFraction {
+	freedTokens := float64(freed) * rate
+	if freed <= 0 || freedTokens < float64(s.lastRequest.InputTokens)*contextGCFraction {
 		return false
+	}
+	oldBody, err := encodeRequest(r.cfg, before)
+	if err != nil {
+		return false
+	}
+	newBody, err := encodeRequest(r.cfg, after)
+	if err != nil {
+		return false
+	}
+	fixedBytes, err := gcFixedPrefixBytes(r.cfg.Provider, newBody)
+	if err != nil {
+		return false
+	}
+	rebuildBytes := max(0, newBytes-fixedBytes)
+	rebuildTokens := float64(rebuildBytes) * rate
+	remaining := max(contextGCRemainingFloor, min(contextGCRemainingCap, s.gcRequests))
+	writePrice := 1.0
+	if r.cfg.Provider == anthropicName {
+		writePrice = 1.25
+	}
+	net := freedTokens*float64(remaining)*contextGCCachedRatio - rebuildTokens*(writePrice-contextGCCachedRatio)
+	trigger := "break_even"
+	if net <= 0 {
+		// Avoid an imminent lossy summary only if this pass buys room below
+		// the same conservative trigger used by compactWithinRunAfterGC.
+		threshold := float64(r.window) * inRunCompactFraction
+		admissionRate := s.admissionRate(r.cfg.Provider)
+		near := r.cfg.InRunCompact && r.steps > 0 && !r.compactOff && r.compactions < inRunCompactLimit &&
+			(r.cfg.MaxSteps <= 0 || r.steps+2 <= r.cfg.MaxSteps) &&
+			math.Ceil(float64(oldBytes)*admissionRate) >= contextGCNearCompact*threshold &&
+			math.Ceil(float64(newBytes)*admissionRate) < threshold
+		if !near {
+			return false
+		}
+		trigger = "near_compaction"
 	}
 	breakEntry := len(s.history)
 	ordered := make([]map[string]any, 0, len(drops))
@@ -316,21 +356,21 @@ func (r *Run) collectContext() bool {
 			breakEntry = breakEntry - s.handoff.Entries + 1
 		}
 	}
-	oldBody, err := encodeRequest(r.cfg, before)
-	if err != nil {
-		return false
-	}
-	newBody, err := encodeRequest(r.cfg, after)
-	if err != nil {
-		return false
-	}
 	breakByte := 0
 	for breakByte < min(len(oldBody), len(newBody)) && oldBody[breakByte] == newBody[breakByte] {
 		breakByte++
 	}
 	s.gc.Dropped, s.gc.LastPass, s.handoff = merged, steps, handoff
 	tokens := int64(math.Ceil(float64(freed) * rate))
-	r.trace.Write("context.gc", r.steps, map[string]any{"dropped": ordered, "bytes_freed": freed, "estimated_tokens_freed": tokens, "cache_break_entry": breakEntry + 1, "cache_break_byte": breakByte})
+	r.trace.Write("context.gc", r.steps, map[string]any{
+		"dropped": ordered, "bytes_freed": freed, "estimated_tokens_freed": tokens,
+		"fixed_prefix_bytes": fixedBytes, "rebuild_bytes": rebuildBytes,
+		"estimated_rebuild_tokens": int64(math.Ceil(rebuildTokens)),
+		"session_requests":         s.gcRequests, "expected_remaining_requests": remaining,
+		"cached_ratio": contextGCCachedRatio, "cache_write_price": writePrice,
+		"estimated_net_saving": net, "trigger": trigger,
+		"cache_break_entry": breakEntry + 1, "cache_break_byte": breakByte,
+	})
 	s.display.note(fmt.Sprintf("context GC: dropped %d results, ~%s tokens", len(drops), formatCount(tokens)))
 	return true
 }
@@ -354,4 +394,18 @@ func (s *Session) copyGC() contextGCState {
 		}
 	}
 	return state
+}
+
+// Measure the fixed values in the actual wire encoding, including escaping and
+// provider cache markers. History before the first changed result is not fixed.
+func gcFixedPrefixBytes(provider string, body []byte) (int, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return 0, err
+	}
+	key := "instructions"
+	if provider == anthropicName {
+		key = "system"
+	}
+	return len(fields[key]) + len(fields["tools"]), nil
 }

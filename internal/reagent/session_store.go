@@ -37,6 +37,7 @@ type chatCheckpoint struct {
 	InRunCompact          bool            `json:"in_run_compact"`
 	ContextGC             bool            `json:"context_gc"`
 	GC                    contextGCState  `json:"gc_state"`
+	GCRequests            int             `json:"gc_requests,omitempty"`
 	Agents                bool            `json:"agents"`
 	AgentRoster           []AgentThread   `json:"agent_roster,omitempty"`
 	AgentSubtree          *agentSubtree   `json:"agent_subtree,omitempty"`

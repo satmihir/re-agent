@@ -189,6 +189,8 @@ func TestContextGC_LoopRunsPassBeforeNextRequest(t *testing.T) {
 	gcAppend(s, "new", "exec", `{"argv":["a"],"cwd":"."}`, ToolOutcome{OK: true, Effect: EffectNone})
 	gcAge(s, 15)
 	gcRun(s)
+	s.lastRequest.InputTokens = int64(float64(contextWindow(s.cfg.Model)) * contextGCWindowFloor)
+	s.tokensPerByte = float64(s.lastRequest.InputTokens) / 20_000
 	s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
 		body, _ := encodeRequest(s.cfg, req)
 		if strings.Contains(string(body), "OLD_OUTPUT") || !strings.Contains(string(body), "recall old") {

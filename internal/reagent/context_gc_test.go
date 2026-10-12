@@ -59,9 +59,13 @@ func gcAge(s *Session, count int) {
 }
 
 func gcRun(s *Session) *Run {
-	s.lastRequest = Usage{Known: true, InputTokens: contextGCMinTokens}
+	s.lastRequest = Usage{Known: true, InputTokens: 20_000}
 	s.tokensPerByte = 1
-	return newRun(s, "gc-run")
+	s.gcRequests = 32
+	r := newRun(s, "gc-run")
+	// Category fixtures use a small window, independent of the model catalog.
+	r.window = 200_000
+	return r
 }
 
 func TestContextGC_CategoriesAndNeverDrop(t *testing.T) {
@@ -162,13 +166,13 @@ func TestContextGC_BatchingAndUnfinishedBatch(t *testing.T) {
 		rate                  float64
 		pending, off, want    bool
 	}{
-		{"fires", 32000, 15, 0, 1, false, false, true},
-		{"small", 31999, 15, 0, 1, false, false, false},
-		{"early", 32000, 5, 0, 1, false, false, false},
-		{"interval", 32000, 15, 2, 1, false, false, false},
-		{"fraction", 32000, 15, 0, .01, false, false, false},
-		{"unfinished", 32000, 15, 0, 1, true, false, false},
-		{"off", 32000, 15, 0, 1, false, true, false},
+		{"fires", 12500, 15, 0, 1, false, false, true},
+		{"small", 12499, 15, 0, 1, false, false, false},
+		{"early", 12500, 5, 0, 1, false, false, false},
+		{"interval", 12500, 15, 2, 1, false, false, false},
+		{"fraction", 12500, 15, 0, .01, false, false, false},
+		{"unfinished", 12500, 15, 0, 1, true, false, false},
+		{"off", 12500, 15, 0, 1, false, true, false},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			s := gcFixture(t, openaiName)
@@ -324,7 +328,7 @@ func TestContextGC_CheckpointRestoresExactView(t *testing.T) {
 	restored.restore(cp)
 	before, _ := encodeRequest(s.cfg, BuildContext(s.cfg, RequestScope{}, s.requestHistory()))
 	after, _ := encodeRequest(restored.cfg, BuildContext(restored.cfg, RequestScope{}, restored.requestHistory()))
-	if !bytes.Equal(before, after) || !reflect.DeepEqual(s.gc, restored.gc) || !restored.cfg.ContextGC {
+	if !bytes.Equal(before, after) || !reflect.DeepEqual(s.gc, restored.gc) || s.gcRequests != restored.gcRequests || !restored.cfg.ContextGC {
 		t.Fatal("checkpoint changed GC view")
 	}
 }
@@ -353,6 +357,9 @@ func TestContextGC_BeforeCompactionAndSummaryUsesView(t *testing.T) {
 				return contextResponse(openaiName, textBlock("handoff recall old")), nil
 			}}
 			r := gcRun(s)
+			s.tokensPerByte = 1
+			s.lastRequest.InputTokens = 32_000
+			s.gcRequests = 32
 			r.steps = 9
 			r.task = s.history[0].User
 			r.window = 100_000

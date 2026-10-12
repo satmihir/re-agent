@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 
 from context_gc import (Frame, Policy, candidates, content_size, encoded, evaluate,
-                        load_frames, placeholder, reasoning_bytes, records, result_offset)
+                        expected_remaining, fixed_prefix_bytes, load_frames, placeholder,
+                        reasoning_bytes, rebuild_surcharge, records, result_offset)
 
 
 def batch(call_id, name="read_file", start=1, end=10, workspace="/workspace", **changes):
@@ -110,6 +111,83 @@ class PolicyTest(unittest.TestCase):
             body = encoded({"type": kind, key: "old", content: "answer"})
             self.assertEqual(body[result_offset(body, "old"):], b'"answer"}')
 
+    def test_window_floor_and_remaining_bounds(self):
+        self.assertEqual(expected_remaining(0), 16)
+        self.assertEqual(expected_remaining(16), 16)
+        self.assertEqual(expected_remaining(27), 27)
+        self.assertEqual(expected_remaining(48), 48)
+        self.assertEqual(expected_remaining(100_000), 48)
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size = 3000
+        frames = [Frame(1, 5000, 0, 1250, results[:1], True, 1),
+                  Frame(17, 5000, 0, 1250, results, True, 16)]
+        policy = Policy(window_floor=.125)
+        self.assertTrue(evaluate(frames, policy, window=10_000).passes)
+        self.assertFalse(evaluate(frames, policy, window=10_001).passes)
+        self.assertFalse(evaluate(frames, policy, window=0).passes)
+
+    def test_full_rebuild_not_cache_break_suffix(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size, results[0].offset = 3000, 4000
+        frames = [Frame(1, 8000, 0, 2000, results[:1], True, 1),
+                  Frame(17, 8000, 0, 2000, results, True, 16, fixed_bytes=1000)]
+        item = evaluate(frames, Policy(0)).passes[0]
+        self.assertAlmostEqual(item.full_price_tokens, (8000 - item.bytes_freed - 1000) * .25)
+        results[0].offset = 0
+        self.assertEqual(item.full_price_tokens, evaluate(frames, Policy(0)).passes[0].full_price_tokens)
+
+    def test_break_even_pass_one_allowed_pass_two_blocked(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size = 100_000
+        frames = [Frame(1, 250_000, 0, 62_500, results[:1], True, 1),
+                  Frame(17, 250_000, 0, 62_500, results, True, 16)]
+        policy = Policy(0)
+        self.assertTrue(evaluate(frames, policy).passes)
+        results[0].size = 56_000
+        frames[0].size = frames[1].size = 360_000
+        frames[0].tokens = frames[1].tokens = 90_000
+        self.assertFalse(evaluate(frames, policy).passes)
+
+    def test_anthropic_cache_write_price_can_block_openai_pass(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size = 2700
+        frames = [Frame(1, 6000, 0, 1500, results[:1], True, 1),
+                  Frame(17, 6000, 0, 1500, results, True, 16)]
+        self.assertAlmostEqual(rebuild_surcharge("anthropic"), 1.15)
+        self.assertAlmostEqual(rebuild_surcharge("openai"), .9)
+        self.assertTrue(evaluate(frames, Policy(0)).passes)
+        for frame in frames:
+            frame.provider = "anthropic"
+        self.assertFalse(evaluate(frames, Policy(0)).passes)
+
+    def test_near_compaction_exception_is_explicit_and_bounded(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size = 2200
+        frames = [Frame(1, 6000, 0, 1500, results[:1], True, 1, provider="anthropic"),
+                  Frame(17, 6000, 0, 1500, results, True, 16, provider="anthropic")]
+        policy = Policy(0)
+        self.assertFalse(evaluate(frames, policy, window=6000).passes)
+        frames[1].in_run_compact = True
+        self.assertEqual(evaluate(frames, policy, window=6000).passes[0].trigger, "near_compaction")
+        self.assertFalse(evaluate(frames, policy, window=10_000).passes)
+        self.assertFalse(evaluate(frames, policy, window=3000).passes)
+        for name, value in (("compact_off", True), ("compactions", 8), ("max_steps", 17), ("step", 1)):
+            with self.subTest(guard=name):
+                before = getattr(frames[1], name)
+                setattr(frames[1], name, value)
+                self.assertFalse(evaluate(frames, policy, window=6000).passes)
+                setattr(frames[1], name, before)
+        frames[1].max_steps = 18
+        self.assertTrue(evaluate(frames, policy, window=6000).passes)
+
+    def test_fixed_prefix_measured_from_both_provider_requests(self):
+        for instructions in ("instructions", "system"):
+            fixed = {instructions: 'quoted " < &', "tools": [{"description": "x" * 10_000}]}
+            body = encoded({"input": ["dynamic" * 10_000], **fixed})
+            self.assertEqual(fixed_prefix_bytes(body), sum(len(encoded(v)) for v in fixed.values()))
+        raw = br'{ "instructions" : "a\/b", "input": [], "tools" : [ { "x" : "\u003c" } ] }'
+        self.assertEqual(fixed_prefix_bytes(raw), len(br'"a\/b"') + len(br'[ { "x" : "\u003c" } ]'))
+
     def test_thresholds_and_one_time_cache_cost(self):
         history = batch("old") + batch("new")
         results, steps, _ = records(history)
@@ -120,7 +198,7 @@ class PolicyTest(unittest.TestCase):
         second = Frame(9, 5000, 0, 1250, results, True, 8)
         third = Frame(10, 5000, 0, 1250, results, True, 9)
         frames = [first, second, third]
-        for policy in (Policy(2000, .15, 8, 0), Policy(0, .9, 8, 0), Policy(0, .15, 10, 0)):
+        for policy in (Policy(2000 / 1_050_000, .15, 8, 0), Policy(0, .9, 8, 0), Policy(0, .15, 10, 0)):
             self.assertFalse(evaluate(frames[:2], policy).passes)
         report = evaluate(frames, Policy(0, .15, 8, 0))
         self.assertEqual(len(report.passes), 1)
@@ -143,11 +221,11 @@ class PolicyTest(unittest.TestCase):
                   Frame(17, 9000, 0, 2250, results, True, 16)]
         # The second original request used 1750 tokens. Its simulated GC view
         # predicts fewer than 1100, so its raw original usage cannot enable GC.
-        report = evaluate(frames, Policy(1100, .1, 8, 0))
+        report = evaluate(frames, Policy(1100 / 1_050_000, .1, 8, 0))
         self.assertEqual([item.step for item in report.passes], [9])
         retained_tokens = (7000 - report.passes[0].bytes_freed) * (1750 / 7000)
         self.assertLess(retained_tokens, 1100)
-        lower_floor = evaluate(frames, Policy(1000, .1, 8, 0))
+        lower_floor = evaluate(frames, Policy(1000 / 1_050_000, .1, 8, 0))
         self.assertEqual([item.step for item in lower_floor.passes], [9, 17])
 
     def test_compaction_first_crossing_can_be_delayed(self):
@@ -239,6 +317,73 @@ class PolicyTest(unittest.TestCase):
         replaced = encoded(encoded(placeholder(result, "", 0)).decode("utf-8"))
         common = next(i for i, pair in enumerate(zip(original, replaced)) if pair[0] != pair[1])
         self.assertEqual(result.offset, result_offset(body, "old") - excluded + common)
+
+    def test_recorded_gc_restored_and_fixed_provider_values_measured(self):
+        history = batch("a") + batch("b")
+        original = history[1]["tool"]["outcome"]
+        old, _, _ = records(history)
+        projected = placeholder(old[0], "superseded", 2)
+        history[1]["tool"]["outcome"] = projected
+        body = encoded({"instructions": "fixed instructions", "tools": [], "input": [
+            {"type": "function_call_output", "call_id": "a", "output": encoded(projected).decode()},
+            {"type": "function_call_output", "call_id": "b", "output": encoded(history[3]["tool"]["outcome"]).decode()}]})
+        events = [
+            {"type": "run.started", "data": {"provider": "openai", "configured": "gpt-6.1-sol", "in_run_compact": True}},
+            {"type": "tool.finished", "data": {"call_id": "a", "outcome": original}},
+            {"type": "context.gc", "data": {"dropped": [{"call_id": "a", "reason": "superseded", "step": 2}]}},
+            {"type": "model.requested", "step": 17, "data": {"history": history}},
+            {"type": "api.attempt.started", "data": {"request_body": body.decode()}},
+            {"type": "model.accepted", "data": {"usage": {"known": True, "input_tokens": 1000}}}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.write_text("\n".join(json.dumps(event) for event in events))
+            frames = load_frames(path)
+        frame = frames[0]
+        self.assertEqual(frame.fixed_bytes, len(encoded("fixed instructions")) + len(encoded([])))
+        self.assertTrue(frame.in_run_compact)
+        self.assertEqual(frame.window, 1_050_000)
+        self.assertGreater(frame.size, len(body))
+        self.assertAlmostEqual(frame.tokens / frame.size, 1000 / len(body))
+        self.assertEqual(frame.results[0].outcome, {k: v for k, v in original.items() if k != "data"})
+        report = evaluate(frames, recorded=True)
+        self.assertEqual(len(report.passes), 1)
+        self.assertEqual(report.passes[0].trigger, "recorded")
+        self.assertAlmostEqual(report.passes[0].full_price_tokens,
+                               (frame.size - report.passes[0].bytes_freed - frame.fixed_bytes) * frame.tokens / frame.size)
+
+    def test_loader_rejects_auto_model_switches_not_stays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            for action in ("stay", "switch"):
+                with self.subTest(action=action):
+                    path.write_text(json.dumps({"type": "auto.route", "data": {"action": action}}))
+                    if action == "switch":
+                        with self.assertRaisesRegex(ValueError, "does not support.*model switches"):
+                            load_frames(path)
+                    else:
+                        self.assertEqual(load_frames(path), [])
+
+    def test_loader_session_counter_includes_failure_not_retry_or_summary(self):
+        body = '{"instructions":"fixed","input":[]}'
+        for initial, header in ((37, {"gc_requests": 37}), (3, {"initial_history": [{"kind": "assistant"}] * 3})):
+            with self.subTest(initial=initial):
+                events = [{"type": "run.started", "data": {"configured": "gpt-6.1-sol", **header}}]
+                for step, outcome in ((1, "model.accepted"), (2, "model.failed"), (4, "model.accepted")):
+                    if step == 4:
+                        events.extend([{"type": "compaction.requested", "step": 3, "data": {}},
+                                       {"type": "api.attempt.started", "data": {"request_body": body}},
+                                       {"type": "compaction.finished", "data": {}}])
+                    events.extend([{"type": "model.requested", "step": step, "data": {"history": []}},
+                                   {"type": "api.attempt.started", "data": {"request_body": body}},
+                                   {"type": "api.attempt.started", "data": {"request_body": "retry"}},
+                                   {"type": outcome, "data": {"usage": {"known": True, "input_tokens": 100}}}])
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "events.jsonl"
+                    path.write_text("\n".join(json.dumps(event) for event in events))
+                    frames = load_frames(path)
+                self.assertEqual([f.completed_requests for f in frames], [initial, initial + 1, initial + 2])
+                self.assertEqual([f.compactions for f in frames], [0, 0, 1])
+                self.assertTrue(frames[-1].compaction_before)
 
     def test_loader_streams_measured_bodies_and_ignores_retries(self):
         history = batch("old") + batch("new")
