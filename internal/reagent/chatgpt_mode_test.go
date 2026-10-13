@@ -301,3 +301,18 @@ func TestChatGPTMode_ExplicitKeyKeepsProxyKeyless(t *testing.T) {
 		t.Fatalf("proxy run %d with %d requests: %s", code, requests, progress.String())
 	}
 }
+
+func TestChatGPTMode_AnthropicKeyVisibleAtStartupAndAfterSwitch(t *testing.T) {
+	modeCredentials(t, "")
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
+	t.Setenv("OPENAI_API_KEY", "openai-test-key")
+	var output, progress bytes.Buffer
+	input := "/status\n/model gpt-6-luna fresh\n/status\n/model " + DefaultAnthropicModel + " fresh\n/status\n/exit\n"
+	code := Main(context.Background(), []string{"chat", "--provider", anthropicName, "--workspace", t.TempDir()}, strings.NewReader(input), &output, &progress)
+	if code != exitOK {
+		t.Fatalf("chat exit %d: %s", code, progress.String())
+	}
+	if !strings.Contains(progress.String(), "anthropic · API key") || strings.Count(progress.String(), "(anthropic · API key)") != 2 || !strings.Contains(progress.String(), "(openai · API key)") {
+		t.Fatalf("startup/switch auth labels disagree: %s", progress.String())
+	}
+}

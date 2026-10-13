@@ -78,6 +78,21 @@ SCENARIOS = {
             ("show", "Login cancelled cleanly through the real terminal"),
         ],
     },
+    "chatgpt-login-invalid-paste-cancel": {
+        "login": True,
+        "size": (24, 110),
+        "steps": [
+            ("wait", "Waiting for approval (Ctrl-C cancels)", 5),
+            ("type", "not-a-callback"), ("key", "enter"),
+            ("wait", "Invalid callback:", 5),
+            ("wait", "Still waiting for approval", 5),
+            ("idle", 0.2),
+            ("show", "Invalid paste leaves offline login waiting for retry or cancellation"),
+            ("key", "ctrl-c"),
+            ("exit", 2, "ChatGPT sign-in cancelled or timed out", 5),
+            ("show", "Invalid paste followed by clean Ctrl-C cancellation"),
+        ],
+    },
     "chatgpt-plan": {
         "chatgpt": True,
         "size": (30, 110),

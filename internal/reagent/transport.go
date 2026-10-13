@@ -157,8 +157,12 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 		}
 		streamRetry := false
 		var streamUsage Usage
-		if (overnight || t.tokenSource != nil) && err == nil && status == http.StatusOK && transient != nil {
-			streamRetry, streamUsage = transient(raw)
+		if err == nil && status == http.StatusOK && transient != nil {
+			if overnight {
+				streamRetry, streamUsage = transient(raw)
+			} else if t.tokenSource != nil {
+				streamRetry, streamUsage = transientChatGPTStream(raw)
+			}
 		}
 		retryHTTP := retryable(status) && !terminalChatGPTCode(providerErrorCode(raw))
 		if !streamRetry && err == nil && !retryHTTP {
@@ -264,7 +268,7 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 	token, err := t.tokenSource.Token(ctx, false, "")
 	rememberSourceSecrets(tokens, t.tokenSource)
 	if err != nil {
-		return 0, nil, "", &ModelError{Status: StatusProviderError, Message: redactTokens(err.Error(), *tokens)}
+		return 0, nil, "", chatGPTTokenError(err, *tokens)
 	}
 	rememberToken(tokens, token)
 	status, raw, retryAfter, err := t.sendOnce(ctx, attempt, step, body, headers, token, *tokens)
@@ -276,10 +280,18 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 	token, err = t.tokenSource.Token(ctx, true, token)
 	rememberSourceSecrets(tokens, t.tokenSource)
 	if err != nil {
-		return 0, nil, "", &ModelError{Status: StatusProviderError, Message: redactTokens(err.Error(), *tokens)}
+		return 0, nil, "", chatGPTTokenError(err, *tokens)
 	}
 	rememberToken(tokens, token)
 	return t.sendOnce(ctx, attempt, step, body, headers, token, *tokens)
+}
+
+func chatGPTTokenError(err error, tokens []string) error {
+	var transient *chatGPTTransportError
+	if errors.As(err, &transient) {
+		return redactTokenError(err, tokens)
+	}
+	return &ModelError{Status: StatusProviderError, Message: redactTokens(err.Error(), tokens)}
 }
 
 func (t *transport) sendOnce(ctx context.Context, attempt, step int, body []byte, headers map[string]string, token string, tokens []string) (int, []byte, string, error) {

@@ -121,7 +121,11 @@ func validateChatGPTIDToken(token, issuer, clientID, nonce, subject string) (str
 		return "", "", fmt.Errorf("ChatGPT ID token claims do not match this login")
 	}
 	if subject != "" && claims.Subject != subject {
-		return "", "", fmt.Errorf("ChatGPT login must use the same account; account switching is not supported")
+		path, err := chatGPTCredentialPath()
+		if err != nil {
+			return "", "", fmt.Errorf("ChatGPT login must use the same account; use the saved ChatGPT account or OPENAI_API_KEY; locate saved registration: %w", err)
+		}
+		return "", "", fmt.Errorf("ChatGPT login must use the same account; use the saved ChatGPT account or OPENAI_API_KEY (saved registration: %s)", path)
 	}
 	return claims.Subject, claims.Email, nil
 }
@@ -149,44 +153,56 @@ func (r chatGPTPasteReader) Read(p []byte) (int, error) {
 }
 
 // Both the callback and pasted URLs enter the same single-winner, state-checked path.
-func waitChatGPTCallback(ctx context.Context, listener net.Listener, redirect, state string, input io.Reader, out io.Writer, open func(context.Context, string) error, authorize string) (url.Values, error) {
+func waitChatGPTCallback(ctx context.Context, listener net.Listener, redirect, state, clientID string, input io.Reader, out io.Writer, open func(context.Context, string) error, authorize string) (url.Values, error) {
 	var mu sync.Mutex
 	var result url.Values
 	var failure error
 	done := false
-	submit := func(address string) {
+	submit := func(address string) error {
 		mu.Lock()
 		defer mu.Unlock()
 		if done {
-			return
+			return nil
 		}
-		done = true
 		u, err := url.Parse(address)
 		if err != nil || u.Scheme+"://"+u.Host+u.Path != redirect || u.User != nil || u.Fragment != "" {
-			failure = fmt.Errorf("paste the complete loopback callback URL from this login")
-			return
+			return fmt.Errorf("paste the complete loopback callback URL from this login")
 		}
 		values, err := url.ParseQuery(u.RawQuery)
 		if err != nil || len(values["state"]) != 1 || subtle.ConstantTimeCompare([]byte(values.Get("state")), []byte(state)) != 1 {
-			failure = fmt.Errorf("ChatGPT login state did not match; run reagent login again")
-			return
+			return fmt.Errorf("ChatGPT login state did not match this attempt")
+		}
+		if len(values["error"]) > 1 {
+			return fmt.Errorf("incomplete ChatGPT login callback")
 		}
 		if values.Get("error") != "" {
+			done = true
 			failure = fmt.Errorf("ChatGPT sign-in was not approved; run reagent login again")
-			return
+			return nil
 		}
 		if len(values["code"]) != 1 || values.Get("code") == "" || len(values["client_id"]) > 1 {
-			failure = fmt.Errorf("incomplete ChatGPT login callback")
-			return
+			return fmt.Errorf("incomplete ChatGPT login callback")
+		}
+		issued := values.Get("client_id")
+		if clientID == "" && (!strings.HasPrefix(issued, "oaiapp_") || len(issued) == len("oaiapp_")) {
+			return fmt.Errorf("ChatGPT callback did not issue a valid client ID")
+		}
+		if clientID != "" && issued != "" && issued != clientID {
+			return fmt.Errorf("ChatGPT callback returned a different client ID")
 		}
 		result = values
+		done = true
+		return nil
 	}
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/auth/callback" {
-			http.NotFound(w, r)
+		if r.Method != http.MethodGet {
+			http.Error(w, "invalid ChatGPT login callback", http.StatusBadRequest)
 			return
 		}
-		submit(redirect + "?" + r.URL.RawQuery)
+		if err := submit("http://" + r.Host + r.URL.RequestURI()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, "Return to re:agent — you can close this tab.")
 	})}
@@ -217,7 +233,12 @@ func waitChatGPTCallback(ctx context.Context, listener net.Listener, redirect, s
 			for scanner.Scan() {
 				line := strings.TrimSpace(scanner.Text())
 				if line != "" {
-					submit(line)
+					if err := submit(line); err != nil {
+						mu.Lock()
+						fmt.Fprintf(out, "Invalid callback: %s. Still waiting for approval; paste the final callback URL or press Ctrl-C to cancel.\n", err)
+						mu.Unlock()
+						continue
+					}
 					return
 				}
 			}
@@ -230,12 +251,16 @@ func waitChatGPTCallback(ctx context.Context, listener net.Listener, redirect, s
 	query.Del("id_token_hint")
 	shown.RawQuery = query.Encode()
 	port := strings.TrimPrefix(listener.Addr().String(), "127.0.0.1:")
+	mu.Lock()
 	fmt.Fprintf(out, "Opening your browser for ChatGPT sign-in.\n%s\nWaiting for approval (Ctrl-C cancels). If the callback cannot reach this machine, paste the final %s?... URL here, or use ssh -L %s:127.0.0.1:%s.\n", shown.String(), redirect, port, port)
 	if hinted {
 		fmt.Fprintln(out, "The printed URL omits the saved identity token and may show the account picker.")
 	}
+	mu.Unlock()
 	if err := open(ctx, authorize); err != nil {
+		mu.Lock()
 		fmt.Fprintln(out, "Could not open the browser; open the URL above yourself.")
+		mu.Unlock()
 	}
 	for {
 		mu.Lock()
@@ -257,19 +282,23 @@ func loginChatGPT(ctx context.Context, client *http.Client, input io.Reader, out
 	if err != nil {
 		return chatGPTCredentials{}, err
 	}
-	defer unlockChatGPTCredentials(lock)
-	c, err := loadChatGPTCredentials()
-	if err != nil {
-		return c, err
-	}
-	if c.HostID == "" {
-		c.HostID, err = chatGPTHostID()
+	c, err := func() (chatGPTCredentials, error) {
+		defer unlockChatGPTCredentials(lock)
+		c, err := loadChatGPTCredentials()
 		if err != nil {
 			return c, err
 		}
-		if err := saveChatGPTCredentials(c); err != nil {
-			return c, err
+		if c.HostID == "" {
+			c.HostID, err = chatGPTHostID()
+			if err != nil {
+				return c, err
+			}
+			return c, saveChatGPTCredentials(c)
 		}
+		return c, nil
+	}()
+	if err != nil {
+		return c, err
 	}
 	discovery, err := discoverChatGPT(ctx, client)
 	if err != nil {
@@ -322,22 +351,32 @@ func loginChatGPT(ctx context.Context, client *http.Client, input io.Reader, out
 		}
 	}
 	authorize.RawQuery = query.Encode()
-	callback, err := waitChatGPTCallback(ctx, listener, redirect, state, input, out, open, authorize.String())
+	callback, err := waitChatGPTCallback(ctx, listener, redirect, state, c.ClientID, input, out, open, authorize.String())
 	if err != nil {
 		return c, err
 	}
+	lock, err = lockChatGPTCredentials(ctx)
+	if err != nil {
+		return c, err
+	}
+	defer unlockChatGPTCredentials(lock)
+	current, err := loadChatGPTCredentials()
+	if err != nil {
+		return c, err
+	}
+	// Refreshes may rotate tokens while the browser is open; identity changes
+	// and a concurrent sign-out must not be undone by this pending login.
+	if current.HostID != c.HostID || current.ClientID != c.ClientID || current.Subject != c.Subject || current.LogoutGeneration != c.LogoutGeneration {
+		return current, fmt.Errorf("ChatGPT credentials changed during sign-in; run reagent login again")
+	}
+	c = current
 	issued := callback.Get("client_id")
 	if c.ClientID == "" {
-		if !strings.HasPrefix(issued, "oaiapp_") {
-			return c, fmt.Errorf("ChatGPT callback did not issue a client ID")
-		}
 		c.ClientID = issued
 		// Registration survives even if the subsequent exchange fails.
 		if err := saveChatGPTCredentials(c); err != nil {
 			return c, err
 		}
-	} else if issued != "" && issued != c.ClientID {
-		return c, fmt.Errorf("ChatGPT callback returned a different client ID")
 	}
 	var tokens chatGPTTokenSet
 	if err := chatGPTForm(ctx, client, discovery.Token, url.Values{
@@ -381,6 +420,7 @@ func logoutChatGPT(ctx context.Context, client *http.Client, out io.Writer) erro
 	}
 	c.IDToken, c.AccessToken, c.RefreshToken, c.Scope = "", "", "", ""
 	c.ExpiresAt, c.EarliestRefreshAt, c.NeedsLogin = 0, 0, false
+	c.LogoutGeneration++
 	if err := saveChatGPTCredentials(c); err != nil {
 		return err
 	}

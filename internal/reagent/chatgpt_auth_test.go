@@ -3,7 +3,9 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -295,7 +297,7 @@ func TestChatGPTAuth_TooEarlyForcedRefreshPreservesLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.Token(context.Background(), true, c.AccessToken); err == nil || !strings.Contains(err.Error(), "cannot be refreshed yet") {
+	if _, err := source.Token(context.Background(), true, c.AccessToken); err == nil || err.Error() != chatGPTReconnect {
 		t.Fatalf("early forced refresh: %v", err)
 	}
 	stored, err := loadChatGPTCredentials()
@@ -328,5 +330,250 @@ func TestChatGPTAuth_SecretSnapshotReadsCrossProcessRotation(t *testing.T) {
 	known[0] = "modified"
 	if source.secrets()[0] == "modified" {
 		t.Fatal("snapshot aliases mutable source state")
+	}
+}
+
+func TestChatGPTAuth_CancelledCallerPreservesRotation(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	c := testChatGPTCredentials(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		wantRefresh := "old-refresh"
+		access, refresh := "new-access", "rotated-refresh"
+		if call == 2 {
+			wantRefresh = "rotated-refresh"
+			access, refresh = "newest-access", "newest-refresh"
+		}
+		if call > 2 || r.Form.Get("refresh_token") != wantRefresh {
+			t.Errorf("refresh %d reused a consumed token", call)
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"refresh_token_reused"}`)
+			return
+		}
+		// The server has consumed the token before cancellation, but has not replied.
+		cancel()
+		<-ctx.Done()
+		json.NewEncoder(w).Encode(chatGPTTokenSet{AccessToken: access, RefreshToken: refresh, TokenType: "Bearer", ExpiresIn: 3600, Scope: c.Scope})
+	}))
+	defer server.Close()
+	t.Setenv("REAGENT_OPENAI_AUTH_ISSUER", server.URL)
+	source, err := newChatGPTTokenSource(server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token, err := source.Token(ctx, false, ""); err != nil || token != "new-access" {
+		t.Fatalf("cancelled refresh: %q, %v", token, err)
+	}
+	stored, err := loadChatGPTCredentials()
+	if err != nil || stored.NeedsLogin || stored.RefreshToken != "rotated-refresh" {
+		t.Fatalf("replacement not persisted: %v", err)
+	}
+	if token, err := source.Token(context.Background(), false, ""); err != nil || token != "new-access" || calls.Load() != 1 {
+		t.Fatalf("next token: %q, %v, refreshes %d", token, err, calls.Load())
+	}
+	if token, err := source.Token(context.Background(), true, "new-access"); err != nil || token != "newest-access" || calls.Load() != 2 {
+		t.Fatalf("next rotation: %q, %v, refreshes %d", token, err, calls.Load())
+	}
+}
+
+func TestChatGPTAuth_CancelledCallerDoesNotStartRefresh(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	c := testChatGPTCredentials(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	defer server.Close()
+	t.Setenv("REAGENT_OPENAI_AUTH_ISSUER", server.URL)
+	source, err := newChatGPTTokenSource(server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := source.Token(ctx, false, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled refresh: %v", err)
+	}
+	stored, err := loadChatGPTCredentials()
+	if err != nil || calls.Load() != 0 || stored != c {
+		t.Fatalf("cancelled caller changed credentials: %v, refreshes %d", err, calls.Load())
+	}
+}
+
+func TestChatGPTAuth_OnlyRefreshWaitsForCredentialLock(t *testing.T) {
+	for _, scenario := range []struct {
+		name              string
+		expires, earliest int64
+		wantLock          bool
+	}{
+		{"valid", 3600, -1, false},
+		{"earliest_gate", 30, 3600, false},
+		{"near_expiry", 30, -1, true},
+		{"expired", -1, -1, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			c := testChatGPTCredentials(t)
+			c.ExpiresAt = time.Now().Unix() + scenario.expires
+			c.EarliestRefreshAt = time.Now().Unix() + scenario.earliest
+			if err := saveChatGPTCredentials(c); err != nil {
+				t.Fatal(err)
+			}
+			source, err := newChatGPTTokenSource(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lock, err := lockChatGPTCredentials(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unlockChatGPTCredentials(lock)
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			token, err := source.Token(ctx, false, "")
+			if scenario.wantLock {
+				if token != "" || !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("refresh bypassed lock: %q, %v", token, err)
+				}
+			} else if err != nil || token != c.AccessToken || ctx.Err() != nil {
+				t.Fatalf("valid token waited for lock: %q, %v", token, err)
+			}
+		})
+	}
+}
+
+func TestChatGPTAuth_TransientTransportErrorsAreTypedAndSanitized(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		status    int
+		code      string
+		transient bool
+	}{
+		{"rate_limit", 429, "rate_limited", true},
+		{"server_fault", 503, "server_error", true},
+		{"unauthorized", 401, "unauthorized", false},
+		{"invalid_grant", 400, "invalid_grant", false},
+		{"terminal_server_fault", 503, "refresh_token_reused", false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(scenario.status)
+				fmt.Fprintf(w, `{"error":%q,"error_description":"secret-access secret-refresh secret-id"}`, scenario.code)
+			}))
+			defer server.Close()
+			err := chatGPTForm(context.Background(), server.Client(), server.URL+"?secret-id", url.Values{"refresh_token": {"secret-refresh"}}, nil)
+			var transient *chatGPTTransportError
+			if err == nil || errors.As(err, &transient) != scenario.transient {
+				t.Fatalf("transport classification: %v", err)
+			}
+			if transient != nil && transient.status != scenario.status {
+				t.Fatalf("transient status: %d", transient.status)
+			}
+			if strings.Contains(err.Error(), "secret-") || strings.Contains(err.Error(), server.URL) {
+				t.Fatalf("authorization error leaked credentials: %v", err)
+			}
+		})
+	}
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+	err := chatGPTForm(context.Background(), server.Client(), server.URL+"?secret-refresh", url.Values{"refresh_token": {"secret-refresh"}}, nil)
+	var transient *chatGPTTransportError
+	if !errors.As(err, &transient) || transient.status != 0 || strings.Contains(err.Error(), "secret-refresh") || strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("network error: %v", err)
+	}
+}
+
+func TestChatGPTAuth_UncertainRotationNeverReplaysRefresh(t *testing.T) {
+	for _, drop := range []string{"headers", "body", "malformed", "incomplete"} {
+		t.Run(drop, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			c := testChatGPTCredentials(t)
+			var refreshes, rotations, modelCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/accounts/oauth/token" {
+					modelCalls.Add(1)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				if err := r.ParseForm(); err != nil {
+					t.Error(err)
+				}
+				if refreshes.Add(1) != 1 || r.Form.Get("refresh_token") != c.RefreshToken {
+					t.Error("replayed a consumed refresh token")
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":"refresh_token_reused"}`)
+					return
+				}
+				rotations.Add(1)
+				if drop == "malformed" {
+					fmt.Fprint(w, `{"access_token":`)
+					return
+				}
+				if drop == "incomplete" {
+					fmt.Fprint(w, `{"access_token":"replacement","token_type":"Bearer","expires_in":3600}`)
+					return
+				}
+				if drop == "body" {
+					w.Header().Set("Content-Length", "200")
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				conn.Close()
+			}))
+			defer server.Close()
+			t.Setenv("REAGENT_OPENAI_AUTH_ISSUER", server.URL)
+			source, err := newChatGPTTokenSource(server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherSource, err := newChatGPTTokenSource(server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			waits := 0
+			transport := transport{
+				endpoint: server.URL + "/v1/responses", client: server.Client(),
+				tokenSource: source, trace: NewTrace(io.Discard),
+				waitRetry: func(context.Context, time.Duration) error {
+					waits++
+					return context.Canceled
+				},
+			}
+			ctx := withModelRetry(context.Background(), time.Hour, nil)
+			_, _, err = transport.call(ctx, 1, []byte(`{}`), nil)
+			var modelErr *ModelError
+			if !errors.As(err, &modelErr) || modelErr.Status != StatusProviderError || waits != 0 || refreshes.Load() != 1 || rotations.Load() != 1 || modelCalls.Load() != 0 {
+				t.Fatalf("ambiguous rotation: err=%v, waits=%d, refreshes=%d, rotations=%d, model calls=%d", err, waits, refreshes.Load(), rotations.Load(), modelCalls.Load())
+			}
+			stored, loadErr := loadChatGPTCredentials()
+			c.NeedsLogin = true
+			if loadErr != nil || stored != c {
+				t.Fatalf("uncertain rotation must require login and retain credentials: %v", loadErr)
+			}
+			for _, laterSource := range []*chatGPTTokenSource{source, otherSource} {
+				for _, force := range []bool{false, true} {
+					if _, laterErr := laterSource.Token(context.Background(), force, c.AccessToken); laterErr == nil || laterErr.Error() != chatGPTReconnect || refreshes.Load() != 1 {
+						t.Fatalf("later token replayed uncertain rotation: %v, refreshes=%d", laterErr, refreshes.Load())
+					}
+				}
+			}
+			if _, laterErr := newChatGPTTokenSource(server.Client()); laterErr == nil || laterErr.Error() != chatGPTReconnect {
+				t.Fatalf("new source accepted uncertain credentials: %v", laterErr)
+			}
+			for _, secret := range []string{c.AccessToken, c.RefreshToken, c.IDToken, server.URL} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatal("ambiguous rotation error leaked authorization data")
+				}
+			}
+		})
 	}
 }

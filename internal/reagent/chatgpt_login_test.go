@@ -27,9 +27,9 @@ func testChatGPTIDToken(issuer, nonce, subject string, audience any, expiry int6
 
 func TestChatGPTLogin_CallbackAndPaste(t *testing.T) {
 	for _, scenario := range []struct {
-		name                                                                                          string
-		relogin, paste, badState, denied, declined, exchangeFails, reconsent, missingScope, loggedOut bool
-		client, subject, wantError                                                                    string
+		name                                                                                                                      string
+		relogin, paste, badState, badClient, denied, declined, exchangeFails, reconsent, missingScope, loggedOut, terminalRefresh bool
+		client, subject, wantError                                                                                                string
 	}{
 		{name: "first_callback", client: "oaiapp_test", subject: "user"},
 		{name: "paste", paste: true, client: "oaiapp_test", subject: "user"},
@@ -38,10 +38,16 @@ func TestChatGPTLogin_CallbackAndPaste(t *testing.T) {
 		{name: "reconsent_declined_plan", relogin: true, reconsent: true, subject: "user"},
 		{name: "decline_logout_login", relogin: true, reconsent: true, loggedOut: true, subject: "user"},
 		{name: "relogin_missing_scope", relogin: true, missingScope: true, subject: "user"},
-		{name: "bad_state_callback", badState: true, client: "oaiapp_test", wantError: "state"},
-		{name: "bad_state_paste", badState: true, paste: true, client: "oaiapp_test", wantError: "state"},
+		{name: "bad_state_callback_then_valid", badState: true, client: "oaiapp_test", subject: "user"},
+		{name: "bad_state_paste_then_valid", badState: true, paste: true, client: "oaiapp_test", subject: "user"},
 		{name: "access_denied", denied: true, wantError: "not approved"},
-		{name: "different_client", relogin: true, client: "oaiapp_other", wantError: "different client"},
+		{name: "different_client_then_valid", relogin: true, badClient: true, client: "oaiapp_other", subject: "user"},
+		{name: "different_client_paste_then_valid", relogin: true, paste: true, badClient: true, client: "oaiapp_other", subject: "user"},
+		{name: "missing_registration_then_valid", badClient: true, subject: "user"},
+		{name: "missing_registration_paste_then_valid", paste: true, badClient: true, subject: "user"},
+		{name: "invalid_registration_then_valid", badClient: true, client: "invalid", subject: "user"},
+		{name: "invalid_registration_paste_then_valid", paste: true, badClient: true, client: "oaiapp_", subject: "user"},
+		{name: "terminal_refresh_during_wait_then_reauthorized", relogin: true, terminalRefresh: true, subject: "user"},
 		{name: "different_subject", relogin: true, subject: "other", wantError: "same account"},
 		{name: "declined_plan", declined: true, client: "oaiapp_test", subject: "user"},
 		{name: "exchange_fails", exchangeFails: true, client: "oaiapp_test", subject: "user", wantError: "authorization failed"},
@@ -68,8 +74,13 @@ func TestChatGPTLogin_CallbackAndPaste(t *testing.T) {
 				case "/api/accounts/oauth/revoke":
 					w.WriteHeader(http.StatusOK)
 				case "/api/accounts/oauth/token":
-					exchanges.Add(1)
 					r.ParseForm()
+					if r.Form.Get("grant_type") == "refresh_token" && scenario.terminalRefresh {
+						w.WriteHeader(http.StatusBadRequest)
+						fmt.Fprint(w, `{"error":"invalid_grant"}`)
+						return
+					}
+					exchanges.Add(1)
 					stored, err := loadChatGPTCredentials()
 					if err != nil || stored.ClientID != "oaiapp_test" {
 						t.Errorf("client ID not persisted before exchange: %q, %v", stored.ClientID, err)
@@ -130,12 +141,46 @@ func TestChatGPTLogin_CallbackAndPaste(t *testing.T) {
 				} else if authorize.Get("client_id") != "dynamic_agent_client" || authorize.Get("agent_name_hint") != "re:agent" || !strings.HasPrefix(authorize.Get("ext_agent_host_id"), "urn:uuid:") {
 					t.Errorf("incorrect registration parameters")
 				}
+				if scenario.terminalRefresh {
+					source, err := newChatGPTTokenSource(server.Client())
+					if err != nil {
+						return err
+					}
+					if _, err := source.Token(ctx, true, previous.AccessToken); err == nil {
+						t.Error("terminal refresh unexpectedly succeeded")
+					}
+					current, err := loadChatGPTCredentials()
+					if err != nil || current.RefreshToken != "" || current.LogoutGeneration != previous.LogoutGeneration || !current.NeedsLogin {
+						t.Fatalf("terminal refresh did not clear tokens without logout: %v", err)
+					}
+				}
 				callback := url.Values{"code": {"test-code"}, "state": {authorize.Get("state")}, "scope": {"openid"}}
 				if scenario.client != "" {
 					callback.Set("client_id", scenario.client)
 				}
-				if scenario.badState {
-					callback.Set("state", "wrong")
+				if scenario.badState || scenario.badClient {
+					if scenario.badState {
+						callback.Set("state", "wrong")
+					}
+					bad := authorize.Get("redirect_uri") + "?" + callback.Encode()
+					if scenario.paste {
+						if _, err := fmt.Fprintln(writer, bad); err != nil {
+							return err
+						}
+					} else {
+						response, err := server.Client().Get(bad)
+						if err != nil {
+							return err
+						}
+						response.Body.Close()
+						if response.StatusCode != http.StatusBadRequest {
+							t.Errorf("bad state callback status: %d", response.StatusCode)
+						}
+					}
+					callback.Set("state", authorize.Get("state"))
+					if scenario.badClient {
+						callback.Set("client_id", "oaiapp_test")
+					}
 				}
 				if scenario.denied {
 					callback.Set("error", "access_denied")
@@ -161,6 +206,20 @@ func TestChatGPTLogin_CallbackAndPaste(t *testing.T) {
 			if scenario.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), scenario.wantError) {
 					t.Fatalf("want %q, got %v", scenario.wantError, err)
+				}
+				if scenario.wantError == "same account" {
+					path, pathErr := chatGPTCredentialPath()
+					if pathErr != nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "use the saved ChatGPT account or OPENAI_API_KEY") {
+						t.Fatalf("missing account recovery/path: %v", err)
+					}
+					for _, secret := range []string{previous.AccessToken, previous.RefreshToken, previous.IDToken, "access-secret", "refresh-secret", "code-secret", "user@example.com"} {
+						if secret != "" && strings.Contains(err.Error(), secret) {
+							t.Fatal("account mismatch diagnostic disclosed a secret")
+						}
+					}
+					if strings.Contains(err.Error(), "delete") || strings.Contains(err.Error(), "remove") {
+						t.Fatalf("account mismatch suggests identity removal: %v", err)
+					}
 				}
 				if scenario.wantError != "same account" && !scenario.exchangeFails && exchanges.Load() != 0 {
 					t.Fatal("exchanged rejected callback")
@@ -356,7 +415,7 @@ func TestChatGPTLogin_CallbackDoesNotLeaveFileReader(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var out bytes.Buffer
-	if _, err := waitChatGPTCallback(ctx, listener, redirect, "test-state", reader, &out, open, "https://auth.example/authorize"); err != nil {
+	if _, err := waitChatGPTCallback(ctx, listener, redirect, "test-state", "oaiapp_test", reader, &out, open, "https://auth.example/authorize"); err != nil {
 		t.Fatal(err)
 	}
 	after, _, errno := syscall.Syscall(syscall.SYS_FCNTL, reader.Fd(), syscall.F_GETFL, 0)
@@ -413,5 +472,269 @@ func TestChatGPTLogin_StatusRedactsRetiredAndRotatedSecrets(t *testing.T) {
 		if strings.Contains(out.String(), secret) || strings.Contains(stderr.String(), secret) {
 			t.Fatal("status leaked a current or retired credential")
 		}
+	}
+}
+
+func TestChatGPTLogin_InvalidCallbacksKeepWaiting(t *testing.T) {
+	for _, query := range []string{
+		"", "code=secret-code", "state=wrong&code=secret-code",
+		"state=test-state&state=test-state&code=secret-code",
+		"state=test-state&code=%zz", "state=test-state",
+		"state=test-state&code=", "state=test-state&code=a&code=b",
+		"state=test-state&code=a&client_id=a&client_id=b",
+		"state=test-state&error=access_denied&error=other",
+	} {
+		t.Run(query, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			redirect := "http://" + listener.Addr().String() + "/auth/callback"
+			open := func(context.Context, string) error {
+				for _, address := range []string{redirect + "?" + query, "http://" + listener.Addr().String() + "/favicon.ico"} {
+					response, err := NewHTTPClient().Get(address)
+					if err != nil {
+						return err
+					}
+					body, _ := io.ReadAll(response.Body)
+					response.Body.Close()
+					if response.StatusCode != http.StatusBadRequest || strings.Contains(string(body), "secret-code") {
+						t.Errorf("invalid callback response: %d %q", response.StatusCode, body)
+					}
+				}
+				for _, method := range []string{http.MethodGet, http.MethodPost} {
+					req, _ := http.NewRequest(method, redirect+"?state=test-state&code=wrong-address", nil)
+					if method == http.MethodGet {
+						req.Host = "wrong.example"
+					}
+					response, err := NewHTTPClient().Do(req)
+					if err != nil {
+						return err
+					}
+					response.Body.Close()
+					if response.StatusCode != http.StatusBadRequest {
+						t.Errorf("invalid method/address callback status: %d", response.StatusCode)
+					}
+				}
+				response, err := NewHTTPClient().Get(redirect + "?state=test-state&code=valid-code")
+				if err == nil {
+					response.Body.Close()
+				}
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			values, err := waitChatGPTCallback(ctx, listener, redirect, "test-state", "oaiapp_test", nil, io.Discard, open, "https://auth.example/authorize")
+			if err != nil || values.Get("code") != "valid-code" || values.Get("state") != "test-state" {
+				t.Fatalf("valid callback after stray request: %v %v", values, err)
+			}
+		})
+	}
+}
+
+func TestChatGPTLogin_InvalidPasteThenValidAndSingleWinner(t *testing.T) {
+	for _, useCallback := range []bool{false, true} {
+		t.Run(fmt.Sprint(useCallback), func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			redirect := "http://" + listener.Addr().String() + "/auth/callback"
+			input := strings.NewReader("https://wrong.example/?code=secret-code\n" + redirect + "?state=test-state&code=pasted\n")
+			open := func(context.Context, string) error {
+				if !useCallback {
+					return fmt.Errorf("browser unavailable")
+				}
+				response, err := NewHTTPClient().Get(redirect + "?state=test-state&code=callback")
+				if err == nil {
+					response.Body.Close()
+				}
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			var out bytes.Buffer
+			values, err := waitChatGPTCallback(ctx, listener, redirect, "test-state", "oaiapp_test", input, &out, open, "https://auth.example/authorize")
+			if err != nil || (values.Get("code") != "pasted" && (!useCallback || values.Get("code") != "callback")) {
+				t.Fatalf("callback/paste winner: %v %v", values, err)
+			}
+			if strings.Contains(out.String(), "secret-code") || (!useCallback && !strings.Contains(out.String(), "Still waiting for approval")) {
+				t.Fatalf("invalid paste diagnostic: %s", out.String())
+			}
+		})
+	}
+}
+
+func TestChatGPTLogin_PendingAllowsTokenAndRefreshPreservesLatestOnFailure(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	c := testChatGPTCredentials(t)
+	c.ExpiresAt = time.Now().Unix() + 3600
+	if err := saveChatGPTCredentials(c); err != nil {
+		t.Fatal(err)
+	}
+	var refreshes, exchanges atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/openid-configuration" {
+			json.NewEncoder(w).Encode(chatGPTDiscovery{Issuer: server.URL, Authorize: server.URL + "/authorize", Token: server.URL + "/api/accounts/oauth/token"})
+			return
+		}
+		r.ParseForm()
+		if r.Form.Get("grant_type") == "refresh_token" {
+			refreshes.Add(1)
+			json.NewEncoder(w).Encode(chatGPTTokenSet{AccessToken: "refreshed-access", RefreshToken: "refreshed-refresh", IDToken: "refreshed-id", TokenType: "Bearer", ExpiresIn: 3600, Scope: c.Scope})
+			return
+		}
+		exchanges.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_grant"}`)
+	}))
+	defer server.Close()
+	t.Setenv("REAGENT_OPENAI_AUTH_ISSUER", server.URL)
+	source, err := newChatGPTTokenSource(server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	var latest chatGPTCredentials
+	open := func(ctx context.Context, address string) error {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		if token, err := source.Token(ctx, false, ""); err != nil || token != c.AccessToken {
+			t.Errorf("pending login blocked valid token: %q %v", token, err)
+			return fmt.Errorf("token failed")
+		}
+		if token, err := source.Token(ctx, true, c.AccessToken); err != nil || token != "refreshed-access" {
+			t.Errorf("pending login blocked refresh: %q %v", token, err)
+			return fmt.Errorf("refresh failed")
+		}
+		latest, err = loadChatGPTCredentials()
+		if err != nil {
+			return err
+		}
+		u, _ := url.Parse(address)
+		_, err = fmt.Fprintln(writer, u.Query().Get("redirect_uri")+"?"+url.Values{"state": {u.Query().Get("state")}, "code": {"test-code"}}.Encode())
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	returned, err := loginChatGPT(ctx, server.Client(), reader, io.Discard, open)
+	if err == nil || !strings.Contains(err.Error(), "authorization failed") || returned != latest {
+		t.Fatalf("rejected exchange: %v; current snapshot retained: %v", err, returned == latest)
+	}
+	stored, err := loadChatGPTCredentials()
+	if err != nil || stored != latest || refreshes.Load() != 1 || exchanges.Load() != 1 {
+		t.Fatalf("latest credentials not preserved: %v, refreshes %d exchanges %d", err, refreshes.Load(), exchanges.Load())
+	}
+}
+
+func TestChatGPTLogin_ConcurrentIdentityChangeAndLogoutRejectPending(t *testing.T) {
+	for _, change := range []string{"client", "subject", "host", "registration", "logout", "first_login_logout", "logged_out_relogin_logout"} {
+		t.Run(change, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			if change != "registration" && change != "first_login_logout" {
+				testChatGPTCredentials(t)
+
+			}
+			var concurrentNonce string
+			var exchanges atomic.Int32
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/.well-known/openid-configuration":
+					json.NewEncoder(w).Encode(chatGPTDiscovery{Issuer: server.URL, Authorize: server.URL + "/authorize", Token: server.URL + "/token"})
+				case "/api/accounts/oauth/revoke":
+					w.WriteHeader(http.StatusOK)
+				default:
+					exchanges.Add(1)
+					if change == "registration" {
+						json.NewEncoder(w).Encode(chatGPTTokenSet{AccessToken: "concurrent-access", RefreshToken: "concurrent-refresh", IDToken: testChatGPTIDToken(server.URL, concurrentNonce, "concurrent-user", "oaiapp_concurrent", time.Now().Unix()+3600), TokenType: "Bearer", ExpiresIn: 3600, Scope: "openid chatgpt.tokens.use.direct"})
+						return
+					}
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("REAGENT_OPENAI_AUTH_ISSUER", server.URL)
+			if change == "logged_out_relogin_logout" {
+				if err := logoutChatGPT(context.Background(), server.Client(), io.Discard); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reader, writer := io.Pipe()
+			defer reader.Close()
+			defer writer.Close()
+			var latest chatGPTCredentials
+			open := func(ctx context.Context, address string) error {
+				ctx, cancel := context.WithTimeout(ctx, time.Second)
+				defer cancel()
+				if change == "registration" {
+					concurrentOpen := func(_ context.Context, address string) error {
+						u, _ := url.Parse(address)
+						query := u.Query()
+						concurrentNonce = query.Get("nonce")
+						response, err := server.Client().Get(query.Get("redirect_uri") + "?" + url.Values{"state": {query.Get("state")}, "code": {"concurrent-code"}, "client_id": {"oaiapp_concurrent"}}.Encode())
+						if err == nil {
+							response.Body.Close()
+						}
+						return err
+					}
+					if _, err := loginChatGPT(ctx, server.Client(), nil, io.Discard, concurrentOpen); err != nil {
+						return err
+					}
+				} else if change == "logout" || change == "first_login_logout" || change == "logged_out_relogin_logout" {
+					if err := logoutChatGPT(ctx, server.Client(), io.Discard); err != nil {
+						return err
+					}
+				} else {
+					lock, err := lockChatGPTCredentials(ctx)
+					if err != nil {
+						return err
+					}
+					current, err := loadChatGPTCredentials()
+					if err == nil {
+						switch change {
+						case "client":
+							current.ClientID = "oaiapp_concurrent"
+						case "subject":
+							current.Subject = "concurrent-user"
+						case "host":
+							current.HostID = "urn:uuid:concurrent"
+						}
+						err = saveChatGPTCredentials(current)
+					}
+					unlockChatGPTCredentials(lock)
+					if err != nil {
+						return err
+					}
+				}
+				var err error
+				latest, err = loadChatGPTCredentials()
+				if err != nil {
+					return err
+				}
+				u, _ := url.Parse(address)
+				_, err = fmt.Fprintln(writer, u.Query().Get("redirect_uri")+"?"+url.Values{"state": {u.Query().Get("state")}, "code": {"test-code"}, "client_id": {"oaiapp_test"}}.Encode())
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_, err := loginChatGPT(ctx, server.Client(), reader, io.Discard, open)
+			if err == nil || !strings.Contains(err.Error(), "credentials changed") {
+				t.Fatalf("pending login after %s: %v", change, err)
+			}
+			stored, err := loadChatGPTCredentials()
+			wantExchanges := int32(0)
+			if change == "registration" {
+				wantExchanges = 1
+			}
+			if err != nil || stored != latest || exchanges.Load() != wantExchanges {
+				t.Fatalf("pending login overwrote %s: %v, exchanges %d", change, err, exchanges.Load())
+			}
+		})
 	}
 }

@@ -124,8 +124,12 @@ While waiting, Ctrl-C cancels. Over SSH, either forward the displayed callback
 port with `ssh -L <port>:127.0.0.1:<port>`, or paste the browser's final
 `http://127.0.0.1:<port>/auth/callback?...` address into the terminal, even if
 the browser could not load that page. The callback and paste paths use the
-same state check; the first arrival wins. On later logins the saved account
-is reused; account switching and multiple profiles are not supported.
+same state check; the first valid arrival wins. Stray callbacks return 400;
+invalid pasted addresses print a diagnostic and leave the sign-in waiting.
+On later logins the saved account is reused; account switching and multiple
+profiles are not supported. Logout keeps that registration: sign back in with
+the saved account or use `OPENAI_API_KEY`, rather than treating logout as an
+account switch.
 
 - `reagent auth status` shows the account, plan permission, token expiry and
   available models, never tokens.
@@ -133,8 +137,11 @@ is reused; account switching and multiple profiles are not supported.
   the installation and account identity for the next login. If revocation
   cannot be confirmed, disconnect re:agent in ChatGPT settings too.
 - Refresh is silent during runs, chats and sub-agents, including across local
-  processes. Credentials live in the user **config** directory as a private
-  (0600), atomically written `reagent/chatgpt.json` file, not in the cache.
+  processes. Browser approval does not hold the credential lock or stall
+  existing sessions. A started refresh finishes and saves its rotating token
+  even when the requesting turn is cancelled, with a separate 30-second bound.
+  Credentials live in the user **config** directory as a private (0600),
+  atomically written `reagent/chatgpt.json` file, not in the cache.
 
 Without a proxy, `OPENAI_API_KEY` wins in the default `auto` mode; otherwise a
 saved login with plan permission uses your ChatGPT plan, not API billing.
@@ -151,6 +158,13 @@ Pro has no such limit.** Manage usage at
 without retrying and leaves the chat resumable; wait for capacity or restart
 with `--openai-auth key`. A disconnected or expired connection asks you to
 run `reagent login` again. No browser approval is requested during inference.
+Only the two documented subscription availability stream errors get default
+bounded retries; generic in-stream overloads/rate limits still require
+`--model-retry-window`. That opt-in window also retries proven pre-send auth
+dial failures and explicit temporary auth-server responses. An ambiguous
+refresh failure after sending is not replayed, even on a later turn: its
+rotating token may already have been consumed. Tokens are retained locally,
+but the connection is marked as needing `reagent login`.
 
 For local fake-server tests, `REAGENT_OPENAI_AUTH_ISSUER` overrides the auth
 issuer and `REAGENT_OPENAI_BASE_URL` overrides the inference base URL (including

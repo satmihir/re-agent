@@ -161,29 +161,39 @@ func streamFailure(response json.RawMessage) error {
 // transientOpenAIStream recognizes only explicit provider overload/rate-limit codes.
 // A truncated or malformed stream remains a terminal incomplete/protocol response.
 func transientOpenAIStream(raw []byte) (bool, Usage) {
+	code, usage := openAIStreamError(raw)
+	return transientStreamCode(code), usage
+}
+
+func transientChatGPTStream(raw []byte) (bool, Usage) {
+	code, usage := openAIStreamError(raw)
+	return code == "subscription_sharing_usage_unavailable" || code == "subscription_sharing_user_unavailable", usage
+}
+
+func openAIStreamError(raw []byte) (string, Usage) {
 	for _, data := range streamData(raw) {
 		var event streamEvent
 		if json.Unmarshal([]byte(data), &event) != nil {
-			return false, Usage{}
+			return "", Usage{}
 		}
 		switch event.Type {
 		case "response.failed":
 			var body responsesBody
 			if json.Unmarshal(event.Response, &body) != nil || body.Error == nil {
-				return false, Usage{}
+				return "", Usage{}
 			}
-			return transientStreamCode(body.Error.Code), body.Usage.normalized()
+			return body.Error.Code, body.Usage.normalized()
 		case "error":
 			code := event.Code
 			if event.Error != nil {
 				code = event.Error.Code
 			}
-			return transientStreamCode(code), Usage{}
+			return code, Usage{}
 		case "response.completed", "response.incomplete":
-			return false, Usage{}
+			return "", Usage{}
 		}
 	}
-	return false, Usage{}
+	return "", Usage{}
 }
 
 func transientStreamCode(code string) bool {

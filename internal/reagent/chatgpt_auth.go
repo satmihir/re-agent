@@ -3,8 +3,10 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +19,7 @@ import (
 
 const chatGPTReconnect = "Your ChatGPT connection is no longer valid; run reagent login."
 const chatGPTResource = "https://api.openai.com/v1"
+const chatGPTRefreshOutcomeUnknown = "refresh_outcome_unknown"
 
 // testConfigPath is installed by TestMain before any credentials are accessed.
 var testConfigPath func(string)
@@ -33,6 +36,8 @@ type chatGPTCredentials struct {
 	EarliestRefreshAt int64  `json:"earliest_refresh_at,omitempty"`
 	Scope             string `json:"scope,omitempty"`
 	NeedsLogin        bool   `json:"needs_login,omitempty"`
+	// A repeated logout must invalidate pending sign-ins even without active tokens.
+	LogoutGeneration uint64 `json:"logout_generation,omitempty"`
 }
 
 func (c chatGPTCredentials) planGranted() bool {
@@ -181,6 +186,19 @@ type chatGPTOAuthError struct{ code string }
 
 func (e *chatGPTOAuthError) Error() string { return "ChatGPT authorization failed; run reagent login." }
 
+type chatGPTTransportError struct{ status int }
+
+func (e *chatGPTTransportError) Error() string {
+	if e.status != 0 {
+		return fmt.Sprintf("ChatGPT authorization service temporarily unavailable (HTTP %d)", e.status)
+	}
+	return "could not contact ChatGPT authorization service"
+}
+
+func terminalChatGPTRefreshCode(code string) bool {
+	return code == "invalid_grant" || code == "invalid_refresh_token" || code == "token_expired" || strings.HasPrefix(code, "refresh_token_")
+}
+
 // Authentication responses can contain credentials, so neither bodies nor URL errors are quoted.
 func chatGPTForm(ctx context.Context, client *http.Client, endpoint string, form url.Values, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
@@ -193,7 +211,12 @@ func chatGPTForm(ctx context.Context, client *http.Client, endpoint string, form
 	authClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := authClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not contact ChatGPT authorization service")
+		// Only a failed dial proves the server could not consume a rotating token.
+		var network *net.OpError
+		if errors.As(err, &network) && network.Op == "dial" {
+			return &chatGPTTransportError{}
+		}
+		return &chatGPTOAuthError{code: chatGPTRefreshOutcomeUnknown}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -209,13 +232,16 @@ func chatGPTForm(ctx context.Context, client *http.Client, endpoint string, form
 			json.Unmarshal(body.Error, &nested)
 			code = nested.Code
 		}
+		if retryable(response.StatusCode) && !terminalChatGPTRefreshCode(code) {
+			return &chatGPTTransportError{status: response.StatusCode}
+		}
 		return &chatGPTOAuthError{code: code}
 	}
 	if out == nil {
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
-		return fmt.Errorf("invalid ChatGPT authorization response")
+		return &chatGPTOAuthError{code: chatGPTRefreshOutcomeUnknown}
 	}
 	return nil
 }
@@ -259,21 +285,9 @@ func newChatGPTTokenSource(client *http.Client) (*chatGPTTokenSource, error) {
 	return source, nil
 }
 
-func (s *chatGPTTokenSource) Token(ctx context.Context, force bool, rejected string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	lock, err := lockChatGPTCredentials(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer unlockChatGPTCredentials(lock)
-	// Refresh tokens rotate: the file, not an in-memory snapshot, is authoritative.
-	c, err := loadChatGPTCredentials()
-	if err != nil {
-		return "", err
-	}
-	s.rememberSecrets(c)
-	if c.NeedsLogin || !c.planGranted() || c.RefreshToken == "" || c.AccessToken == "" {
+// An empty token with no error means a refresh is needed.
+func cachedChatGPTToken(c chatGPTCredentials, force bool, rejected string) (string, error) {
+	if c.NeedsLogin || !c.planGranted() || c.RefreshToken == "" || c.AccessToken == "" || c.ClientID == "" {
 		return "", fmt.Errorf("%s", chatGPTReconnect)
 	}
 	now := time.Now().Unix()
@@ -287,24 +301,64 @@ func (s *chatGPTTokenSource) Token(ctx context.Context, force bool, rejected str
 		if !force && c.ExpiresAt > now {
 			return c.AccessToken, nil
 		}
-		return "", fmt.Errorf("ChatGPT access token cannot be refreshed yet; run reagent login.")
+		return "", fmt.Errorf("%s", chatGPTReconnect)
 	}
+	return "", nil
+}
+
+func (s *chatGPTTokenSource) Token(ctx context.Context, force bool, rejected string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Atomic file replacement lets valid credentials avoid a file-lock round trip.
+	c, err := loadChatGPTCredentials()
+	if err != nil {
+		return "", err
+	}
+	s.rememberSecrets(c)
+	if token, err := cachedChatGPTToken(c, force, rejected); token != "" || err != nil {
+		return token, err
+	}
+	lock, err := lockChatGPTCredentials(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlockChatGPTCredentials(lock)
+	// Another process may have rotated the refresh token while we waited.
+	c, err = loadChatGPTCredentials()
+	if err != nil {
+		return "", err
+	}
+	s.rememberSecrets(c)
+	if token, err := cachedChatGPTToken(c, force, rejected); token != "" || err != nil {
+		return token, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	// Once consumed, a rotating token's replacement must survive caller cancellation.
+	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	var tokens chatGPTTokenSet
-	err = chatGPTForm(ctx, s.client, chatGPTIssuer()+"/api/accounts/oauth/token", url.Values{
+	err = chatGPTForm(refreshCtx, s.client, chatGPTIssuer()+"/api/accounts/oauth/token", url.Values{
 		"grant_type": {"refresh_token"}, "client_id": {c.ClientID}, "refresh_token": {c.RefreshToken}, "resource": {chatGPTResource},
 	}, &tokens)
-	if oauth, ok := err.(*chatGPTOAuthError); ok && (oauth.code == "invalid_grant" || oauth.code == "invalid_refresh_token" || oauth.code == "token_expired" || strings.HasPrefix(oauth.code, "refresh_token_")) {
+	if err == nil {
+		if err = applyChatGPTTokens(&c, tokens); err != nil {
+			err = &chatGPTOAuthError{code: chatGPTRefreshOutcomeUnknown}
+		}
+	}
+	if oauth, ok := err.(*chatGPTOAuthError); ok && (terminalChatGPTRefreshCode(oauth.code) || oauth.code == chatGPTRefreshOutcomeUnknown) {
 		c.NeedsLogin = true
-		c.AccessToken, c.RefreshToken = "", ""
+		// Uncertainty forbids reuse, but does not confirm these credentials were revoked.
+		if oauth.code != chatGPTRefreshOutcomeUnknown {
+			c.AccessToken, c.RefreshToken = "", ""
+		}
 		if err := saveChatGPTCredentials(c); err != nil {
 			return "", err
 		}
 		return "", fmt.Errorf("%s", chatGPTReconnect)
 	}
 	if err != nil {
-		return "", err
-	}
-	if err := applyChatGPTTokens(&c, tokens); err != nil {
 		return "", err
 	}
 	s.rememberSecrets(c)
