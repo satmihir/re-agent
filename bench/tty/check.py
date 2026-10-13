@@ -64,6 +64,42 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "chatgpt-login-cancel": {
+        "login": True,
+        "size": (24, 110),
+        "steps": [
+            ("wait", "Waiting for approval (Ctrl-C cancels)", 5),
+            ("wait", "paste the final", 5),
+            ("wait", "ssh -L", 5),
+            ("show", "Offline login waiting with paste and SSH options"),
+            ("idle", 0.2),
+            ("key", "ctrl-c"),
+            ("exit", 2, "ChatGPT sign-in cancelled or timed out", 5),
+            ("show", "Login cancelled cleanly through the real terminal"),
+        ],
+    },
+    "chatgpt-plan": {
+        "chatgpt": True,
+        "size": (30, 110),
+        "steps": [
+            ("wait", "ChatGPT plan", 5),
+            ("wait_status", "ChatGPT plan", 5),
+            ("show", "ChatGPT plan header and prompt status"),
+            ("expect", "status_row_last"),
+            ("type", "hello"), ("key", "enter"),
+            ("wait", "ChatGPT reply.", 5),
+            ("wait_status", "ChatGPT plan", 5),
+            ("type", "again"), ("key", "enter"),
+            ("wait", "Next ChatGPT turn.", 5),
+            ("wait_status", "ChatGPT plan", 5),
+            ("type", "/status"), ("key", "enter"),
+            ("wait", "model      gpt-6-luna (openai · ChatGPT plan)", 5),
+            ("wait_status", "ChatGPT plan", 5),
+            ("idle", 0.1),
+            ("show", "ChatGPT reply, next turn and status after fake-server requests"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "context-gc": {
         "context_gc": True,
         "steps": [
@@ -375,7 +411,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "esc": "\x1b",
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -386,9 +422,14 @@ class Session:
             env = dict(os.environ, TERM="xterm-256color")
             env.pop("NO_COLOR", None)
             env.update(extra_env or {})
-            env.update(HOME=workspace, XDG_CACHE_HOME=os.path.join(workspace, ".cache"))
+            env.update(HOME=workspace, XDG_CACHE_HOME=os.path.join(workspace, ".cache"),
+                       XDG_CONFIG_HOME=os.path.join(workspace, ".config"))
             args = [binary, "chat", "--workspace", workspace]
-            if context_gc:
+            if login:
+                args = [binary, "login"]
+            elif chatgpt:
+                args += ["--openai-auth", "chatgpt", "--no-project-instructions", "--model", "gpt-6-luna"]
+            elif context_gc:
                 args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6-sol"]
             elif agents:
                 args += ["--agents", "--recap", "--no-project-instructions", "--model", "gpt-6-sol"]
@@ -561,13 +602,39 @@ def run(binary, name, scenario, workspace):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
             json.dump(scenario["script"], f)
             script_path = f.name
-    extra_env = {}
+    extra_env = {"REAGENT_OPENAI_AUTH": "auto"}
     server = None
     gates = {name: threading.Event() for name in ("advance", "finish")}
+    if scenario.get("login"):
+        class AuthHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                issuer = f"http://127.0.0.1:{self.server.server_port}"
+                body = json.dumps({"issuer": issuer, "authorization_endpoint": issuer + "/authorize",
+                                   "token_endpoint": issuer + "/token"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AuthHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        # Exercise browser dispatch without launching any browser or contacting OpenAI.
+        browser_dir = os.path.join(workspace, "browser-bin")
+        os.makedirs(browser_dir)
+        for browser_name in ("open", "xdg-open"):
+            browser = os.path.join(browser_dir, browser_name)
+            with open(browser, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(browser, 0o700)
+        extra_env.update(REAGENT_OPENAI_AUTH_ISSUER=f"http://127.0.0.1:{server.server_port}",
+                         PATH=browser_dir + os.pathsep + os.environ.get("PATH", ""))
     if scenario.get("context_gc"):
         with open(os.path.join(workspace, "gc.txt"), "w") as f:
             f.write("x" * 25000 + "\n")
-    if scenario.get("agents") or scenario.get("context_gc"):
+    if scenario.get("agents") or scenario.get("context_gc") or scenario.get("chatgpt"):
         class AgentHandler(http.server.BaseHTTPRequestHandler):
             root_requests = 0
             child_requests = 0
@@ -627,6 +694,12 @@ def run(binary, name, scenario, workspace):
                         calls = [("spawn", {"task": "create a file", "context": {"brief": "independent"},
                                             "name": "writer", "authority": "write"}),
                                  ("wait", {"ids": ["writer"]})] if number == 1 else []
+                    if scenario.get("chatgpt"):
+                        calls = []
+                        if self.headers.get("Authorization") != "Bearer tty-access" or not self.headers.get("session_id"):
+                            failures.append("ChatGPT request lacked bearer token or session_id")
+                        if "truncation" in json.loads(request):
+                            failures.append("ChatGPT request included truncation")
                     if scenario.get("context_gc"):
                         calls = [("read_file", {"path": "gc.txt"})] if number <= 2 else [("list_files", {"path": "."})] if number <= 16 else []
                     output = [{"type": "function_call", "call_id": f"c{number}-{index}",
@@ -638,6 +711,8 @@ def run(binary, name, scenario, workspace):
                             text = "Agent changed a file."
                         if scenario.get("context_gc"):
                             text = "GC turn complete." if number == 17 else "Next turn works."
+                        if scenario.get("chatgpt"):
+                            text = "ChatGPT reply." if number == 1 else "Next ChatGPT turn."
                         output = [{"type": "message", "status": "completed", "content": [
                             {"type": "output_text", "text": text}]}]
                 result = {"id": "r", "model": "test", "status": "completed", "output": output,
@@ -658,6 +733,18 @@ def run(binary, name, scenario, workspace):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL=f"http://127.0.0.1:{server.server_port}/v1/responses",
                          OPENAI_API_KEY="")
+        if scenario.get("chatgpt"):
+            config = os.path.join(workspace, "Library", "Application Support") if sys.platform == "darwin" else os.path.join(workspace, ".config")
+            directory = os.path.join(config, "reagent")
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            credentials = os.path.join(directory, "chatgpt.json")
+            with open(credentials, "w") as f:
+                json.dump({"client_id": "oaiapp_tty", "sub": "tty-user", "email": "tty@example.com",
+                           "access_token": "tty-access", "refresh_token": "tty-refresh",
+                           "expires_at": int(time.time()) + 3600, "scope": "chatgpt.tokens.use.direct"}, f)
+            os.chmod(credentials, 0o600)
+            extra_env.update(API_PROXY_PROVIDER="", API_PROXY_URL="", REAGENT_OPENAI_AUTH="chatgpt",
+                             REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}/v1")
     if scenario.get("retry"):
         class RetryHandler(http.server.BaseHTTPRequestHandler):
             attempts = 0
@@ -696,7 +783,7 @@ def run(binary, name, scenario, workspace):
             editor.write(scenario["editor"])
         os.chmod(editor_path, 0o700)
         extra_env["VISUAL"] = editor_path
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]
@@ -722,6 +809,15 @@ def run(binary, name, scenario, workspace):
             elif kind == "wait_status":
                 if not s.wait_for(args[0], args[1], status=True):
                     failures.append("timed out waiting for the prompt status row")
+            elif kind == "exit":
+                s.pump(args[2])
+                if s.alive:
+                    failures.append("reagent did not exit after login cancellation")
+                else:
+                    pid, status = os.waitpid(s.pid, 0)
+                    code = os.waitstatus_to_exitcode(status)
+                    if code != args[0] or args[1] not in s.raw.decode("utf-8", "replace"):
+                        failures.append(f"login cancellation exit {code}, expected {args[0]} with {args[1]!r}")
             elif kind == "idle":
                 s.pump(args[0])
             elif kind == "resize":
@@ -732,7 +828,7 @@ def run(binary, name, scenario, workspace):
                 error = CHECKS[args[0]](s, *args[1:])
                 if error:
                     failures.append(error)
-            if not s.alive:
+            if not s.alive and not scenario.get("login"):
                 failures.append("reagent exited during %r" % (step,))
                 break
     finally:

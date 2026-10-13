@@ -132,7 +132,7 @@ func (p apiProxy) shown() string { return redacted(p.endpoint) }
 
 // newLiveModel constructs the adapter for a provider. Without a proxy the
 // endpoint is the provider's own; tests pass a local server.
-func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, trace *Trace) Model {
+func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, trace *Trace, sources ...*chatGPTTokenSource) Model {
 	if proxy.serves(provider) {
 		// Only OpenAI can be proxied, and the proxy is sent no key.
 		model := NewOpenAIModel("", proxy.endpoint, client, trace)
@@ -141,6 +141,9 @@ func newLiveModel(provider, apiKey string, proxy apiProxy, client *http.Client, 
 	}
 	if provider == anthropicName {
 		return NewAnthropicModel(apiKey, "", client, trace)
+	}
+	if len(sources) > 0 && sources[0] != nil {
+		return newChatGPTModel(sources[0], "", client, trace)
 	}
 	return NewOpenAIModel(apiKey, "", client, trace)
 }
@@ -164,7 +167,7 @@ func encodeRequest(cfg Config, req ModelRequest) ([]byte, error) {
 	if cfg.Provider == anthropicName {
 		return EncodeAnthropicRequest(req)
 	}
-	return encodeOpenAIRequest(req, cfg.Proxied)
+	return encodeOpenAIRequest(req, cfg.Proxied || cfg.AuthMode == "chatgpt")
 }
 
 // nativeItemLabel names a provider output item's type for /context. Unknown
@@ -177,4 +180,62 @@ func nativeItemLabel(itemType string) string {
 		return "model tool calls"
 	}
 	return "model text"
+}
+
+func resolveOpenAIAuth(mode, key string, proxy apiProxy, plan bool) (string, error) {
+	switch mode {
+	case "", "auto":
+		// Preserve proxy routing even when an API key is also configured.
+		if proxy.serves(openaiName) {
+			return "proxy", nil
+		}
+		if key != "" || !plan {
+			return "key", nil
+		}
+		return "chatgpt", nil
+	case "key":
+		// The proxy remains a separate, keyless route in either non-plan mode.
+		if proxy.serves(openaiName) {
+			return "proxy", nil
+		}
+		return "key", nil
+	case "chatgpt":
+		if proxy.endpoint != "" {
+			return "", fmt.Errorf("ChatGPT auth cannot be combined with API_PROXY_URL")
+		}
+		if !plan {
+			return "", fmt.Errorf("no usable ChatGPT plan login; run reagent login and grant plan usage, or use --openai-auth key")
+		}
+		return "chatgpt", nil
+	default:
+		return "", fmt.Errorf("--openai-auth must be auto, key or chatgpt")
+	}
+}
+
+func providerAvailable(provider string, keys map[string]string, proxy apiProxy, source *chatGPTTokenSource) bool {
+	return keys[provider] != "" || proxy.serves(provider) || (provider == openaiName && source != nil)
+}
+
+func setConfigAuth(cfg *Config, proxy apiProxy) {
+	cfg.Proxied = proxy.serves(cfg.Provider)
+	cfg.AuthMode = "key"
+	if cfg.Proxied {
+		cfg.AuthMode = "proxy"
+	} else if cfg.Provider == openaiName && cfg.chatGPTSource != nil {
+		cfg.AuthMode = "chatgpt"
+	} else if cfg.Provider == "scripted" {
+		cfg.AuthMode = ""
+	}
+}
+
+func authModeLabel(mode string) string {
+	switch mode {
+	case "chatgpt":
+		return "ChatGPT plan"
+	case "key":
+		return "API key"
+	case "proxy":
+		return "API proxy"
+	}
+	return ""
 }

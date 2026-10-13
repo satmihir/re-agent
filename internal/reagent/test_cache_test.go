@@ -1,6 +1,7 @@
 package reagent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,7 @@ import (
 	"testing"
 )
 
-var originalTestCache, originalTestHome string
+var originalTestCache, originalTestConfig, originalTestHome string
 
 // TestMain isolates default traces and checkpoints, including direct calls to Main.
 func TestMain(m *testing.M) {
@@ -21,13 +22,19 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	originalTestCache = resolvedTestPath(cache)
+	config, err := os.UserConfigDir()
+	if err != nil {
+		panic(err)
+	}
+	originalTestConfig = resolvedTestPath(config)
 	originalTestHome = os.Getenv("HOME")
 	testCachePath = guardTestCachePath
+	testConfigPath = guardTestConfigPath
 	home, err := os.MkdirTemp("", "reagent-test-home-")
 	if err != nil {
 		panic(err)
 	}
-	for key, value := range map[string]string{"HOME": home, "XDG_CACHE_HOME": filepath.Join(home, ".cache")} {
+	for key, value := range map[string]string{"HOME": home, "XDG_CACHE_HOME": filepath.Join(home, ".cache"), "XDG_CONFIG_HOME": filepath.Join(home, ".config")} {
 		if err := os.Setenv(key, value); err != nil {
 			os.RemoveAll(home)
 			panic(err)
@@ -45,6 +52,7 @@ func setTestHome(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 }
 
 // Resolve components before cleaning: link/.. follows the link, then its parent.
@@ -78,17 +86,25 @@ func resolvedTestPath(path string) string {
 }
 
 func guardTestCachePath(path string) {
+	guardTestPrivatePath(path, originalTestCache, "cache")
+}
+
+func guardTestConfigPath(path string) {
+	guardTestPrivatePath(path, originalTestConfig, "config")
+}
+
+func guardTestPrivatePath(path, root, kind string) {
 	resolved := resolvedTestPath(path)
-	rel, err := filepath.Rel(originalTestCache, resolved)
+	rel, err := filepath.Rel(root, resolved)
 	if err != nil {
 		panic(err)
 	}
 	inside := rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 	// SameFile catches case aliases without assuming the volume is case-insensitive.
-	cacheInfo, cacheErr := os.Stat(originalTestCache)
+	cacheInfo, cacheErr := os.Stat(root)
 	if os.IsNotExist(cacheErr) {
 		// Until it exists, conservatively forbid case aliases on any volume.
-		inside = inside || strings.HasPrefix(strings.ToLower(resolved)+string(filepath.Separator), strings.ToLower(originalTestCache)+string(filepath.Separator))
+		inside = inside || strings.HasPrefix(strings.ToLower(resolved)+string(filepath.Separator), strings.ToLower(root)+string(filepath.Separator))
 	}
 	for probe := resolved; !inside && cacheErr == nil; probe = filepath.Dir(probe) {
 		info, err := os.Stat(probe)
@@ -103,7 +119,7 @@ func guardTestCachePath(path string) {
 	// Include all stacks so an agent goroutine's failure names its owning test.
 	stack := make([]byte, 1<<20)
 	n := runtime.Stack(stack, true)
-	panic(fmt.Sprintf("test cache guard: %s resolves under real user cache %s\n%s", path, originalTestCache, stack[:n]))
+	panic(fmt.Sprintf("test %s guard: %s resolves under real user %s %s\n%s", kind, path, kind, root, stack[:n]))
 }
 
 func TestCacheGuard_DefaultPathsAreIsolated(t *testing.T) {
@@ -236,4 +252,29 @@ func TestCacheGuard_RejectsAbsentCacheCaseAlias(t *testing.T) {
 		}
 	}()
 	OpenTrace(filepath.Join(parent, "forbiddencache", "events.jsonl"), "s", "r", io.Discard)
+}
+
+func TestConfigGuard_RejectsRealCredentials(t *testing.T) {
+	for _, operation := range []string{"load", "save", "lock"} {
+		t.Run(operation, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", originalTestConfig)
+			if runtime.GOOS == "darwin" {
+				t.Setenv("HOME", originalTestHome)
+			}
+			defer func() {
+				failure := fmt.Sprint(recover())
+				if !strings.Contains(failure, "test config guard:") || !strings.Contains(failure, "TestConfigGuard_RejectsRealCredentials") {
+					t.Fatalf("expected config guard panic, got %s", failure)
+				}
+			}()
+			switch operation {
+			case "load":
+				loadChatGPTCredentials()
+			case "save":
+				saveChatGPTCredentials(chatGPTCredentials{})
+			case "lock":
+				lockChatGPTCredentials(context.Background())
+			}
+		})
+	}
 }

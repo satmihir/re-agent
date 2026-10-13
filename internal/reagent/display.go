@@ -477,7 +477,11 @@ func modelPresentation(cfg Config) (model, provider, effort string) {
 	} else {
 		effort = "effort " + effort
 	}
-	return cfg.Model, cfg.Provider, effort
+	provider = cfg.Provider
+	if label := authModeLabel(cfg.AuthMode); label != "" {
+		provider += " · " + label
+	}
+	return cfg.Model, provider, effort
 }
 
 // header names the model, authority, and workspace. endpoint is non-empty only

@@ -230,7 +230,7 @@ func (c *conversation) transitionModel(ctx context.Context, info modelInfo, fres
 	s := c.session
 	cfg := s.cfg
 	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
-	cfg.Proxied = c.proxy.serves(info.Provider)
+	setConfigAuth(&cfg, c.proxy)
 	runID := NewID()
 	path, err := tracePathFor(c.traceDir, runID)
 	if err != nil {
@@ -268,7 +268,7 @@ func (c *conversation) transitionModel(ctx context.Context, info modelInfo, fres
 		c.switchTo(info)
 	} else {
 		s.cfg, s.handoff = cfg, handoff
-		s.model = newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, s.trace)
+		s.model = newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, s.trace, cfg.chatGPTSource)
 		s.lastRequest = Usage{}
 		s.tokensPerByte = 0
 		c.autoCompactOff = false

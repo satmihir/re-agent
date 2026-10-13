@@ -1,0 +1,334 @@
+package reagent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+const chatGPTReconnect = "Your ChatGPT connection is no longer valid; run reagent login."
+const chatGPTResource = "https://api.openai.com/v1"
+
+// testConfigPath is installed by TestMain before any credentials are accessed.
+var testConfigPath func(string)
+
+type chatGPTCredentials struct {
+	HostID            string `json:"host_id"`
+	ClientID          string `json:"client_id"`
+	Subject           string `json:"sub"`
+	Email             string `json:"email"`
+	IDToken           string `json:"id_token,omitempty"`
+	AccessToken       string `json:"access_token,omitempty"`
+	RefreshToken      string `json:"refresh_token,omitempty"`
+	ExpiresAt         int64  `json:"expires_at,omitempty"`
+	EarliestRefreshAt int64  `json:"earliest_refresh_at,omitempty"`
+	Scope             string `json:"scope,omitempty"`
+	NeedsLogin        bool   `json:"needs_login,omitempty"`
+}
+
+func (c chatGPTCredentials) planGranted() bool {
+	for _, scope := range strings.Fields(c.Scope) {
+		if scope == "chatgpt.tokens.use.direct" {
+			return true
+		}
+	}
+	return false
+}
+
+func chatGPTCredentialPath() (string, error) {
+	root, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("find user config: %w", err)
+	}
+	path := filepath.Join(root, "reagent", "chatgpt.json")
+	if testConfigPath != nil {
+		testConfigPath(path)
+	}
+	return path, nil
+}
+
+func loadChatGPTCredentials() (chatGPTCredentials, error) {
+	var c chatGPTCredentials
+	path, err := chatGPTCredentialPath()
+	if err != nil {
+		return c, err
+	}
+	if err := privateDirectory(filepath.Dir(path), false); err != nil {
+		if os.IsNotExist(err) {
+			return c, nil
+		}
+		return c, fmt.Errorf("open ChatGPT credential directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if os.IsNotExist(err) {
+		return c, nil
+	}
+	if err != nil {
+		return c, fmt.Errorf("open ChatGPT credentials: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return c, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return c, fmt.Errorf("ChatGPT credentials must be a private regular file (0600)")
+	}
+	if err := json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&c); err != nil {
+		return c, fmt.Errorf("ChatGPT credentials are corrupt; run reagent login")
+	}
+	return c, nil
+}
+
+func saveChatGPTCredentials(c chatGPTCredentials) error {
+	path, err := chatGPTCredentialPath()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := privateDirectory(dir, true); err != nil {
+		return fmt.Errorf("open credential directory: %w", err)
+	}
+	file, err := os.CreateTemp(dir, ".chatgpt-*")
+	if err != nil {
+		return fmt.Errorf("stage ChatGPT credentials: %w", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if err := json.NewEncoder(file).Encode(c); err != nil {
+		return fmt.Errorf("write ChatGPT credentials: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("replace ChatGPT credentials: %w", err)
+	}
+	parent, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	return parent.Sync()
+}
+
+func lockChatGPTCredentials(ctx context.Context) (*os.File, error) {
+	path, err := chatGPTCredentialPath()
+	if err != nil {
+		return nil, err
+	}
+	if err := privateDirectory(filepath.Dir(path), true); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open ChatGPT credential lock: %w", err)
+	}
+	for {
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return lock, nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			lock.Close()
+			return nil, fmt.Errorf("lock ChatGPT credentials: %w", err)
+		}
+		if err := waitBeforeRetry(ctx, 25*time.Millisecond); err != nil {
+			lock.Close()
+			return nil, err
+		}
+	}
+}
+
+func unlockChatGPTCredentials(lock *os.File) {
+	syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	lock.Close()
+}
+
+func chatGPTIssuer() string {
+	if base := os.Getenv("REAGENT_OPENAI_AUTH_ISSUER"); base != "" {
+		return strings.TrimRight(base, "/")
+	}
+	return "https://auth.openai.com"
+}
+
+type chatGPTTokenSet struct {
+	AccessToken       string `json:"access_token"`
+	RefreshToken      string `json:"refresh_token"`
+	IDToken           string `json:"id_token"`
+	TokenType         string `json:"token_type"`
+	ExpiresIn         int64  `json:"expires_in"`
+	EarliestRefreshAt int64  `json:"earliest_refresh_at"`
+	Scope             string `json:"scope"`
+}
+
+type chatGPTOAuthError struct{ code string }
+
+func (e *chatGPTOAuthError) Error() string { return "ChatGPT authorization failed; run reagent login." }
+
+// Authentication responses can contain credentials, so neither bodies nor URL errors are quoted.
+func chatGPTForm(ctx context.Context, client *http.Client, endpoint string, form url.Values, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("invalid ChatGPT authorization endpoint")
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// An injected client must not forward token-bearing forms through a redirect.
+	authClient := *client
+	authClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := authClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("could not contact ChatGPT authorization service")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var body struct {
+			Error json.RawMessage `json:"error"`
+		}
+		json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&body)
+		var code string
+		if json.Unmarshal(body.Error, &code) != nil {
+			var nested struct {
+				Code string `json:"code"`
+			}
+			json.Unmarshal(body.Error, &nested)
+			code = nested.Code
+		}
+		return &chatGPTOAuthError{code: code}
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
+		return fmt.Errorf("invalid ChatGPT authorization response")
+	}
+	return nil
+}
+
+func applyChatGPTTokens(c *chatGPTCredentials, tokens chatGPTTokenSet) error {
+	if tokens.AccessToken == "" || tokens.RefreshToken == "" || !strings.EqualFold(tokens.TokenType, "Bearer") || tokens.ExpiresIn <= 0 {
+		return fmt.Errorf("incomplete ChatGPT token response; run reagent login")
+	}
+	c.AccessToken, c.RefreshToken = tokens.AccessToken, tokens.RefreshToken
+	if tokens.IDToken != "" {
+		c.IDToken = tokens.IDToken
+	}
+	c.ExpiresAt = time.Now().Unix() + tokens.ExpiresIn
+	c.EarliestRefreshAt = tokens.EarliestRefreshAt
+	if tokens.Scope != "" {
+		c.Scope = tokens.Scope
+	}
+	c.NeedsLogin = false
+	return nil
+}
+
+type chatGPTTokenSource struct {
+	mu           sync.Mutex
+	client       *http.Client
+	secretTokens []string
+}
+
+func newChatGPTTokenSource(client *http.Client) (*chatGPTTokenSource, error) {
+	c, err := loadChatGPTCredentials()
+	if err != nil {
+		return nil, err
+	}
+	if !c.planGranted() || c.NeedsLogin || c.AccessToken == "" || c.RefreshToken == "" || c.ClientID == "" {
+		return nil, fmt.Errorf("%s", chatGPTReconnect)
+	}
+	if client == nil {
+		client = NewHTTPClient()
+	}
+	source := &chatGPTTokenSource{client: client}
+	source.rememberSecrets(c)
+	return source, nil
+}
+
+func (s *chatGPTTokenSource) Token(ctx context.Context, force bool, rejected string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := lockChatGPTCredentials(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlockChatGPTCredentials(lock)
+	// Refresh tokens rotate: the file, not an in-memory snapshot, is authoritative.
+	c, err := loadChatGPTCredentials()
+	if err != nil {
+		return "", err
+	}
+	s.rememberSecrets(c)
+	if c.NeedsLogin || !c.planGranted() || c.RefreshToken == "" || c.AccessToken == "" {
+		return "", fmt.Errorf("%s", chatGPTReconnect)
+	}
+	now := time.Now().Unix()
+	if force && rejected != "" && c.AccessToken != rejected && c.ExpiresAt > now {
+		return c.AccessToken, nil
+	}
+	if !force && c.ExpiresAt-now > 120 {
+		return c.AccessToken, nil
+	}
+	if now < c.EarliestRefreshAt {
+		if !force && c.ExpiresAt > now {
+			return c.AccessToken, nil
+		}
+		return "", fmt.Errorf("ChatGPT access token cannot be refreshed yet; run reagent login.")
+	}
+	var tokens chatGPTTokenSet
+	err = chatGPTForm(ctx, s.client, chatGPTIssuer()+"/api/accounts/oauth/token", url.Values{
+		"grant_type": {"refresh_token"}, "client_id": {c.ClientID}, "refresh_token": {c.RefreshToken}, "resource": {chatGPTResource},
+	}, &tokens)
+	if oauth, ok := err.(*chatGPTOAuthError); ok && (oauth.code == "invalid_grant" || oauth.code == "invalid_refresh_token" || oauth.code == "token_expired" || strings.HasPrefix(oauth.code, "refresh_token_")) {
+		c.NeedsLogin = true
+		c.AccessToken, c.RefreshToken = "", ""
+		if err := saveChatGPTCredentials(c); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%s", chatGPTReconnect)
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := applyChatGPTTokens(&c, tokens); err != nil {
+		return "", err
+	}
+	s.rememberSecrets(c)
+	if err := saveChatGPTCredentials(c); err != nil {
+		return "", err
+	}
+	if !c.planGranted() {
+		return "", fmt.Errorf("ChatGPT plan usage was not granted; run reagent login.")
+	}
+	return c.AccessToken, nil
+}
+
+// Retired secrets remain sensitive even after another process rotates the file.
+func (s *chatGPTTokenSource) rememberSecrets(c chatGPTCredentials) {
+	for _, secret := range []string{c.AccessToken, c.RefreshToken, c.IDToken} {
+		rememberToken(&s.secretTokens, secret)
+	}
+}
+
+func (s *chatGPTTokenSource) secrets() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c, err := loadChatGPTCredentials(); err == nil {
+		s.rememberSecrets(c)
+	}
+	return append([]string(nil), s.secretTokens...)
+}
