@@ -69,7 +69,8 @@ scripts instead of `edit_file`.
 
 ```bash
 make build
-export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY=sk-ant-...
+./reagent login                   # use your ChatGPT Plus/Pro plan
+# Or: export OPENAI_API_KEY=sk-...  # or ANTHROPIC_API_KEY=sk-ant-...
 ./reagent chat --workspace ./your-repo
 ```
 
@@ -79,7 +80,7 @@ The welcome shows a session ID. To continue a live chat after exiting:
 ./reagent chat --resume ID
 ```
 
-Resume needs the provider credential again. It restores recorded context but does **not** restart an interrupted model request or tool; an in-flight tool may have unknown effects. Recovery explains uncertainty on stderr and waits for a new message. It starts in the original launch workspace; other workspace approvals must be granted again. Only live chats have resumable IDs (not `--scripted`), and `/reset` or `/model NAME fresh` shows a new ID while preserving the old checkpoint. There is no session list or automatic crash recovery. Resume accepts `--recap` and `--trace-dir`, but not flags that replace saved settings.
+Resume needs the provider credential again. It restores recorded context but does **not** restart an interrupted model request or tool; an in-flight tool may have unknown effects. Recovery explains uncertainty on stderr and waits for a new message. It starts in the original launch workspace; other workspace approvals must be granted again. Only live chats have resumable IDs (not `--scripted`), and `/reset` or `/model NAME fresh` shows a new ID while preserving the old checkpoint. There is no session list or automatic crash recovery. Resume accepts `--recap`, `--trace-dir` and `--openai-auth`, but not flags that replace saved settings.
 
 For a single task instead of a conversation:
 
@@ -108,6 +109,67 @@ between workspace switches, including after `/reset` or `/model`. An invalid or 
 file is skipped with a warning. Use `--no-project-instructions` on `run` or
 `chat` to leave it out, for example when comparing requests. Project text
 cannot grant tools beyond the chosen mode.
+
+## Sign in with ChatGPT
+
+`reagent login` opens OpenAI's approval pages in your browser and prints a
+fallback URL. Sign in to ChatGPT, approve the pre-filled **re:agent** app name,
+and allow **use your ChatGPT plan**. The local callback page says “Return to
+re:agent — you can close this tab.” The terminal shows your email, whether
+plan usage is enabled, and the available models. If you decline plan usage,
+the login is saved but never used for inference: log in again and allow it,
+or use `OPENAI_API_KEY`.
+
+While waiting, Ctrl-C cancels. Over SSH, either forward the displayed callback
+port with `ssh -L <port>:127.0.0.1:<port>`, or paste the browser's final
+`http://127.0.0.1:<port>/auth/callback?...` address into the terminal, even if
+the browser could not load that page. The callback and paste paths use the
+same state check; the first valid arrival wins. Stray callbacks return 400;
+invalid pasted addresses print a diagnostic and leave the sign-in waiting.
+On later logins the saved account is reused; account switching and multiple
+profiles are not supported. Logout keeps that registration: sign back in with
+the saved account or use `OPENAI_API_KEY`, rather than treating logout as an
+account switch.
+
+- `reagent auth status` shows the account, plan permission, token expiry and
+  available models, never tokens.
+- `reagent logout` revokes the refresh token and clears local tokens, keeping
+  the installation and account identity for the next login. If revocation
+  cannot be confirmed, disconnect re:agent in ChatGPT settings too.
+- Refresh is silent during runs, chats and sub-agents, including across local
+  processes. Browser approval does not hold the credential lock or stall
+  existing sessions. A started refresh finishes and saves its rotating token
+  even when the requesting turn is cancelled, with a separate 30-second bound.
+  Credentials live in the user **config** directory as a private (0600),
+  atomically written `reagent/chatgpt.json` file, not in the cache.
+
+Without a proxy, `OPENAI_API_KEY` wins in the default `auto` mode; otherwise a
+saved login with plan permission uses your ChatGPT plan, not API billing.
+`--openai-auth auto|key|chatgpt` (or `REAGENT_OPENAI_AUTH`) selects the mode;
+the flag wins over the environment. The existing `API_PROXY_URL` /
+`API_PROXY_PROVIDER=openai` path remains keyless: both `auto` and `key` keep
+that proxy route, without sending an API key. ChatGPT authentication cannot
+be combined with `API_PROXY_URL`. The chat header/status and
+`run.started` trace show `key`, `chatgpt` or `proxy` authentication.
+
+**Plus has a five-hour usage limit shared across all apps using the plan;
+Pro has no such limit.** Manage usage at
+<https://chatgpt.com/settings/usage>. A plan usage-limit error stops the turn
+without retrying and leaves the chat resumable; wait for capacity or restart
+with `--openai-auth key`. A disconnected or expired connection asks you to
+run `reagent login` again. No browser approval is requested during inference.
+Only the two documented subscription availability stream errors get default
+bounded retries; generic in-stream overloads/rate limits still require
+`--model-retry-window`. That opt-in window also retries proven pre-send auth
+connection failures (including TLS negotiation and proxy CONNECT failures)
+and explicit temporary auth-server responses. An ambiguous
+refresh failure after sending is not replayed, even on a later turn: its
+rotating token may already have been consumed. Tokens are retained locally,
+but the connection is marked as needing `reagent login`.
+
+For local fake-server tests, `REAGENT_OPENAI_AUTH_ISSUER` overrides the auth
+issuer and `REAGENT_OPENAI_BASE_URL` overrides the inference base URL (including
+`/v1`). Treat these overrides as trusted destinations: they receive credentials.
 
 ## In chat
 

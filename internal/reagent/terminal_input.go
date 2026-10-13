@@ -42,8 +42,8 @@ func discardTerminalInput(fd int) (err error) {
 	return fmt.Errorf("too much pending terminal input; consent refused")
 }
 
-// pollingReader permits width checks while a styled prompt waits for input.
-// It is used only in raw mode; the picker can continue waiting on an empty read.
+// pollingReader permits width checks or cancellation while terminal input is idle.
+// An empty read lets the caller check its state before polling again.
 type pollingReader struct{ fd int }
 
 func (r pollingReader) Read(p []byte) (n int, err error) {

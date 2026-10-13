@@ -15,6 +15,7 @@ type streamEvent struct {
 	OutputIndex *int            `json:"output_index"`
 	Code        string          `json:"code"`
 	Message     string          `json:"message"`
+	Param       string          `json:"param"`
 	Error       *streamError    `json:"error"`
 }
 
@@ -23,6 +24,7 @@ type streamEvent struct {
 type streamError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Param   string `json:"param"`
 }
 
 // assembleOpenAIStream rebuilds the body a non-streamed request would have
@@ -118,9 +120,12 @@ func streamData(raw []byte) []string {
 // streamEventFailure accepts both top-level and nested error events; a nested
 // overload first exposed this distinction (v0 §10 amendment of 2026-09-26).
 func streamEventFailure(event streamEvent) error {
-	code, message := event.Code, event.Message
+	code, message, param := event.Code, event.Message, event.Param
 	if event.Error != nil {
-		code, message = event.Error.Code, event.Error.Message
+		code, message, param = event.Error.Code, event.Error.Message, event.Error.Param
+	}
+	if mapped := chatGPTProviderError(code, param, Usage{}); mapped != nil {
+		return mapped
 	}
 	// v0 §10 amendment (2026-09-28): proxy overflow must block, like HTTP 400.
 	if code == "context_length_exceeded" {
@@ -137,6 +142,11 @@ func streamEventFailure(event streamEvent) error {
 func streamFailure(response json.RawMessage) error {
 	var body responsesBody
 	_ = json.Unmarshal(response, &body)
+	if body.Error != nil {
+		if mapped := chatGPTProviderError(body.Error.Code, body.Error.Param, body.Usage.normalized()); mapped != nil {
+			return mapped
+		}
+	}
 	// v0 §10 amendment (2026-09-28): a failed streamed response can overflow.
 	if body.Error != nil && body.Error.Code == "context_length_exceeded" {
 		return contextWindowError(body.Error.Message, body.Usage.normalized())
@@ -151,31 +161,42 @@ func streamFailure(response json.RawMessage) error {
 // transientOpenAIStream recognizes only explicit provider overload/rate-limit codes.
 // A truncated or malformed stream remains a terminal incomplete/protocol response.
 func transientOpenAIStream(raw []byte) (bool, Usage) {
+	code, usage := openAIStreamError(raw)
+	return transientStreamCode(code), usage
+}
+
+func transientChatGPTStream(raw []byte) (bool, Usage) {
+	code, usage := openAIStreamError(raw)
+	return code == "subscription_sharing_usage_unavailable" || code == "subscription_sharing_user_unavailable", usage
+}
+
+func openAIStreamError(raw []byte) (string, Usage) {
 	for _, data := range streamData(raw) {
 		var event streamEvent
 		if json.Unmarshal([]byte(data), &event) != nil {
-			return false, Usage{}
+			return "", Usage{}
 		}
 		switch event.Type {
 		case "response.failed":
 			var body responsesBody
 			if json.Unmarshal(event.Response, &body) != nil || body.Error == nil {
-				return false, Usage{}
+				return "", Usage{}
 			}
-			return transientStreamCode(body.Error.Code), body.Usage.normalized()
+			return body.Error.Code, body.Usage.normalized()
 		case "error":
 			code := event.Code
 			if event.Error != nil {
 				code = event.Error.Code
 			}
-			return transientStreamCode(code), Usage{}
+			return code, Usage{}
 		case "response.completed", "response.incomplete":
-			return false, Usage{}
+			return "", Usage{}
 		}
 	}
-	return false, Usage{}
+	return "", Usage{}
 }
 
 func transientStreamCode(code string) bool {
-	return code == "server_is_overloaded" || code == "rate_limit_exceeded" || code == "rate_limit_error" || code == "service_unavailable_error"
+	return code == "server_is_overloaded" || code == "rate_limit_exceeded" || code == "rate_limit_error" || code == "service_unavailable_error" ||
+		code == "subscription_sharing_usage_unavailable" || code == "subscription_sharing_user_unavailable"
 }

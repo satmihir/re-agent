@@ -88,7 +88,7 @@ type conversation struct {
 // available reports which providers this process holds a credential for.
 func (c *conversation) available() map[string]bool {
 	return map[string]bool{
-		openaiName:    c.keys[openaiName] != "" || c.proxy.serves(openaiName),
+		openaiName:    providerAvailable(openaiName, c.keys, c.proxy, c.session.cfg.chatGPTSource),
 		anthropicName: c.keys[anthropicName] != "" || c.proxy.serves(anthropicName),
 	}
 }
@@ -148,8 +148,12 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 		c.session.pinAuto()
 		fmt.Fprintf(stderr, "already using %s\n", info.ID)
 		return
-	case c.keys[info.Provider] == "" && !c.proxy.serves(info.Provider):
-		fmt.Fprintf(stderr, "%s needs %s, which is not set\n", info.ID, apiKeyVariable(info.Provider))
+	case !providerAvailable(info.Provider, c.keys, c.proxy, c.session.cfg.chatGPTSource):
+		fmt.Fprintf(stderr, "%s needs %s, which is not set", info.ID, apiKeyVariable(info.Provider))
+		if info.Provider == openaiName {
+			fmt.Fprint(stderr, "; or run reagent login for ChatGPT plan usage")
+		}
+		fmt.Fprintln(stderr)
 		return
 	}
 
@@ -176,6 +180,8 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 	route := info.Provider
 	if c.proxy.serves(info.Provider) {
 		route += " via " + proxyURLVariable
+	} else if c.session.cfg.AuthMode == "chatgpt" {
+		route += " · ChatGPT plan"
 	}
 	switch {
 	case fresh:
@@ -191,8 +197,8 @@ func (c *conversation) commandModel(ctx context.Context, argument string, input 
 func (c *conversation) switchTo(info modelInfo) {
 	cfg := c.session.cfg
 	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
-	cfg.Proxied = c.proxy.serves(info.Provider)
-	model := newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, c.trace)
+	setConfigAuth(&cfg, c.proxy)
+	model := newLiveModel(info.Provider, c.keys[info.Provider], c.proxy, c.client, c.trace, cfg.chatGPTSource)
 	previous := c.session
 	c.session = NewSession(cfg, model, c.trace, c.progress)
 	c.session.snapshot, c.session.planMode = previous.snapshot, previous.planMode
@@ -696,6 +702,13 @@ func planSwitchLine(on, styled bool) string {
 func (c *conversation) regionStatus() regionStatus {
 	status := regionStatus{plan: c.session.planMode, blocked: c.session.blocked != "", model: c.session.cfg.Model, effort: c.session.cfg.ReasoningEffort,
 		usage: c.session.lastRequest, window: contextWindow(c.session.cfg.Model)}
+	if label := authModeLabel(c.session.cfg.AuthMode); label != "" {
+		if status.effort != "" {
+			status.effort += " · " + label
+		} else {
+			status.model += " · " + label
+		}
+	}
 	if c.session.auto != nil {
 		status.auto = c.session.auto.enabled
 	}

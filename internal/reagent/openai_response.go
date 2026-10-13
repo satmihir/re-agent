@@ -23,6 +23,7 @@ type responsesError struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
 	Code    string `json:"code"`
+	Param   string `json:"param"`
 }
 
 type responsesUsage struct {

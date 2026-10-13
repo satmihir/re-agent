@@ -41,7 +41,7 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 	if !known || info.ContextWindow == 0 || info.Provider != cfg.Provider || (len(info.Efforts) == 0 && cfg.ReasoningEffort != "") || (len(info.Efforts) != 0 && !info.accepts(cfg.ReasoningEffort)) {
 		return nil, fmt.Errorf("Auto fallback needs a catalog model with a known window and supported explicit effort")
 	}
-	if keys[info.Provider] == "" && !proxy.serves(info.Provider) {
+	if !providerAvailable(info.Provider, keys, proxy, cfg.chatGPTSource) {
 		return nil, fmt.Errorf("Auto fallback provider is unavailable")
 	}
 	fallback := jevRoute{ID: "capable", Model: cfg.Model, Effort: cfg.ReasoningEffort, Description: autoRouteDescription(cfg.Model, cfg.ReasoningEffort)}
@@ -50,7 +50,7 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 	a.routes = append(a.routes, fallback)
 	for _, modelID := range []string{"gpt-6-luna", "gpt-6-sol", cfg.Model} {
 		model, known := findModel(modelID)
-		if !known || model.ContextWindow == 0 || (keys[model.Provider] == "" && !proxy.serves(model.Provider)) {
+		if !known || model.ContextWindow == 0 || !providerAvailable(model.Provider, keys, proxy, cfg.chatGPTSource) {
 			continue
 		}
 		for _, effort := range []string{"low", "medium", "high"} {
@@ -72,7 +72,7 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 	}
 	for _, route := range a.routes {
 		model, _ := findModel(route.Model)
-		a.models[route.ID] = newLiveModel(model.Provider, keys[model.Provider], proxy, client, trace)
+		a.models[route.ID] = newLiveModel(model.Provider, keys[model.Provider], proxy, client, trace, cfg.chatGPTSource)
 	}
 	return a, nil
 }
@@ -117,7 +117,7 @@ func stageAutoCandidate(ctx context.Context, s *Session, route jevRoute) (autoCa
 	}
 	cfg := s.cfg
 	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, route.Model, route.Effort
-	cfg.Proxied = s.auto.proxy.serves(info.Provider)
+	setConfigAuth(&cfg, s.auto.proxy)
 	handoff := s.handoff
 	var size int
 	var err error

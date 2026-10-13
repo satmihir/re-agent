@@ -177,7 +177,11 @@ func renderModels(current string, available map[string]bool) string {
 		}
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(&out, "\nmodels marked no key need %s\n", strings.Join(missing, " or "))
+		fmt.Fprintf(&out, "\nmodels marked no key need %s", strings.Join(missing, " or "))
+		if needed["OPENAI_API_KEY"] {
+			out.WriteString("; or run reagent login for ChatGPT plan usage")
+		}
+		out.WriteByte('\n')
 	}
 	out.WriteString("\na model change starts a fresh session; /model <number or name> switches")
 	return out.String()

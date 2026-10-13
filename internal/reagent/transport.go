@@ -111,6 +111,7 @@ type transport struct {
 	client          *http.Client
 	trace           *Trace
 	waitRetry       func(context.Context, time.Duration) error
+	tokenSource     *chatGPTTokenSource
 }
 
 // modelRetryKey scopes the opt-in policy to generative requests, including summaries.
@@ -145,8 +146,9 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 	policy, overnight := ctx.Value(modelRetryKey{}).(modelRetry)
 	deadline := time.Now().Add(policy.window)
 	prior := Usage{Known: true}
+	var tokens []string
 	for attempt := 1; ; attempt++ {
-		status, raw, retryAfter, err := t.send(ctx, attempt, step, body, headers)
+		status, raw, retryAfter, err := t.send(ctx, attempt, step, body, headers, &tokens)
 		if ctx.Err() != nil {
 			return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled during a model request", Usage: prior}
 		}
@@ -155,10 +157,15 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 		}
 		streamRetry := false
 		var streamUsage Usage
-		if overnight && err == nil && status == http.StatusOK && transient != nil {
-			streamRetry, streamUsage = transient(raw)
+		if err == nil && status == http.StatusOK && transient != nil {
+			if overnight {
+				streamRetry, streamUsage = transient(raw)
+			} else if t.tokenSource != nil {
+				streamRetry, streamUsage = transientChatGPTStream(raw)
+			}
 		}
-		if !streamRetry && err == nil && !retryable(status) {
+		retryHTTP := retryable(status) && !terminalChatGPTCode(providerErrorCode(raw))
+		if !streamRetry && err == nil && !retryHTTP {
 			return status, raw, prior, nil
 		}
 		if !overnight {
@@ -167,6 +174,9 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 			}
 			if attempt >= maxAttempts {
 				return status, raw, prior, nil
+			}
+			if streamRetry && streamUsage.Known {
+				prior.Add(streamUsage)
 			}
 			if err := wait(ctx, retryDelay); err != nil {
 				return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry"}
@@ -247,23 +257,59 @@ func retryBackoff(attempt int, header string) time.Duration {
 	return backoff
 }
 
-// send performs one HTTP transmission and records its exact request and
-// response bytes before anything interprets them.
-func (t *transport) send(ctx context.Context, attempt, step int, body []byte, headers map[string]string) (int, []byte, string, error) {
+// send retains credential snapshots across refreshes and retries of a logical request.
+func (t *transport) send(ctx context.Context, attempt, step int, body []byte, headers map[string]string, tokens *[]string) (int, []byte, string, error) {
+	if t.tokenSource == nil {
+		token := strings.TrimPrefix(t.headers["Authorization"], "Bearer ")
+		rememberToken(tokens, token)
+		return t.sendOnce(ctx, attempt, step, body, headers, token, *tokens)
+	}
+	rememberSourceSecrets(tokens, t.tokenSource)
+	token, err := t.tokenSource.Token(ctx, false, "")
+	rememberSourceSecrets(tokens, t.tokenSource)
+	if err != nil {
+		return 0, nil, "", chatGPTTokenError(err, *tokens)
+	}
+	rememberToken(tokens, token)
+	status, raw, retryAfter, err := t.sendOnce(ctx, attempt, step, body, headers, token, *tokens)
+	if err != nil || status != http.StatusUnauthorized || terminalChatGPTCode(providerErrorCode(raw)) {
+		return status, raw, retryAfter, err
+	}
+	// Refresh once for an unclassified 401; a concurrent refresh may have won.
+	rememberSourceSecrets(tokens, t.tokenSource)
+	token, err = t.tokenSource.Token(ctx, true, token)
+	rememberSourceSecrets(tokens, t.tokenSource)
+	if err != nil {
+		return 0, nil, "", chatGPTTokenError(err, *tokens)
+	}
+	rememberToken(tokens, token)
+	return t.sendOnce(ctx, attempt, step, body, headers, token, *tokens)
+}
+
+func chatGPTTokenError(err error, tokens []string) error {
+	var transient *chatGPTTransportError
+	if errors.As(err, &transient) {
+		return redactTokenError(err, tokens)
+	}
+	return &ModelError{Status: StatusProviderError, Message: redactTokens(err.Error(), tokens)}
+}
+
+func (t *transport) sendOnce(ctx context.Context, attempt, step int, body []byte, headers map[string]string, token string, tokens []string) (int, []byte, string, error) {
 	if ctx.Err() != nil {
 		return 0, nil, "", ctx.Err()
 	}
 	digest := sha256.Sum256(body)
 	t.trace.Write("api.attempt.started", step, map[string]any{
 		"attempt":        attempt,
-		"endpoint":       redacted(t.endpoint),
-		"request_body":   string(body),
+		"endpoint":       redactTokens(redacted(t.endpoint), tokens),
+		"request_body":   redactTokens(string(body), tokens),
 		"request_sha256": hex.EncodeToString(digest[:]),
 	})
 
 	started := time.Now()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
 	if err != nil {
+		err = redactTokenError(err, tokens)
 		t.failed(step, attempt, 0, started, err)
 		return 0, nil, "", &ModelError{Status: StatusProviderError, Message: "invalid model request: " + err.Error()}
 	}
@@ -274,9 +320,13 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	response, err := t.client.Do(request)
 	if err != nil {
+		err = redactTokenError(err, tokens)
 		t.failed(step, attempt, 0, started, err)
 		return 0, nil, "", err
 	}
@@ -284,15 +334,19 @@ func (t *transport) send(ctx context.Context, attempt, step int, body []byte, he
 
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
+		err = redactTokenError(err, tokens)
 		t.failed(step, attempt, response.StatusCode, started, err)
 		return 0, nil, "", err
 	}
 
+	// A provider error can echo a credential; do not retain it in any view.
+	raw = []byte(redactTokens(string(raw), tokens))
+	requestID := redactTokens(response.Header.Get(t.requestIDHeader), tokens)
 	text, replaced := traceableBody(raw)
 	t.trace.Write("api.attempt.finished", step, map[string]any{
 		"attempt":            attempt,
 		"http_status":        response.StatusCode,
-		"request_id":         response.Header.Get(t.requestIDHeader),
+		"request_id":         requestID,
 		"duration_ms":        time.Since(started).Milliseconds(),
 		"response_body":      text,
 		"body_utf8_replaced": replaced,
@@ -347,17 +401,20 @@ func contextWindowError(detail string, usage Usage) *ModelError {
 
 // providerError explains a non-2xx reply using the provider's own message when
 // there is one, bounded so a large error page cannot fill the transcript. Both
-// providers put that message at error.message.
+// providers usually put that message at error.message; admission may use detail.
 func providerError(status int, raw []byte) error {
 	detail := strings.TrimSpace(truncateUTF8(string(raw), 500))
 	var body struct {
-		Error *struct {
-			Message string `json:"message"`
-			Code    string `json:"code"`
-			Type    string `json:"type"`
-		} `json:"error"`
+		Detail string          `json:"detail"`
+		Error  *responsesError `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &body); err == nil && body.Error != nil {
+	if json.Unmarshal(raw, &body) == nil && body.Detail != "" {
+		detail = truncateUTF8(body.Detail, 500)
+	}
+	if body.Error != nil {
+		if mapped := chatGPTProviderError(body.Error.Code, body.Error.Param, Usage{}); mapped != nil {
+			return mapped
+		}
 		if body.Error.Message != "" {
 			detail = truncateUTF8(body.Error.Message, 500)
 		}
@@ -381,4 +438,85 @@ func traceableBody(raw []byte) (string, bool) {
 		return string(raw), false
 	}
 	return strings.ToValidUTF8(string(raw), "�"), true
+}
+
+func rememberSourceSecrets(tokens *[]string, source *chatGPTTokenSource) {
+	for _, secret := range source.secrets() {
+		rememberToken(tokens, secret)
+	}
+}
+
+func rememberToken(tokens *[]string, token string) {
+	if token == "" {
+		return
+	}
+	for _, known := range *tokens {
+		if known == token {
+			return
+		}
+	}
+	*tokens = append(*tokens, token)
+}
+
+func redactTokens(text string, tokens []string) string {
+	for _, token := range tokens {
+		text = strings.ReplaceAll(text, token, "[redacted]")
+	}
+	return text
+}
+
+func redactTokenError(err error, tokens []string) error {
+	if text := redactTokens(err.Error(), tokens); text != err.Error() {
+		return errors.New(text)
+	}
+	return err
+}
+
+func providerErrorCode(raw []byte) string {
+	var body struct {
+		Error *responsesError `json:"error"`
+	}
+	if json.Unmarshal(raw, &body) == nil && body.Error != nil {
+		return body.Error.Code
+	}
+	return ""
+}
+
+func terminalChatGPTCode(code string) bool {
+	if strings.HasPrefix(code, "chatpass_v2_") {
+		return true
+	}
+	return strings.HasPrefix(code, "subscription_sharing_") &&
+		code != "subscription_sharing_usage_unavailable" && code != "subscription_sharing_user_unavailable"
+}
+
+func chatGPTProviderError(code, param string, usage Usage) *ModelError {
+	var message string
+	switch code {
+	case "subscription_sharing_usage_limit_exceeded":
+		message = "ChatGPT plan usage limit reached. Manage usage: https://chatgpt.com/settings/usage (or rerun with --openai-auth key)"
+	case "subscription_sharing_usage_unavailable":
+		message = "ChatGPT plan usage availability is temporarily unavailable; retry later."
+	case "subscription_sharing_user_unavailable":
+		message = "Your ChatGPT account or workspace is temporarily unavailable; retry later."
+	case "subscription_sharing_unsupported_capability":
+		message = "ChatGPT plan does not support the requested capability"
+		if param != "" {
+			message += ": " + truncateUTF8(param, 200)
+		}
+	case "subscription_sharing_user_not_eligible":
+		message = "ChatGPT plan usage is unavailable for this account, workspace, or policy; use --openai-auth key."
+	case "subscription_sharing_invalid_user":
+		message = "Your ChatGPT subscriber identity could not be validated; check reagent auth status and run reagent login if disconnected."
+	case "subscription_sharing_route_not_supported":
+		message = "ChatGPT plan does not support this API route; use POST /v1/responses."
+	default:
+		if strings.HasPrefix(code, "chatpass_v2_") {
+			message = "Your ChatGPT permission context does not authorize this request (" + truncateUTF8(code, 200) + "); check the client and granted permissions with reagent auth status."
+		}
+	}
+	if message == "" {
+		return nil
+	}
+	return &ModelError{Status: StatusProviderError, Message: message, Usage: usage}
 }

@@ -218,7 +218,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	if err != nil {
 		return AgentThread{}, err
 	}
-	cfg.Proxied = s.agentProxy.serves(cfg.Provider)
+	setConfigAuth(&cfg, s.agentProxy)
 	cfg.Registry, cfg.Workspace, cfg.WorkspacePath = registry, ws, ws.Root()
 	cfg.approvedWorkspaces = nil
 	cfg.MaxSteps, cfg.MaxToolCalls = maxAgentSteps, maxAgentCalls

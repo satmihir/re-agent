@@ -14,7 +14,10 @@ import (
 
 // Config holds model settings and the current workspace request prefix.
 type Config struct {
-	Provider              string
+	Provider string
+	// AuthMode records billing without retaining credentials in a trace.
+	AuthMode              string
+	chatGPTSource         *chatGPTTokenSource
 	Model                 string
 	ReasoningEffort       string
 	Registry              *Registry
@@ -103,6 +106,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 	header := map[string]any{
 		"model":      r.model.Name(),
 		"provider":   r.cfg.Provider,
+		"auth_mode":  r.cfg.AuthMode,
 		"configured": r.cfg.Model,
 		// v0 §10 amendment (2026-09-30): build metadata belongs only in the trace.
 		"build":               buildRevision(),
@@ -173,7 +177,11 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		}
 		r.trace.Write("model.requested", r.steps, req)
 
-		s.display.modelStarted(r.cfg.Model, r.steps, r.cfg.MaxSteps)
+		modelLabel := r.cfg.Model
+		if label := authModeLabel(r.cfg.AuthMode); label != "" {
+			modelLabel += " · " + label
+		}
+		s.display.modelStarted(modelLabel, r.steps, r.cfg.MaxSteps)
 		// v0 §10 amendment (2026-09-28): meter the last request, not the turn.
 		s.lastRequest = Usage{}
 		resp, err := r.model.Generate(withModelRetry(ctx, r.cfg.ModelRetryWindow, s.display), req)

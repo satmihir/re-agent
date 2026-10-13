@@ -24,8 +24,8 @@ const (
 )
 
 // Main parses arguments, runs one task or one conversation, and returns the
-// process exit code. stdout carries model replies only; everything else goes
-// to stderr.
+// process exit code. stdout carries replies and command results; diagnostics
+// go to stderr.
 func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		writeTopLevelHelp(stderr)
@@ -51,6 +51,9 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if args[0] == "version" || args[0] == "--version" {
 		writeVersion(stdout)
 		return exitOK
+	}
+	if args[0] == "login" || args[0] == "logout" || args[0] == "auth" {
+		return chatGPTAuthCommand(ctx, args, stdin, stdout, stderr)
 	}
 	if args[0] != "run" && args[0] != "chat" {
 		fmt.Fprintf(stderr, "error: unknown command %s\n", args[0])
@@ -119,7 +122,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	var saved chatCheckpoint
 	var store *sessionStore
 	if options.resume != "" {
-		conflicts := map[string]bool{"resume": false, "recap": false, "trace-dir": false}
+		conflicts := map[string]bool{"resume": false, "recap": false, "trace-dir": false, "openai-auth": false}
 		var conflict string
 		fs.Visit(func(f *flag.Flag) {
 			if _, ok := conflicts[f.Name]; !ok {
@@ -249,7 +252,41 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if err != nil {
 		return startupError(stderr, err.Error())
 	}
-	cfg.Proxied = proxy.serves(cfg.Provider)
+	keys := map[string]string{
+		openaiName:    os.Getenv(apiKeyVariable(openaiName)),
+		anthropicName: os.Getenv(apiKeyVariable(anthropicName)),
+	}
+	client := NewHTTPClient()
+	authChoice := options.openaiAuth
+	if authChoice == "" {
+		authChoice = os.Getenv("REAGENT_OPENAI_AUTH")
+	}
+	plan := false
+	if options.script == "" && (authChoice == "chatgpt" || (keys[openaiName] == "" && !proxy.serves(openaiName) && authChoice != "key")) {
+		credentials, loadErr := loadChatGPTCredentials()
+		if loadErr != nil && !os.IsNotExist(loadErr) && !options.showContext && (provider == openaiName || authChoice == "chatgpt") {
+			return startupError(stderr, loadErr.Error())
+		}
+		if credentials.NeedsLogin && credentials.planGranted() && !options.showContext && (provider == openaiName || authChoice == "chatgpt") {
+			return startupError(stderr, chatGPTReconnect)
+		}
+		plan = credentials.planGranted() && !credentials.NeedsLogin && credentials.AccessToken != "" && credentials.RefreshToken != ""
+	}
+	openaiAuth, err := resolveOpenAIAuth(authChoice, keys[openaiName], proxy, plan || (options.showContext && authChoice == "chatgpt"))
+	if err != nil {
+		return startupError(stderr, err.Error())
+	}
+	if options.script == "" && !options.showContext && openaiAuth == "chatgpt" {
+		cfg.chatGPTSource, err = newChatGPTTokenSource(client)
+		if err != nil {
+			return startupError(stderr, err.Error())
+		}
+		keys[openaiName] = "" // A forced plan never falls back to an API key.
+	}
+	setConfigAuth(&cfg, proxy)
+	if cfg.Provider == openaiName {
+		cfg.AuthMode = openaiAuth
+	}
 
 	// The preview is built before any live dependency exists, which is why it
 	// needs no credentials and creates no trace (v0 §6.1).
@@ -266,14 +303,12 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return exitOK
 	}
 
-	// Both keys are read, not just the selected provider's: chat can switch
-	// providers, and the catalog listing says which are usable.
-	keys := map[string]string{
-		openaiName:    os.Getenv(apiKeyVariable(openaiName)),
-		anthropicName: os.Getenv(apiKeyVariable(anthropicName)),
-	}
-	if options.script == "" && keys[provider] == "" && !proxy.serves(provider) {
-		return startupError(stderr, apiKeyVariable(provider)+" is not set; use --scripted or --show-context to work offline")
+	if options.script == "" && !providerAvailable(provider, keys, proxy, cfg.chatGPTSource) {
+		message := apiKeyVariable(provider) + " is not set"
+		if provider == openaiName {
+			message += "; run reagent login to use your ChatGPT plan"
+		}
+		return startupError(stderr, message+"; use --scripted or --show-context to work offline")
 	}
 
 	// One recorder follows the session; the adapter holds it so every
@@ -281,8 +316,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// into the transcript (v1 §5.1).
 	trace := NewTrace(stderr)
 	defer trace.Close()
-	client := NewHTTPClient()
-	live := newLiveModel(provider, keys[provider], proxy, client, trace)
+	live := newLiveModel(provider, keys[provider], proxy, client, trace, cfg.chatGPTSource)
 	var scripted Model
 	if options.script != "" {
 		if scripted, err = LoadScript(options.script); err != nil {
@@ -295,10 +329,10 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if options.agents {
 		session.agentProxy = proxy
 		session.agentModel = func(agentCfg Config, agentTrace *Trace) (Model, error) {
-			if keys[agentCfg.Provider] == "" && !proxy.serves(agentCfg.Provider) {
+			if !providerAvailable(agentCfg.Provider, keys, proxy, cfg.chatGPTSource) {
 				return nil, fmt.Errorf("%s is not configured", agentCfg.Provider)
 			}
-			return newLiveModel(agentCfg.Provider, keys[agentCfg.Provider], proxy, client, agentTrace), nil
+			return newLiveModel(agentCfg.Provider, keys[agentCfg.Provider], proxy, client, agentTrace, cfg.chatGPTSource), nil
 		}
 		defer func() { session.closeAgents() }()
 	}
@@ -417,6 +451,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 
 type options struct {
 	workspace, provider, model, reasoning, script, promptFile, traceFile, traceDir, resume, gitDo string
+	openaiAuth                                                                                    string
 	showContext, readOnly, recap, noProjectInstructions, plan, reportFriction                     bool
 	auto, inRunCompact, contextGC, agents                                                         bool
 	maxSteps, maxToolCalls                                                                        int
@@ -429,6 +464,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.StringVar(&o.workspace, "workspace", ".", "initial directory the tools may see")
 	fs.Func("allow-workspace", "preapprove an exact absolute workspace or prospective destination; repeatable", func(path string) error { o.allowedWorkspaces = append(o.allowedWorkspaces, path); return nil })
 	fs.StringVar(&o.provider, "provider", "", "openai or anthropic; inferred from the model name when omitted")
+	fs.StringVar(&o.openaiAuth, "openai-auth", "", "auto, key or chatgpt; defaults to REAGENT_OPENAI_AUTH, then auto")
 	fs.StringVar(&o.model, "model", "", "model to request; defaults to REAGENT_MODEL, then the provider's default")
 	fs.StringVar(&o.reasoning, "reasoning-effort", "auto", "reasoning effort to request; auto picks the provider's default, empty omits the parameter")
 	fs.StringVar(&o.script, "scripted", "", "replay model responses from a JSON script instead of calling a provider")
@@ -459,7 +495,7 @@ type flagGroup struct {
 }
 
 var runFlagGroups = []flagGroup{
-	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
+	{"Model", []string{"provider", "model", "reasoning-effort", "openai-auth", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"prompt-file", "no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "context-gc", "agents"}},
@@ -470,7 +506,7 @@ var runFlagGroups = []flagGroup{
 }
 
 var chatFlagGroups = []flagGroup{
-	{"Model", []string{"provider", "model", "reasoning-effort", "auto"}},
+	{"Model", []string{"provider", "model", "reasoning-effort", "openai-auth", "auto"}},
 	{"Authority", []string{"workspace", "allow-workspace", "read-only", "plan"}},
 	{"Input", []string{"no-project-instructions"}},
 	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "context-gc", "agents"}},
@@ -482,7 +518,7 @@ var chatFlagGroups = []flagGroup{
 }
 
 var flagPlaceholders = map[string]string{
-	"workspace": "DIR", "allow-workspace": "PATH", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL",
+	"workspace": "DIR", "allow-workspace": "PATH", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL", "openai-auth": "MODE",
 	"scripted": "FILE", "resume": "ID", "prompt-file": "PATH", "trace-file": "PATH", "trace-dir": "DIR",
 	"max-steps": "N", "max-tool-calls": "N", "model-retry-window": "DURATION",
 }
@@ -494,6 +530,9 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  reagent chat [flags]             a conversation, one turn per line")
 	fmt.Fprintln(w, "  reagent help [run|chat]          this text, or a command's flags")
 	fmt.Fprintln(w, "  reagent version                  the build's version")
+	fmt.Fprintln(w, "  reagent login                    sign in with ChatGPT")
+	fmt.Fprintln(w, "  reagent logout                   disconnect ChatGPT")
+	fmt.Fprintln(w, "  reagent auth status              account, plan usage, expiry and models")
 	fmt.Fprintln(w, "\nexamples:")
 	fmt.Fprintln(w, "  reagent chat --workspace ./repo")
 	fmt.Fprintln(w, "  reagent run --workspace ./repo \"Set the default timeout to 30s.\"")
@@ -504,6 +543,9 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "                                      with no key; the provider must be openai")
 	fmt.Fprintln(w, "  TYPESAFE_API_KEY                    optional router key; read only when Auto is enabled")
 	fmt.Fprintln(w, "  REAGENT_MODEL                       default model")
+	fmt.Fprintln(w, "  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)")
+	fmt.Fprintln(w, "  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)")
+	fmt.Fprintln(w, "  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)")
 	fmt.Fprintln(w, "  NO_COLOR                            turn off styling")
 }
 
