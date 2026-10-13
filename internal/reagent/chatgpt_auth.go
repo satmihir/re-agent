@@ -8,11 +8,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -206,14 +208,20 @@ func chatGPTForm(ctx context.Context, client *http.Client, endpoint string, form
 		return fmt.Errorf("invalid ChatGPT authorization endpoint")
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	var acquiring, connected atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		GetConn: func(string) { acquiring.Store(true) },
+		GotConn: func(httptrace.GotConnInfo) { connected.Store(true) },
+	}))
 	// An injected client must not forward token-bearing forms through a redirect.
 	authClient := *client
 	authClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := authClient.Do(req)
 	if err != nil {
-		// Only a failed dial proves the server could not consume a rotating token.
+		// Connection acquisition precedes sending; WroteRequest alone can race a lost response.
+		// Untraced injected transports must still prove a failed dial.
 		var network *net.OpError
-		if errors.As(err, &network) && network.Op == "dial" {
+		if acquiring.Load() && !connected.Load() || errors.As(err, &network) && network.Op == "dial" {
 			return &chatGPTTransportError{}
 		}
 		return &chatGPTOAuthError{code: chatGPTRefreshOutcomeUnknown}

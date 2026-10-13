@@ -2,10 +2,12 @@ package reagent
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -573,6 +575,84 @@ func TestChatGPTAuth_UncertainRotationNeverReplaysRefresh(t *testing.T) {
 				if strings.Contains(err.Error(), secret) {
 					t.Fatal("ambiguous rotation error leaked authorization data")
 				}
+			}
+		})
+	}
+}
+
+func TestChatGPTAuth_ConnectionAcquisitionFailurePreservesLogin(t *testing.T) {
+	for _, failure := range []string{"untrusted_certificate", "handshake_timeout", "proxy_connect"} {
+		t.Run(failure, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			original := testChatGPTCredentials(t)
+			var requests atomic.Int32
+			issuer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if err := r.ParseForm(); err != nil {
+					t.Error(err)
+				}
+				if r.Form.Get("refresh_token") != original.RefreshToken {
+					t.Error("pre-send failure changed the refresh token")
+				}
+				json.NewEncoder(w).Encode(chatGPTTokenSet{AccessToken: "new-access", RefreshToken: "new-refresh", TokenType: "Bearer", ExpiresIn: 3600, Scope: original.Scope})
+			}))
+			issuer.Config.ErrorLog = log.New(io.Discard, "", 0)
+			if failure == "handshake_timeout" {
+				issuer.TLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+					time.Sleep(100 * time.Millisecond)
+					return nil, nil
+				}}
+			}
+			issuer.StartTLS()
+			defer issuer.Close()
+			t.Setenv("REAGENT_OPENAI_AUTH_ISSUER", issuer.URL)
+			client := NewHTTPClient()
+			switch failure {
+			case "handshake_timeout":
+				transport := issuer.Client().Transport.(*http.Transport).Clone()
+				transport.TLSHandshakeTimeout = 20 * time.Millisecond
+				defer transport.CloseIdleConnections()
+				client = &http.Client{Transport: transport}
+			case "proxy_connect":
+				proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodConnect {
+						t.Error("proxy received a token-bearing request instead of CONNECT")
+					}
+					w.WriteHeader(http.StatusBadGateway)
+				}))
+				defer proxy.Close()
+				address, err := url.Parse(proxy.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				transport := &http.Transport{Proxy: http.ProxyURL(address)}
+				defer transport.CloseIdleConnections()
+				client = &http.Client{Transport: transport}
+			}
+			source, err := newChatGPTTokenSource(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = source.Token(context.Background(), false, "")
+			var transient *chatGPTTransportError
+			if !errors.As(err, &transient) || transient.status != 0 || requests.Load() != 0 {
+				t.Fatalf("unsent refresh was not transient: %v, requests=%d", err, requests.Load())
+			}
+			stored, loadErr := loadChatGPTCredentials()
+			if loadErr != nil || stored != original {
+				t.Fatalf("unsent refresh changed saved login: %v", loadErr)
+			}
+			for _, secret := range []string{original.AccessToken, original.RefreshToken, original.IDToken, issuer.URL} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatal("pre-send error leaked authorization data")
+				}
+			}
+			// The next attempt can still rotate the original, unconsumed token.
+			source.client = issuer.Client()
+			token, err := source.Token(context.Background(), false, "")
+			stored, loadErr = loadChatGPTCredentials()
+			if err != nil || loadErr != nil || token != "new-access" || stored.RefreshToken != "new-refresh" || stored.NeedsLogin || requests.Load() != 1 {
+				t.Fatalf("recovery lost login: %v, %v, requests=%d", err, loadErr, requests.Load())
 			}
 		})
 	}

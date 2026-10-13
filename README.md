@@ -161,7 +161,8 @@ run `reagent login` again. No browser approval is requested during inference.
 Only the two documented subscription availability stream errors get default
 bounded retries; generic in-stream overloads/rate limits still require
 `--model-retry-window`. That opt-in window also retries proven pre-send auth
-dial failures and explicit temporary auth-server responses. An ambiguous
+connection failures (including TLS negotiation and proxy CONNECT failures)
+and explicit temporary auth-server responses. An ambiguous
 refresh failure after sending is not replayed, even on a later turn: its
 rotating token may already have been consumed. Tokens are retained locally,
 but the connection is marked as needing `reagent login`.

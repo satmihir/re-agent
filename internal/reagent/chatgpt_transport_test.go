@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -383,6 +384,8 @@ func TestChatGPT_TokenFailuresFollowModelRetryPolicy(t *testing.T) {
 	}{
 		{"default_network_failure", "network", false, false, false},
 		{"overnight_network_recovers", "network", true, false, true},
+		{"default_tls_failure", "tls", false, false, false},
+		{"overnight_tls_recovers", "tls", true, false, true},
 		{"overnight_http_503_recovers", "503", true, false, true},
 		{"overnight_invalid_grant_is_terminal", "invalid_grant", true, false, false},
 		{"cancelled_network_failure", "network", true, true, false},
@@ -399,7 +402,7 @@ func TestChatGPT_TokenFailuresFollowModelRetryPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			var issuerRequests atomic.Int32
-			issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			issuer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				attempt := issuerRequests.Add(1)
 				if err := r.ParseForm(); err != nil {
 					t.Error(err)
@@ -419,6 +422,12 @@ func TestChatGPT_TokenFailuresFollowModelRetryPolicy(t *testing.T) {
 				}
 				io.WriteString(w, `{"access_token":"new-access-secret","refresh_token":"new-refresh-secret","token_type":"Bearer","expires_in":3600,"scope":"chatgpt.tokens.use.direct"}`)
 			}))
+			if tc.failure == "tls" {
+				issuer.Config.ErrorLog = log.New(io.Discard, "", 0)
+				issuer.StartTLS()
+			} else {
+				issuer.Start()
+			}
 			defer issuer.Close()
 			t.Setenv("REAGENT_OPENAI_AUTH_ISSUER", issuer.URL)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -428,8 +437,14 @@ func TestChatGPT_TokenFailuresFollowModelRetryPolicy(t *testing.T) {
 			}
 			var authAttempts atomic.Int32
 			base := issuer.Client().Transport
+			untrusted := http.DefaultTransport.(*http.Transport).Clone()
+			defer untrusted.CloseIdleConnections()
 			source.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				if authAttempts.Add(1) == 1 && tc.failure == "network" {
+				attempt := authAttempts.Add(1)
+				if attempt == 1 && tc.failure == "tls" {
+					return untrusted.RoundTrip(r)
+				}
+				if attempt == 1 && tc.failure == "network" {
 					if tc.cancel {
 						cancel()
 					}
@@ -445,7 +460,7 @@ func TestChatGPT_TokenFailuresFollowModelRetryPolicy(t *testing.T) {
 			model.transport.waitRetry = func(context.Context, time.Duration) error {
 				waits++
 				stored, err := loadChatGPTCredentials()
-				if err != nil || stored.RefreshToken != "refresh-secret" || len(api.received()) != 0 {
+				if err != nil || stored.RefreshToken != "refresh-secret" || stored.NeedsLogin || len(api.received()) != 0 {
 					t.Fatalf("failed refresh consumed token or sent inference: %v", err)
 				}
 				return nil
@@ -477,11 +492,11 @@ func TestChatGPT_TokenFailuresFollowModelRetryPolicy(t *testing.T) {
 				if tc.failure == "invalid_grant" && !strings.Contains(err.Error(), chatGPTReconnect) {
 					t.Fatalf("lost reconnect guidance: %v", err)
 				}
-				if tc.failure == "network" && !tc.cancel && !strings.Contains(err.Error(), "could not contact ChatGPT authorization service") {
+				if (tc.failure == "network" || tc.failure == "tls") && !tc.cancel && !strings.Contains(err.Error(), "could not contact ChatGPT authorization service") {
 					t.Fatalf("lost safe transport diagnostic: %v", err)
 				}
 			}
-			if tc.failure == "network" && issuerRequests.Load() != int32(waits) {
+			if (tc.failure == "network" || tc.failure == "tls") && issuerRequests.Load() != int32(waits) {
 				t.Fatalf("fault reached issuer: requests=%d", issuerRequests.Load())
 			}
 			for _, secret := range []string{"access-secret", "refresh-secret", "id-secret", issuer.URL} {
