@@ -39,7 +39,7 @@ Pilot binary source: `b86443092718672e0c6dafd6ef285004b5b96b7a`;
 SHA-256: `b2a08436155d2e522d546140694e09c83121d74d71ab0b9a7780b69ceaa1af08`.
 The clean-source build was frozen before the experiments. Embedded VCS metadata
 was absent even with `-buildvcs=true`; provenance uses the observed commit and
-binary digest instead. PR #152 was later rebased onto #151 and received two
+binary digest instead. PR #152 was later rebased onto #151/#153 and received two
 review fixes. Those later changes are offline-verified, **not** claimed exercised
 by this binary. Final accounting uses the corrected Part A bench evaluator.
 
@@ -225,15 +225,20 @@ fetches or mutually incompatible edits; serialize those or reconsider worktrees.
 Final Part A executable checks, after rebase and review fixes:
 
 ```text
-go build ./...                         # exit 0
+go build ./...                         # exit 0, silent
+go vet ./...                           # exit 0, silent
+go test ./...
+?   	github.com/satmihir/re-agent/cmd/reagent	[no test files]
+ok  	github.com/satmihir/re-agent/internal/reagent	46.317s
 make check
   go vet ./...
   go test ./...
-  ok .../internal/reagent 49.765s
+  ok github.com/satmihir/re-agent/internal/reagent (cached)
 go test -race ./...
-  ok .../internal/reagent 80.320s
+?   	github.com/satmihir/re-agent/cmd/reagent	[no test files]
+ok  	github.com/satmihir/re-agent/internal/reagent	81.219s
 python3 -m unittest discover -s bench -p '*test.py'
-  Ran 62 tests in 18.123s; OK
+  Ran 62 tests in 18.257s; OK
 make tty-check
   all 24 scenarios passed
 ```
