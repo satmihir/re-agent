@@ -75,8 +75,10 @@ func TestGitInspectUnified_Bounds(t *testing.T) {
 		old, current []byte
 		ok           bool
 	}{
-		{"distance_at_limit", nil, bytes.Repeat([]byte("x\n"), 512), true},
-		{"distance_over_limit", nil, bytes.Repeat([]byte("x\n"), 513), false},
+		{"distance_at_limit", []byte("y\n"), bytes.Repeat([]byte("x\n"), 511), true},
+		{"distance_over_limit", []byte("y\n"), bytes.Repeat([]byte("x\n"), 512), false},
+		{"pure_add_over_distance", nil, bytes.Repeat([]byte("x\n"), 600), true},
+		{"pure_delete_over_distance", bytes.Repeat([]byte("x\n"), 600), nil, true},
 		{"replace_at_limit", bytes.Repeat([]byte("x\n"), 256), bytes.Repeat([]byte("y\n"), 256), true},
 		{"replace_over_limit", bytes.Repeat([]byte("x\n"), 257), bytes.Repeat([]byte("y\n"), 256), false},
 		{"work_limit", longOld, longNew, false},
@@ -210,6 +212,22 @@ func TestGitInspectUnified_PatchAppliesAndHasMinimalDistance(t *testing.T) {
 		got, err := os.ReadFile(name)
 		if err != nil || string(got) != after {
 			t.Fatalf("sample %d: patched=%q, want=%q, err=%v", sample, got, after, err)
+		}
+	}
+}
+
+func TestGitInspectUnified_LargeOneSidedGolden(t *testing.T) {
+	t.Parallel()
+	content := strings.Repeat("line\n", 600) + "last"
+	for _, deletion := range []bool{false, true} {
+		old, current, sign, hunk := "", content, "+", "@@ -0,0 +1,601 @@\n"
+		if deletion {
+			old, current, sign, hunk = content, "", "-", "@@ -1,601 +0,0 @@\n"
+		}
+		want := "--- a/f\n+++ b/f\n" + hunk + strings.Repeat(sign+"line\n", 600) + sign + "last\n\\ No newline at end of file\n"
+		patch, ok := gitInspectUnified([]byte(old), []byte(current), "a/f", "b/f")
+		if !ok || patch != want {
+			t.Fatalf("deletion=%v ok=%v patch bytes=%d, want %d", deletion, ok, len(patch), len(want))
 		}
 	}
 }

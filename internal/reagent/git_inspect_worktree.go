@@ -562,23 +562,24 @@ func gitInspectConversions(ctx context.Context, root string, names []string) (ma
 			configured = true
 		}
 	}
-	// Batch paths to bound argv and attribute output independently of the index.
-	for start := 0; start < len(names); start += 32 {
-		batch := names[start:min(start+32, len(names))]
-		args := []string{"check-attr", "-z", "filter", "text", "eol", "crlf", "ident", "working-tree-encoding", "--"}
-		raw, seen, err := gitInspectCommand(ctx, root, append(args, batch...)...)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range batch {
-			result[p] = configured || seen > len(raw)
-		}
-		fields := bytes.Split(raw, []byte{0})
-		for i := 0; i+2 < len(fields); i += 3 {
-			value := string(fields[i+2])
-			if value != "unspecified" && value != "unset" {
-				result[string(fields[i])] = true
-			}
+	if len(names) == 0 {
+		return result, nil
+	}
+	// NUL-delimited stdin avoids argv limits and one subprocess per small batch.
+	out := &gitInspectOutput{limit: gitInspectInventoryLimit}
+	input := strings.NewReader(strings.Join(names, "\x00") + "\x00")
+	if err := gitInspectRunInput(ctx, root, out, input, "check-attr", "--stdin", "-z", "filter", "text", "eol", "crlf", "ident", "working-tree-encoding"); err != nil {
+		return nil, err
+	}
+	for _, p := range names {
+		// An incomplete attribute inventory must not imply conversion is absent.
+		result[p] = configured || out.seen > len(out.prefix)
+	}
+	fields := bytes.Split(out.prefix, []byte{0})
+	for i := 0; i+2 < len(fields); i += 3 {
+		value := string(fields[i+2])
+		if value != "unspecified" && value != "unset" {
+			result[string(fields[i])] = true
 		}
 	}
 	return result, nil

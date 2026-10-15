@@ -13,8 +13,8 @@ const (
 	gitInspectDiffMaxWork     = 16 << 20
 )
 
-// gitInspectUnified uses classic Myers O(ND) with deterministic byte, distance,
-// and work bounds; exceeding any bound returns no partial patch.
+// gitInspectUnified renders one-sided changes directly, otherwise using classic
+// Myers O(ND); exceeding its byte, distance or work bounds returns no partial patch.
 func gitInspectUnified(old, current []byte, oldName, newName string) (string, bool) {
 	if len(old) > gitInspectDiffMaxBytes || len(current) > gitInspectDiffMaxBytes {
 		return "", false
@@ -23,9 +23,18 @@ func gitInspectUnified(old, current []byte, oldName, newName string) (string, bo
 		return "", true
 	}
 	a, b := gitInspectLineEnds(old), gitInspectLineEnds(current)
-	edits, ok := gitInspectMyers(old, current, a, b)
-	if !ok {
-		return "", false
+	var edits []byte
+	switch {
+	case len(old) == 0:
+		edits = bytes.Repeat([]byte{'+'}, len(b)-1)
+	case len(current) == 0:
+		edits = bytes.Repeat([]byte{'-'}, len(a)-1)
+	default:
+		var ok bool
+		edits, ok = gitInspectMyers(old, current, a, b)
+		if !ok {
+			return "", false
+		}
 	}
 	return gitInspectRenderUnified(old, current, a, b, edits, oldName, newName), true
 }

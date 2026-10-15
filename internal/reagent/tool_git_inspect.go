@@ -325,6 +325,10 @@ func gitInspectCommand(ctx context.Context, root string, args ...string) ([]byte
 }
 
 func gitInspectRun(ctx context.Context, root string, output io.Writer, args ...string) error {
+	return gitInspectRunInput(ctx, root, output, nil, args...)
+}
+
+func gitInspectRunInput(ctx context.Context, root string, output io.Writer, input io.Reader, args ...string) error {
 	fixed := []string{"--no-pager"}
 	for _, setting := range []string{"core.fsmonitor=false", "core.hooksPath=" + os.DevNull, "core.attributesFile=" + os.DevNull, "core.quotePath=true", "diff.external=", "diff.submodule=short", "log.showSignature=false", "credential.helper=", "protocol.allow=never", "gc.auto=0", "maintenance.auto=false"} {
 		fixed = append(fixed, "-c", setting)
@@ -334,7 +338,7 @@ func gitInspectRun(ctx context.Context, root string, output io.Writer, args ...s
 	// Inherit neither Git overrides nor loader variables, credentials or user config.
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C", "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_SYSTEM=" + os.DevNull, "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_ATTR_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1", "GIT_TERMINAL_PROMPT=0"}
 	cmd.WaitDelay = time.Second
-	cmd.Stdout, cmd.Stderr = output, io.Discard
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, output, io.Discard
 	return cmd.Run()
 }
 

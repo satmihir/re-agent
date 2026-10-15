@@ -502,8 +502,10 @@ three-digit octal (Git's path syntax, never Go hex/Unicode escapes). Ordinary
 ASCII names remain unquoted. Binary classification belongs to the caller,
 which supplies raw header names.
 
-Each blob is limited to 1,048,576 retained bytes; edit distance is at most 512
-inclusive. Search permits at most 16,777,216 deterministic work units: one per
+Each blob is limited to 1,048,576 retained bytes. When either side is empty,
+render all added/deleted lines directly without a Myers pass; the byte and
+encoded-output limits still apply, but there is no edit-distance/work cap.
+For two nonempty sides, edit distance is at most 512 inclusive. Search permits at most 16,777,216 deterministic work units: one per
 frontier transition, one per line comparison, plus the line's byte length when
 the compared lengths agree (charged before comparing). Exceeding any bound
 returns `("", false)`, never a partial patch; the caller reports sizes/blob IDs.
@@ -521,6 +523,10 @@ capture is capped at 8 MiB per command, untracked listings at 1,000 selected
 paths, and the existing 32 KiB encoded-result limit still applies. Truncated
 inventory is never used to infer additions/deletions. Conversions configured
 by attributes, `core.autocrlf` or `core.eol` produce a raw-comparison caveat.
+Attribute lookup uses one `check-attr --stdin -z` process with NUL-delimited
+paths and an 8 MiB capture cap; exceeding it conservatively caveats all paths.
+Matching index stat data does not replace raw hashing: the index blob can
+contain cleaned bytes even when Git considers the working file unchanged.
 
 ### Agents and context — A01–A40 (40 families)
 

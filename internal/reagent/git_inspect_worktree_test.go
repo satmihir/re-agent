@@ -496,3 +496,88 @@ func TestGitInspect_WorktreeDeletedGitlinkStillExcludesDescendants(t *testing.T)
 		t.Fatalf("explicit descendant selection bypassed gitlink exclusion: %s", result.Output)
 	}
 }
+
+func TestGitInspect_AttributesUseOneNULDelimitedProcess(t *testing.T) {
+	ws := gitInspectTestRepo(t)
+	root := ws.Root()
+	special := "z special\twith\nnewline"
+	gitInspectTestWrite(t, root, ".gitattributes", fmt.Sprintf("%q filter=review\n", special))
+	for i := 0; i < 160; i++ {
+		gitInspectTestWrite(t, root, fmt.Sprintf("many/%03d-%s", i, strings.Repeat("x", 180)), "base\n")
+	}
+	gitInspectTestWrite(t, root, special, "base\n")
+	gitInspectTestGit(t, root, "add", ".")
+	gitInspectTestGit(t, root, "commit", "-q", "-m", "Attribute inventory")
+	gitInspectTestWrite(t, root, "f.txt", "plain changed\n")
+	gitInspectTestWrite(t, root, special, "filtered changed\n")
+
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, marker := t.TempDir(), filepath.Join(t.TempDir(), "check-attr-calls")
+	script := fmt.Sprintf("#!/bin/sh\nfor arg do\n  if [ \"$arg\" = check-attr ]; then printf x >> %q; fi\ndone\nexec %q \"$@\"\n", marker, git)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for i, operation := range []string{"status", "worktree_diff"} {
+		out, result := gitInspectWorktreeResult(t, ws, fmt.Sprintf(`{"operation":%q}`, operation))
+		if out.Truncated || strings.Count(result.Output, "comparison not filter-aware") != 1 {
+			t.Fatalf("attribute lookup lost path boundaries or precision: %+v %s", out, result.Output)
+		}
+		calls, err := os.ReadFile(marker)
+		if err != nil || string(calls) != strings.Repeat("x", i+1) {
+			t.Fatalf("check-attr calls=%q, error=%v; want one per inspection", calls, err)
+		}
+	}
+}
+
+func TestGitInspect_StatCleanFilesStillCompareRawBytes(t *testing.T) {
+	t.Parallel()
+	ws := gitInspectTestRepo(t)
+	root := ws.Root()
+	gitInspectTestWrite(t, root, ".gitattributes", "")
+	gitInspectTestGit(t, root, "config", "core.autocrlf", "true")
+	gitInspectTestWrite(t, root, "f.txt", "raw\r\n")
+	gitInspectTestGit(t, root, "add", ".gitattributes", "f.txt")
+	gitInspectTestGit(t, root, "commit", "-q", "-m", "Clean index stat cache")
+	if status := gitInspectTestGit(t, root, "status", "--porcelain", "--", "f.txt"); status != "" {
+		t.Fatalf("fixture is not stat-clean: %s", status)
+	}
+	index := gitInspectTestGit(t, root, "rev-parse", "HEAD:f.txt")
+	raw := gitInspectTestGit(t, root, "hash-object", "--no-filters", "f.txt")
+	if raw == index {
+		t.Fatal("fixture must differ after cleaning")
+	}
+	_, status := gitInspectWorktreeResult(t, ws, `{"operation":"status","paths":["f.txt"]}`)
+	gitInspectWorktreeContains(t, status.Output, "unstaged modified", index, raw, "comparison not filter-aware")
+	_, patch := gitInspectWorktreeResult(t, ws, `{"operation":"worktree_diff","paths":["f.txt"]}`)
+	gitInspectWorktreeContains(t, patch.Output, "@@", "+raw\r\n", "comparison not filter-aware")
+}
+
+func TestGitInspect_WorktreeLargeOneSidedPatches(t *testing.T) {
+	t.Parallel()
+	ws := gitInspectTestRepo(t)
+	root := ws.Root()
+	content := strings.Repeat("line\n", 600)
+	gitInspectTestWrite(t, root, "removed", content)
+	gitInspectTestGit(t, root, "add", "removed")
+	gitInspectTestGit(t, root, "commit", "-q", "-m", "Deletion baseline")
+	if err := os.Remove(filepath.Join(root, "removed")); err != nil {
+		t.Fatal(err)
+	}
+	gitInspectTestWrite(t, root, "added", content)
+	gitInspectTestGit(t, root, "add", "added")
+	out, result := gitInspectWorktreeResult(t, ws, `{"operation":"worktree_diff","paths":["added","removed"]}`)
+	gitInspectWorktreeContains(t, result.Output, "@@ -0,0 +1,600 @@", "@@ -1,600 +0,0 @@")
+	if out.Truncated || strings.Count(result.Output, "+line\n") != 600 || strings.Count(result.Output, "-line\n") != 600 {
+		t.Fatalf("one-sided content missing: %+v %s", out, result.Output)
+	}
+	gitInspectTestWrite(t, root, "added", strings.Repeat("line\n", 20_000))
+	out, result = gitInspectWorktreeResult(t, ws, `{"operation":"worktree_diff","paths":["added"]}`)
+	if !out.Truncated || !result.OutputTruncated || result.OutputBytesSeen <= len(result.Output) {
+		t.Fatalf("large addition bypassed output limits: %+v %+v", out, result)
+	}
+	gitInspectWorktreeContains(t, result.Output, "@@ -0,0 +1,20000 @@", "+line\n")
+}
