@@ -2,7 +2,6 @@ package reagent
 
 import (
 	"context"
-	"crypto/sha1"
 	"fmt"
 	"os"
 	"os/exec"
@@ -141,8 +140,9 @@ func TestGitInspect_WorktreeTypesAndMode(t *testing.T) {
 	head := gitInspectTestGit(t, root, "rev-parse", "HEAD")
 	gitInspectTestGit(t, root, "update-index", "--cacheinfo", "160000,"+head+",module")
 	_, status := gitInspectWorktreeResult(t, ws, `{"operation":"status"}`)
-	gitInspectWorktreeLine(t, status.Output, "unstaged", "mode", `"executable.txt"`)
-	gitInspectWorktreeLine(t, status.Output, "unstaged", "type", `"regular.txt"`)
+	gitInspectWorktreeLine(t, status.Output, "unstaged", "modified", `"executable.txt"`)
+	gitInspectWorktreeLine(t, status.Output, "unstaged", "modified", `"regular.txt"`)
+	gitInspectWorktreeContains(t, status.Output, "mode 100644 -> 100755", "mode 100644 -> 120000")
 	gitInspectWorktreeLine(t, status.Output, "submodule", `"module"`)
 	_, mode := gitInspectWorktreeResult(t, ws, `{"operation":"worktree_diff","paths":["executable.txt"]}`)
 	gitInspectWorktreeContains(t, mode.Output, "mode")
@@ -162,8 +162,9 @@ func TestGitInspect_WorktreeTypesAndMode(t *testing.T) {
 	}
 	gitInspectTestGit(t, root, "add", "executable.txt", "regular.txt", "link")
 	_, status = gitInspectWorktreeResult(t, ws, `{"operation":"status"}`)
-	gitInspectWorktreeLine(t, status.Output, "staged", "mode", `"executable.txt"`)
-	gitInspectWorktreeLine(t, status.Output, "staged", "type", `"regular.txt"`)
+	gitInspectWorktreeLine(t, status.Output, "staged", "modified", `"executable.txt"`)
+	gitInspectWorktreeLine(t, status.Output, "staged", "modified", `"regular.txt"`)
+	gitInspectWorktreeContains(t, status.Output, "mode 100644 -> 100755", "mode 100644 -> 120000")
 }
 
 func TestGitInspect_WorktreeBinaryAndOversizeAreSummaries(t *testing.T) {
@@ -178,13 +179,20 @@ func TestGitInspect_WorktreeBinaryAndOversizeAreSummaries(t *testing.T) {
 	gitInspectTestWrite(t, root, "large", largeBefore)
 	gitInspectTestGit(t, root, "add", "binary", "large")
 	gitInspectTestGit(t, root, "commit", "-q", "-m", "Summary baseline")
+	oldBinary := gitInspectTestGit(t, root, "rev-parse", "HEAD:binary")
+	oldLarge := gitInspectTestGit(t, root, "rev-parse", "HEAD:large")
 	gitInspectTestWrite(t, root, "binary", after)
 	gitInspectTestWrite(t, root, "large", largeAfter)
+	newBinary := gitInspectTestGit(t, root, "hash-object", "--no-filters", "binary")
+	newLarge := gitInspectTestGit(t, root, "hash-object", "--no-filters", "large")
 	for _, args := range []string{`{"operation":"worktree_diff"}`, `{"operation":"worktree_diff","stat":true}`, `{"operation":"status"}`} {
 		out, result := gitInspectWorktreeResult(t, ws, args)
 		gitInspectWorktreeContains(t, result.Output, "binary", "large")
-		for _, content := range []string{before, after, largeBefore, largeAfter} {
-			gitInspectWorktreeContains(t, result.Output, fmt.Sprint(len(content)), fmt.Sprintf("%x", sha1.Sum([]byte(fmt.Sprintf("blob %d\x00%s", len(content), content)))))
+		for _, size := range []int{len(before), len(after), len(largeBefore), len(largeAfter)} {
+			gitInspectWorktreeContains(t, result.Output, fmt.Sprintf("size=%d", size))
+		}
+		for _, oid := range []string{oldBinary, newBinary, oldLarge, newLarge} {
+			gitInspectWorktreeContains(t, result.Output, "blob="+oid)
 		}
 		if out.Truncated || strings.Contains(result.Output, "\x00") || strings.Contains(result.Output, strings.Repeat("a", 100)) || strings.Contains(result.Output, strings.Repeat("b", 100)) {
 			t.Fatalf("content was emitted instead of summary: %+v %s", out, result.Output)
@@ -194,16 +202,34 @@ func TestGitInspect_WorktreeBinaryAndOversizeAreSummaries(t *testing.T) {
 
 func TestGitInspect_WorktreeComparisonIsNotFilterAware(t *testing.T) {
 	t.Parallel()
-	ws := gitInspectTestRepo(t)
-	root := ws.Root()
-	gitInspectTestWrite(t, root, ".gitattributes", "f.txt text eol=lf\n")
-	gitInspectTestGit(t, root, "add", ".gitattributes")
-	gitInspectTestGit(t, root, "commit", "-q", "-m", "Text attribute")
-	gitInspectTestGit(t, root, "config", "core.autocrlf", "true")
-	gitInspectTestWrite(t, root, "f.txt", "after\r\n")
-	for _, args := range []string{`{"operation":"status"}`, `{"operation":"worktree_diff","paths":["f.txt"]}`} {
-		_, result := gitInspectWorktreeResult(t, ws, args)
-		gitInspectWorktreeContains(t, result.Output, "comparison not filter-aware", "f.txt")
+	for _, tc := range []struct {
+		name, attributes, key, value string
+		wantNote                     bool
+	}{
+		{name: "no conversion"},
+		{name: "attributes only", attributes: "f.txt text eol=lf\n", wantNote: true},
+		{name: "autocrlf only", key: "core.autocrlf", value: "true", wantNote: true},
+		{name: "eol only", key: "core.eol", value: "crlf", wantNote: true},
+		{name: "attributes and autocrlf", attributes: "f.txt text eol=lf\n", key: "core.autocrlf", value: "true", wantNote: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := gitInspectTestRepo(t)
+			root := ws.Root()
+			gitInspectTestWrite(t, root, ".gitattributes", tc.attributes)
+			gitInspectTestGit(t, root, "add", ".gitattributes")
+			gitInspectTestGit(t, root, "commit", "-q", "-m", "Conversion attributes")
+			if tc.key != "" {
+				gitInspectTestGit(t, root, "config", tc.key, tc.value)
+			}
+			gitInspectTestWrite(t, root, "f.txt", "after\r\n")
+			for _, args := range []string{`{"operation":"status","paths":["f.txt"]}`, `{"operation":"worktree_diff","paths":["f.txt"]}`} {
+				_, result := gitInspectWorktreeResult(t, ws, args)
+				gitInspectWorktreeContains(t, result.Output, "f.txt")
+				if got := strings.Contains(result.Output, "comparison not filter-aware"); got != tc.wantNote {
+					t.Fatalf("conversion note = %v, want %v: %s", got, tc.wantNote, result.Output)
+				}
+			}
+		})
 	}
 }
 
@@ -350,13 +376,18 @@ func TestGitInspect_WorktreeNeverRunsRepositoryPrograms(t *testing.T) {
 		args []string
 	}{
 		{"filter.evil.clean", []string{"add", "f.txt"}},
-		{"filter.evil.smudge", []string{"checkout", "--", "f.txt"}},
+		{"filter.evil.smudge", []string{"checkout-index", "--force", "--", "f.txt"}},
 		{"diff.evil.textconv", []string{"diff", "--no-ext-diff", "--textconv", "main", "HEAD", "--", "f.txt"}},
 		{"diff.external", []string{"diff", "--ext-diff", "--no-textconv", "main", "HEAD", "--", "f.txt"}},
 		{"core.fsmonitor", []string{"status", "--porcelain", "-uno"}},
 	} {
 		gitInspectTestGit(t, root, "config", driver.key, script)
 		gitInspectTestWrite(t, root, "f.txt", "positive control "+driver.key+"\n")
+		if driver.key == "filter.evil.smudge" {
+			if err := os.Remove(filepath.Join(root, "f.txt")); err != nil {
+				t.Fatal(err)
+			}
+		}
 		gitInspectTestGit(t, root, driver.args...)
 		if err := os.Remove(marker); err != nil {
 			t.Fatalf("positive control %s did not execute: %v", driver.key, err)
@@ -434,5 +465,34 @@ func TestGitInspect_WorktreeDoesNotTraverseSymlinkAncestors(t *testing.T) {
 		if strings.Contains(result.Output, "EXTERNAL_") {
 			t.Fatalf("symlink traversal exposed external files: %s", result.Output)
 		}
+	}
+}
+
+func TestGitInspect_WorktreeDeletedGitlinkStillExcludesDescendants(t *testing.T) {
+	t.Parallel()
+	ws := gitInspectTestRepo(t)
+	root := ws.Root()
+	oid := gitInspectTestGit(t, root, "rev-parse", "HEAD")
+	gitInspectTestGit(t, root, "update-index", "--add", "--cacheinfo", "160000,"+oid+",module")
+	gitInspectTestGit(t, root, "commit", "-q", "-m", "Gitlink baseline")
+	gitInspectTestWrite(t, root, "module/secret", "DO_NOT_READ_DELETED_GITLINK_CONTENT\n")
+	gitInspectTestGit(t, root, "update-index", "--force-remove", "module")
+	gitInspectWorktreeContains(t, gitInspectTestGit(t, root, "ls-files", "--others", "--exclude-standard"), "module/secret")
+	for _, args := range []string{
+		`{"operation":"status"}`, `{"operation":"status","paths":["module"]}`,
+		`{"operation":"worktree_diff"}`, `{"operation":"worktree_diff","paths":["module"]}`, `{"operation":"worktree_diff","stat":true}`,
+	} {
+		_, result := gitInspectWorktreeResult(t, ws, args)
+		gitInspectWorktreeContains(t, result.Output, "submodule", `"module"`)
+		if strings.Contains(args, "status") {
+			gitInspectWorktreeLine(t, result.Output, "staged", "deleted", `"module"`)
+		}
+		if strings.Contains(result.Output, "module/secret") || strings.Contains(result.Output, "DO_NOT_READ_DELETED_GITLINK_CONTENT") {
+			t.Fatalf("descended into deleted gitlink: %s", result.Output)
+		}
+	}
+	_, result := gitInspectWorktreeResult(t, ws, `{"operation":"worktree_diff","paths":["module/secret"]}`)
+	if result.Output != "" {
+		t.Fatalf("explicit descendant selection bypassed gitlink exclusion: %s", result.Output)
 	}
 }

@@ -13,7 +13,8 @@ const (
 	gitInspectDiffMaxWork     = 16 << 20
 )
 
-// gitInspectUnified returns no partial patch when a deterministic bound is exceeded.
+// gitInspectUnified uses classic Myers O(ND) with deterministic byte, distance,
+// and work bounds; exceeding any bound returns no partial patch.
 func gitInspectUnified(old, current []byte, oldName, newName string) (string, bool) {
 	if len(old) > gitInspectDiffMaxBytes || len(current) > gitInspectDiffMaxBytes {
 		return "", false
@@ -141,7 +142,7 @@ func gitInspectRenderUnified(old, current []byte, a, b []int, edits []byte, oldN
 		hunks = append(hunks, hunk{start, end})
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "--- %s\n+++ %s\n", oldName, newName)
+	fmt.Fprintf(&out, "--- %s\n+++ %s\n", gitInspectDiffName(oldName), gitInspectDiffName(newName))
 	pos, oldLine, newLine := 0, 0, 0
 	for _, h := range hunks {
 		for ; pos < h.start; pos++ {
@@ -194,4 +195,13 @@ func gitInspectHunkRange(before, count int) string {
 		return strconv.Itoa(before + 1)
 	}
 	return strconv.Itoa(before+1) + "," + strconv.Itoa(count)
+}
+
+func gitInspectDiffName(name string) string {
+	for _, c := range name {
+		if c < ' ' || c == 0x7f || c == '\\' || c == '"' || c == '\u2028' || c == '\u2029' {
+			return strconv.Quote(name)
+		}
+	}
+	return name
 }

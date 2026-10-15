@@ -103,6 +103,44 @@ func TestGitInspectUnified_DevNullNames(t *testing.T) {
 	}
 }
 
+func TestGitInspectUnified_HeaderNamesAreQuotedAndApply(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, path, quoted string }{
+		{"plain", "plain.txt", "a/plain.txt"},
+		{"space", "with space", "a/with space"},
+		{"unicode", "café", "a/café"},
+		{"newline", "line\n@@ injected @@", `"a/line\n@@ injected @@"`},
+		{"tab", "with\ttab", `"a/with\ttab"`},
+		{"backslash", "with\\slash", `"a/with\\slash"`},
+		{"double_quote", "with\"quote", `"a/with\"quote"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			patch, ok := gitInspectUnified([]byte("old\n"), []byte("new\n"), "a/"+tc.path, "b/"+tc.path)
+			newName := strings.Replace(tc.quoted, "a/", "b/", 1)
+			want := "--- " + tc.quoted + "\n+++ " + newName + "\n@@ -1 +1 @@\n-old\n+new\n"
+			if !ok || patch != want {
+				t.Fatalf("ok=%v, patch=%q, want=%q", ok, patch, want)
+			}
+			root := t.TempDir()
+			name := filepath.Join(root, tc.path)
+			if err := os.WriteFile(name, []byte("old\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("git", "apply", "--no-index", "--unsafe-paths", "--whitespace=nowarn", "-")
+			cmd.Dir = root
+			cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull}
+			cmd.Stdin = strings.NewReader(patch)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git apply: %v: %s\n%s", err, out, patch)
+			}
+			got, err := os.ReadFile(name)
+			if err != nil || string(got) != "new\n" {
+				t.Fatalf("patched=%q, err=%v", got, err)
+			}
+		})
+	}
+}
+
 func TestGitInspectUnified_PatchAppliesAndHasMinimalDistance(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewSource(136))
