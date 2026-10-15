@@ -104,8 +104,13 @@ from `origin/main` (or `origin/HEAD`), last fetch, and change counts. It is a
 local observation; re:agent never fetches automatically. The preview includes it.
 
 At launch, re:agent also loads the workspace root's `AGENTS.md` into its
-instructions, if it is valid UTF-8 and at most 32 KiB. The text stays fixed
-between workspace switches, including after `/reset` or `/model`. An invalid or oversized
+instructions, if it is valid UTF-8 and at most 32 KiB. A session's instructions
+never change mid-conversation: Anthropic binds thinking blocks to the exact
+system prompt, and every provider's cache depends on it. After a
+`switch_workspace`, the result names the new root and carries its `AGENTS.md`
+(or says to read it if it doesn't fit); the instructions pick up the new root
+only when no earlier model output is sent again, which is after `/reset`,
+compaction, or `/model`. Changing the effort leaves the text alone. An invalid or oversized
 file is skipped with a warning. Use `--no-project-instructions` on `run` or
 `chat` to leave it out, for example when comparing requests. Project text
 cannot grant tools beyond the chosen mode.

@@ -51,13 +51,53 @@ func BuildContext(cfg Config, scope RequestScope, history []Entry) ModelRequest 
 	return req
 }
 
-// instructions is the embedded text plus a labelled runtime section, which is
+// pinnedPrompt is the instruction text a session sends unchanged on every
+// request. Anthropic binds thinking-block signatures to the system prompt they
+// were produced under, so rewriting it mid-conversation invalidates every
+// earlier block; for every provider it would also discard the cached prefix.
+// Project is the AGENTS.md text the pin includes, for /context attribution.
+type pinnedPrompt struct {
+	Text    string  `json:"text"`
+	Project *string `json:"project,omitempty"`
+}
+
+// instructions returns the session's pinned text, or renders it for a
+// configuration that has no pin yet.
+func instructions(cfg Config) string {
+	if cfg.prompt != nil {
+		return cfg.prompt.Text
+	}
+	return renderInstructions(cfg)
+}
+
+// pinInstructions fixes the prompt from cfg's current settings. Sessions call
+// it only where no earlier provider output is sent again with the new text: at
+// creation, after a summary replaces the history, and at a model transition.
+func pinInstructions(cfg *Config) {
+	cfg.prompt = &pinnedPrompt{Project: cfg.ProjectInstructions}
+	cfg.prompt.Text = renderInstructions(Config{Provider: cfg.Provider, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort,
+		Registry: cfg.Registry, WorkspacePath: cfg.WorkspacePath, ProjectInstructions: cfg.ProjectInstructions,
+		MaxSteps: cfg.MaxSteps, MaxToolCalls: cfg.MaxToolCalls, agent: cfg.agent, ReportFriction: cfg.ReportFriction})
+}
+
+// promptProject is the AGENTS.md text the request instructions actually carry.
+func promptProject(cfg Config) *string {
+	if cfg.prompt != nil {
+		return cfg.prompt.Project
+	}
+	return cfg.ProjectInstructions
+}
+
+const projectInstructionsHeading = "\n# Project instructions (AGENTS.md)\n\n"
+
+// renderInstructions is the embedded text plus a labelled runtime section, which is
 // the only way the model learns anything about its own environment.
 //
-// v0 §6 amendment (2026-09-30): the prefix is fixed between explicit setting
-// or workspace transitions; collected observations belong in history instead.
+// v0 §6 amendment (2026-09-30): collected observations belong in history.
+// A session pins the rendered text (pinInstructions); a workspace switch
+// reports the new root and its AGENTS.md in the switch_workspace result.
 // Declarations and dispatch gates, not instruction text, enforce authority.
-func instructions(cfg Config) string {
+func renderInstructions(cfg Config) string {
 	// An unset effort means the harness sends no such parameter, leaving the
 	// model wherever the provider puts it by default.
 	effort := cfg.ReasoningEffort
@@ -75,13 +115,17 @@ func instructions(cfg Config) string {
 			"Workspace: %s\nMode: %s\nBudget: %s model requests and %s tool calls per run\n",
 		cfg.Provider, cfg.Model, effort, runtime.GOOS,
 		cfg.WorkspacePath, cfg.Registry.Mode().String(), formatLimit(cfg.MaxSteps), formatLimit(cfg.MaxToolCalls))
+	if !cfg.agent {
+		text += "A successful switch_workspace result names the new active workspace and carries its AGENTS.md, " +
+			"which then replaces the workspace and project instructions given here.\n"
+	}
 	// v0 §10 amendment (2026-09-30): opt-in text is fixed and precedes project instructions.
 	if cfg.ReportFriction {
 		text += frictionInstructions
 	}
 	// v0 §6 amendment (2026-09-30): the selected root copy follows runtime instructions.
 	if cfg.ProjectInstructions != nil {
-		text += "\n# Project instructions (AGENTS.md)\n\n" + *cfg.ProjectInstructions
+		text += projectInstructionsHeading + *cfg.ProjectInstructions
 	}
 	return text
 }

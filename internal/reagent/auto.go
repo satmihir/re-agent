@@ -118,6 +118,10 @@ func stageAutoCandidate(ctx context.Context, s *Session, route jevRoute) (autoCa
 	cfg := s.cfg
 	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, route.Model, route.Effort
 	setConfigAuth(&cfg, s.auto.proxy)
+	// Same model keeps the history and so its pin; another model gets a handoff or text-only history.
+	if cfg.Provider != s.cfg.Provider || cfg.Model != s.cfg.Model {
+		pinInstructions(&cfg)
+	}
 	handoff := s.handoff
 	var size int
 	var err error

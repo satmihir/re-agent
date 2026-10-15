@@ -155,12 +155,16 @@ func TestWorkspaceSwitch_CreateWorktreeThenUseEveryTool(t *testing.T) {
 		if string(mustJSON(t, req.Tools)) != initialSpecs {
 			t.Fatal("schemas changed")
 		}
-		if i >= 3 && (!strings.Contains(req.Instructions, "Workspace: "+canonical) || !strings.Contains(req.Instructions, "target instructions") || strings.Contains(req.Instructions, "launch instructions")) {
-			t.Fatalf("stale prefix at request %d", i)
+		// Anthropic binds thinking signatures to the system prompt, so it never changes mid-session.
+		if req.Instructions != model.requests[0].Instructions {
+			t.Fatalf("instructions changed at request %d", i)
 		}
 	}
 	var switched workspaceSwitchResult
 	data(t, observations[2].Outcome, &switched)
+	if switched.Workspace != canonical || switched.ProjectInstructions == nil || *switched.ProjectInstructions != "target instructions\n" {
+		t.Fatalf("switch result %+v", switched)
+	}
 	var state workspaceState
 	if err := json.Unmarshal(switched.State, &state); err != nil {
 		t.Fatal(err)

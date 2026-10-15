@@ -265,10 +265,23 @@ func (s *Session) selectWorkspace(ctx context.Context, destination workspaceDest
 	if ctx.Err() != nil {
 		return failOutcome("permission_denied", "workspace request cancelled"), nil
 	}
-	result := workspaceSwitchResult{Previous: previous, Workspace: ws.Root(), Changed: true, State: state, Warnings: warnings.String()}
+	result := workspaceSwitchResult{Previous: previous, Workspace: ws.Root(), Changed: true, State: state, Warnings: warnings.String(), ProjectInstructions: project}
+	switch {
+	case s.cfg.NoProjectInstructions:
+		result.ProjectInstructionsNote = "project instructions are disabled for this session"
+	case project == nil:
+		result.ProjectInstructionsNote = "no AGENTS.md was loaded from the new workspace (see warnings if any); earlier project instructions no longer apply"
+	}
 	outcome, err := workspaceOutcome(result, previous)
 	if err != nil {
 		return ToolOutcome{}, err
+	}
+	if encodedSize(outcome) > MaxResultBytes && project != nil {
+		result.ProjectInstructions = nil
+		result.ProjectInstructionsNote = fmt.Sprintf("AGENTS.md (%d bytes) does not fit in this result; read it with read_file before continuing", len(*project))
+		if outcome, err = workspaceOutcome(result, previous); err != nil {
+			return ToolOutcome{}, err
+		}
 	}
 	if encodedSize(outcome) > MaxResultBytes {
 		return failOutcome("invalid_arguments", "workspace transition metadata exceeds the result limit"), nil

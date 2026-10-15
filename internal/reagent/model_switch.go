@@ -231,6 +231,8 @@ func (c *conversation) transitionModel(ctx context.Context, info modelInfo, fres
 	cfg := s.cfg
 	cfg.Provider, cfg.Model, cfg.ReasoningEffort = info.Provider, info.ID, info.Effort
 	setConfigAuth(&cfg, c.proxy)
+	// The destination sees the handoff, not the source's native items, so it starts a new pin.
+	pinInstructions(&cfg)
 	runID := NewID()
 	path, err := tracePathFor(c.traceDir, runID)
 	if err != nil {

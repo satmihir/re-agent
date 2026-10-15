@@ -95,7 +95,10 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 	}
 	summary := Summary{Text: text, ReplacedEntries: len(s.history), Model: r.cfg.Model}
 	projected := []Entry{{Kind: EntryUser, User: r.task}, {Kind: EntrySummary, Summary: &summary}}
-	projectedSize, err := admissionRequestBytes(r.cfg, BuildContext(r.cfg, scope, projected))
+	// Only the task and summary remain, so the prompt may follow the active workspace again.
+	repinned := r.cfg
+	pinInstructions(&repinned)
+	projectedSize, err := admissionRequestBytes(repinned, BuildContext(repinned, scope, projected))
 	if err != nil || math.Ceil(float64(projectedSize)*rate)+16_000 > threshold {
 		reason := "within-run summary leaves too little room for the next request"
 		r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
@@ -104,6 +107,7 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 	// No accepted call is in flight. The old history remains intact until all
 	// requests and the handoff have been checked.
 	s.history = []Entry{{Kind: EntryUser, User: r.task}, {Kind: EntrySummary, Summary: &summary}}
+	s.cfg.prompt = repinned.prompt
 	s.gc = contextGCState{}
 	s.compactedPlan = r.task.Plan
 	s.handoff = nil

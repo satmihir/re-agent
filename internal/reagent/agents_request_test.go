@@ -18,10 +18,10 @@ func TestAgents_DisabledRequestBytes(t *testing.T) {
 		readOnly bool
 		digest   string
 	}{
-		{openaiName, false, "6aebc279f4c6c9c8dafca16de615d1abd9d0b91fee017b17d117923a68cedb93"},
-		{openaiName, true, "29fdace403ea4e4b3c32e5ea2837b2071825b2a6c5f5ff0a2f7d86f026e8a693"},
-		{anthropicName, false, "30aad69c5ca3288d4b5921f55f2580fc59a8ea625e00db750145ab83cb05889d"},
-		{anthropicName, true, "1829741f16cb3249dde83b4ec3a6d33a2aacad602bcd12d3ba0632494acb2eaa"},
+		{openaiName, false, "9e6ea1424b306046f8b252b152d82137d32b7110f5ee6a83cca6d51ab8cde1ee"},
+		{openaiName, true, "52ce48aaf30fa9586149a5d593ccad041839f5c8ecf4f8269d68c6a393609fc2"},
+		{anthropicName, false, "f5b9a9aa58c3aca47ba3bfe7416eeaef76d9dbf052d951316cbb2d14764e521b"},
+		{anthropicName, true, "b3a900d466ff8a363dd21e72d1aad18f22f6c0fccd4477c1a7705b422cb8fb59"},
 	} {
 		t.Run(fmt.Sprintf("%s/%t", scenario.provider, scenario.readOnly), func(t *testing.T) {
 			registry, err := NewRegistry(Mode{ReadOnly: scenario.readOnly}, NewListFilesTool(nil), NewReadFileTool(nil), NewSearchTextTool(nil), NewGitInspectTool(nil), NewEditFileTool(nil), NewWriteFileTool(nil), NewDeleteFileTool(nil), NewExecTool(nil), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool())

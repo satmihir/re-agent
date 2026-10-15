@@ -75,6 +75,8 @@ func NewSession(cfg Config, model Model, trace *Trace, progress io.Writer) *Sess
 		s.cfg.WorkspacePath = s.workspace.active.Root()
 		s.cfg.Registry = cfg.Registry.bindWorkspace(s, s.workspace.active)
 	}
+	// A configuration copied from a parent or an earlier session carries that pin.
+	pinInstructions(&s.cfg)
 	return s
 }
 
@@ -92,7 +94,7 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		ID: s.ID, Provider: s.cfg.Provider, Model: s.cfg.Model, Effort: s.cfg.ReasoningEffort,
 		Launch: launch, Active: s.cfg.WorkspacePath, ReadOnly: s.cfg.Registry.Mode().ReadOnly,
 		Plan: s.planMode, NoProjectInstructions: s.cfg.NoProjectInstructions,
-		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, MaxSteps: s.cfg.MaxSteps,
+		ProjectInstructions: s.cfg.ProjectInstructions, LaunchInstructions: s.launchInstructions, Prompt: s.cfg.prompt, MaxSteps: s.cfg.MaxSteps,
 		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, Agents: s.cfg.Agents,
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
 		ContextGC: s.cfg.ContextGC, GC: s.gc, GCRequests: s.gcRequests,
@@ -193,6 +195,11 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.launchInstructions = cp.LaunchInstructions
 	if cp.Active == cp.Launch {
 		s.launchInstructions = cp.ProjectInstructions
+	}
+	// The recorded text, not a re-render, keeps earlier thinking blocks valid
+	// even when the workspace, effort or embedded instructions have changed since.
+	if cp.Prompt != nil {
+		s.cfg.prompt = cp.Prompt
 	}
 	s.checkpointPhase, s.checkpointInFlight = cp.Phase, cp.InFlight
 }
@@ -372,6 +379,8 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 		}
 	}
 	s.handoff = nil
+	// Only the summary remains, so the prompt may follow the active workspace again.
+	pinInstructions(&s.cfg)
 	s.tokensPerByte = 0
 	s.blocked = ""
 	// The request's input was the whole old history, so its usage says nothing
@@ -398,6 +407,7 @@ func (s *Session) Reset() {
 	}
 	s.pendingSubmission = nil
 	s.handoff = nil
+	pinInstructions(&s.cfg)
 	s.tokensPerByte = 0
 	s.compactedPlan = ""
 	s.seenCalls = make(map[string]bool)

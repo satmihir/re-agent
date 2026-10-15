@@ -61,6 +61,7 @@ type chatCheckpoint struct {
 	Usage                 Usage           `json:"usage"`
 	Phase                 string          `json:"phase"`
 	InFlight              string          `json:"in_flight,omitempty"`
+	Prompt                *pinnedPrompt   `json:"prompt,omitempty"` // absent before instructions were pinned
 }
 
 // A single gob payload retains RawMessage bytes verbatim; JSON re-encodes them.
