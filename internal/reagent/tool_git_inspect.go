@@ -23,7 +23,7 @@ var (
 
 type gitInspectTool struct{ ws *Workspace }
 
-// NewGitInspectTool returns fixed read-only operations over local Git history.
+// NewGitInspectTool returns read-only operations over local Git history and raw working files.
 func NewGitInspectTool(ws *Workspace) Tool { return gitInspectTool{ws: ws} }
 
 func (t gitInspectTool) withWorkspace(ws *Workspace) Tool { t.ws = ws; return t }
@@ -37,10 +37,12 @@ type gitInspectArgs struct {
 	Paths     []string        `json:"paths"`
 	Count     json.RawMessage `json:"count"`
 	Stat      json.RawMessage `json:"stat"`
+	Staged    json.RawMessage `json:"staged"`
 }
 
 type gitInspectResult struct {
 	Operation        string `json:"operation"`
+	Staged           bool   `json:"staged,omitempty"`
 	From             string `json:"from,omitempty"`
 	To               string `json:"to,omitempty"`
 	Rev              string `json:"rev,omitempty"`
@@ -53,7 +55,7 @@ type gitInspectResult struct {
 }
 
 func (gitInspectTool) Spec() ToolSpec {
-	return ToolSpec{Name: "git_inspect", Description: "Review local Git changes and history without writes or network, in any mode. diff requires from and to commits, optional literal paths and stat:true for a summary. Working-tree diff is unsupported because it can run clean filters. show uses rev (default HEAD): with path returns a raw historical file; without path returns commit message and stat. log uses optional from and to (default HEAD), meaning from..to when from is given, optional paths, and count (default20, maximum100). Revisions must name single commits, not ranges/options. Paths are workspace-relative; .git/.env names and descendants are excluded even from unscoped file output. Results are a bounded prefix with explicit truncation. Promisor/partial-clone repositories are refused to prevent lazy fetching.", InputSchema: json.RawMessage(`{"type":"object","properties":{"operation":{"type":"string","enum":["diff","show","log"]},"from":{"type":"string"},"to":{"type":"string"},"rev":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":32},"count":{"type":"integer","minimum":1,"maximum":100},"stat":{"type":"boolean"}},"required":["operation"],"additionalProperties":false}`), Effect: EffectClassRead}
+	return ToolSpec{Name: "git_inspect", Description: "Review local Git changes and history without writes or network, in any mode. status uses rev (default HEAD) and paths, separating staged (base to index), unstaged (index to raw working tree) and untracked changes. worktree_diff compares raw working files to rev (default HEAD), with optional literal paths and stat:true. These Go comparisons never run filters; conversion attributes/config are marked not filter-aware. Binary, oversized or diff-budget-exceeding files show sizes and blob IDs. Special index flags and submodules are reported without guessing. diff requires from and to commits; staged:true instead compares from (default HEAD) to the index, with no to. Both accept paths and stat. show uses rev (default HEAD): with path returns a raw historical file; without path returns commit message and stat. log uses optional from and to (default HEAD), meaning from..to when from is given, optional paths, and count (default20, maximum100). Revisions must name single commits, not ranges/options. Paths are workspace-relative; .git/.env names and descendants are excluded even from unscoped file output. Results are a bounded prefix with explicit truncation. Promisor/partial-clone repositories are refused to prevent lazy fetching.", InputSchema: json.RawMessage(`{"type":"object","properties":{"operation":{"type":"string","enum":["status","worktree_diff","diff","show","log"]},"from":{"type":"string"},"to":{"type":"string"},"rev":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":32},"count":{"type":"integer","minimum":1,"maximum":100},"stat":{"type":"boolean"},"staged":{"type":"boolean"}},"required":["operation"],"additionalProperties":false}`), Effect: EffectClassRead}
 }
 
 func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outcome ToolOutcome, err error) {
@@ -81,13 +83,34 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 			return failOutcome("invalid_arguments", "omit optional fields rather than using null"), nil
 		}
 	}
+	staged, bad := optionalBool(a.Staged, "staged")
+	if bad != nil {
+		return *bad, nil
+	}
+	if a.Operation != "diff" && len(a.Staged) > 0 {
+		return failOutcome("invalid_arguments", "staged is supported only by diff"), nil
+	}
 	switch a.Operation {
+	case "status", "worktree_diff":
+		if a.From != "" || a.To != "" || a.Path != "" || len(a.Count) > 0 || (a.Operation == "status" && len(a.Stat) > 0) {
+			return failOutcome("invalid_arguments", "status accepts rev and paths; worktree_diff also accepts stat"), nil
+		}
+		if a.Rev == "" {
+			a.Rev = "HEAD"
+		}
 	case "diff":
-		if a.From == "" || a.To == "" {
-			return failOutcome("invalid_arguments", "diff requires from and to; working-tree diff is unsupported because it can run clean filters"), nil
+		if staged {
+			if a.To != "" {
+				return failOutcome("invalid_arguments", "staged diff accepts from but not to"), nil
+			}
+			if a.From == "" {
+				a.From = "HEAD"
+			}
+		} else if a.From == "" || a.To == "" {
+			return failOutcome("invalid_arguments", "diff requires from and to; use worktree_diff for raw working files"), nil
 		}
 		if a.Rev != "" || a.Path != "" || len(a.Count) > 0 {
-			return failOutcome("invalid_arguments", "diff accepts only from, to, paths and stat"), nil
+			return failOutcome("invalid_arguments", "diff accepts only from, to, paths, stat and staged"), nil
 		}
 	case "show":
 		if a.From != "" || a.To != "" || a.Paths != nil || len(a.Count) > 0 || len(a.Stat) > 0 {
@@ -104,7 +127,7 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 			a.To = "HEAD"
 		}
 	default:
-		return failOutcome("invalid_arguments", "operation must be diff, show or log"), nil
+		return failOutcome("invalid_arguments", "operation must be status, worktree_diff, diff, show or log"), nil
 	}
 	for _, rev := range []string{a.From, a.To, a.Rev} {
 		if rev != "" && (len(rev) > 256 || !gitInspectRevision.MatchString(rev) || strings.Contains(rev, "..")) {
@@ -173,7 +196,7 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 		}
 		return oid, nil
 	}
-	r := gitInspectResult{Operation: a.Operation, Path: a.Path}
+	r := gitInspectResult{Operation: a.Operation, Path: a.Path, Staged: staged}
 	for _, item := range []struct {
 		rev string
 		dst *string
@@ -187,12 +210,25 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 	diffOptions := []string{"--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--ignore-submodules=none", "--submodule=short", "--relative"}
 	var argv []string
 	switch a.Operation {
+	case "status", "worktree_diff":
+		var output *gitInspectOutput
+		output, runErr = gitInspectWorktree(ctx, root, a, r.Rev, stat)
+		if output != nil {
+			raw, seen, r.OutputTruncated = output.prefix, output.seen, output.incomplete
+		}
 	case "diff":
 		argv = append([]string{"diff"}, diffOptions...)
+		if staged {
+			argv = append(argv, "--cached")
+		}
 		if stat {
 			argv = append(argv, "--stat")
 		}
-		argv = append(argv, r.From, r.To, "--")
+		argv = append(argv, r.From)
+		if !staged {
+			argv = append(argv, r.To)
+		}
+		argv = append(argv, "--")
 		argv = append(argv, gitInspectPaths(a.Paths)...)
 	case "show":
 		if a.Path != "" {
@@ -212,7 +248,9 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 		argv = []string{"log", "--format=%H %s", "--no-notes", "--no-show-signature", fmt.Sprintf("--max-count=%d", count), rev, "--"}
 		argv = append(argv, gitInspectPaths(a.Paths)...)
 	}
-	raw, seen, runErr = gitInspectCommand(ctx, root, argv...)
+	if argv != nil {
+		raw, seen, runErr = gitInspectCommand(ctx, root, argv...)
+	}
 	if runErr != nil {
 		return gitInspectFailure(ctx, runErr, "git_error", "Git inspection failed; the object or historical file may be unavailable"), nil
 	}
@@ -222,12 +260,12 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 	build := func(n int) any {
 		result := r
 		result.Output = truncateUTF8(text, n)
-		result.OutputTruncated = seen > len(raw) || n < len(text)
+		result.OutputTruncated = r.OutputTruncated || seen > len(raw) || n < len(text)
 		return result
 	}
 	shown := fitElements(len(text), build, root)
 	outcome, err = workspaceOutcome(build(shown), root)
-	outcome.Truncated = seen > len(raw) || shown < len(text)
+	outcome.Truncated = r.OutputTruncated || seen > len(raw) || shown < len(text)
 	return outcome, err
 }
 
@@ -262,19 +300,35 @@ func gitInspectPaths(paths []string) []string {
 }
 
 type gitInspectOutput struct {
-	prefix []byte
-	seen   int
+	prefix     []byte
+	seen       int
+	limit      int
+	incomplete bool
 }
 
 func (w *gitInspectOutput) Write(p []byte) (int, error) {
 	n := len(p)
 	w.seen += n
-	keep := min(n, MaxResultBytes-len(w.prefix))
+	limit := w.limit
+	if limit == 0 {
+		limit = MaxResultBytes
+	}
+	keep := min(n, limit-len(w.prefix))
 	w.prefix = append(w.prefix, p[:keep]...)
 	return n, nil
 }
 
 func gitInspectCommand(ctx context.Context, root string, args ...string) ([]byte, int, error) {
+	output := &gitInspectOutput{}
+	err := gitInspectRun(ctx, root, output, args...)
+	return output.prefix, output.seen, err
+}
+
+func gitInspectRun(ctx context.Context, root string, output io.Writer, args ...string) error {
+	return gitInspectRunInput(ctx, root, output, nil, args...)
+}
+
+func gitInspectRunInput(ctx context.Context, root string, output io.Writer, input io.Reader, args ...string) error {
 	fixed := []string{"--no-pager"}
 	for _, setting := range []string{"core.fsmonitor=false", "core.hooksPath=" + os.DevNull, "core.attributesFile=" + os.DevNull, "core.quotePath=true", "diff.external=", "diff.submodule=short", "log.showSignature=false", "credential.helper=", "protocol.allow=never", "gc.auto=0", "maintenance.auto=false"} {
 		fixed = append(fixed, "-c", setting)
@@ -284,10 +338,8 @@ func gitInspectCommand(ctx context.Context, root string, args ...string) ([]byte
 	// Inherit neither Git overrides nor loader variables, credentials or user config.
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C", "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_SYSTEM=" + os.DevNull, "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_ATTR_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1", "GIT_TERMINAL_PROMPT=0"}
 	cmd.WaitDelay = time.Second
-	output := &gitInspectOutput{}
-	cmd.Stdout, cmd.Stderr = output, io.Discard
-	err := cmd.Run()
-	return output.prefix, output.seen, err
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, output, io.Discard
+	return cmd.Run()
 }
 
 func gitInspectFailure(ctx context.Context, err error, code, message string) ToolOutcome {

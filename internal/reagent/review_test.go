@@ -326,9 +326,12 @@ func TestChat_ReviewPipelineOffline(t *testing.T) {
 					if !strings.Contains(prompt, "Review level: "+level) {
 						t.Error("command level lost")
 					}
-					return turn(callBlock("baseline", "threads", `{"subtree":true}`), callBlock("inventory", "list_files", `{"path":"."}`), callBlock("uncommitted", "read_file", `{"path":"untracked.txt"}`)), nil
+					return turn(callBlock("baseline", "threads", `{"subtree":true}`), callBlock("inventory", "git_inspect", `{"operation":"status"}`), callBlock("uncommitted", "git_inspect", `{"operation":"worktree_diff","paths":["untracked.txt"]}`)), nil
 				case 2:
 					data(t, reviewToolResult(t, req.History, "baseline"), &baseline)
+					if !strings.Contains(string(reviewToolResult(t, req.History, "inventory").Data), "untracked") {
+						t.Error("untracked inventory missing")
+					}
 					if !strings.Contains(string(reviewToolResult(t, req.History, "uncommitted").Data), "uncommitted evidence") {
 						t.Error("uncommitted file not inspected")
 					}
@@ -1447,5 +1450,16 @@ func TestReviewPrompt_AllReviewAgentsStartFresh(t *testing.T) {
 		if !strings.Contains(text, rule) {
 			t.Errorf("missing fresh review context rule: %s", rule)
 		}
+	}
+}
+
+func TestReviewGuidance_UsesSafeWorkingTreeInspection(t *testing.T) {
+	for _, rule := range []string{"status", "worktree_diff", "staged:true", "unstaged means index -> raw worktree", "diff budget", "special index flags"} {
+		if !strings.Contains(reviewPrompt, rule) {
+			t.Errorf("review guidance missing %q", rule)
+		}
+	}
+	if strings.Contains(reviewPrompt, "cannot inspect working-tree diffs") || strings.Contains(reviewPrompt, "compare read_file contents") {
+		t.Fatal("obsolete manual comparison workaround")
 	}
 }

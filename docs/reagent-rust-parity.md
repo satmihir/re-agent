@@ -450,9 +450,9 @@ in another matrix area.
 | T35 | Natural leader exit with descendants retaining pipes versus redirected background | Bounded drain/failure distinction, output_may_be_incomplete and unknown effects; N/S |
 | T36 | SIGINT before/after startup; child cancel during exec; then ordinary turn | No-start none versus started unknown; subtree cleanup, no automatic retry, block/reset; N/S |
 | T37 | Same/overlapping/nonoverlapping canonical exec roots, per-chain-step overlap | Advisory concurrent_exec not a block; correct identities/argv/cwd/bounds; N/S |
-| T38 | git_inspect show/file/log/from..to/diff/stat with fixed repo and literals | Exact historical bytes/log/patch order and committed-only revisions; N/B |
+| T38 | git_inspect show/file/log/from..to/diff/stat, staged diff, status and worktree_diff with fixed SHA-1/SHA-256 repos and literals | Exact historical bytes, staged/unstaged layers, raw blob IDs, modes/flags/submodules, deterministic patches/fallbacks and path order; N/B |
 | T39 | git_inspect bad fields/null/option/range/ref/path/>32 paths/count>100 | Exact errors/defaults, withheld content absent even unscoped; N/S |
-| T40 | Malicious filters/external diff/textconv/hooks/pager; partial clone/promisor; missing Git | No configured programs/network/write, refused repository/output bounds; N/S plus tripwire files |
+| T40 | Malicious clean/smudge filters/external diff/textconv/fsmonitor/hooks/pager; conversion config/attributes; partial clone/promisor; missing Git | No configured programs/network/write in any inspection operation, conversion caveats, withheld names, inventory/content/output bounds; N/S plus positive-control tripwire files |
 | T41 | git_do mode off/recipe/jev; bad intent/recipe/PR/paths/null; state pruning | Exact validation/decline/snapshot/decision; named recipe cannot override Jev; N; L for classifier |
 | T42 | git_do status | No mutation; branch/upstream/staged/untracked/log/PR state and proof; N/S |
 | T43 | explain_branch | Committed comparison with default, no mutation; N/S |
@@ -483,6 +483,50 @@ manifest of **every command/proof** per recipe from Go; do not merely assert
 `status:done`. Host Git version noise is pinned or explicitly allowlisted in §3.
 Classifier calls use the Jev loopback base URL on both platforms. Offline tests do not
 prove GitHub permissions or hosting reliability.
+
+#### Deterministic raw-blob unified diff (#136)
+
+`git_inspect_diff.go` uses classic Myers furthest-reaching O((N+M)D)
+line search and frontier-trace backtracking, not Git's heuristic diff. Lines
+retain LF; an unterminated final line is distinct from its terminated form.
+Diagonals are visited from `-d` to `d`. Both search and backtracking choose
+insertion exactly when `k == -d || (k != d && V[k-1] < V[k+1])`;
+otherwise they choose deletion (equal **predecessor** reaches prefer deletion).
+There is no prefix/suffix trimming or subsequent edit reordering. Output has
+`---`/`+++` names, Git-style ranges, three context lines, merged hunks across at
+most six unchanged lines, and standard missing-final-LF markers. Identical
+inputs return an empty successful patch. Header names are quoted for control
+bytes, non-ASCII bytes, backslash or double quote. LF/tab/CR use `\n`/`\t`/`\r`,
+backslash/quote are backslash-escaped, and other control/non-ASCII bytes use
+three-digit octal (Git's path syntax, never Go hex/Unicode escapes). Ordinary
+ASCII names remain unquoted. Binary classification belongs to the caller,
+which supplies raw header names.
+
+Each blob is limited to 1,048,576 retained bytes. When either side is empty,
+render all added/deleted lines directly without a Myers pass; the byte and
+encoded-output limits still apply, but there is no edit-distance/work cap.
+For two nonempty sides, edit distance is at most 512 inclusive. Search permits at most 16,777,216 deterministic work units: one per
+frontier transition, one per line comparison, plus the line's byte length when
+the compared lengths agree (charged before comparing). Exceeding any bound
+returns `("", false)`, never a partial patch; the caller reports sizes/blob IDs.
+Memory is O(N+M+D²+output): line offsets, a byte edit script and at most 513
+frontier snapshots of 1,027 integers; no N×M allocation. Goldens pin repeated
+lines, moved blocks, newline handling, hunk boundaries and all three caps;
+generated patches are checked for minimal edit distance and with `git apply`.
+
+Raw inventory paths are sorted bytewise. Git blob IDs hash
+`blob <byte_length>\0<content>` using the repository's `--show-object-format`.
+Regular files are stream-hashed, retaining no content above 1 MiB; symlink
+blobs contain only `Readlink` target text. Gitlinks are never descended into.
+Index flags are explicit unknown comparisons, not assumed clean. Inventory
+capture is capped at 8 MiB per command, untracked listings at 1,000 selected
+paths, and the existing 32 KiB encoded-result limit still applies. Truncated
+inventory is never used to infer additions/deletions. Conversions configured
+by attributes, `core.autocrlf` or `core.eol` produce a raw-comparison caveat.
+Attribute lookup uses one `check-attr --stdin -z` process with NUL-delimited
+paths and an 8 MiB capture cap; exceeding it conservatively caveats all paths.
+Matching index stat data does not replace raw hashing: the index blob can
+contain cleaned bytes even when Git considers the working file unchanged.
 
 ### Agents and context — A01–A40 (40 families)
 
