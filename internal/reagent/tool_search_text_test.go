@@ -229,7 +229,7 @@ func TestSearchText_InvalidQueries(t *testing.T) {
 		"nul byte":          {args: `{"path":".","query":"a\u0000b"}`},
 		"no query":          {args: `{"path":"."}`},
 		"zero limit":        {args: `{"path":".","query":"x","max_results":0}`},
-		"regex compile":     {args: `{"path":"missing.txt","query":"(","regex":true}`, wantMessage: "regex does not compile"},
+		"regex compile":     {args: `{"path":"missing.txt","query":"(","regex":true}`, wantMessage: "invalid RE2 regex at byte 1: unclosed group"},
 		"regex empty match": {args: `{"path":".","query":"a*","regex":true}`, wantMessage: "empty string"},
 		"regex null":        {args: `{"path":".","query":"x","regex":null}`, wantMessage: "omitted rather than null"},
 		"regex not boolean": {args: `{"path":".","query":"x","regex":"true"}`, wantMessage: "must be a boolean"},

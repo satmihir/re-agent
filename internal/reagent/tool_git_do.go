@@ -506,14 +506,14 @@ func (r *gitDoRun) exec(argv []string) (string, int, error) {
 	command.WaitDelay = time.Second
 	err := command.Run()
 	if ctx.Err() != nil {
-		return out.String(), -1, ctx.Err()
+		return out.String(), -1, boundaryError{"run git command", ctx.Err()}
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return out.String(), exitErr.ExitCode(), nil
 	}
 	if err != nil {
-		return err.Error(), -1, nil
+		return stableError(err), -1, nil
 	}
 	return out.String(), 0, nil
 }
@@ -826,7 +826,7 @@ func (r *gitDoRun) rejectEmbedded(paths []string) error {
 			return nil
 		})
 		if err != nil {
-			return gitDoDecline{"cannot inspect untracked path: " + p + ": " + err.Error()}
+			return gitDoDecline{"cannot inspect untracked path: " + p + ": " + stableError(err)}
 		}
 	}
 	if len(embedded) > 0 {

@@ -941,3 +941,50 @@ func TestGitDo_PathsDeclineStagedLeadingSpaceOutsideSelection(t *testing.T) {
 		t.Fatal("changed HEAD or index despite staged file outside paths")
 	}
 }
+
+func TestGitDo_ProcessStartFailureUsesStableError(t *testing.T) {
+	ws := gitDoRepo(t)
+	bin := t.TempDir()
+	git := filepath.Join(bin, "git")
+	if err := os.WriteFile(git, []byte("#!/missing-reagent-interpreter\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", bin)
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"status"}`)
+	result := gitDoData(t, outcome)
+	if outcome.OK || result.Status != "failed" || len(result.Steps) != 1 {
+		t.Fatalf("start failure: %+v / %+v", outcome, result)
+	}
+	if result.Steps[0].Output != "path does not exist" || !strings.HasSuffix(result.Reason, ": path does not exist") {
+		t.Fatalf("unstable process failure: %+v", result)
+	}
+	t.Setenv("PATH", path)
+	outcome = runTool(t, NewGitDoTool(ws, nil), `{"recipe":"status"}`)
+	if !outcome.OK {
+		t.Fatalf("next status: %+v", outcome)
+	}
+}
+
+func TestGitDo_UnreadableUntrackedDirectoryUsesStableError(t *testing.T) {
+	ws := gitDoRepo(t)
+	dir := filepath.Join(ws.Root(), "blocked")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("directory permissions are not enforced")
+	}
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"commit","message":"blocked"}`)
+	result := gitDoData(t, outcome)
+	if result.Status != "declined" || result.Reason != "cannot inspect untracked path: blocked/: permission denied" || len(result.Steps) != 0 {
+		t.Fatalf("unreadable directory: %+v", result)
+	}
+}

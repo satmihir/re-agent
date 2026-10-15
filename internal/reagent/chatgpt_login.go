@@ -25,7 +25,7 @@ import (
 func chatGPTRandom() (string, error) {
 	var bytes [32]byte
 	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", err
+		return "", boundaryError{"generate ChatGPT authorization randomness", err}
 	}
 	return base64.RawURLEncoding.EncodeToString(bytes[:]), nil
 }
@@ -33,7 +33,7 @@ func chatGPTRandom() (string, error) {
 func chatGPTHostID() (string, error) {
 	var bytes [16]byte
 	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", err
+		return "", boundaryError{"generate ChatGPT authorization randomness", err}
 	}
 	bytes[6] = bytes[6]&0x0f | 0x40
 	bytes[8] = bytes[8]&0x3f | 0x80
@@ -63,7 +63,7 @@ func discoverChatGPT(ctx context.Context, client *http.Client) (chatGPTDiscovery
 	if err != nil {
 		return d, fmt.Errorf("invalid ChatGPT authorization issuer")
 	}
-	response, err := client.Do(req)
+	response, err := noRedirectClient(client).Do(req)
 	if err != nil {
 		return d, fmt.Errorf("could not discover ChatGPT authorization service")
 	}
@@ -252,7 +252,7 @@ func waitChatGPTCallback(ctx context.Context, listener net.Listener, redirect, s
 	shown.RawQuery = query.Encode()
 	port := strings.TrimPrefix(listener.Addr().String(), "127.0.0.1:")
 	mu.Lock()
-	fmt.Fprintf(out, "Opening your browser for ChatGPT sign-in.\n%s\nWaiting for approval (Ctrl-C cancels). If the callback cannot reach this machine, paste the final %s?... URL here, or use ssh -L %s:127.0.0.1:%s.\n", shown.String(), redirect, port, port)
+	fmt.Fprintf(out, "Opening your browser for ChatGPT sign-in.\n%s\nWaiting for approval (Ctrl-C cancels). If the callback cannot reach this machine, paste the final %s?... URL here, or use ssh -L %s:127.0.0.1:%s.\n", shown.Redacted(), redirect, port, port)
 	if hinted {
 		fmt.Fprintln(out, "The printed URL omits the saved identity token and may show the account picker.")
 	}
@@ -309,7 +309,7 @@ func loginChatGPT(ctx context.Context, client *http.Client, input io.Reader, out
 		listener, err = net.Listen("tcp", "127.0.0.1:0")
 	}
 	if err != nil {
-		return c, fmt.Errorf("could not listen for ChatGPT callback: %w", err)
+		return c, fmt.Errorf("could not listen for ChatGPT callback: %s", stableError(err))
 	}
 	defer listener.Close()
 	redirect := "http://" + listener.Addr().String() + "/auth/callback"
@@ -429,6 +429,9 @@ func logoutChatGPT(ctx context.Context, client *http.Client, out io.Writer) erro
 }
 
 func chatGPTVisible(text string, secrets ...string) string {
+	for _, endpoint := range []string{openAIInferenceBaseURL(), chatGPTIssuer()} {
+		text = strings.ReplaceAll(text, endpoint, redacted(endpoint))
+	}
 	for _, secret := range secrets {
 		if secret != "" {
 			text = strings.ReplaceAll(text, secret, "[redacted]")
@@ -443,7 +446,7 @@ func printChatGPTModels(ctx context.Context, client *http.Client, token string, 
 		return fmt.Errorf("invalid OpenAI inference base URL")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	response, err := client.Do(req)
+	response, err := noRedirectClient(client).Do(req)
 	if err != nil {
 		return fmt.Errorf("could not list ChatGPT models")
 	}
@@ -469,6 +472,9 @@ func printChatGPTModels(ctx context.Context, client *http.Client, token string, 
 }
 
 func chatGPTAuthCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if err := validateHTTPEnvironment(); err != nil {
+		return startupError(stderr, err.Error())
+	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	client := NewHTTPClient()

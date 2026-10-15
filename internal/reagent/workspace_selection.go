@@ -255,7 +255,9 @@ func (s *Session) selectWorkspace(ctx context.Context, destination workspaceDest
 		var err error
 		ws, err = OpenWorkspace(current.path)
 		if err != nil {
-			return *osOutcome(err), nil
+			outcome := osOutcome(err)
+			outcome.Message = err.Error()
+			return *outcome, nil
 		}
 		ws.publishMu = s.workspace.active.publishMu
 	}

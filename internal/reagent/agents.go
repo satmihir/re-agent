@@ -152,7 +152,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 		return AgentThread{}, fmt.Errorf("agents are unavailable here")
 	}
 	if ctx.Err() != nil {
-		return AgentThread{}, ctx.Err()
+		return AgentThread{}, boundaryError{"spawn agent", ctx.Err()}
 	}
 	t := s.agents
 	var initialWorkspace json.RawMessage
@@ -171,7 +171,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if ctx.Err() != nil {
-		return AgentThread{}, ctx.Err()
+		return AgentThread{}, boundaryError{"spawn agent", ctx.Err()}
 	}
 	depth, err := s.agentAdmissionLocked(a.Name)
 	if err != nil {
@@ -406,7 +406,7 @@ func (t *agentTree) sleepLocked(ctx context.Context, done func() bool) error {
 	defer wake()
 	for !done() {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return boundaryError{"wait for agent", ctx.Err()}
 		}
 		t.changed.Wait()
 	}

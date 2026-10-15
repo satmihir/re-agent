@@ -27,7 +27,7 @@ type lineReader interface {
 // newLineReader picks terminal editing only for an interactive file.
 func newLineReader(stdin io.Reader, stderr io.Writer, complete func(string, int, rune) (string, int, bool)) lineReader {
 	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		keys := &keyReader{inner: f}
+		keys := &keyReader{inner: terminalFileReader{f}}
 		reader := &terminalReader{fd: int(f.Fd()), keys: keys, prompt: "> ", complete: complete,
 			out: stderr, styled: styledOutput(stderr), size: func() (int, int, error) { return term.GetSize(int(f.Fd())) }}
 		if output, ok := stderr.(*os.File); ok && term.IsTerminal(int(output.Fd())) && os.Getenv("TERM") != "dumb" {
@@ -214,7 +214,7 @@ func (r *terminalReader) rawMode() (func(), error) {
 	} else {
 		state, err := term.MakeRaw(r.fd)
 		if err != nil {
-			return nil, err
+			return nil, boundaryError{"enter terminal raw mode", err}
 		}
 		restore = func() { _ = term.Restore(r.fd, state) }
 	}
@@ -579,7 +579,7 @@ func (r *scannerReader) Choose(pickerConfig, []choice, int) (int, error) {
 func (r *scannerReader) ReadLine() (string, error) {
 	if !r.scanner.Scan() {
 		if err := r.scanner.Err(); err != nil {
-			return "", err
+			return "", boundaryError{"read chat input", err}
 		}
 		return "", io.EOF
 	}
@@ -630,4 +630,15 @@ func completeLine(line string, pos int, key rune, commands []string, argumentsFo
 		out += " "
 	}
 	return out, len(out), true
+}
+
+// terminalFileReader owns errors from the terminal file, before key decoding.
+type terminalFileReader struct{ file *os.File }
+
+func (r terminalFileReader) Read(p []byte) (int, error) {
+	n, err := r.file.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, boundaryError{"read terminal", err}
+	}
+	return n, err
 }

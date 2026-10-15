@@ -145,7 +145,7 @@ func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 		Stream:            proxied,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot encode OpenAI request: invalid JSON data")
 	}
 	if len(body) > MaxRequestBytes {
 		return nil, &ModelError{
@@ -207,7 +207,7 @@ func encodeHistory(history []Entry) ([]any, error) {
 		case EntryTool:
 			outcome, err := json.Marshal(entry.Tool.Outcome)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("cannot encode tool outcome: invalid JSON data")
 			}
 			input = append(input, responsesToolOutput{
 				Type:   "function_call_output",

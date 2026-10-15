@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -126,9 +127,10 @@ func decodeArgs(args json.RawMessage, dst any) *ToolOutcome {
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		return failPtr("invalid_arguments", err.Error())
+		return failPtr("invalid_arguments", jsonError(err, len(args)))
 	}
-	if dec.More() {
+	var trailing json.RawMessage
+	if dec.Decode(&trailing) != io.EOF {
 		return failPtr("invalid_arguments", "arguments must be one JSON object")
 	}
 	return nil
@@ -175,7 +177,7 @@ func optionalBool(raw json.RawMessage, field string) (bool, *ToolOutcome) {
 func okOutcome(data any) (ToolOutcome, error) {
 	raw, err := json.Marshal(data)
 	if err != nil {
-		return ToolOutcome{}, fmt.Errorf("marshal tool data: %w", err)
+		return ToolOutcome{}, fmt.Errorf("cannot encode tool result: invalid JSON data")
 	}
 	return ToolOutcome{OK: true, Code: "ok", Data: raw, Effect: EffectNone}, nil
 }

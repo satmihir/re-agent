@@ -11,14 +11,14 @@ import (
 func discardTerminalInput(fd int) (err error) {
 	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFL, 0)
 	if errno != 0 {
-		return fmt.Errorf("read terminal flags: %w", errno)
+		return boundaryError{"read terminal flags", errno}
 	}
 	if err := syscall.SetNonblock(fd, true); err != nil {
-		return fmt.Errorf("drain terminal input: %w", err)
+		return boundaryError{"drain terminal input", err}
 	}
 	defer func() {
 		if restoreErr := syscall.SetNonblock(fd, flags&syscall.O_NONBLOCK != 0); restoreErr != nil && err == nil {
-			err = fmt.Errorf("restore terminal flags: %w", restoreErr)
+			err = boundaryError{"restore terminal flags", restoreErr}
 		}
 	}()
 	var pending [256]byte
@@ -35,7 +35,7 @@ func discardTerminalInput(fd int) (err error) {
 			}
 			discarded += n
 		default:
-			return fmt.Errorf("discard terminal input: %w", readErr)
+			return boundaryError{"discard terminal input", readErr}
 		}
 	}
 	// A continuing stream refuses the picker rather than waiting forever or granting on leftover keys.
@@ -49,14 +49,14 @@ type pollingReader struct{ fd int }
 func (r pollingReader) Read(p []byte) (n int, err error) {
 	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(r.fd), syscall.F_GETFL, 0)
 	if errno != 0 {
-		return 0, fmt.Errorf("read terminal flags: %w", errno)
+		return 0, boundaryError{"read terminal flags", errno}
 	}
 	if err := syscall.SetNonblock(r.fd, true); err != nil {
-		return 0, fmt.Errorf("poll terminal: %w", err)
+		return 0, boundaryError{"poll terminal", err}
 	}
 	defer func() {
 		if restoreErr := syscall.SetNonblock(r.fd, flags&syscall.O_NONBLOCK != 0); restoreErr != nil && err == nil {
-			err = fmt.Errorf("restore terminal flags: %w", restoreErr)
+			err = boundaryError{"restore terminal flags", restoreErr}
 		}
 	}()
 	n, err = syscall.Read(r.fd, p)
@@ -65,7 +65,7 @@ func (r pollingReader) Read(p []byte) (n int, err error) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("read terminal: %w", err)
+		return 0, boundaryError{"read terminal", err}
 	}
 	if n == 0 {
 		return 0, io.EOF

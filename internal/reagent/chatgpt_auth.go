@@ -54,7 +54,7 @@ func (c chatGPTCredentials) planGranted() bool {
 func chatGPTCredentialPath() (string, error) {
 	root, err := os.UserConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("find user config: %w", err)
+		return "", fmt.Errorf("user configuration directory is unavailable")
 	}
 	path := filepath.Join(root, "reagent", "chatgpt.json")
 	if testConfigPath != nil {
@@ -69,10 +69,10 @@ func loadChatGPTCredentials() (chatGPTCredentials, error) {
 	if err != nil {
 		return c, err
 	}
+	if _, err := os.Lstat(filepath.Dir(path)); os.IsNotExist(err) {
+		return c, nil
+	}
 	if err := privateDirectory(filepath.Dir(path), false); err != nil {
-		if os.IsNotExist(err) {
-			return c, nil
-		}
 		return c, fmt.Errorf("open ChatGPT credential directory: %w", err)
 	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
@@ -80,12 +80,12 @@ func loadChatGPTCredentials() (chatGPTCredentials, error) {
 		return c, nil
 	}
 	if err != nil {
-		return c, fmt.Errorf("open ChatGPT credentials: %w", err)
+		return c, fmt.Errorf("open ChatGPT credentials: %s", stableError(err))
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return c, err
+		return c, fmt.Errorf("inspect ChatGPT credentials: %s", stableError(err))
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		return c, fmt.Errorf("ChatGPT credentials must be a private regular file (0600)")
@@ -107,31 +107,34 @@ func saveChatGPTCredentials(c chatGPTCredentials) error {
 	}
 	file, err := os.CreateTemp(dir, ".chatgpt-*")
 	if err != nil {
-		return fmt.Errorf("stage ChatGPT credentials: %w", err)
+		return fmt.Errorf("stage ChatGPT credentials: %s", stableError(err))
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
 	if err := file.Chmod(0o600); err != nil {
-		return err
+		return fmt.Errorf("protect ChatGPT credentials: %s", stableError(err))
 	}
 	if err := json.NewEncoder(file).Encode(c); err != nil {
-		return fmt.Errorf("write ChatGPT credentials: %w", err)
+		return fmt.Errorf("write ChatGPT credentials: %s", stableError(err))
 	}
 	if err := file.Sync(); err != nil {
-		return err
+		return fmt.Errorf("sync ChatGPT credentials: %s", stableError(err))
 	}
 	if err := file.Close(); err != nil {
-		return err
+		return fmt.Errorf("close ChatGPT credentials: %s", stableError(err))
 	}
 	if err := os.Rename(file.Name(), path); err != nil {
-		return fmt.Errorf("replace ChatGPT credentials: %w", err)
+		return fmt.Errorf("replace ChatGPT credentials: %s", stableError(err))
 	}
 	parent, err := os.Open(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("open ChatGPT credential directory: %s", stableError(err))
 	}
 	defer parent.Close()
-	return parent.Sync()
+	if err := parent.Sync(); err != nil {
+		return fmt.Errorf("sync ChatGPT credential directory: %s", stableError(err))
+	}
+	return nil
 }
 
 func lockChatGPTCredentials(ctx context.Context) (*os.File, error) {
@@ -144,7 +147,7 @@ func lockChatGPTCredentials(ctx context.Context) (*os.File, error) {
 	}
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("open ChatGPT credential lock: %w", err)
+		return nil, fmt.Errorf("open ChatGPT credential lock: %s", stableError(err))
 	}
 	for {
 		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -153,11 +156,11 @@ func lockChatGPTCredentials(ctx context.Context) (*os.File, error) {
 		}
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
 			lock.Close()
-			return nil, fmt.Errorf("lock ChatGPT credentials: %w", err)
+			return nil, boundaryError{"lock ChatGPT credentials", err}
 		}
 		if err := waitBeforeRetry(ctx, 25*time.Millisecond); err != nil {
 			lock.Close()
-			return nil, err
+			return nil, boundaryError{"lock ChatGPT credentials", err}
 		}
 	}
 }
@@ -168,10 +171,7 @@ func unlockChatGPTCredentials(lock *os.File) {
 }
 
 func chatGPTIssuer() string {
-	if base := os.Getenv("REAGENT_OPENAI_AUTH_ISSUER"); base != "" {
-		return strings.TrimRight(base, "/")
-	}
-	return "https://auth.openai.com"
+	return endpointBaseURL("REAGENT_OPENAI_AUTH_ISSUER", "https://auth.openai.com")
 }
 
 type chatGPTTokenSet struct {
@@ -341,7 +341,7 @@ func (s *chatGPTTokenSource) Token(ctx context.Context, force bool, rejected str
 		return token, err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", boundaryError{"refresh ChatGPT credentials", err}
 	}
 	// Once consumed, a rotating token's replacement must survive caller cancellation.
 	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)

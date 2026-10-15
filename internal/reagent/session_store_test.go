@@ -1,6 +1,7 @@
 package reagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -62,7 +63,7 @@ func TestSessionStore_PrivateAtomicAndExclusive(t *testing.T) {
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	envelope.State[len(envelope.State)-1] ^= 1
+	envelope.State = bytes.Replace(envelope.State, []byte(`"phase":"model"`), []byte(`"phase":"idle"`), 1)
 	body, err = json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)
@@ -247,10 +248,12 @@ func TestSessionStore_PreservesExactNativeAndSnapshotBytes(t *testing.T) {
 	st := testSessionStore(t, NewID())
 	cp := chatCheckpoint{ID: filepath.Base(st.dir), Launch: t.TempDir(), Provider: openaiName, Model: "gpt-6-sol", Phase: "terminal", Seen: map[string]bool{"id": true}}
 	cp.History = []Entry{
-		{Kind: EntryUser, User: &UserTurn{Text: "first", Workspace: json.RawMessage(`{ "date" : "today" }`)}},
-		{Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{callBlock("id", "echo", `{}`)}, Native: NativeOutput{Provider: openaiProvider, Items: []json.RawMessage{json.RawMessage(`{ "type" : "reasoning", "id":"rs_1" }`)}}}},
-		{Kind: EntryTool, Tool: &ToolResult{CallID: "id", Name: "echo", Outcome: ToolOutcome{OK: true, Code: "ok", Effect: EffectNone, Data: json.RawMessage(`{ "answer" : 42 }`)}}},
+		{Kind: EntryUser, User: &UserTurn{Text: "first", Workspace: json.RawMessage(` { "date" : "today <&> 界" } `), Roster: json.RawMessage(` { "task" : "<tag>& café" } `)}},
+		{Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{callBlock("id", "echo", `{}`)}, Native: NativeOutput{Provider: openaiProvider, Items: []json.RawMessage{json.RawMessage(` { "type" : "reasoning", "id":"rs_1", "text" : "<think>& café 界" } `)}}}},
+		{Kind: EntryTool, Tool: &ToolResult{CallID: "id", Name: "echo", Outcome: ToolOutcome{OK: true, Code: "ok", Effect: EffectNone, Data: json.RawMessage(` { "answer" : "42 <&> 界" } `)}}},
 	}
+	cp.PendingSubmission = &UserTurn{Text: "next", Workspace: json.RawMessage(` { "pending" : "<&> 界" } `), Roster: json.RawMessage(` { "roster" : "<&> 界" } `)}
+	cp.GC.Inherited = map[string]ToolOutcome{"old": {Data: json.RawMessage(` { "old" : "<&> 界" } `)}}
 	if err := st.save(cp); err != nil {
 		t.Fatal(err)
 	}
@@ -260,8 +263,20 @@ func TestSessionStore_PreservesExactNativeAndSnapshotBytes(t *testing.T) {
 	}
 	if len(got.History) != 3 || string(got.History[0].User.Workspace) != string(cp.History[0].User.Workspace) ||
 		string(got.History[1].Assistant.Native.Items[0]) != string(cp.History[1].Assistant.Native.Items[0]) ||
-		string(got.History[2].Tool.Outcome.Data) != string(cp.History[2].Tool.Outcome.Data) {
+		string(got.History[2].Tool.Outcome.Data) != string(cp.History[2].Tool.Outcome.Data) ||
+		string(got.History[0].User.Roster) != string(cp.History[0].User.Roster) ||
+		string(got.PendingSubmission.Workspace) != string(cp.PendingSubmission.Workspace) ||
+		string(got.PendingSubmission.Roster) != string(cp.PendingSubmission.Roster) ||
+		string(got.GC.Inherited["old"].Data) != string(cp.GC.Inherited["old"].Data) {
 		t.Fatalf("raw bytes changed: %#v vs %#v", got.History, cp.History)
+	}
+	before, err := EncodeOpenAIRequest(ModelRequest{Model: cp.Model, History: cp.History})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := EncodeOpenAIRequest(ModelRequest{Model: got.Model, History: got.History})
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("resume changed next request bytes: %v", err)
 	}
 }
 
@@ -283,5 +298,97 @@ func TestSessionStore_InRunCompactOptInSurvivesResume(t *testing.T) {
 	restored.restore(cp)
 	if !restored.cfg.InRunCompact {
 		t.Fatal("resume dropped the opt-in setting")
+	}
+}
+
+func TestSessionStore_V2RepeatedSavesAreCanonical(t *testing.T) {
+	st := testSessionStore(t, "0123456789abcdef")
+	cp := chatCheckpoint{ID: "0123456789abcdef", Launch: "/fixture/workspace", Provider: openaiName, Model: "gpt-6-sol", Phase: "idle", Blocked: "<tag>& 界", Seen: map[string]bool{"z": true, "a": false}}
+	path := filepath.Join(st.dir, "checkpoint.json")
+	var first []byte
+	for i := 0; i < 3; i++ {
+		if err := st.save(cp); err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = body
+		} else if !bytes.Equal(first, body) {
+			t.Fatal("repeated save changed checkpoint bytes")
+		}
+	}
+	if !bytes.HasPrefix(first, []byte(`{"version":2,"id":"0123456789abcdef","state":{"version":2,"id":`)) ||
+		!bytes.Contains(first, []byte(`"seen":{"a":false,"z":true}`)) ||
+		!bytes.Contains(first, []byte(`"blocked":"<tag>& 界"`)) || bytes.HasSuffix(first, []byte("\n")) {
+		t.Fatalf("noncanonical checkpoint: %s", first)
+	}
+	loaded, err := st.load(cp.ID)
+	if err != nil || loaded.Version != 2 || loaded.Blocked != cp.Blocked {
+		t.Fatalf("v2 round trip: %+v %v", loaded, err)
+	}
+	if err := st.save(loaded); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(first, rewritten) {
+		t.Fatalf("round trip changed canonical bytes: %v", err)
+	}
+}
+
+func TestSessionStore_V1FixtureResumesAndMigrates(t *testing.T) {
+	const id = "0123456789abcdef"
+	st := testSessionStore(t, id)
+	body, err := os.ReadFile("testdata/checkpoint-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(st.dir, "checkpoint.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := st.load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.Version != 1 || len(cp.History) != 2 || cp.History[0].User.Text != "legacy <&> 界" || string(cp.History[1].Assistant.Native.Items[0]) != ` { "type" : "reasoning", "data" : "<&> 界" } ` {
+		t.Fatalf("legacy fixture changed: %+v", cp)
+	}
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model, cfg.WorkspacePath = openaiName, cp.Model, t.TempDir()
+	model := NewScriptedModel(turn(textBlock("continued")))
+	s := NewSession(cfg, model, NewTrace(io.Discard), io.Discard)
+	s.restore(cp)
+	s.store = st
+	result, err := s.Turn(context.Background(), "new", NewID(), filepath.Join(t.TempDir(), "trace.jsonl"))
+	if err != nil || result.Status != StatusCompleted {
+		t.Fatalf("legacy resume: %+v %v", result, err)
+	}
+	migrated, err := st.load(id)
+	if err != nil || migrated.Version != 2 || len(migrated.History) != 4 {
+		t.Fatalf("migration: %+v %v", migrated, err)
+	}
+	if string(migrated.History[1].Assistant.Native.Items[0]) != string(cp.History[1].Assistant.Native.Items[0]) {
+		t.Fatal("migration changed native bytes")
+	}
+}
+
+func TestSessionStore_PreservesRawByteShapes(t *testing.T) {
+	st := testSessionStore(t, NewID())
+	items := []json.RawMessage{nil, {}, json.RawMessage("null"), {0xff, '<', '&', '>', '\n'}}
+	cp := chatCheckpoint{ID: filepath.Base(st.dir), Launch: t.TempDir(), Provider: openaiName, Model: "gpt-6-sol", Phase: "idle", History: []Entry{{Kind: EntryAssistant, Assistant: &ModelResponse{Native: NativeOutput{Provider: openaiProvider, Items: items}}}}}
+	if err := st.save(cp); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.load(cp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, item := range got.History[0].Assistant.Native.Items {
+		if !bytes.Equal(item, items[i]) || (item == nil) != (items[i] == nil) {
+			t.Fatalf("item %d changed: %v vs %v", i, item, items[i])
+		}
 	}
 }

@@ -31,21 +31,26 @@ type Workspace struct {
 func OpenWorkspace(path string) (*Workspace, error) {
 	root, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, workspaceOpenError{err}
 	}
 	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
-		return nil, err
+		return nil, workspaceOpenError{err}
 	}
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, err
+		return nil, workspaceOpenError{err}
 	}
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace %s is not a directory", root)
 	}
 	return &Workspace{root: root, rootInfo: info, digests: make(map[string]map[string]bool), seen: make(map[string]string), publishMu: &sync.Mutex{}}, nil
 }
+
+type workspaceOpenError struct{ err error }
+
+func (e workspaceOpenError) Error() string { return stableError(e.err) }
+func (e workspaceOpenError) Unwrap() error { return e.err }
 
 // Root is the absolute directory, shown to the model as runtime context.
 func (w *Workspace) Root() string { return w.root }
@@ -244,8 +249,7 @@ func splitLines(data []byte) []string {
 	return lines
 }
 
-// osOutcome maps an OS error to the observation the model should read. It keeps
-// the syscall text but drops the host path it was attempted on (v1 §19.1).
+// osOutcome maps filesystem failures to stable observations without host paths.
 func osOutcome(err error) *ToolOutcome {
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -253,11 +257,7 @@ func osOutcome(err error) *ToolOutcome {
 	case errors.Is(err, os.ErrPermission):
 		return failPtr("permission_denied", "path is not readable")
 	}
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
-		return failPtr("io_error", pathErr.Err.Error())
-	}
-	return failPtr("io_error", err.Error())
+	return failPtr("io_error", stableError(err))
 }
 
 // publish replaces a file by writing the new bytes beside it and renaming over
