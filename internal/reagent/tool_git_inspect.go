@@ -55,7 +55,7 @@ type gitInspectResult struct {
 }
 
 func (gitInspectTool) Spec() ToolSpec {
-	return ToolSpec{Name: "git_inspect", Description: "Review local Git changes and history without writes or network, in any mode. status separates staged (base to index) and unstaged (index to working tree) changes. worktree_diff compares raw working files to rev (default HEAD), with optional literal paths and stat:true. These Go comparisons never run filters; conversion attributes/config are marked not filter-aware. Binary, oversized or diff-budget-exceeding files show sizes and blob IDs. Special index flags and submodules are reported without guessing. diff requires from and to commits; staged:true instead compares the index to from (default HEAD), with no to. Both accept paths and stat. show uses rev (default HEAD): with path returns a raw historical file; without path returns commit message and stat. log uses optional from and to (default HEAD), meaning from..to when from is given, optional paths, and count (default20, maximum100). Revisions must name single commits, not ranges/options. Paths are workspace-relative; .git/.env names and descendants are excluded even from unscoped file output. Results are a bounded prefix with explicit truncation. Promisor/partial-clone repositories are refused to prevent lazy fetching.", InputSchema: json.RawMessage(`{"type":"object","properties":{"operation":{"type":"string","enum":["status","worktree_diff","diff","show","log"]},"from":{"type":"string"},"to":{"type":"string"},"rev":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":32},"count":{"type":"integer","minimum":1,"maximum":100},"stat":{"type":"boolean"},"staged":{"type":"boolean"}},"required":["operation"],"additionalProperties":false}`), Effect: EffectClassRead}
+	return ToolSpec{Name: "git_inspect", Description: "Review local Git changes and history without writes or network, in any mode. status uses rev (default HEAD) and paths, separating staged (base to index), unstaged (index to raw working tree) and untracked changes. worktree_diff compares raw working files to rev (default HEAD), with optional literal paths and stat:true. These Go comparisons never run filters; conversion attributes/config are marked not filter-aware. Binary, oversized or diff-budget-exceeding files show sizes and blob IDs. Special index flags and submodules are reported without guessing. diff requires from and to commits; staged:true instead compares from (default HEAD) to the index, with no to. Both accept paths and stat. show uses rev (default HEAD): with path returns a raw historical file; without path returns commit message and stat. log uses optional from and to (default HEAD), meaning from..to when from is given, optional paths, and count (default20, maximum100). Revisions must name single commits, not ranges/options. Paths are workspace-relative; .git/.env names and descendants are excluded even from unscoped file output. Results are a bounded prefix with explicit truncation. Promisor/partial-clone repositories are refused to prevent lazy fetching.", InputSchema: json.RawMessage(`{"type":"object","properties":{"operation":{"type":"string","enum":["status","worktree_diff","diff","show","log"]},"from":{"type":"string"},"to":{"type":"string"},"rev":{"type":"string"},"path":{"type":"string"},"paths":{"type":"array","items":{"type":"string"},"maxItems":32},"count":{"type":"integer","minimum":1,"maximum":100},"stat":{"type":"boolean"},"staged":{"type":"boolean"}},"required":["operation"],"additionalProperties":false}`), Effect: EffectClassRead}
 }
 
 func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outcome ToolOutcome, err error) {
@@ -110,7 +110,7 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 			return failOutcome("invalid_arguments", "diff requires from and to; use worktree_diff for raw working files"), nil
 		}
 		if a.Rev != "" || a.Path != "" || len(a.Count) > 0 {
-			return failOutcome("invalid_arguments", "diff accepts only from, to, paths and stat"), nil
+			return failOutcome("invalid_arguments", "diff accepts only from, to, paths, stat and staged"), nil
 		}
 	case "show":
 		if a.From != "" || a.To != "" || a.Paths != nil || len(a.Count) > 0 || len(a.Stat) > 0 {
@@ -211,7 +211,11 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 	var argv []string
 	switch a.Operation {
 	case "status", "worktree_diff":
-		raw, seen, runErr = gitInspectWorktree(ctx, root, a, r.Rev, stat)
+		var output *gitInspectOutput
+		output, runErr = gitInspectWorktree(ctx, root, a, r.Rev, stat)
+		if output != nil {
+			raw, seen, r.OutputTruncated = output.prefix, output.seen, output.incomplete
+		}
 	case "diff":
 		argv = append([]string{"diff"}, diffOptions...)
 		if staged {
@@ -256,12 +260,12 @@ func (t gitInspectTool) Execute(ctx context.Context, args json.RawMessage) (outc
 	build := func(n int) any {
 		result := r
 		result.Output = truncateUTF8(text, n)
-		result.OutputTruncated = seen > len(raw) || n < len(text)
+		result.OutputTruncated = r.OutputTruncated || seen > len(raw) || n < len(text)
 		return result
 	}
 	shown := fitElements(len(text), build, root)
 	outcome, err = workspaceOutcome(build(shown), root)
-	outcome.Truncated = seen > len(raw) || shown < len(text)
+	outcome.Truncated = r.OutputTruncated || seen > len(raw) || shown < len(text)
 	return outcome, err
 }
 
@@ -296,9 +300,10 @@ func gitInspectPaths(paths []string) []string {
 }
 
 type gitInspectOutput struct {
-	prefix []byte
-	seen   int
-	limit  int
+	prefix     []byte
+	seen       int
+	limit      int
+	incomplete bool
 }
 
 func (w *gitInspectOutput) Write(p []byte) (int, error) {

@@ -42,41 +42,52 @@ func gitInspectInventory(ctx context.Context, root string, args ...string) ([]by
 	return out.prefix, out.seen > len(out.prefix), err
 }
 
-func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev string, stat bool) ([]byte, int, error) {
+func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev string, stat bool) (*gitInspectOutput, error) {
 	out := &gitInspectOutput{}
-	finish := func() ([]byte, int, error) { return out.prefix, out.seen, nil }
 	format, _, err := gitInspectCommand(ctx, root, "rev-parse", "--show-object-format")
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	algorithm := strings.TrimSpace(string(format))
 	if algorithm != "sha1" && algorithm != "sha256" {
-		return nil, 0, fmt.Errorf("unsupported Git object format")
+		return nil, fmt.Errorf("unsupported Git object format")
 	}
-	baseRaw, truncated, err := gitInspectInventory(ctx, root, "ls-tree", "-r", "-z", rev, "--", ".")
-	if err != nil {
-		return nil, 0, err
+	scope := gitInspectPaths(a.Paths)
+	// ls-tree supports literal pathspecs but not exclusion/glob magic.
+	treeScope := []string{"."}
+	if len(a.Paths) > 0 {
+		treeScope = nil
+		for _, p := range a.Paths {
+			treeScope = append(treeScope, ":(literal)"+path.Clean(p))
+		}
 	}
-	indexRaw, indexTruncated, err := gitInspectInventory(ctx, root, "ls-files", "--stage", "--debug", "-z", "--", ".")
+	baseRaw, truncated, err := gitInspectInventory(ctx, root, append([]string{"ls-tree", "-r", "-z", rev, "--"}, treeScope...)...)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
+	}
+	indexRaw, indexTruncated, err := gitInspectInventory(ctx, root, append([]string{"ls-files", "--stage", "--debug", "-z", "--"}, scope...)...)
+	if err != nil {
+		return nil, err
 	}
 	if truncated || indexTruncated {
 		fmt.Fprintln(out, "[truncated: inventory exceeds byte limit; comparison unavailable]")
-		out.seen = max(out.seen, MaxResultBytes+1)
-		return finish()
+		out.incomplete = true
+		return out, nil
 	}
 	base, err := gitInspectTree(baseRaw)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	index, err := gitInspectIndex(indexRaw)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	untracked, untrackedTruncated, err := gitInspectInventory(ctx, root, "ls-files", "-z", "--others", "--exclude-standard", "--", ".")
+	if err := gitInspectModuleAncestors(ctx, root, rev, a.Paths, base, index); err != nil {
+		return nil, err
+	}
+	untracked, untrackedTruncated, err := gitInspectInventory(ctx, root, append([]string{"ls-files", "-z", "--others", "--exclude-standard", "--"}, scope...)...)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	paths := make(map[string]bool)
 	modules := make(map[string]bool)
@@ -130,17 +141,31 @@ func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev 
 	sort.Strings(names)
 	conversions, err := gitInspectConversions(ctx, root, names)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	for _, p := range names {
 		if out.seen > MaxResultBytes {
 			break
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		b, i := base[p], index[p]
 		if a.Operation == "status" && !strings.Contains(i.flags, "intent-to-add") && !strings.Contains(i.flags, "unmerged") {
+			if gitInspectChange(b, i) != "" && b.mode != "160000" && i.mode != "160000" {
+				if b.oid != "" {
+					b, err = gitInspectReadBlob(ctx, root, b, algorithm)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if i.oid != "" {
+					i, err = gitInspectReadBlob(ctx, root, i, algorithm)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 			gitInspectStatus(out, "staged", p, b, i, "")
 		}
 		if i.flags != "" {
@@ -154,7 +179,7 @@ func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev 
 		current := gitInspectReadWorking(ctx, root, p, algorithm)
 		if current.note != "" {
 			if err := ctx.Err(); err != nil {
-				return nil, 0, err
+				return nil, err
 			}
 			fmt.Fprintf(out, "unknown %q: %s\n", p, current.note)
 			continue
@@ -168,10 +193,10 @@ func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev 
 				fmt.Fprintf(out, "untracked %q%s\n", p, conversion)
 				gitInspectSummary(out, gitInspectFile{}, current)
 			} else {
-				if i.oid != "" && gitInspectChange(i, current) != "" && (current.size > gitInspectContentLimit || gitInspectBinary(current.content)) {
+				if i.oid != "" && gitInspectChange(i, current) != "" && (current.size > gitInspectContentLimit || gitInspectBinary(current.content) || current.mode == "") {
 					i, err = gitInspectReadBlob(ctx, root, i, algorithm)
 					if err != nil {
-						return nil, 0, err
+						return nil, err
 					}
 				}
 				gitInspectStatus(out, "unstaged", p, i, current, conversion)
@@ -181,7 +206,7 @@ func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev 
 		if gitInspectChange(b, current) == "" {
 			continue
 		}
-		fmt.Fprintf(out, "diff --git %q %q\n", "a/"+p, "b/"+p)
+		fmt.Fprintf(out, "diff --git %s %s\n", gitInspectDiffName("a/"+p), gitInspectDiffName("b/"+p))
 		fmt.Fprintf(out, "%s %q%s\n", gitInspectChange(b, current), p, conversion)
 		if b.mode != current.mode {
 			fmt.Fprintf(out, "mode %s -> %s\n", gitInspectMode(b), gitInspectMode(current))
@@ -189,7 +214,7 @@ func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev 
 		if b.oid != "" {
 			b, err = gitInspectReadBlob(ctx, root, b, algorithm)
 			if err != nil {
-				return nil, 0, err
+				return nil, err
 			}
 		}
 		if stat {
@@ -221,9 +246,54 @@ func gitInspectWorktree(ctx context.Context, root string, a gitInspectArgs, rev 
 	}
 	if untrackedTruncated {
 		fmt.Fprintln(out, "[truncated: untracked listing]")
-		out.seen = max(out.seen, MaxResultBytes+1)
+		out.incomplete = true
 	}
-	return finish()
+	return out, nil
+}
+
+// Scoped inventories omit gitlinks above the selected path. Inspect ancestors
+// without descending into their trees, so narrowing cannot expose a submodule.
+func gitInspectModuleAncestors(ctx context.Context, root, rev string, paths []string, base, index map[string]gitInspectFile) error {
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		for parent := path.Dir(path.Clean(p)); parent != "."; parent = path.Dir(parent) {
+			if seen[parent] {
+				continue
+			}
+			seen[parent] = true
+			raw, truncated, err := gitInspectInventory(ctx, root, "ls-tree", "-z", rev, "--", ":(literal)"+parent)
+			if err != nil {
+				return fmt.Errorf("inspect gitlink ancestor: %w", err)
+			}
+			if truncated {
+				return fmt.Errorf("gitlink ancestor inventory exceeds byte limit")
+			}
+			entries, err := gitInspectTree(raw)
+			if err != nil {
+				return err
+			}
+			if f := entries[parent]; f.mode == "160000" {
+				base[parent] = f
+			}
+			// Exclude descendants, not the gitlink entry itself.
+			glob := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`, `]`, `\]`).Replace(parent)
+			raw, truncated, err = gitInspectInventory(ctx, root, "ls-files", "--stage", "--debug", "-z", "--", ":(literal)"+parent, ":(exclude,glob)"+glob+"/**")
+			if err != nil {
+				return fmt.Errorf("inspect index gitlink ancestor: %w", err)
+			}
+			if truncated {
+				return fmt.Errorf("index gitlink ancestor inventory exceeds byte limit")
+			}
+			entries, err = gitInspectIndex(raw)
+			if err != nil {
+				return err
+			}
+			if f := entries[parent]; f.mode == "160000" {
+				index[parent] = f
+			}
+		}
+	}
+	return nil
 }
 
 func gitInspectSelected(p string, paths []string) bool {
@@ -333,7 +403,7 @@ func gitInspectStatus(out io.Writer, section, p string, old, current gitInspectF
 		fmt.Fprintf(out, "mode %s -> %s\n", gitInspectMode(old), gitInspectMode(current))
 	}
 	fmt.Fprintf(out, "blob %s -> %s\n", old.oid, current.oid)
-	if current.size > gitInspectContentLimit || gitInspectBinary(current.content) {
+	if old.size > gitInspectContentLimit || current.size > gitInspectContentLimit || gitInspectBinary(old.content) || gitInspectBinary(current.content) {
 		gitInspectSummary(out, old, current)
 	}
 }
@@ -472,7 +542,7 @@ func gitInspectReadBlob(ctx context.Context, root string, f gitInspectFile, algo
 	if err != nil || content.oid != f.oid || int64(out.seen) != size {
 		return f, fmt.Errorf("blob digest mismatch")
 	}
-	content.mode = f.mode
+	content.mode, content.flags = f.mode, f.flags
 	return content, nil
 }
 

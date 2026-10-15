@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -363,12 +364,23 @@ func TestContextGC_BeforeCompactionAndSummaryUsesView(t *testing.T) {
 			r.steps = 9
 			r.task = s.history[0].User
 			r.window = 100_000
-			if !suffice {
-				r.window = 80_000
-			}
 			if !r.collectContext() {
 				t.Fatal("no pass")
 			}
+			// Keep the boundary relative to real request bytes, not prompt length.
+			scope := RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps + 1}
+			history := s.requestHistory()
+			margin := 1000
+			if !suffice {
+				summary := Summary{Text: "handoff recall old", ReplacedEntries: len(s.history), Model: r.cfg.Model}
+				history = []Entry{{Kind: EntryUser, User: r.task}, {Kind: EntrySummary, Summary: &summary}}
+				margin = 20_000
+			}
+			size, err := admissionRequestBytes(r.cfg, BuildContext(r.cfg, scope, history))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.window = int64(math.Ceil((float64(size)*s.admissionRate(r.cfg.Provider) + float64(margin)) / inRunCompactFraction))
 			status, reason := r.compactWithinRunAfterGC(context.Background(), true)
 			if status != "" {
 				t.Fatalf("%s %s", status, reason)

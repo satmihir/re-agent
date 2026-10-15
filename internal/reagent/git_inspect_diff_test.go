@@ -108,7 +108,10 @@ func TestGitInspectUnified_HeaderNamesAreQuotedAndApply(t *testing.T) {
 	for _, tc := range []struct{ name, path, quoted string }{
 		{"plain", "plain.txt", "a/plain.txt"},
 		{"space", "with space", "a/with space"},
-		{"unicode", "café", "a/café"},
+		{"unicode", "café", `"a/caf\303\251"`},
+		{"escape", "with\x1bescape", `"a/with\033escape"`},
+		{"control", "with\x01control", `"a/with\001control"`},
+		{"separator", "with\u2028separator", `"a/with\342\200\250separator"`},
 		{"newline", "line\n@@ injected @@", `"a/line\n@@ injected @@"`},
 		{"tab", "with\ttab", `"a/with\ttab"`},
 		{"backslash", "with\\slash", `"a/with\\slash"`},

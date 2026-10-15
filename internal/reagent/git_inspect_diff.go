@@ -198,10 +198,32 @@ func gitInspectHunkRange(before, count int) string {
 }
 
 func gitInspectDiffName(name string) string {
-	for _, c := range name {
-		if c < ' ' || c == 0x7f || c == '\\' || c == '"' || c == '\u2028' || c == '\u2029' {
-			return strconv.Quote(name)
+	if !strings.ContainsFunc(name, func(c rune) bool { return c < ' ' || c >= 0x7f || c == '\\' || c == '"' }) {
+		return name
+	}
+	// Git's quoted paths use octal bytes, not Go's hex/Unicode escapes.
+	var out strings.Builder
+	out.WriteByte('"')
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch c {
+		case '\\', '"':
+			out.WriteByte('\\')
+			out.WriteByte(c)
+		case '\n':
+			out.WriteString(`\n`)
+		case '\t':
+			out.WriteString(`\t`)
+		case '\r':
+			out.WriteString(`\r`)
+		default:
+			if c < ' ' || c >= 0x7f {
+				fmt.Fprintf(&out, `\%03o`, c)
+			} else {
+				out.WriteByte(c)
+			}
 		}
 	}
-	return name
+	out.WriteByte('"')
+	return out.String()
 }
