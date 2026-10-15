@@ -357,6 +357,7 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 		}
 	}
 	for i, call := range calls {
+		r.session.gcCallPath(call)
 		if ctx.Err() != nil {
 			r.recordNotExecuted(calls[i:], "cancelled")
 			return StatusCancelled, "cancelled during tool dispatch"
@@ -396,7 +397,6 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			"call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "workspace": r.cfg.WorkspacePath,
 		})
 		r.session.display.toolStarted(*call)
-		r.session.gcCallPath(call)
 		outcome, err := tool.Execute(ctx, json.RawMessage(call.Arguments))
 		if err != nil {
 			r.recordResult(call, failOutcome("internal_error", err.Error()))

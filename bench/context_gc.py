@@ -317,6 +317,8 @@ def load_frames(path, recorded=False):
             compaction = True
             compactions += 1
             originals = {}
+            if recorded_gc:
+                recorded_gc["compacted"] = True
         if kind == "model.requested":
             request, body = event, None
         elif kind == "api.attempt.started" and request is not None and body is None:
@@ -440,7 +442,8 @@ def evaluate_recorded(frames):
                         trigger="recorded:" + event.get("trigger", "unknown"),
                         expected_remaining_requests=event.get("expected_remaining_requests", 0))
             report.passes.append(item)
-            active.append(item)
+            if not event.get("compacted"):
+                active.append(item)
             report.full_price_tokens += full_price
             report.net_saving += item.net_saving
         # Charge only requests observed in this trace. Initial inherited drops

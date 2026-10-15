@@ -296,3 +296,34 @@ func TestContextGC_ReferenceRemainsUntrustedInModelHandoff(t *testing.T) {
 		t.Fatalf("reference trust: records=%+v err=%v", records, err)
 	}
 }
+
+func TestContextGC_RefusedEditStillRefreshesFileReference(t *testing.T) {
+	for _, plan := range []bool{false, true} {
+		s := gcFixture(t, openaiName)
+		s.cfg.ContextGCAgeSteps = 16
+		path := filepath.Join(s.cfg.WorkspacePath, "f")
+		if err := os.WriteFile(path, []byte("unchanged"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		gcAppend(s, "old", "read_file", `{"path":"f"}`, gcRead(t, "f", s.gcDigest(path), 1, 20))
+		gcAge(s, 15)
+		s.planMode = plan
+		if !plan {
+			registry, err := NewRegistry(Mode{ReadOnly: true}, NewReadFileTool(s.cfg.Workspace), NewEditFileTool(s.cfg.Workspace))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.cfg.Registry = registry
+		}
+		s.model = NewScriptedModel(contextResponse(openaiName, callBlock("attempt", "edit_file", `{"path":"f","old_text":"unchanged","new_text":"changed"}`)), contextResponse(openaiName, textBlock("done")))
+		r := newRun(s, "refused-reference")
+		result := r.Execute(context.Background(), "try editing f", nil, "")
+		if result.Status != StatusCompleted || s.gc.Paths["attempt"] != path {
+			t.Fatalf("plan=%t result=%+v reference=%q", plan, result, s.gc.Paths["attempt"])
+		}
+		gcRun(s).collectContext()
+		if drop, ok := s.gc.Dropped["old"]; ok {
+			t.Fatalf("plan=%t: recently referenced read dropped: %+v", plan, drop)
+		}
+	}
+}

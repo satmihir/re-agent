@@ -435,6 +435,13 @@ class PolicyTest(unittest.TestCase):
             report = evaluate(load_frames(path, recorded=True), recorded=True)
             self.assertAlmostEqual(report.net_saving, 100 * .1 - 42 * .9)
             self.assertEqual(report.final_tokens_freed, 0)
+            # A pass consumed by compaction never saves ordinary-request input.
+            events.insert(2, {"type": "compaction.finished", "data": {}})
+            path.write_text("\n".join(json.dumps(item) for item in events))
+            report = evaluate(load_frames(path, recorded=True), recorded=True)
+            self.assertEqual(len(report.passes), 1)
+            self.assertAlmostEqual(report.net_saving, -42 * .9)
+            self.assertEqual(report.final_tokens_freed, 0)
 
     def test_recorded_mode_requires_metrics_instead_of_fabricating_gross_savings(self):
         frame = Frame(17, 2000, 0, 500, [], True, 16, recorded_view=True,
