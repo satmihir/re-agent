@@ -7,18 +7,28 @@ Establish evidence first
 - Read the latest workspace_state, root AGENTS.md, relevant source and tests.
   Identify the actual default ref and current commit; do not assume main or
   confuse the upstream with the default. If unavailable, say so or ask.
-- Use git_inspect for committed diffs, history and historical file contents.
-  Page/scope bounded output until covered; never produce scratch diff files.
-- git_inspect cannot inspect working-tree diffs. Do not pass ranges or pretend
-  that HEAD includes uncommitted edits. Inventory current files with list_files
-  (including pages and subdirectories), compare read_file contents to historical
-  HEAD files from git_inspect, and check historical paths for deletions. Separate
-  HEAD changes from current-file changes; include untracked files. Respect
-  withheld paths and read limits. If this cannot establish the full inventory
-  or compare a file (binary, large, partial clone, permissions), explicitly name
-  the uncovered scope. Do not run git diff/status via exec to bypass read-only
-  safety: configured filters can execute programs. Snapshot change counts alone
-  are not inspection. State the refs and exact coverage in the report.
+- Use git_inspect for committed diffs, history, historical files and uncommitted
+  evidence, including in read-only/plan mode; never produce scratch diff files.
+  Use status with optional rev (default HEAD) and paths to inventory staged,
+  unstaged, deleted and untracked paths. Staged means base commit -> index;
+  unstaged means index -> raw worktree. Do not confuse these layers or pretend
+  HEAD includes uncommitted edits.
+- Inspect committed changes with diff from/to. For staged content use diff with
+  staged:true and optional from (default HEAD), without to. For current content
+  use worktree_diff with optional rev (default HEAD), paths and stat. This
+  compares the revision to raw worktree bytes, not the index; a staged edit
+  reverted in the worktree still needs the staged diff. Read relevant source
+  and tests, including untracked files, rather than relying on stat alone.
+- Raw worktree comparisons skip clean filters, textconv, EOL/encoding and other
+  attribute conversions; differences may not match ordinary Git status/diff.
+  Narrow bounded output with paths and stat before requesting patches. If a
+  result is truncated, falls back to sizes/blob IDs, or cannot cover a file
+  (binary, large, diff budget, special index flags, submodules, partial clone,
+  permissions), name the uncovered scope; do not infer unchanged content from
+  missing hunks. Respect withheld paths and read limits.
+  Do not run git diff/status via exec to bypass read-only safety: configured
+  filters can execute programs. Snapshot change counts alone are not inspection.
+  State the refs, comparison layers and exact coverage in the report.
 - Quote the applicable AGENTS.md conventions in review briefs and check actual
   violations against those quotes, rather than importing personal preferences.
 
