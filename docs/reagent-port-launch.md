@@ -131,3 +131,11 @@ because its result is missing. If plan permission expired, use `"$BIN" login`
 interactively before resuming; never fall back to API-key billing unnoticed.
 A lost checkpoint requires a fresh Session with the task, progress file and
 explicit filesystem/effects inspection, not a claim of transparent resumption.
+
+A terminal `limit_exceeded` Run is different from a cancelled/provider-error
+checkpoint: reopening its Session restores a **blocked** conversation. Inspect
+the trace and files first, then use `/reset` and resubmit the task plus progress
+file as fresh context (or start a fresh Session). Reset discards model history,
+not files, and is not transparent continuation. The bounded #140 pilot observed
+this refusal live. Keep root budgets unlimited for #141 as above; a finite
+per-turn step budget also counts every summary and can stop before the audits.
