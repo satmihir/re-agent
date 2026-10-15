@@ -35,6 +35,7 @@ type Config struct {
 	Agents              bool
 	agent               bool
 	agentPrefix         *agentRequestPrefix
+	prompt              *pinnedPrompt // the session's pinned instructions; nil renders from the fields
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool

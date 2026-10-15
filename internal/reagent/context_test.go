@@ -103,7 +103,9 @@ func TestInstructions_RuntimeSectionContents(t *testing.T) {
 		"Platform: " + runtime.GOOS + "\n" +
 		"Workspace: /tmp/example\n" +
 		"Mode: read, write, and execute\n" +
-		"Budget: 20 model requests and 40 tool calls per run\n"
+		"Budget: 20 model requests and 40 tool calls per run\n" +
+		"A successful switch_workspace result names the new active workspace and carries its AGENTS.md, " +
+		"which then replaces the workspace and project instructions given here.\n"
 	if section != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", section, want)
 	}

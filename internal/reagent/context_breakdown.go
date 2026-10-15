@@ -124,11 +124,9 @@ func measureContext(cfg Config, history []Entry) (contextBreakdown, error) {
 	}
 
 	b.parts = []contextPart{{label: "instructions", bytes: encodedSize(req.Instructions)}}
-	if cfg.ProjectInstructions != nil {
+	if project := promptProject(cfg); project != nil {
 		// v0 §6 U5: attribute the encoded appended section without double-counting it.
-		base := cfg
-		base.ProjectInstructions = nil
-		baseSize := encodedSize(instructions(base))
+		baseSize := encodedSize(strings.TrimSuffix(req.Instructions, projectInstructionsHeading+*project))
 		b.parts[0].bytes = baseSize
 		b.parts = append(b.parts, contextPart{label: "project instructions", bytes: encodedSize(req.Instructions) - baseSize})
 	}

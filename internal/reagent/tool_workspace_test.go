@@ -201,7 +201,7 @@ func TestWorkspaceSwitch_AliasesContainmentAndDigestIdentity(t *testing.T) {
 	}
 }
 
-func TestWorkspaceSwitch_ProjectInstructionsReloadWithoutChangingOldRequests(t *testing.T) {
+func TestWorkspaceSwitch_ProjectInstructionsArriveInTheResultAndReloadAtReset(t *testing.T) {
 	for _, kind := range []string{"loaded", "missing", "oversized", "non-UTF8", "directory", "inside symlink", "outside symlink", "withheld symlink", "broken symlink", "disabled"} {
 		t.Run(kind, func(t *testing.T) {
 			root, target := t.TempDir(), t.TempDir()
@@ -248,13 +248,26 @@ func TestWorkspaceSwitch_ProjectInstructionsReloadWithoutChangingOldRequests(t *
 			old := BuildContext(s.cfg, RequestScope{}, nil)
 			s.cfg.NoProjectInstructions = kind == "disabled"
 			s.workspaceConsent = func(context.Context, workspaceDestination) (bool, error) { return true, nil }
-			if outcome := workspaceTool(t, s, "switch_workspace", map[string]string{"path": target}); !outcome.OK {
+			outcome := workspaceTool(t, s, "switch_workspace", map[string]string{"path": target})
+			if !outcome.OK {
 				t.Fatal(outcome)
 			}
-			current := BuildContext(s.cfg, RequestScope{}, nil)
 			loaded := kind == "loaded" || kind == "inside symlink"
+			// The pinned prompt is unchanged; the result carries the new instructions.
+			current := BuildContext(s.cfg, RequestScope{}, nil)
+			if current.Instructions != old.Instructions {
+				t.Fatal("a workspace switch rewrote the pinned instructions")
+			}
+			var switched workspaceSwitchResult
+			data(t, outcome, &switched)
+			if loaded != (switched.ProjectInstructions != nil && *switched.ProjectInstructions == text) || loaded == (switched.ProjectInstructionsNote != "") {
+				t.Fatalf("switch result instructions %v, note %q", switched.ProjectInstructions, switched.ProjectInstructionsNote)
+			}
+			// Once no earlier provider output is resent, the prompt follows the active workspace.
+			s.Reset()
+			current = BuildContext(s.cfg, RequestScope{}, nil)
 			if strings.Contains(current.Instructions, "old instructions") || strings.Contains(current.Instructions, text) != loaded || !strings.Contains(old.Instructions, "old instructions") {
-				t.Fatal("effective project instructions are stale")
+				t.Fatal("effective project instructions are stale after reset")
 			}
 			for _, encode := range []func(ModelRequest) ([]byte, error){EncodeOpenAIRequest, EncodeAnthropicRequest} {
 				body, err := encode(current)
