@@ -2,8 +2,8 @@
 
 Measured 2026-10-14 PDT / 2026-10-15 UTC. Code and launch recipe:
 [Part A, PR #152](https://github.com/satmihir/re-agent/pull/152).
-This report does **not** declare #141 ready to launch: #139/#149 and working-tree
-review #136 remain separate gates.
+This report does **not** declare #141 ready to launch: #139/#149 and the review
+replay remain pending. Working-tree review #136 landed after the experiment cutoff.
 
 ## Decisions
 
@@ -17,9 +17,10 @@ review #136 remain separate gates.
   coordinated source tree. It avoids build-directory locks, not package-cache
   locks or source conflicts. No evidence here requires #124 worktrees merely
   for Cargo; incompatible source/branch changes would be a different experiment.
-- **Review replay:** deferred. `gh issue view 136 --json state,title,closedAt`
-  still reported OPEN after B1–3. No blind replay, effectiveness score, or
-  `review.txt` budget adjustment was made.
+- **Review replay:** deferred at the experiment cutoff, when `gh issue view 136
+  --json state,title,closedAt` still reported OPEN after B1–3. It subsequently
+  closed via PR #153 at 2026-10-15 05:30 UTC, after live spend had stopped. No
+  blind replay, effectiveness score, or `review.txt` budget adjustment was made.
 - **Recovery:** a terminal step-budget failure reopens as blocked, unlike a
   cancelled/provider-error checkpoint. Inspect, then `/reset` and resubmit the
   task/progress as fresh context. PR #152's launch recipe now explains this;
@@ -261,8 +262,11 @@ The separate main-based report branch also ran `go build ./... && go vet ./...
 ok  	github.com/satmihir/re-agent/internal/reagent	44.872s
 ```
 
-#136 was still open at the final prerequisite check. Therefore the PR #135 blind
-replay of #127/#130 was **not run**; known-issue recall, false positives and review
-cost remain unmeasured, and review budgets stay unchanged. Land #136 and run that
-replay as a follow-up. #139/#149 approval and freeze are still prerequisites for
-#141; this report neither launches the full translation nor refreshes goldens.
+#136 was open at the experiment-cutoff prerequisite check, then closed through
+[PR #153](https://github.com/satmihir/re-agent/pull/153) at 05:30 UTC, after B1–3
+and the conservative usage stop. This late arrival does not retrofit working-tree
+inspection into the frozen pilot binary. The PR #135 blind replay of #127/#130
+was **not run**; known-issue recall, false positives and review cost remain
+unmeasured, and budgets stay unchanged. Run that replay in a follow-up with a new
+binary containing #153 and a fresh spend tally. #139/#149 approval and freeze
+remain prerequisites for #141; no full translation or golden refresh was launched.
