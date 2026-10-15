@@ -360,7 +360,7 @@ func (s *Session) Compact(ctx context.Context, focus, runID, tracePath string) (
 	}
 	oldJSON, err := json.Marshal(s.history)
 	if err != nil {
-		return fail(StatusProtocolError, fmt.Sprintf("serialize history: %v", err))
+		return fail(StatusProtocolError, "cannot serialize history: invalid JSON data")
 	}
 	// Repeated compaction with no turn retains the last real user's marker.
 	for i := len(s.history) - 1; i >= 0; i-- {

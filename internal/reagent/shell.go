@@ -41,7 +41,7 @@ func runShellCommand(ctx context.Context, dir, command string, live io.Writer) (
 	// ErrWaitDelay means the shell exited cleanly but something it started in
 	// the background still holds the output open; the command itself finished.
 	if runErr != nil && !errors.As(runErr, &exitErr) && !errors.Is(runErr, exec.ErrWaitDelay) {
-		return ShellCommand{}, runErr
+		return ShellCommand{}, boundaryError{"run shell command", runErr}
 	}
 	record.ExitCode, record.Signal = exitStatus(process.ProcessState)
 	outputText := captured.report(&record.Output, &record.OutputBytesSeen, &record.OutputTruncated, &record.EncodingReplaced)

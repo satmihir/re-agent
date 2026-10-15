@@ -172,9 +172,34 @@ refresh failure after sending is not replayed, even on a later turn: its
 rotating token may already have been consumed. Tokens are retained locally,
 but the connection is marked as needing `reagent login`.
 
-For local fake-server tests, `REAGENT_OPENAI_AUTH_ISSUER` overrides the auth
-issuer and `REAGENT_OPENAI_BASE_URL` overrides the inference base URL (including
-`/v1`). Treat these overrides as trusted destinations: they receive credentials.
+### Endpoints and transport timeouts
+
+Trusted gateways and offline fake servers can override these base URLs:
+
+| Variable | Default | Appended route |
+| --- | --- | --- |
+| `REAGENT_OPENAI_BASE_URL` | `https://api.openai.com/v1` | `/responses`, `/models` |
+| `REAGENT_ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | `/messages` |
+| `REAGENT_JEV_BASE_URL` | `https://api.typesafe.ai/v1` | `/systemone` |
+| `REAGENT_OPENAI_AUTH_ISSUER` | `https://auth.openai.com` | OAuth routes |
+
+Include the API prefix (normally `/v1`) in inference base URLs. Empty/unset
+values keep the defaults; trailing slashes are removed. Values must be full
+HTTP(S) URLs with a host and no query or fragment. Invalid values fail at startup without echoing the
+URL; displayed/traced endpoint passwords are masked. Treat overrides as trusted
+destinations: they receive their provider's credentials. Redirects are not
+followed.
+
+`API_PROXY_URL` remains a **full OpenAI endpoint**, not a base URL. Together
+with `API_PROXY_PROVIDER=openai`, it takes precedence over the OpenAI base URL,
+uses streaming, and receives no provider API key. It does not reroute Anthropic,
+Jev or OAuth traffic; ChatGPT auth cannot be combined with it.
+
+`REAGENT_RESPONSE_HEADER_TIMEOUT` and `REAGENT_RESPONSE_IDLE_TIMEOUT` accept
+whole integer seconds from **1 to 3600**, defaulting to **600** and **300**.
+Duration strings such as `5m`, fractions and out-of-range values fail at startup.
+The settings apply to all harness HTTP clients, including authentication;
+authentication's existing overall deadlines still apply.
 
 ## In chat
 

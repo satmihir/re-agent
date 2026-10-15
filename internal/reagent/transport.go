@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +36,31 @@ const (
 // NewHTTPClient builds the client the live adapters use. Redirects are refused
 // because following one would forward the credential header (v1 §9.1).
 func NewHTTPClient() *http.Client {
-	return newHTTPClient(ResponseHeaderTimeout, ResponseIdleTimeout)
+	// CLI startup rejects malformed values before any request is made.
+	header, _ := responseTimeout("REAGENT_RESPONSE_HEADER_TIMEOUT", ResponseHeaderTimeout)
+	idle, _ := responseTimeout("REAGENT_RESPONSE_IDLE_TIMEOUT", ResponseIdleTimeout)
+	return newHTTPClient(header, idle)
+}
+
+func noRedirectClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = NewHTTPClient()
+	}
+	copy := *client
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copy
+}
+
+func responseTimeout(variable string, fallback time.Duration) (time.Duration, error) {
+	value := os.Getenv(variable)
+	if value == "" {
+		return fallback, nil
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 1 || seconds > 3600 || strings.Trim(value, "0123456789") != "" {
+		return fallback, fmt.Errorf("%s must be an integer number of seconds from 1 to 3600", variable)
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 func newHTTPClient(headerTimeout, idleTimeout time.Duration) *http.Client {
@@ -63,12 +88,33 @@ func (t idleTransport) RoundTrip(request *http.Request) (*http.Response, error) 
 		cancel(nil)
 		return nil, err
 	}
-	stalled := fmt.Errorf("the provider sent nothing for %s", t.idle)
+	stalled := &responseIdleError{idle: t.idle}
 	body := &idleBody{inner: response.Body, ctx: ctx, cancel: cancel, stalled: stalled}
 	body.timer = time.AfterFunc(t.idle, func() { cancel(stalled) })
 	body.idle = t.idle
 	response.Body = body
 	return response, nil
+}
+
+type responseIdleError struct{ idle time.Duration }
+
+func (e *responseIdleError) Error() string {
+	return fmt.Sprintf("the provider sent nothing for %s", e.idle)
+}
+
+func modelRequestFailure(err error) string {
+	var idle *responseIdleError
+	if errors.As(err, &idle) {
+		return idle.Error()
+	}
+	var auth *chatGPTTransportError
+	if errors.As(err, &auth) {
+		return auth.Error()
+	}
+	if category := stableError(err); category != "operation failed" {
+		return category
+	}
+	return "connection or response read failed"
 }
 
 // idleBody restarts the idle timer on every read that brings data.
@@ -170,7 +216,7 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 		}
 		if !overnight {
 			if err != nil {
-				return 0, nil, prior, &ModelError{Status: StatusProviderError, Message: "model request failed: " + err.Error()}
+				return 0, nil, prior, &ModelError{Status: StatusProviderError, Message: "model request failed: " + modelRequestFailure(err)}
 			}
 			if attempt >= maxAttempts {
 				return status, raw, prior, nil
@@ -235,7 +281,7 @@ func (t *transport) retryExhausted(step, attempt, status int, raw []byte, err er
 	if stream {
 		reason = "provider stream overload"
 	} else if err != nil {
-		reason = strings.ReplaceAll(err.Error(), t.endpoint, redacted(t.endpoint))
+		reason = modelRequestFailure(err)
 	} else if retryable(status) && len(raw) > 0 {
 		reason = providerError(status, raw).Error()
 	}
@@ -302,16 +348,15 @@ func (t *transport) sendOnce(ctx context.Context, attempt, step int, body []byte
 	t.trace.Write("api.attempt.started", step, map[string]any{
 		"attempt":        attempt,
 		"endpoint":       redactTokens(redacted(t.endpoint), tokens),
-		"request_body":   redactTokens(string(body), tokens),
+		"request_body":   redactTokens(redactEndpointBody(string(body), t.endpoint), tokens),
 		"request_sha256": hex.EncodeToString(digest[:]),
 	})
 
 	started := time.Now()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
 	if err != nil {
-		err = redactTokenError(err, tokens)
-		t.failed(step, attempt, 0, started, err)
-		return 0, nil, "", &ModelError{Status: StatusProviderError, Message: "invalid model request: " + err.Error()}
+		t.failed(step, attempt, 0, started, redactEndpointError(redactTokenError(err, tokens), t.endpoint))
+		return 0, nil, "", &ModelError{Status: StatusProviderError, Message: "invalid model request endpoint"}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	for name, value := range t.headers {
@@ -326,22 +371,20 @@ func (t *transport) sendOnce(ctx context.Context, attempt, step int, body []byte
 
 	response, err := t.client.Do(request)
 	if err != nil {
-		err = redactTokenError(err, tokens)
-		t.failed(step, attempt, 0, started, err)
+		t.failed(step, attempt, 0, started, redactEndpointError(redactTokenError(err, tokens), t.endpoint))
 		return 0, nil, "", err
 	}
 	defer response.Body.Close()
 
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
-		err = redactTokenError(err, tokens)
-		t.failed(step, attempt, response.StatusCode, started, err)
+		t.failed(step, attempt, response.StatusCode, started, redactEndpointError(redactTokenError(err, tokens), t.endpoint))
 		return 0, nil, "", err
 	}
 
 	// A provider error can echo a credential; do not retain it in any view.
-	raw = []byte(redactTokens(string(raw), tokens))
-	requestID := redactTokens(response.Header.Get(t.requestIDHeader), tokens)
+	raw = []byte(redactTokens(redactEndpointBody(string(raw), t.endpoint), tokens))
+	requestID := redactTokens(redactEndpointText(response.Header.Get(t.requestIDHeader), t.endpoint), tokens)
 	text, replaced := traceableBody(raw)
 	t.trace.Write("api.attempt.finished", step, map[string]any{
 		"attempt":            attempt,
@@ -359,9 +402,22 @@ func (t *transport) sendOnce(ctx context.Context, attempt, step int, body []byte
 func redacted(endpoint string) string {
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return endpoint
+		return "[invalid endpoint]"
 	}
 	return u.Redacted()
+}
+
+func redactEndpointError(err error, endpoint string) error {
+	text := strings.ReplaceAll(err.Error(), endpoint, redacted(endpoint))
+	if u, parseErr := url.Parse(endpoint); parseErr == nil && u.User != nil {
+		if password, ok := u.User.Password(); ok && password != "" {
+			text = redactTokens(text, []string{password, url.QueryEscape(password), url.PathEscape(password)})
+		}
+	}
+	if text != err.Error() {
+		return errors.New(text)
+	}
+	return err
 }
 
 func (t *transport) failed(step, attempt, status int, started time.Time, err error) {

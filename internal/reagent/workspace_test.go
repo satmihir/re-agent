@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -191,5 +192,45 @@ func TestReadSnapshot_NamedPipeDoesNotBlock(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("readSnapshot blocked on a named pipe")
+	}
+}
+
+func TestOpenWorkspace_LibraryErrorsUseStableTextAndKeepIdentity(t *testing.T) {
+	root := t.TempDir()
+	_, err := OpenWorkspace(filepath.Join(root, "missing"))
+	if err == nil || err.Error() != "path does not exist" || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing workspace: %v", err)
+	}
+	loop := filepath.Join(root, "loop")
+	if err := os.Symlink("loop", loop); err != nil {
+		t.Fatal(err)
+	}
+	_, err = OpenWorkspace(loop)
+	if err == nil || err.Error() != "operation failed" {
+		t.Fatalf("symlink loop workspace: %v", err)
+	}
+}
+
+func TestFileTools_LibraryPathErrorsUseStableText(t *testing.T) {
+	ws := testWorkspace(t, map[string]string{"file": "old"})
+	for _, tc := range []struct {
+		tool Tool
+		args string
+	}{
+		{NewReadFileTool(ws), `{"path":"file/child"}`},
+		{NewListFilesTool(ws), `{"path":"file/child"}`},
+		{NewWriteFileTool(ws), `{"path":"file/child","content":"new"}`},
+		{NewEditFileTool(ws), `{"path":"file/child","old_text":"old","new_text":"new"}`},
+	} {
+		t.Run(tc.tool.Spec().Name, func(t *testing.T) {
+			outcome := runTool(t, tc.tool, tc.args)
+			if outcome.Code != "io_error" || outcome.Message != "path component is not a directory" || outcome.Effect != EffectNone {
+				t.Fatalf("path failure: %+v", outcome)
+			}
+		})
+	}
+	outcome := runTool(t, NewReadFileTool(ws), `{"path":"file"}`)
+	if !outcome.OK {
+		t.Fatalf("next read: %+v", outcome)
 	}
 }

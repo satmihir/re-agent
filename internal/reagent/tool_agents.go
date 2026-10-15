@@ -65,7 +65,7 @@ type agentFork bool
 func (f *agentFork) UnmarshalJSON(raw []byte) error {
 	value, bad := optionalBool(raw, "fork")
 	if bad != nil {
-		return fmt.Errorf("%s", bad.Message)
+		return argumentError(bad.Message)
 	}
 	*f = agentFork(value)
 	return nil
@@ -75,11 +75,11 @@ type agentEntries []int
 
 func (e *agentEntries) UnmarshalJSON(raw []byte) error {
 	if string(raw) == "null" {
-		return fmt.Errorf("entries must be omitted rather than null")
+		return argumentError("entries must be omitted rather than null")
 	}
 	var indices []int
 	if err := json.Unmarshal(raw, &indices); err != nil {
-		return fmt.Errorf("entries must be an array of integer indices: %w", err)
+		return argumentError("entries must be an array of integer indices")
 	}
 	*e = indices
 	return nil

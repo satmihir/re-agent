@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// anthropicEndpoint is fixed. Tests pass their own to the constructor.
+// anthropicEndpoint is the provider's default inference endpoint.
 const anthropicEndpoint = "https://api.anthropic.com/v1/messages"
 
 // AnthropicModel calls the Messages API directly, through the same transport
@@ -19,7 +19,7 @@ type AnthropicModel struct {
 // header: never a request body, a trace, or an error.
 func NewAnthropicModel(apiKey, endpoint string, client *http.Client, trace *Trace) *AnthropicModel {
 	if endpoint == "" {
-		endpoint = anthropicEndpoint
+		endpoint = endpointBaseURL("REAGENT_ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1") + "/messages"
 	}
 	return &AnthropicModel{transport: &transport{
 		endpoint: endpoint,
@@ -28,7 +28,7 @@ func NewAnthropicModel(apiKey, endpoint string, client *http.Client, trace *Trac
 			"anthropic-version": "2023-06-01",
 		},
 		requestIDHeader: "request-id",
-		client:          client,
+		client:          noRedirectClient(client),
 		trace:           trace,
 	}}
 }

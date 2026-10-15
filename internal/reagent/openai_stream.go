@@ -83,10 +83,14 @@ func assembleOpenAIStream(raw []byte) ([]byte, error) {
 	}
 	encoded, err := json.Marshal(output)
 	if err != nil {
-		return nil, err
+		return nil, &ModelError{Status: StatusProtocolError, Message: "cannot encode stream output: invalid JSON data"}
 	}
 	body["output"] = encoded
-	return json.Marshal(body)
+	encoded, err = json.Marshal(body)
+	if err != nil {
+		return nil, &ModelError{Status: StatusProtocolError, Message: "cannot encode stream response: invalid JSON data"}
+	}
+	return encoded, nil
 }
 
 // streamData returns the data of each event in a server-sent event stream, in

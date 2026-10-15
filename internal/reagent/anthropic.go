@@ -119,7 +119,7 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 		OutputConfig: outputConfig,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot encode Anthropic request: invalid JSON data")
 	}
 	if len(body) > MaxRequestBytes {
 		return nil, &ModelError{
@@ -215,7 +215,7 @@ func encodeAnthropicHistoryWithCache(history []Entry, cacheEntries []int) ([]mes
 		case EntryTool:
 			outcome, err := json.Marshal(entry.Tool.Outcome)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("cannot encode tool outcome: invalid JSON data")
 			}
 			pendingResults = append(pendingResults, messagesToolResult{
 				Type:      "tool_result",

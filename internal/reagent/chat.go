@@ -634,12 +634,12 @@ func editorCommand() []string {
 func composeInEditor(editor []string, stdin, stdout, stderr *os.File) (string, error) {
 	file, err := os.CreateTemp("", "reagent-*.md")
 	if err != nil {
-		return "", err
+		return "", boundaryError{"create editor file", err}
 	}
 	name := file.Name()
 	defer os.Remove(name)
 	if err := file.Close(); err != nil {
-		return "", err
+		return "", boundaryError{"close editor file", err}
 	}
 	if len(editor) == 0 {
 		return "", errors.New("no editor configured")
@@ -647,11 +647,11 @@ func composeInEditor(editor []string, stdin, stdout, stderr *os.File) (string, e
 	command := exec.Command(editor[0], append(editor[1:], name)...)
 	command.Stdin, command.Stdout, command.Stderr = stdin, stdout, stderr
 	if err := command.Run(); err != nil {
-		return "", err
+		return "", boundaryError{"run editor", err}
 	}
 	text, err := os.ReadFile(name)
 	if err != nil {
-		return "", err
+		return "", boundaryError{"read editor file", err}
 	}
 	return string(text), nil
 }

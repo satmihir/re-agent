@@ -252,7 +252,7 @@ func TestExec_MissingExecutableAppliesNothing(t *testing.T) {
 func TestExec_ProcessStartFailureAppliesNothing(t *testing.T) {
 	ws := testWorkspace(t, map[string]string{"not-executable": "no"})
 	outcome := runTool(t, NewExecTool(ws), `{"argv":["./not-executable"],"cwd":"."}`)
-	if outcome.Code != "process_start_failed" || outcome.Effect != EffectNone {
+	if outcome.Code != "process_start_failed" || outcome.Message != "permission denied" || outcome.Effect != EffectNone {
 		t.Fatalf("got %s (%s) effect=%s", outcome.Code, outcome.Message, outcome.Effect)
 	}
 	var got execResult
@@ -802,5 +802,21 @@ func TestExec_StringArgvExplainsTheShape(t *testing.T) {
 	outcome := runTool(t, NewExecTool(ws), `{"argv":["true"],"cwd":".","shell":true}`)
 	if !strings.Contains(outcome.Message, "unknown field") {
 		t.Fatalf("got %+v", outcome)
+	}
+}
+
+func TestExec_MissingAbsoluteExecutableUsesStableError(t *testing.T) {
+	ws := testWorkspace(t, nil)
+	args, err := json.Marshal(map[string]any{"argv": []string{filepath.Join(ws.Root(), "missing")}, "cwd": "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := runTool(t, NewExecTool(ws), string(args))
+	if outcome.Code != "process_start_failed" || outcome.Message != "path does not exist" || outcome.Effect != EffectNone {
+		t.Fatalf("start failure: %+v", outcome)
+	}
+	outcome = runTool(t, NewExecTool(ws), `{"argv":["/bin/sh","-c","printf ok"],"cwd":"."}`)
+	if !outcome.OK || outcome.Effect != EffectApplied {
+		t.Fatalf("next command: %+v", outcome)
 	}
 }

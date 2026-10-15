@@ -14,7 +14,7 @@ import (
 )
 
 // v0 §10 amendment (2026-10-02): checkpoints are execution barriers, not traces.
-const checkpointVersion = 1
+const checkpointVersion = 2
 
 var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
@@ -64,12 +64,11 @@ type chatCheckpoint struct {
 	Prompt                *pinnedPrompt   `json:"prompt,omitempty"` // absent before instructions were pinned
 }
 
-// A single gob payload retains RawMessage bytes verbatim; JSON re-encodes them.
 type checkpointEnvelope struct {
-	Version int    `json:"version"`
-	ID      string `json:"id"`
-	State   []byte `json:"state"`
-	Digest  string `json:"sha256"`
+	Version int             `json:"version"`
+	ID      string          `json:"id"`
+	State   json.RawMessage `json:"state"`
+	Digest  string          `json:"sha256"`
 }
 
 type sessionStore struct {
@@ -83,7 +82,7 @@ func checkpointDirectory(id string) (string, error) {
 	}
 	root, err := os.UserCacheDir()
 	if err != nil {
-		return "", fmt.Errorf("find user cache: %w", err)
+		return "", fmt.Errorf("user cache directory is unavailable")
 	}
 	dir := filepath.Join(root, "reagent", "sessions", id)
 	if testCachePath != nil {
@@ -95,12 +94,12 @@ func checkpointDirectory(id string) (string, error) {
 func privateDirectory(path string, create bool) error {
 	if create {
 		if err := os.MkdirAll(path, 0o700); err != nil {
-			return err
+			return fmt.Errorf("create session directory: %s", stableError(err))
 		}
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect session directory: %s", stableError(err))
 	}
 	if !info.IsDir() || info.Mode().Perm() != 0o700 {
 		return fmt.Errorf("session directory %s must be private (0700) and not a symlink", path)
@@ -119,7 +118,7 @@ func openSessionStore(id string, create bool) (*sessionStore, error) {
 	}
 	if create {
 		if err := os.Mkdir(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("create session %s: %w", id, err)
+			return nil, fmt.Errorf("create session %s: %s", id, stableError(err))
 		}
 	}
 	if err := privateDirectory(dir, false); err != nil {
@@ -127,11 +126,11 @@ func openSessionStore(id string, create bool) (*sessionStore, error) {
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("open session lock: %w", err)
+		return nil, fmt.Errorf("open session lock: %s", stableError(err))
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		lock.Close()
-		return nil, fmt.Errorf("session %s is already open: %w", id, err)
+		return nil, fmt.Errorf("session %s is already open or cannot be locked", id)
 	}
 	return &sessionStore{dir: dir, lock: lock}, nil
 }
@@ -150,40 +149,44 @@ func (st *sessionStore) save(cp chatCheckpoint) error {
 		testCachePath(filepath.Join(st.dir, "checkpoint.json"))
 	}
 	cp.Version = checkpointVersion
-	var state bytes.Buffer
-	if err := gob.NewEncoder(&state).Encode(cp); err != nil {
-		return fmt.Errorf("encode checkpoint state: %w", err)
-	}
-	body, err := json.Marshal(checkpointEnvelope{Version: checkpointVersion, ID: cp.ID, State: state.Bytes(), Digest: fmt.Sprintf("%x", sha256.Sum256(state.Bytes()))})
+	persisted, err := checkpointRawJSON(cp, false)
 	if err != nil {
-		return fmt.Errorf("encode checkpoint: %w", err)
+		return err
+	}
+	state, err := canonicalCheckpointJSON(persisted)
+	if err != nil {
+		return err
+	}
+	body, err := canonicalCheckpointJSON(checkpointEnvelope{Version: checkpointVersion, ID: cp.ID, State: state, Digest: fmt.Sprintf("%x", sha256.Sum256(state))})
+	if err != nil {
+		return err
 	}
 	file, err := os.CreateTemp(st.dir, ".checkpoint-*")
 	if err != nil {
-		return fmt.Errorf("stage checkpoint: %w", err)
+		return fmt.Errorf("stage checkpoint: %s", stableError(err))
 	}
 	defer os.Remove(file.Name())
 	if _, err = file.Write(body); err != nil {
 		file.Close()
-		return fmt.Errorf("write checkpoint: %w", err)
+		return fmt.Errorf("write checkpoint: %s", stableError(err))
 	}
 	if err = file.Sync(); err != nil {
 		file.Close()
-		return fmt.Errorf("sync checkpoint: %w", err)
+		return fmt.Errorf("sync checkpoint: %s", stableError(err))
 	}
 	if err = file.Close(); err != nil {
-		return fmt.Errorf("close checkpoint: %w", err)
+		return fmt.Errorf("close checkpoint: %s", stableError(err))
 	}
 	if err = os.Rename(file.Name(), filepath.Join(st.dir, "checkpoint.json")); err != nil {
-		return fmt.Errorf("replace checkpoint: %w", err)
+		return fmt.Errorf("replace checkpoint: %s", stableError(err))
 	}
 	dir, err := os.Open(st.dir)
 	if err != nil {
-		return fmt.Errorf("open checkpoint directory: %w", err)
+		return fmt.Errorf("open checkpoint directory: %s", stableError(err))
 	}
 	defer dir.Close()
 	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("sync checkpoint directory: %w", err)
+		return fmt.Errorf("sync checkpoint directory: %s", stableError(err))
 	}
 	return nil
 }
@@ -197,30 +200,46 @@ func (st *sessionStore) load(id string) (chatCheckpoint, error) {
 	path := filepath.Join(st.dir, "checkpoint.json")
 	info, err := os.Lstat(path)
 	if err != nil {
-		return cp, fmt.Errorf("session %s checkpoint: %w", id, err)
+		return cp, fmt.Errorf("session %s checkpoint: %s", id, stableError(err))
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		return cp, fmt.Errorf("session %s checkpoint is not a private regular file", id)
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return cp, fmt.Errorf("read session %s: %w", id, err)
+		return cp, fmt.Errorf("read session %s: %s", id, stableError(err))
 	}
 	var envelope checkpointEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return cp, fmt.Errorf("corrupt session %s: %w", id, err)
+		return cp, fmt.Errorf("corrupt session %s: invalid checkpoint JSON", id)
 	}
-	if envelope.Version != checkpointVersion {
+	if envelope.Version != 1 && envelope.Version != checkpointVersion {
 		return cp, fmt.Errorf("session %s has unsupported checkpoint version %d", id, envelope.Version)
 	}
 	if envelope.ID != id || len(envelope.State) == 0 {
 		return cp, fmt.Errorf("corrupt session %s: invalid checkpoint envelope", id)
 	}
-	if envelope.Digest != fmt.Sprintf("%x", sha256.Sum256(envelope.State)) {
+	state := []byte(envelope.State)
+	if envelope.Version == 1 {
+		if err := json.Unmarshal(envelope.State, &state); err != nil {
+			return cp, fmt.Errorf("corrupt session %s: invalid legacy checkpoint payload", id)
+		}
+	}
+	if envelope.Digest != fmt.Sprintf("%x", sha256.Sum256(state)) {
 		return cp, fmt.Errorf("corrupt session %s: checkpoint checksum mismatch", id)
 	}
-	if err := gob.NewDecoder(bytes.NewReader(envelope.State)).Decode(&cp); err != nil {
-		return cp, fmt.Errorf("corrupt session %s: %w", id, err)
+	if envelope.Version == 1 {
+		if err := gob.NewDecoder(bytes.NewReader(state)).Decode(&cp); err != nil {
+			return cp, fmt.Errorf("corrupt session %s: invalid legacy checkpoint state", id)
+		}
+	} else {
+		if err := json.Unmarshal(state, &cp); err != nil {
+			return cp, fmt.Errorf("corrupt session %s: invalid checkpoint state", id)
+		}
+		cp, err = checkpointRawJSON(cp, true)
+		if err != nil {
+			return cp, fmt.Errorf("corrupt session %s: %w", id, err)
+		}
 	}
 	if cp.Version != envelope.Version {
 		return cp, fmt.Errorf("corrupt session %s: mismatched version", id)

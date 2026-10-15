@@ -104,7 +104,7 @@ func (t searchTextTool) Execute(_ context.Context, args json.RawMessage) (ToolOu
 	if regex {
 		re, err := regexp.Compile(a.Query)
 		if err != nil {
-			return failOutcome("invalid_arguments", "regex does not compile: "+err.Error()), nil
+			return failOutcome("invalid_arguments", regexError(a.Query, err)), nil
 		}
 		if re.MatchString("") {
 			return failOutcome("invalid_arguments", "pattern matches the empty string, so it would match every line"), nil

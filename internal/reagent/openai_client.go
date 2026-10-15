@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"strings"
 )
 
 // openAIEndpoint is the provider's default inference endpoint.
@@ -38,7 +36,7 @@ func NewOpenAIModel(apiKey, endpoint string, client *http.Client, trace *Trace) 
 		endpoint:        endpoint,
 		headers:         headers,
 		requestIDHeader: "x-request-id",
-		client:          client,
+		client:          noRedirectClient(client),
 		trace:           trace,
 	}}
 }
@@ -92,10 +90,7 @@ func (m *OpenAIModel) Generate(ctx context.Context, req ModelRequest) (ModelResp
 }
 
 func openAIInferenceBaseURL() string {
-	if base := os.Getenv("REAGENT_OPENAI_BASE_URL"); base != "" {
-		return strings.TrimRight(base, "/")
-	}
-	return "https://api.openai.com/v1"
+	return endpointBaseURL("REAGENT_OPENAI_BASE_URL", "https://api.openai.com/v1")
 }
 
 func newChatGPTModel(source *chatGPTTokenSource, endpoint string, client *http.Client, trace *Trace) *OpenAIModel {

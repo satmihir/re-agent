@@ -36,16 +36,18 @@ func drippingServer(t *testing.T, pause time.Duration, chunks ...string) *httpte
 // A reply that keeps arriving is read to the end, however long it takes in
 // total: here six times the idle bound.
 func TestTransport_SteadyReplyOutlastsTheIdleBound(t *testing.T) {
-	chunks := strings.Split("a,b,c,d,e,f,g,h,i,j,k,l", ",")
+	// Leave scheduling headroom under -race while still exceeding the idle bound.
+	const idle = 200 * time.Millisecond
+	chunks := strings.Split(strings.Repeat("abcdefghijkl", 4), "")
 	server := drippingServer(t, 25*time.Millisecond, chunks...)
-	tr := &transport{endpoint: server.URL, client: newHTTPClient(time.Second, 50*time.Millisecond), trace: NewTrace(io.Discard)}
+	tr := &transport{endpoint: server.URL, client: newHTTPClient(time.Second, idle), trace: NewTrace(io.Discard)}
 
 	started := time.Now()
 	status, raw, err := tr.call(context.Background(), 1, []byte("{}"), nil)
 	if err != nil || status != http.StatusOK || string(raw) != strings.Join(chunks, "") {
 		t.Fatalf("status %d, body %q, err %v", status, raw, err)
 	}
-	if elapsed := time.Since(started); elapsed < 6*50*time.Millisecond {
+	if elapsed := time.Since(started); elapsed < 6*idle {
 		t.Fatalf("finished in %s; the test did not outlast the idle bound", elapsed)
 	}
 }

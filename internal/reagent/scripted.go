@@ -20,13 +20,13 @@ type ScriptedModel struct {
 func LoadScript(path string) (*ScriptedModel, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read script %s: %s", path, stableError(err))
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var responses []ModelResponse
 	if err := dec.Decode(&responses); err != nil {
-		return nil, fmt.Errorf("parse script %s: %w", path, err)
+		return nil, fmt.Errorf("parse script %s: %s", path, jsonError(err, len(raw)))
 	}
 	if len(responses) == 0 {
 		return nil, fmt.Errorf("script %s contains no responses", path)

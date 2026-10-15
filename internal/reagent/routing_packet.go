@@ -89,7 +89,7 @@ func buildRoutingPacket(cfg Config, history []Entry, planMode bool, routes []jev
 	encode := func(state routingState) (string, error) {
 		body, err := json.Marshal(state)
 		if err != nil {
-			return "", fmt.Errorf("encode routing state: %w", err)
+			return "", fmt.Errorf("cannot encode routing state: invalid JSON data")
 		}
 		if _, err := encodeJevRequest(string(body), routes); err != nil {
 			return "", err

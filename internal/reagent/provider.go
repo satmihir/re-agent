@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // Everywhere the choice of provider matters is in this file. The loop,
@@ -238,4 +239,32 @@ func authModeLabel(mode string) string {
 		return "API proxy"
 	}
 	return ""
+}
+
+// endpointBaseURL preserves a gateway's path prefix when an API path is appended.
+func endpointBaseURL(variable, fallback string) string {
+	if value := os.Getenv(variable); value != "" {
+		return strings.TrimRight(value, "/")
+	}
+	return fallback
+}
+
+func validateHTTPEnvironment() error {
+	for _, variable := range []string{"REAGENT_OPENAI_BASE_URL", "REAGENT_OPENAI_AUTH_ISSUER", "REAGENT_ANTHROPIC_BASE_URL", "REAGENT_JEV_BASE_URL"} {
+		value := os.Getenv(variable)
+		if value == "" {
+			continue
+		}
+		u, err := url.Parse(value)
+		// Never quote parser errors: the value may contain a password.
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(value, "#") {
+			return fmt.Errorf("%s must be a full http or https URL with a host and no query or fragment", variable)
+		}
+	}
+	for _, variable := range []string{"REAGENT_RESPONSE_HEADER_TIMEOUT", "REAGENT_RESPONSE_IDLE_TIMEOUT"} {
+		if _, err := responseTimeout(variable, time.Second); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -361,6 +361,28 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "edit-error-recovery": {
+        "missing_editor": True,
+        "script": [reply("Next ordinary turn works.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "/edit"), ("key", "enter"),
+            ("wait", "error: run editor: path does not exist", 5),
+            ("wait_status", "scripted / low", 5),
+            ("show", "owned editor error and restored prompt"),
+            ("expect", "screen_has", "error: run editor: path does not exist"),
+            ("expect", "region_after_output"),
+            ("expect", "status_row_last"),
+            ("type", "next question"), ("key", "enter"),
+            ("wait", "Next ordinary turn works.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("show", "normal turn succeeds after the editor launch failure"),
+            ("expect", "all_lines", ["error: run editor: path does not exist", "Next ordinary turn works.", "completed"]),
+            ("expect", "all_lack", ["fork/exec", "no such file or directory", "missing-editor", "^[["]),
+            ("expect", "region_after_output"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "interrupt-shell-command": {
         "script": [reply("unused")],
         "steps": [
@@ -791,6 +813,8 @@ def run(binary, name, scenario, workspace):
     if scenario.get("auto"): 
         extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL="http://127.0.0.1:1/v1/responses",
                          TYPESAFE_API_KEY="", REAGENT_MODEL="")
+    if scenario.get("missing_editor"):
+        extra_env["VISUAL"] = os.path.join(workspace, "missing-editor")
     editor_path = None
     if "editor" in scenario:
         editor_path = os.path.join(workspace, "tty-editor")

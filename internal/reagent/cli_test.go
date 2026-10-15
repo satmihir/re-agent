@@ -387,7 +387,7 @@ func TestMain_UnknownFlagStaysOffStdout(t *testing.T) {
 	if code != exitUsage {
 		t.Fatalf("exit %d, want %d", code, exitUsage)
 	}
-	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "flag provided but not defined") {
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown flag --bogus") {
 		t.Fatalf("stdout %q, stderr %q", stdout.String(), stderr.String())
 	}
 }

@@ -69,7 +69,7 @@ func TestJev_InvalidArgumentsNeverSend(t *testing.T) {
 	}{
 		{"missing key", func(j *jevClient, _ *string, _ *[]jevRoute) { j.key = "" }},
 		{"invalid key", func(j *jevClient, _ *string, _ *[]jevRoute) { j.key = "secret\nvalue" }},
-		{"credential URL", func(j *jevClient, _ *string, _ *[]jevRoute) { j.endpoint = "https://private:secret@example.invalid/" }},
+		{"query URL", func(j *jevClient, _ *string, _ *[]jevRoute) { j.endpoint = "https://example.invalid/?secret" }},
 		{"invalid URL", func(j *jevClient, _ *string, _ *[]jevRoute) { j.endpoint = ":secret" }},
 		{"blank state", func(_ *jevClient, state *string, _ *[]jevRoute) { *state = " \n" }},
 		{"state bound", func(_ *jevClient, state *string, _ *[]jevRoute) { *state = strings.Repeat("x", jevMaxRequestBytes) }},

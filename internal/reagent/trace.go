@@ -94,7 +94,7 @@ func (t *Trace) Open(sessionID, runID, path string) {
 func DefaultTracePath(runID string) (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
-		return "", err
+		return "", boundaryError{"locate trace cache", err}
 	}
 	path := filepath.Join(dir, "reagent", "runs", runID, "events.jsonl")
 	if testCachePath != nil {
@@ -153,5 +153,5 @@ func (t *Trace) Close() {
 func (t *Trace) disable(cause error) {
 	t.off = true
 	t.Close()
-	fmt.Fprintf(t.warn, "warning: tracing disabled, this run is not recorded: %v\n", cause)
+	fmt.Fprintf(t.warn, "warning: tracing disabled, this run is not recorded: %s\n", stableError(cause))
 }

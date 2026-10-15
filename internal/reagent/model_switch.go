@@ -51,7 +51,7 @@ func renderModelHandoff(history []Entry) (*modelHandoff, error) {
 	}
 	body, err := json.Marshal(entries)
 	if err != nil {
-		return nil, fmt.Errorf("encode historical conversation: %w", err)
+		return nil, fmt.Errorf("cannot encode historical conversation: invalid JSON data")
 	}
 	plan := ""
 	for i := len(history) - 1; i >= 0; i-- {
@@ -185,13 +185,13 @@ func admissionRequestBytes(cfg Config, req ModelRequest) (int, error) {
 				Type string `json:"type"`
 			}
 			if err := json.Unmarshal(item, &kind); err != nil {
-				return 0, fmt.Errorf("measure native item type: %w", err)
+				return 0, fmt.Errorf("measure native item type: %s", jsonError(err, len(item)))
 			}
 			switch kind.Type {
 			case "reasoning", "thinking", "redacted_thinking":
 				encoded, err := json.Marshal(item)
 				if err != nil {
-					return 0, fmt.Errorf("measure native reasoning bytes: %w", err)
+					return 0, fmt.Errorf("cannot measure native reasoning bytes: invalid JSON data")
 				}
 				size -= len(encoded)
 			}

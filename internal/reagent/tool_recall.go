@@ -42,7 +42,7 @@ func (t recallTool) Execute(_ context.Context, args json.RawMessage) (ToolOutcom
 	// Keep the envelope's effect none even when the recalled command wrote files.
 	raw, err := json.Marshal(original)
 	if err != nil {
-		return ToolOutcome{}, fmt.Errorf("encode recalled outcome: %w", err)
+		return ToolOutcome{}, fmt.Errorf("cannot encode recalled outcome: invalid JSON data")
 	}
 	out := ToolOutcome{OK: true, Code: "ok", Data: raw, Effect: EffectNone}
 	var read readFileResult

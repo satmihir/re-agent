@@ -265,7 +265,7 @@ func (r *Run) routeNext(ctx context.Context) error {
 		}
 		candidate, err := stageAutoCandidate(ctx, s, route)
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return boundaryError{"choose model route", ctx.Err()}
 		}
 		if err != nil {
 			excluded = append(excluded, route.ID+": "+err.Error())
@@ -313,7 +313,7 @@ func (r *Run) routeNext(ctx context.Context) error {
 			if ctx.Err() != nil {
 				metadata["action"] = "cancelled"
 				r.trace.Write("auto.route", r.steps+1, metadata)
-				return ctx.Err()
+				return boundaryError{"choose model route", ctx.Err()}
 			}
 			if err != nil {
 				fallbackReason = err.Error()

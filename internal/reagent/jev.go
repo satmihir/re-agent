@@ -84,15 +84,9 @@ type jevClient struct {
 
 func newJevClient(key, endpoint string, client *http.Client) *jevClient {
 	if endpoint == "" {
-		endpoint = jevEndpoint
+		endpoint = endpointBaseURL("REAGENT_JEV_BASE_URL", "https://api.typesafe.ai/v1") + "/systemone"
 	}
-	if client == nil {
-		client = NewHTTPClient()
-	}
-	// Redirects must not forward the key, even when a caller supplies the client.
-	copy := *client
-	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &jevClient{key: key, endpoint: endpoint, client: &copy, deadline: jevDeadline}
+	return &jevClient{key: key, endpoint: endpoint, client: noRedirectClient(client), deadline: jevDeadline}
 }
 
 func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute) (decision jevDecision, err error) {
@@ -101,7 +95,7 @@ func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute)
 	ctx, cancel := context.WithTimeout(ctx, j.deadline)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
-		return decision, err
+		return decision, boundaryError{"Jev request", err}
 	}
 	body, err := encodeJevRequest(state, routes)
 	decision.RequestBytes = len(body)
@@ -139,7 +133,7 @@ func (j *jevClient) decide(ctx context.Context, state string, routes []jevRoute)
 		return decision, fmt.Errorf("Jev probabilities do not sum to one")
 	}
 	if err := ctx.Err(); err != nil {
-		return decision, err
+		return decision, boundaryError{"Jev request", err}
 	}
 	decision.Route, decision.Confidence, decision.Probabilities = answer.Choice, *answer.Confidence, probabilities
 	return decision, nil
@@ -153,12 +147,12 @@ func (j *jevClient) post(ctx context.Context, body []byte, decision *jevDecision
 	}
 	// Endpoint errors deliberately omit URL text, which could itself contain credentials.
 	endpoint, err := url.Parse(j.endpoint)
-	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") {
+	if err != nil || endpoint.Host == "" || endpoint.RawQuery != "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") {
 		return decoded, fmt.Errorf("invalid Jev endpoint")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
-		return decoded, fmt.Errorf("prepare Jev request: %w", err)
+		return decoded, fmt.Errorf("invalid Jev request endpoint")
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+j.key)
@@ -166,9 +160,9 @@ func (j *jevClient) post(ctx context.Context, body []byte, decision *jevDecision
 	response, err := j.client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return decoded, fmt.Errorf("Jev request: %w", ctx.Err())
+			return decoded, boundaryError{"Jev request", ctx.Err()}
 		}
-		return decoded, fmt.Errorf("send Jev request: %w", err)
+		return decoded, fmt.Errorf("could not send Jev request")
 	}
 	defer response.Body.Close()
 	decision.HTTPStatus = response.StatusCode
@@ -179,12 +173,12 @@ func (j *jevClient) post(ctx context.Context, body []byte, decision *jevDecision
 	raw, err := io.ReadAll(io.LimitReader(response.Body, jevMaxResponseBytes+1))
 	if err != nil {
 		if ctx.Err() != nil {
-			return decoded, fmt.Errorf("read Jev response: %w", ctx.Err())
+			return decoded, boundaryError{"read Jev response", ctx.Err()}
 		}
-		return decoded, fmt.Errorf("read Jev response: %w", err)
+		return decoded, fmt.Errorf("read Jev response: %s", stableError(err))
 	}
 	if err := ctx.Err(); err != nil {
-		return decoded, err
+		return decoded, boundaryError{"Jev request", err}
 	}
 	if len(raw) > jevMaxResponseBytes {
 		return decoded, fmt.Errorf("Jev response exceeds the %d byte limit", jevMaxResponseBytes)
@@ -273,7 +267,7 @@ func encodeJevRequest(state string, routes []jevRoute) ([]byte, error) {
 		"route": {Type: "choice", Instructions: jevInstructions, Criteria: criteria},
 	}})
 	if err != nil {
-		return nil, fmt.Errorf("encode Jev request: %w", err)
+		return nil, fmt.Errorf("cannot encode Jev request: invalid JSON data")
 	}
 	if len(body) > jevMaxRequestBytes {
 		return body, fmt.Errorf("Jev request exceeds the %d byte limit", jevMaxRequestBytes)

@@ -71,7 +71,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			writeCommandHelp(stdout, command, fs)
 			return exitOK
 		}
-		return usage(stderr, command, err.Error())
+		return usage(stderr, command, flagParseError(fs, args[1:]))
 	}
 	consumed := len(args[1:]) - len(fs.Args())
 	terminated := consumed > 0 && args[consumed] == "--"
@@ -117,6 +117,10 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, "--agents cannot be combined with --scripted")
 	case options.script != "" && options.showContext:
 		return usage(stderr, command, "--show-context previews a live request, so it cannot be combined with --scripted")
+	}
+
+	if err := validateHTTPEnvironment(); err != nil {
+		return startupError(stderr, err.Error())
 	}
 
 	var saved chatCheckpoint
@@ -297,7 +301,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			return exitRunFail
 		}
 		if _, err := stdout.Write(append(body, '\n')); err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
+			fmt.Fprintf(stderr, "error: write stdout: %s\n", stableError(err))
 			return exitRunFail
 		}
 		return exitOK
@@ -546,6 +550,10 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)")
 	fmt.Fprintln(w, "  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)")
 	fmt.Fprintln(w, "  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)")
+	fmt.Fprintln(w, "  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)")
+	fmt.Fprintln(w, "  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)")
+	fmt.Fprintln(w, "  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)")
+	fmt.Fprintln(w, "  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)")
 	fmt.Fprintln(w, "  NO_COLOR                            turn off styling")
 }
 
@@ -778,11 +786,55 @@ func readPrompt(path string, stdin io.Reader) (string, error) {
 		raw, err = os.ReadFile(path)
 	}
 	if err != nil {
-		return "", err
+		return "", boundaryError{"read prompt", err}
 	}
 	prompt := strings.TrimSuffix(string(raw), "\n")
 	if strings.TrimSpace(prompt) == "" {
 		return "", fmt.Errorf("%s contains no prompt", path)
 	}
 	return prompt, nil
+}
+
+func flagParseError(fs *flag.FlagSet, args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" || arg == "-" || !strings.HasPrefix(arg, "-") {
+			break
+		}
+		name := strings.TrimPrefix(arg, "-")
+		name = strings.TrimPrefix(name, "-")
+		name, value, hasValue := strings.Cut(name, "=")
+		if name == "" || strings.HasPrefix(name, "-") {
+			return fmt.Sprintf("invalid flag name %q", arg)
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			return "unknown flag --" + name
+		}
+		expected := "text"
+		if getter, ok := f.Value.(flag.Getter); ok {
+			switch getter.Get().(type) {
+			case bool:
+				expected = "a boolean (true or false)"
+				if !hasValue {
+					continue
+				}
+			case int:
+				expected = "an integer"
+			case time.Duration:
+				expected = "a duration (for example 30s or 12h)"
+			}
+		}
+		if !hasValue {
+			if i+1 == len(args) {
+				return "--" + name + " requires " + expected
+			}
+			i++
+			value = args[i]
+		}
+		if err := f.Value.Set(value); err != nil {
+			return "--" + name + " expects " + expected
+		}
+	}
+	return "invalid command flags"
 }

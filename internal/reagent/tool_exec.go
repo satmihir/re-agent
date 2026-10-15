@@ -219,13 +219,13 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 
 	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
-		return ToolOutcome{}, fmt.Errorf("create stdout pipe: %w", err)
+		return ToolOutcome{}, fmt.Errorf("create stdout pipe: %s", stableError(err))
 	}
 	defer stdoutRead.Close()
 	defer stdoutWrite.Close()
 	stderrRead, stderrWrite, err := os.Pipe()
 	if err != nil {
-		return ToolOutcome{}, fmt.Errorf("create stderr pipe: %w", err)
+		return ToolOutcome{}, fmt.Errorf("create stderr pipe: %s", stableError(err))
 	}
 	defer stderrRead.Close()
 	defer stderrWrite.Close()
@@ -339,7 +339,7 @@ func classifyRun(parent, deadline context.Context, runErr error, started, output
 		if parent.Err() != nil {
 			return "cancelled", "the run was cancelled before the command started", EffectNone
 		}
-		return "process_start_failed", runErr.Error(), EffectNone
+		return "process_start_failed", stableError(runErr), EffectNone
 	}
 
 	result.ExitCode, result.Signal = exitStatus(state)
@@ -358,7 +358,7 @@ func classifyRun(parent, deadline context.Context, runErr error, started, output
 	case runErr != nil:
 		var exitErr *exec.ExitError
 		if !errors.As(runErr, &exitErr) {
-			return "command_wait_failed", runErr.Error(), EffectUnknown
+			return "command_wait_failed", stableError(runErr), EffectUnknown
 		}
 		return "command_failed", "the command exited with a failure status", EffectApplied
 	}
