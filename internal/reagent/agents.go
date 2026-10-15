@@ -290,7 +290,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	if sharing {
 		user := &UserTurn{Text: prompt, Workspace: initialWorkspace, Roster: child.rosterJSON(), Plan: planMarkerFor(history, cfg.PlanMode)}
 		projected := append(append([]Entry(nil), child.requestHistory()...), Entry{Kind: EntryUser, User: user})
-		_, err = validateDestination(cfg, projected, contextWindow(cfg.Model), s.admissionRate(cfg.Provider))
+		_, err = validateDestination(cfg, projected, effectiveContextWindow(cfg), s.admissionRate(cfg.Provider))
 		if err != nil {
 			return AgentThread{}, err
 		}

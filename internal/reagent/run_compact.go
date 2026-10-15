@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	inRunCompactFraction = 0.4
-	inRunCompactLimit    = 8
+	inRunCompactFraction  = 0.4
+	inRunCompactMinShrink = 0.15
 )
 
 const inRunCompactFocus = "Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls."
@@ -40,9 +40,6 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 		r.trace.Write("compaction.skipped", r.steps, map[string]any{"reason": reason})
 		r.compactOff = true
 		return "", ""
-	}
-	if r.compactions >= inRunCompactLimit {
-		return skip(fmt.Sprintf("within-run continuation reached %d summaries", inRunCompactLimit))
 	}
 	if r.cfg.MaxSteps > 0 && r.steps+2 > r.cfg.MaxSteps {
 		return skip("within-run continuation has no spare summary and follow-up steps")
@@ -104,6 +101,11 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 		r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
 		return skip(reason)
 	}
+	if float64(projectedSize) > float64(size)*(1-inRunCompactMinShrink) {
+		reason := "within-run summary shrinks the request by less than 15%"
+		r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
+		return skip(reason)
+	}
 	// No accepted call is in flight. The old history remains intact until all
 	// requests and the handoff have been checked.
 	s.history = []Entry{{Kind: EntryUser, User: r.task}, {Kind: EntrySummary, Summary: &summary}}
@@ -121,7 +123,7 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 	r.compactions++
 	// Auto's history cursor referred to the discarded slice.
 	r.routingEntries = len(s.history)
-	r.trace.Write("compaction.finished", r.steps, map[string]any{"summary": text, "replaced_entries": summary.ReplacedEntries})
+	r.trace.Write("compaction.finished", r.steps, map[string]any{"summary": text, "replaced_entries": summary.ReplacedEntries, "request_bytes_before": size, "request_bytes_after": projectedSize})
 	if err := s.checkpointWithUsage("accepted", "", r.usage); err != nil {
 		r.persistenceErr = err
 		return StatusPersistenceError, err.Error()

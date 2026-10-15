@@ -477,6 +477,9 @@ func modelPresentation(cfg Config) (model, provider, effort string) {
 	} else {
 		effort = "effort " + effort
 	}
+	if cfg.ContextWindowTokens > 0 {
+		effort += " · window " + formatWindow(effectiveContextWindow(cfg)) + " override"
+	}
 	provider = cfg.Provider
 	if label := authModeLabel(cfg.AuthMode); label != "" {
 		provider += " · " + label

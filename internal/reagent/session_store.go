@@ -35,6 +35,9 @@ type chatCheckpoint struct {
 	MaxToolCalls          int             `json:"max_tool_calls"`
 	ModelRetryWindow      time.Duration   `json:"model_retry_window"`
 	InRunCompact          bool            `json:"in_run_compact"`
+	ContextWindowTokens   int64           `json:"context_window_tokens,omitempty"`
+	ContextGCAgeSteps     int             `json:"context_gc_age_steps,omitempty"`
+	ContextGCConsolidate  bool            `json:"context_gc_consolidate,omitempty"`
 	ContextGC             bool            `json:"context_gc"`
 	GC                    contextGCState  `json:"gc_state"`
 	GCRequests            int             `json:"gc_requests,omitempty"`
@@ -244,7 +247,7 @@ func (st *sessionStore) load(id string) (chatCheckpoint, error) {
 	if cp.Version != envelope.Version {
 		return cp, fmt.Errorf("corrupt session %s: mismatched version", id)
 	}
-	if cp.ID != id || cp.Launch == "" || cp.Provider == "" || cp.Model == "" || cp.MaxSteps < 0 || cp.MaxToolCalls < 0 || cp.ModelRetryWindow < 0 {
+	if cp.ID != id || cp.Launch == "" || cp.Provider == "" || cp.Model == "" || cp.MaxSteps < 0 || cp.MaxToolCalls < 0 || cp.ModelRetryWindow < 0 || cp.ContextWindowTokens < 0 {
 		return cp, fmt.Errorf("corrupt session %s: invalid configuration", id)
 	}
 	switch cp.Phase {

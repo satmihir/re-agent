@@ -115,6 +115,24 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "context-window-override": {
+        "chatgpt": True,
+        "size": (30, 140),
+        "context_window": 70000,
+        "steps": [
+            ("wait_status", "window 70k override", 5),
+            ("show", "Testing window cap visible in terminal status"),
+            ("expect", "status_row_last"),
+            ("type", "hello"), ("key", "enter"),
+            ("wait", "ChatGPT reply.", 5),
+            ("wait_status", "window 70k override", 5),
+            ("type", "/status"), ("key", "enter"),
+            ("wait", "70k window", 5),
+            ("wait_status", "window 70k override", 5),
+            ("show", "Next request and status use the testing window"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "context-gc": {
         "context_gc": True,
         "steps": [
@@ -822,6 +840,8 @@ def run(binary, name, scenario, workspace):
             editor.write(scenario["editor"])
         os.chmod(editor_path, 0o700)
         extra_env["VISUAL"] = editor_path
+    if scenario.get("context_window"):
+        extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
     s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False))
     try:
         for step in scenario["steps"]:

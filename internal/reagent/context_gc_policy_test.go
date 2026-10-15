@@ -90,9 +90,8 @@ func TestContextGC_NearCompactionException(t *testing.T) {
 		{"far", false, true, false, 0, false},
 		{"off", true, false, false, 0, false},
 		{"compact disabled after failure", true, true, true, 0, false},
-		{"below summary cap", true, true, false, inRunCompactLimit - 1, true},
-		{"at summary cap", true, true, false, inRunCompactLimit, false},
-		{"above summary cap", true, true, false, inRunCompactLimit + 1, false},
+		{"after eight summaries", true, true, false, 8, true},
+		{"after thirty summaries", true, true, false, 30, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s, r := gcEconomicFixture(t, openaiName, 16)

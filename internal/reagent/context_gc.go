@@ -40,7 +40,19 @@ func gcHistory(history []Entry, dropped map[string]contextGCDrop) []Entry {
 		return history
 	}
 	view := append([]Entry(nil), history...)
+	lastReference := -1
+	for i, entry := range history {
+		if entry.User != nil && entry.User.Source == "context_gc" {
+			lastReference = i
+		}
+	}
 	for i, entry := range view {
+		if entry.User != nil && entry.User.Source == "context_gc" && i != lastReference {
+			// Handoff and selected-entry boundaries use stored-history indices.
+			user := *entry.User
+			user.Text = "[consolidated references superseded by the later reference entry; original reads remain recoverable by their recall IDs]"
+			view[i].User = &user
+		}
 		if entry.Tool == nil {
 			continue
 		}
@@ -264,6 +276,7 @@ func (r *Run) collectContext() bool {
 		return false
 	}
 	drops, _ := gcCandidates(s.history, s.gc, s.gcDigest)
+	reference := s.gcExperimentCandidates(drops, steps)
 	if len(drops) == 0 {
 		return false
 	}
@@ -279,7 +292,11 @@ func (r *Run) collectContext() bool {
 	for id, drop := range drops {
 		merged[id] = drop
 	}
-	view := gcHistory(s.history, merged)
+	history := s.history
+	if reference != nil {
+		history = append(append([]Entry(nil), history...), *reference)
+	}
+	view := gcHistory(history, merged)
 	// Rebuild a switched projection only at the pass boundary.
 	handoff := s.handoff
 	if handoff != nil {
@@ -329,7 +346,7 @@ func (r *Run) collectContext() bool {
 		// the same conservative trigger used by compactWithinRunAfterGC.
 		threshold := float64(r.window) * inRunCompactFraction
 		admissionRate := s.admissionRate(r.cfg.Provider)
-		near := r.cfg.InRunCompact && r.steps > 0 && !r.compactOff && r.compactions < inRunCompactLimit &&
+		near := r.cfg.InRunCompact && r.steps > 0 && !r.compactOff &&
 			(r.cfg.MaxSteps <= 0 || r.steps+2 <= r.cfg.MaxSteps) &&
 			math.Ceil(float64(oldBytes)*admissionRate) >= contextGCNearCompact*threshold &&
 			math.Ceil(float64(newBytes)*admissionRate) < threshold
@@ -360,10 +377,13 @@ func (r *Run) collectContext() bool {
 	for breakByte < min(len(oldBody), len(newBody)) && oldBody[breakByte] == newBody[breakByte] {
 		breakByte++
 	}
+	s.history = history
 	s.gc.Dropped, s.gc.LastPass, s.handoff = merged, steps, handoff
 	tokens := int64(math.Ceil(float64(freed) * rate))
 	r.trace.Write("context.gc", r.steps, map[string]any{
 		"dropped": ordered, "bytes_freed": freed, "estimated_tokens_freed": tokens,
+		"age_steps": r.cfg.ContextGCAgeSteps, "consolidate": r.cfg.ContextGCConsolidate,
+		"reference_entry":    reference,
 		"fixed_prefix_bytes": fixedBytes, "rebuild_bytes": rebuildBytes,
 		"estimated_rebuild_tokens": int64(math.Ceil(rebuildTokens)),
 		"session_requests":         s.gcRequests, "expected_remaining_requests": remaining,

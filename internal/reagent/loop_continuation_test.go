@@ -220,18 +220,19 @@ func TestLoop_InRunContinuationFailureLeavesHistoryIntact(t *testing.T) {
 	}
 }
 
-func TestLoop_InRunContinuationStopsAtEightSummaries(t *testing.T) {
+func TestLoop_InRunContinuationCompactsThirtyTwoTimes(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider = openaiName
-	cfg.MaxSteps = 25
-	cfg.MaxToolCalls = 25
+	cfg.MaxSteps = 100
+	cfg.MaxToolCalls = 100
 	var replies []ModelResponse
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 32; i++ {
 		replies = append(replies, continuationResponse(string(rune('a'+i))), turn(textBlock("stage")))
 	}
+	replies = append(replies, turn(textBlock("done")))
 	model := &compactModel{replies: replies}
 	_, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusCompleted || result.Steps != 18 || result.ToolCalls != 9 || len(model.requests) != 18 {
+	if result.Status != StatusCompleted || result.Steps != 65 || result.ToolCalls != 32 || len(model.requests) != 65 {
 		t.Fatalf("cap stopped a safe final request: %+v requests=%d", result, len(model.requests))
 	}
 	finished := 0
@@ -246,7 +247,7 @@ func TestLoop_InRunContinuationStopsAtEightSummaries(t *testing.T) {
 			skipped++
 		}
 	}
-	if finished != 8 || skipped != 1 {
+	if finished != 32 || skipped != 0 {
 		t.Fatalf("summaries committed=%d skipped=%d", finished, skipped)
 	}
 }
@@ -409,5 +410,26 @@ func TestLoop_ContinuationPreservesCallIDsAfterSummary(t *testing.T) {
 	s, result, _ := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
 	if result.Status != StatusProtocolError || !strings.Contains(result.Reason, "duplicate call_id") || result.ToolCalls != 1 || len(results(s)) != 0 {
 		t.Fatalf("summary reset call IDs or replayed effects: %+v", result)
+	}
+}
+
+func TestLoop_InRunContinuationRejectsNonShrinkingSummaryOnce(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider, cfg.InRunCompact = openaiName, true
+	model := &compactModel{replies: []ModelResponse{turn(textBlock(strings.Repeat("summary", 100)))}}
+	s := NewSession(cfg, model, NewTrace(io.Discard), io.Discard)
+	task := &UserTurn{Text: "keep the task"}
+	s.history = []Entry{{Kind: EntryUser, User: task}}
+	s.lastRequest = Usage{Known: true, InputTokens: 40_000}
+	s.tokensPerByte = 0.25
+	r := newRun(s, "run")
+	r.task, r.steps, r.window = task, 1, 100_000
+	for i := 0; i < 10; i++ {
+		if status, reason := r.compactWithinRun(context.Background()); status != "" {
+			t.Fatalf("status=%s reason=%s", status, reason)
+		}
+	}
+	if len(model.requests) != 1 || !r.compactOff || r.compactions != 0 || len(s.history) != 1 || s.history[0].User != task {
+		t.Fatalf("nonshrinking summary retried or changed history: requests=%d run=%+v", len(model.requests), r)
 	}
 }

@@ -83,6 +83,9 @@ func visibleHistory(history []Entry) ([]transcriptEntry, int, error) {
 			if entry.User.Source == "agent" {
 				record.Trust = "untrusted_agent_data"
 			}
+			if entry.User.Source == "context_gc" {
+				record.Trust = "untrusted_tool_data"
+			}
 		case entry.Kind == EntrySummary && entry.Summary != nil:
 			record.Summary = entry.Summary
 		case entry.Kind == EntryShell && entry.Shell != nil:
@@ -252,7 +255,7 @@ func (c *conversation) transitionModel(ctx context.Context, info modelInfo, fres
 	if fresh {
 		history = nil
 	}
-	handoff, size, err := stageModelSwitch(ctx, history, cfg, info.ContextWindow, s.admissionRate(cfg.Provider))
+	handoff, size, err := stageModelSwitch(ctx, history, cfg, effectiveContextWindow(cfg), s.admissionRate(cfg.Provider))
 	metadata["request_bytes"] = size
 	metadata["latency_ms"] = time.Since(started).Milliseconds()
 	if err != nil {
