@@ -264,8 +264,8 @@ The catalog is:
 
 | Boundary | Owned message/template |
 | --- | --- |
-| JSON syntax | `invalid JSON at byte N`, with `: incomplete input` for truncation |
-| JSON field/type | `field "NAME" must be TYPE (byte N)`; declared JSON vocabulary (string, boolean, integer, object, array, array of strings/integers/argument vectors), never Go type names |
+| JSON syntax | `invalid JSON at byte N`; N is the one-based UTF-8 byte position of the offending byte. For truncated input, `invalid JSON at byte N: incomplete input` uses input length in bytes plus one |
+| JSON field/type | `field "NAME" must be TYPE`; declared JSON vocabulary (string, boolean, integer, object, array, array of strings/integers/argument vectors), never Go type names. Type errors deliberately omit byte positions: a decoder's scalar-end/container-start offset is not part of the contract |
 | JSON unknown field / object framing | `unknown field "NAME"`; `arguments must be one JSON object`; existing custom field validation stays owned |
 | Regex compilation | `invalid RE2 regex at byte N: REASON`; one-based UTF-8 byte position, respecting escapes/classes/groups. Reasons include invalid escape/range/class/repetition, unclosed group/class, unexpected closing group, trailing backslash, unsupported RE2 construct and syntax/complexity limits. RE2 acceptance/matching is unchanged |
 | URL/timeout startup | Variable name plus required HTTP(S)/host/no-query-or-fragment contract, or `must be an integer number of seconds from 1 to 3600`; values/parser prose never echoed |

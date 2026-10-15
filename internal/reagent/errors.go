@@ -87,7 +87,7 @@ func jsonError(err error, size int) string {
 		if field == "" {
 			field = "value"
 		}
-		return fmt.Sprintf("field %q must be %s (byte %d)", field, expected, typeError.Offset)
+		return fmt.Sprintf("field %q must be %s", field, expected)
 	}
 	// The decoder exposes no typed unknown-field error; retain only its quoted field.
 	if field, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {

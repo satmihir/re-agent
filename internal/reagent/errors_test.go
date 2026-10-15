@@ -17,13 +17,19 @@ func TestTools_ArgumentErrorsUseOwnedMessages(t *testing.T) {
 		args string
 		want string
 	}{
-		{NewEchoTool(), `{"text":4}`, `field "text" must be a string (byte 9)`},
-		{NewEchoTool(), `{"text":true}`, `field "text" must be a string (byte 12)`},
+		{NewEchoTool(), `{"text":4}`, `field "text" must be a string`},
+		{NewEchoTool(), `{"text":true}`, `field "text" must be a string`},
+		{NewEchoTool(), `{"text":1.5}`, `field "text" must be a string`},
+		{NewEchoTool(), `{"text":[1]}`, `field "text" must be a string`},
+		{NewEchoTool(), `{"text":{"a":1}}`, `field "text" must be a string`},
+		{NewSearchTextTool(ws), `{"path":"é","query":true}`, `field "query" must be a string`},
 		{NewEchoTool(), `{"text":}`, `invalid JSON at byte 9`},
+		{NewEchoTool(), `{"text":"a",}`, `invalid JSON at byte 13`},
+		{NewEchoTool(), `{"text":"é","other":}`, `invalid JSON at byte 22`},
 		{NewEchoTool(), `{"text":`, `invalid JSON at byte 9: incomplete input`},
 		{NewEchoTool(), `{"other":1}`, `unknown field "other"`},
 		{NewEchoTool(), `{"text":"a"} garbage`, `arguments must be one JSON object`},
-		{NewReadFileTool(ws), `{"path":false}`, `field "path" must be a string (byte 13)`},
+		{NewReadFileTool(ws), `{"path":false}`, `field "path" must be a string`},
 		{NewWriteFileTool(ws), `{"content":7}`, `content must be a string`},
 	} {
 		t.Run(tc.args, func(t *testing.T) {
@@ -32,6 +38,10 @@ func TestTools_ArgumentErrorsUseOwnedMessages(t *testing.T) {
 				t.Fatalf("got %+v, %v; want %q", got, err, tc.want)
 			}
 		})
+	}
+	got, err := NewEchoTool().Execute(context.Background(), json.RawMessage(`{"text":"corrected"}`))
+	if err != nil || !got.OK {
+		t.Fatalf("corrected arguments: %+v, %v", got, err)
 	}
 }
 
@@ -116,9 +126,10 @@ func TestDecodeArgs_AliasTypesUseDeclaredJSONVocabulary(t *testing.T) {
 	type namedText string
 	type namedTexts []namedText
 	for _, tc := range []struct{ args, want string }{
-		{`{"text":7}`, `field "text" must be a string (byte 9)`},
-		{`{"paths":7}`, `field "paths" must be an array of strings (byte 10)`},
-		{`{"paths":[false]}`, `field "paths" must be an array of strings (byte 15)`},
+		{`{"text":7}`, `field "text" must be a string`},
+		{`{"paths":7}`, `field "paths" must be an array of strings`},
+		{`{"paths":"x"}`, `field "paths" must be an array of strings`},
+		{`{"paths":[false]}`, `field "paths" must be an array of strings`},
 	} {
 		t.Run(tc.args, func(t *testing.T) {
 			var dst struct {

@@ -73,7 +73,7 @@ Plus's five-hour usage limit is shared across all plan-using apps; Pro has no su
 
 Replies and auth command results go to stdout; chat status and diagnostics go to stderr. On a styled terminal replies render as Markdown. `NO_COLOR` turns styling off.
 
-Tool argument errors use owned field/type/byte messages; regex errors identify a one-based UTF-8 byte position and owned reason without changing the RE2 dialect. Filesystem, process, transport, terminal and checkpoint failures use owned categories rather than Go/OS prose. Provider/command diagnostics remain bounded external data.
+Tool argument type errors name the field and expected JSON type without decoder-specific offsets; syntax errors retain byte positions. Regex errors identify a one-based UTF-8 byte position and owned reason without changing the RE2 dialect. Filesystem, process, transport, terminal and checkpoint failures use owned categories rather than Go/OS prose. Provider/command diagnostics remain bounded external data.
 
 ## Traces
 
