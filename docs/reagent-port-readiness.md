@@ -2,8 +2,10 @@
 
 Measured 2026-10-14 PDT / 2026-10-15 UTC. Code and launch recipe:
 [Part A, PR #152](https://github.com/satmihir/re-agent/pull/152).
-This report does **not** declare #141 ready to launch: #139/#149 and the review
-replay remain pending. Working-tree review #136 landed after the experiment cutoff.
+This report does **not** declare #141 ready to launch: #139 approval/freeze and
+the review replay remain pending. Working-tree review #136 and Go hardening #149
+landed after the experiment cutoff (#153 and #154, respectively). Merge this
+report after Part A (#152); #140 then remains open for the blind review replay.
 
 ## Decisions
 
@@ -105,6 +107,14 @@ summary failed or was disabled for ineffectiveness. This proves repeated
 continuation, not perfect semantic memory. All three had not yet created
 `PORT_STATUS.md` before the first summary and created it afterward: initialize
 that file before the real launch, rather than relying on unfinished setup.
+
+Summary spacing tightened late in the baseline: Steps 84, 88, 93, 96 leave only
+4, 5 and 3 steps between summaries. The 80k test window leaves little headroom
+under its 32k trigger after a summary and decision/progress rereads. Real windows
+are larger, but a growing `rust/PORT_STATUS.md` can still erode that headroom.
+For #141, record each summary's Step and the gap from the previous summary in
+the progress file. Keep the current status concise; move detailed older evidence
+to linked artifacts rather than repeatedly rereading an ever-growing log.
 
 ### GC results
 
@@ -273,5 +283,7 @@ and the conservative usage stop. This late arrival does not retrofit working-tre
 inspection into the frozen pilot binary. The PR #135 blind replay of #127/#130
 was **not run**; known-issue recall, false positives and review cost remain
 unmeasured, and budgets stay unchanged. Run that replay in a follow-up with a new
-binary containing #153 and a fresh spend tally. #139/#149 approval and freeze
-remain prerequisites for #141; no full translation or golden refresh was launched.
+binary containing #153 and a fresh spend tally. Go hardening #149 subsequently
+landed through [PR #154](https://github.com/satmihir/re-agent/pull/154) at 05:49 UTC.
+#139 approval and reference/suite freeze remain prerequisites for #141; no full
+translation or golden refresh was launched.
