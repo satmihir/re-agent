@@ -116,6 +116,28 @@ terminate process groups, reap owned helpers and retain bounded raw artifacts.
 Normal completion is graceful, especially in coverage runs. Test failures are
 not automatically retried; a diagnostic rerun is reported separately.
 
+### Readiness environment controls
+
+Clear inherited `REAGENT_CONTEXT_WINDOW_TOKENS`, `REAGENT_CONTEXT_GC_AGE_STEPS`
+and `REAGENT_CONTEXT_GC_CONSOLIDATE` unless a case explicitly sets them. Empty
+values are unset. Run/chat startup validates them, including preview, scripted
+runs and resume; invalid values produce owned startup errors (exit 2, stderr,
+no usage hint), never raw values or parser errors.
+
+- `REAGENT_CONTEXT_WINDOW_TOKENS`: positive int64 testing window cap; a known
+  model's real window remains the upper bound.
+- `REAGENT_CONTEXT_GC_AGE_STEPS`: 0 disables; otherwise an integer greater than 3.
+- `REAGENT_CONTEXT_GC_CONSOLIDATE`: boolean, default false; accepts the Go boolean
+  spellings (`1`, `t`, `T`, `TRUE`, `true`, `True` and their false equivalents
+  `0`, `f`, `F`, `FALSE`, `false`, `False`).
+
+Positive age and enabled consolidation are mutually exclusive. New sessions
+require `--context-gc` for either enabled experiment. Resume still validates
+syntax and mutual exclusion, but restores the saved window/GC settings rather
+than applying environment values or requiring a new `--context-gc` flag.
+C05/C06/C19 cover empty/invalid controls, exclusivity, the required flag and
+saved-settings precedence; A29–A32 exercise their GC behavior.
+
 ### Three fake-provider forms through public configuration
 
 `--scripted` reads normalized ModelResponse fixtures, rejects unknown fields,

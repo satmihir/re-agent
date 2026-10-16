@@ -83,21 +83,24 @@ func TestContextGC_NearCompactionException(t *testing.T) {
 		near        bool
 		enabled     bool
 		blocked     bool
+		retryAfter  int
 		compactions int
 		want        bool
 	}{
-		{"near", true, true, false, 0, true},
-		{"far", false, true, false, 0, false},
-		{"off", true, false, false, 0, false},
-		{"compact disabled after failure", true, true, true, 0, false},
-		{"below summary cap", true, true, false, inRunCompactLimit - 1, true},
-		{"at summary cap", true, true, false, inRunCompactLimit, false},
-		{"above summary cap", true, true, false, inRunCompactLimit + 1, false},
+		{"near", true, true, false, 0, 0, true},
+		{"far", false, true, false, 0, 0, false},
+		{"off", true, false, false, 0, 0, false},
+		{"compact disabled after failures", true, true, true, 0, 0, false},
+		{"cooldown", true, true, false, 18, 0, false},
+		{"cooldown elapsed", true, true, false, 17, 0, true},
+		{"after eight summaries", true, true, false, 0, 8, true},
+		{"after thirty summaries", true, true, false, 0, 30, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s, r := gcEconomicFixture(t, openaiName, 16)
 			r.cfg.InRunCompact = test.enabled
 			r.compactOff = test.blocked
+			r.compactRetryAfter = test.retryAfter
 			r.compactions = test.compactions
 			r.steps = 17
 			size, err := admissionRequestBytes(r.cfg, BuildContext(r.cfg, RequestScope{}, s.history))

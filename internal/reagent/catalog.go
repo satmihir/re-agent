@@ -74,6 +74,15 @@ func contextWindow(id string) int64 {
 	return info.ContextWindow
 }
 
+// effectiveContextWindow caps a known window; an override also admits unknown models.
+func effectiveContextWindow(cfg Config) int64 {
+	window := contextWindow(cfg.Model)
+	if cfg.ContextWindowTokens > 0 && (window == 0 || cfg.ContextWindowTokens < window) {
+		return cfg.ContextWindowTokens
+	}
+	return window
+}
+
 // accepts reports whether this model takes the given effort value.
 func (m modelInfo) accepts(effort string) bool {
 	for _, allowed := range m.Efforts {

@@ -98,6 +98,8 @@ func (s *Session) checkpoint(phase, inFlight string) error {
 		MaxToolCalls: s.cfg.MaxToolCalls, ModelRetryWindow: s.cfg.ModelRetryWindow, ReportFriction: s.cfg.ReportFriction, InRunCompact: s.cfg.InRunCompact, Agents: s.cfg.Agents,
 		History: s.history, PendingSubmission: s.pendingSubmission, Seen: s.seenCalls, Handoff: s.handoff,
 		ContextGC: s.cfg.ContextGC, GC: s.gc, GCRequests: s.gcRequests,
+		ContextWindowTokens: s.cfg.ContextWindowTokens,
+		ContextGCAgeSteps:   s.cfg.ContextGCAgeSteps, ContextGCConsolidate: s.cfg.ContextGCConsolidate,
 		CompactedPlan: s.compactedPlan, Blocked: s.blocked, LastTrace: s.lastTrace,
 		LastRequest: s.lastRequest, TokensPerByte: s.tokensPerByte,
 		Usage: s.checkpointUsage, AutoCompactOff: s.checkpointAutoCompactOff,
@@ -140,6 +142,8 @@ func (s *Session) restore(cp chatCheckpoint) {
 	s.tokensPerByte, s.checkpointUsage = cp.TokensPerByte, cp.Usage
 	s.checkpointAutoCompactOff = cp.AutoCompactOff
 	s.cfg.InRunCompact = cp.InRunCompact
+	s.cfg.ContextWindowTokens = cp.ContextWindowTokens
+	s.cfg.ContextGCAgeSteps, s.cfg.ContextGCConsolidate = cp.ContextGCAgeSteps, cp.ContextGCConsolidate
 	s.cfg.ContextGC, s.gc, s.gcRequests = cp.ContextGC, cp.GC, cp.GCRequests
 	if cp.ContextGC && cp.GCRequests == 0 {
 		// Older checkpoints can recover only the requests still in history.

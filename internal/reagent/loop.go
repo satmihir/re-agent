@@ -26,16 +26,19 @@ type Config struct {
 	approvedWorkspaces    []workspaceDestination
 	NoProjectInstructions bool
 	// v0 §6 U5: nil means no root AGENTS.md was loaded; an empty file is present.
-	ProjectInstructions *string
-	MaxSteps            int
-	MaxToolCalls        int
-	ModelRetryWindow    time.Duration
-	InRunCompact        bool
-	ContextGC           bool
-	Agents              bool
-	agent               bool
-	agentPrefix         *agentRequestPrefix
-	prompt              *pinnedPrompt // the session's pinned instructions; nil renders from the fields
+	ProjectInstructions  *string
+	MaxSteps             int
+	MaxToolCalls         int
+	ModelRetryWindow     time.Duration
+	InRunCompact         bool
+	ContextWindowTokens  int64
+	ContextGC            bool
+	ContextGCAgeSteps    int
+	ContextGCConsolidate bool
+	Agents               bool
+	agent                bool
+	agentPrefix          *agentRequestPrefix
+	prompt               *pinnedPrompt // the session's pinned instructions; nil renders from the fields
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
 	// the proxy form of each request (v0 §6 amendment of 2026-09-25).
 	Proxied bool
@@ -68,17 +71,19 @@ type Run struct {
 	routingOff                                                      bool
 	routingPostSwitch                                               bool
 	// v0 §10.4: the submitted task survives lossy in-run summaries.
-	task           *UserTurn
-	window         int64
-	compactions    int
-	compactOff     bool
-	agentCostStart Usage
+	task              *UserTurn
+	window            int64
+	compactions       int
+	compactOff        bool
+	compactFailures   int
+	compactRetryAfter int
+	agentCostStart    Usage
 }
 
 func newRun(session *Session, runID string) *Run {
 	r := &Run{
 		session: session, cfg: session.cfg, model: session.model, trace: session.trace,
-		runID: runID, usage: Usage{Known: true}, window: contextWindow(session.cfg.Model),
+		runID: runID, usage: Usage{Known: true}, window: effectiveContextWindow(session.cfg),
 	}
 	if session.agents != nil {
 		r.agentCostStart = session.agents.usage()
@@ -110,19 +115,24 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"auth_mode":  r.cfg.AuthMode,
 		"configured": r.cfg.Model,
 		// v0 §10 amendment (2026-09-30): build metadata belongs only in the trace.
-		"build":               buildRevision(),
-		"workspace":           r.cfg.WorkspacePath,
-		"approved_workspaces": s.approvedWorkspacePaths(),
-		"max_steps":           r.cfg.MaxSteps,
-		"max_tool_calls":      r.cfg.MaxToolCalls,
-		"in_run_compact":      r.cfg.InRunCompact,
-		"context_gc":          r.cfg.ContextGC,
-		"gc_state":            s.gc,
-		"gc_requests":         s.gcRequests,
-		"prompt":              prompt,
-		"instructions":        prefix.Instructions,
-		"tools":               prefix.Tools,
-		"initial_history":     s.history,
+		"build":                     buildRevision(),
+		"workspace":                 r.cfg.WorkspacePath,
+		"approved_workspaces":       s.approvedWorkspacePaths(),
+		"max_steps":                 r.cfg.MaxSteps,
+		"max_tool_calls":            r.cfg.MaxToolCalls,
+		"in_run_compact":            r.cfg.InRunCompact,
+		"in_run_compact_min_shrink": inRunCompactMinShrink,
+		"context_gc":                r.cfg.ContextGC,
+		"context_gc_age_steps":      r.cfg.ContextGCAgeSteps,
+		"context_gc_consolidate":    r.cfg.ContextGCConsolidate,
+		"gc_state":                  s.gc.traceState(),
+		"context_window_tokens":     r.window,
+		"context_window_override":   r.cfg.ContextWindowTokens,
+		"gc_requests":               s.gcRequests,
+		"prompt":                    prompt,
+		"instructions":              prefix.Instructions,
+		"tools":                     prefix.Tools,
+		"initial_history":           s.history,
 	}
 	if r.cfg.agentPrefix != nil {
 		header["dispatch_tools"] = r.cfg.Registry.Specs()
@@ -150,7 +160,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		}
 		r.cfg, r.model = s.cfg, s.model // v0 §10 amendment (2026-10-02): commit the next segment together.
 		if r.cfg.Model != previousModel {
-			r.window = contextWindow(r.cfg.Model)
+			r.window = effectiveContextWindow(r.cfg)
 		}
 		gcRan := r.collectContext()
 		if status, reason := r.compactWithinRunAfterGC(ctx, gcRan); status != "" {
@@ -349,6 +359,7 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 		}
 	}
 	for i, call := range calls {
+		r.session.gcCallPath(call)
 		if ctx.Err() != nil {
 			r.recordNotExecuted(calls[i:], "cancelled")
 			return StatusCancelled, "cancelled during tool dispatch"
@@ -388,7 +399,6 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 			"call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "workspace": r.cfg.WorkspacePath,
 		})
 		r.session.display.toolStarted(*call)
-		r.session.gcCallPath(call)
 		outcome, err := tool.Execute(ctx, json.RawMessage(call.Arguments))
 		if err != nil {
 			r.recordResult(call, failOutcome("internal_error", err.Error()))

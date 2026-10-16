@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -122,6 +123,23 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if err := validateHTTPEnvironment(); err != nil {
 		return startupError(stderr, err.Error())
 	}
+	// Validate even on resume; the saved configuration replaces these values below.
+	var contextWindowTokens int64
+	if raw := os.Getenv("REAGENT_CONTEXT_WINDOW_TOKENS"); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			return startupError(stderr, "REAGENT_CONTEXT_WINDOW_TOKENS must be a positive integer")
+		}
+		contextWindowTokens = value
+	}
+
+	gcAgeSteps, gcConsolidate, err := readContextGCExperiments()
+	if err != nil {
+		return startupError(stderr, err.Error())
+	}
+	if options.resume == "" && (gcAgeSteps > 0 || gcConsolidate) && !options.contextGC {
+		return startupError(stderr, "context GC experiments require --context-gc")
+	}
 
 	var saved chatCheckpoint
 	var store *sessionStore
@@ -153,6 +171,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		options.inRunCompact, options.agents = saved.InRunCompact, saved.Agents
 		options.contextGC = saved.ContextGC
 		options.modelRetryWindow = saved.ModelRetryWindow
+		contextWindowTokens = saved.ContextWindowTokens
+		gcAgeSteps, gcConsolidate = saved.ContextGCAgeSteps, saved.ContextGCConsolidate
 	}
 	if options.promptFile != "" {
 		text, err := readPrompt(options.promptFile, stdin)
@@ -237,7 +257,9 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		Provider: provider, Model: model, ReasoningEffort: resolveEffort(options.reasoning, provider, model),
 		Registry: registry, WorkspacePath: ws.Root(), Workspace: ws, NoProjectInstructions: options.noProjectInstructions,
 		ProjectInstructions: projectInstructions,
-		MaxSteps:            options.maxSteps, MaxToolCalls: options.maxToolCalls, ModelRetryWindow: options.modelRetryWindow,
+		ContextWindowTokens: contextWindowTokens,
+		ContextGCAgeSteps:   gcAgeSteps, ContextGCConsolidate: gcConsolidate,
+		MaxSteps: options.maxSteps, MaxToolCalls: options.maxToolCalls, ModelRetryWindow: options.modelRetryWindow,
 		PlanMode: options.plan, ReportFriction: options.reportFriction, InRunCompact: options.inRunCompact, ContextGC: options.contextGC, Agents: options.agents,
 	}
 	for _, path := range options.allowedWorkspaces {
@@ -554,6 +576,11 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)")
 	fmt.Fprintln(w, "  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)")
 	fmt.Fprintln(w, "  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)")
+	fmt.Fprintln(w, "  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume")
+	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables")
+	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: boolean, default false")
+	fmt.Fprintln(w, "                                      experiments are exclusive and require --context-gc")
+	fmt.Fprintln(w, "                                      empty is unset; validated on resume, saved settings win")
 	fmt.Fprintln(w, "  NO_COLOR                            turn off styling")
 }
 

@@ -133,13 +133,13 @@ func stageAutoCandidate(ctx context.Context, s *Session, route jevRoute) (autoCa
 		}
 	}
 	if cfg.Model == s.cfg.Model {
-		size, err = validateDestination(cfg, s.requestHistory(), info.ContextWindow, s.admissionRate(cfg.Provider))
+		size, err = validateDestination(cfg, s.requestHistory(), effectiveContextWindow(cfg), s.admissionRate(cfg.Provider))
 	} else if textOnly {
 		// No native assistant state exists yet; preserve ordinary user snapshot/plan parts.
 		handoff = nil
-		size, err = validateDestination(cfg, s.history, info.ContextWindow, s.admissionRate(cfg.Provider))
+		size, err = validateDestination(cfg, s.history, effectiveContextWindow(cfg), s.admissionRate(cfg.Provider))
 	} else {
-		handoff, size, err = stageModelSwitch(ctx, s.gcHistory(), cfg, info.ContextWindow, s.admissionRate(cfg.Provider))
+		handoff, size, err = stageModelSwitch(ctx, s.gcHistory(), cfg, effectiveContextWindow(cfg), s.admissionRate(cfg.Provider))
 	}
 	if err != nil {
 		return autoCandidate{}, err

@@ -12,6 +12,11 @@ and lexical result paths is an approximation that cannot recover changed aliases
 Trigger replay uses the latest measured request rate. After an earlier simulated
 pass, prior input usage is predicted as retained request bytes times that rate;
 the original trace cannot supply actual usage for a request it never sent.
+Recorded-pass mode uses traced net byte savings and full-rebuild estimates, so
+consolidated reference content is not mistaken for freed input. It attributes
+savings only to local passes and observed ordinary requests, excluding retries.
+Counterfactual replay requires originals and cannot reconstruct consolidated
+reference blocks or filesystem-based age eligibility.
 """
 
 import argparse
@@ -251,6 +256,10 @@ class Frame:
     max_steps: int = 0
     compactions: int = 0
     compact_off: bool = False
+    compaction_limit: int = 8  # Historical traces stopped after eight summaries.
+    recorded_gc: dict = field(default_factory=dict)
+    recorded_view: bool = False
+    retry_after_step: int = 0  # Completed Run step boundary, not request count.
 
 
 def trace_events(path):
@@ -259,14 +268,16 @@ def trace_events(path):
             yield json.loads(line)
 
 
-def load_frames(path):
+def load_frames(path, recorded=False):
     """Stream traces, retaining metadata rather than private output or HTTP bodies."""
     frames = []
     request = None
     body = None
     compaction = False
     originals = {}
-    recorded_drops = []
+    recorded_drops, recorded_gc = [], {}
+    compaction_limit = 8
+    retry_after_step = 0
     provider, in_run_compact, window = "openai", False, 0
     completed_requests, max_steps, compactions, compact_off = 0, 0, 0, False
     for event in trace_events(path):
@@ -280,20 +291,40 @@ def load_frames(path):
             if completed_requests is None:
                 completed_requests = sum(entry["kind"] == "assistant" for entry in (data.get("initial_history") or []))
             max_steps, compactions, compact_off = data.get("max_steps", 0), 0, False
+            retry_after_step = 0
+            # Distinguish the shrink safeguard from historical count caps
+            # independently of whether the window override is being tested.
+            compaction_limit = 0 if "in_run_compact_min_shrink" in data else 8
+            originals = dict((data.get("gc_state") or {}).get("inherited") or {})
+            for entry in data.get("initial_history") or []:
+                tool = entry.get("tool")
+                if tool and tool.get("outcome", {}).get("code") != "context_gc":
+                    originals[tool["call_id"]] = tool["outcome"]
             model = data.get("configured", data.get("model"))
             window = {"gpt-6-luna": 1_050_000, "gpt-6-sol": 1_050_000,
                       "gpt-6.1-sol": 1_050_000, "claude-haiku-4-5": 200_000,
                       "claude-sonnet-5-5": 1_000_000, "claude-opus-5-5": 1_000_000}.get(model, 0)
+            window = data.get("context_window_tokens", window)
         if kind == "context.gc":
             recorded_drops = data["dropped"]
+            # Only aggregate accounting survives; reference content stays private.
+            recorded_gc = {key: data[key] for key in (
+                "bytes_freed", "estimated_tokens_freed", "rebuild_bytes",
+                "estimated_rebuild_tokens", "cache_break_entry", "expected_remaining_requests",
+                "trigger", "cache_write_price", "cached_ratio") if key in data}
         if kind == "tool.finished":
             originals[data["call_id"]] = data["outcome"]
         if kind == "compaction.skipped":
-            compact_off = True
+            # Legacy skips disabled compaction for the remainder of the Run.
+            compact_off = data.get("disabled", True)
+            retry_after_step = data.get("retry_after_step", 0)
         if kind == "compaction.finished":
+            retry_after_step = 0
             compaction = True
             compactions += 1
             originals = {}
+            if recorded_gc:
+                recorded_gc["compacted"] = True
         if kind == "model.requested":
             request, body = event, None
         elif kind == "api.attempt.started" and request is not None and body is None:
@@ -307,13 +338,16 @@ def load_frames(path):
             fixed = fixed_prefix_bytes(body, provider)
             # Restore recorded GC outcomes to replay the policy against the
             # original input. Usage is rescaled with this request's measured rate.
-            for entry in history:
+            if not recorded and any(entry.get("user", {}).get("source") == "context_gc"
+                                    for entry in history):
+                raise ValueError("counterfactual replay does not support consolidated references; use --recorded-passes")
+            for entry in history if not recorded else []:
                 tool = entry.get("tool")
                 if tool is None or tool.get("outcome", {}).get("code") != "context_gc":
                     continue
                 original = originals.get(tool["call_id"])
                 if original is None:
-                    raise ValueError("trace lacks original behind recorded GC placeholder")
+                    raise ValueError("counterfactual replay lacks original behind inherited GC placeholder; use --recorded-passes")
                 old = encoded(encoded(tool["outcome"]).decode())
                 new = encoded(encoded(original).decode())
                 if old not in body:
@@ -349,9 +383,10 @@ def load_frames(path):
                                 usage.get("input_tokens", 0) * (len(body) - native) / measured_size,
                                 results, settled, steps, compaction, bool(usage.get("known")),
                                 fixed, provider, in_run_compact, window, recorded_drops,
-                                completed_requests, max_steps, compactions, compact_off))
+                                completed_requests, max_steps, compactions, compact_off,
+                                compaction_limit, recorded_gc, recorded, retry_after_step))
             completed_requests += 1
-            request, body, compaction, recorded_drops = None, None, False, []
+            request, body, compaction, recorded_drops, recorded_gc = None, None, False, [], {}
     return frames
 
 
@@ -387,9 +422,50 @@ class Evaluation:
     first_compaction_without: int = None
     first_compaction_with: int = None
     actual_compactions: int = 0
+    accounting: str = "counterfactual"
+
+
+def evaluate_recorded(frames):
+    """Cost measured net changes, including bytes added by reference blocks."""
+    rate = measured_rate(frames)
+    report = Evaluation(len(frames), 1 / rate, accounting="recorded_net_bytes")
+    active = []
+    for frame in frames:
+        if frame.compaction_before:
+            active = []
+        report.actual_compactions += frame.compaction_before
+        event = frame.recorded_gc
+        if frame.recorded_drops:
+            required = ("bytes_freed", "estimated_tokens_freed", "estimated_rebuild_tokens")
+            if any(key not in event for key in required):
+                raise ValueError("recorded GC pass lacks net byte/rebuild metrics")
+            full_price = event["estimated_rebuild_tokens"]
+            surcharge = event.get("cache_write_price", rebuild_surcharge(frame.provider) + .1) - event.get("cached_ratio", .1)
+            item = Pass(frame.step, len(frame.recorded_drops), event["bytes_freed"],
+                        event["estimated_tokens_freed"], event.get("cache_break_entry", 0),
+                        full_price, dict(Counter(drop["reason"] for drop in frame.recorded_drops)),
+                        net_saving=-surcharge * full_price,
+                        trigger="recorded:" + event.get("trigger", "unknown"),
+                        expected_remaining_requests=event.get("expected_remaining_requests", 0))
+            report.passes.append(item)
+            if not event.get("compacted"):
+                active.append(item)
+            report.full_price_tokens += full_price
+            report.net_saving += item.net_saving
+        # Charge only requests observed in this trace. Initial inherited drops
+        # have no local pass metrics and are not invented as local savings.
+        frame_rate = frame.tokens / frame.size if frame.known and frame.size > 0 else 0
+        for item in active:
+            saving = item.bytes_freed * frame_rate * .1
+            item.net_saving += saving
+            report.net_saving += saving
+        report.final_tokens_freed = sum(item.bytes_freed for item in active) * frame_rate
+    return report
 
 
 def evaluate(frames, policy=Policy(), window=None, recorded=False):
+    if recorded and any(frame.recorded_gc or frame.recorded_view for frame in frames):
+        return evaluate_recorded(frames)
     rate = measured_rate(frames)
     report = Evaluation(len(frames), 1 / rate)
     dropped = {}
@@ -429,7 +505,9 @@ def evaluate(frames, policy=Policy(), window=None, recorded=False):
         surcharge = rebuild_surcharge(frame.provider)
         break_even = freed * remaining * 0.1 > rebuild * surcharge
         near_compaction = (frame.in_run_compact and frame.step > 1 and not frame.compact_off
-                           and frame.compactions < 8 and (frame.max_steps <= 0 or frame.step + 1 <= frame.max_steps)
+                           and frame.step - 1 >= frame.retry_after_step
+                           and (frame.compaction_limit == 0 or frame.compactions < frame.compaction_limit)
+                           and (frame.max_steps <= 0 or frame.step + 1 <= frame.max_steps)
                            and math.ceil((frame.size - existing) * admission_rate) >= policy.compact_close * threshold and
                            math.ceil((frame.size - existing - freed) * admission_rate) < threshold)
         fires = (frame_window > 0 and frame.settled and previous_known and changes
@@ -504,7 +582,7 @@ def main(argv=None):
                     args.remaining_floor, args.remaining_cap, args.compact_close)
     summaries = []
     for path in args.traces:
-        report = evaluate(load_frames(path), policy, args.window, args.recorded_passes)
+        report = evaluate(load_frames(path, recorded=args.recorded_passes), policy, args.window, args.recorded_passes)
         summary = {"run": path.parent.name, "policy": vars(policy), **vars(report)}
         summary["passes"] = [vars(item) for item in report.passes]
         summaries.append(summary)
@@ -525,10 +603,13 @@ def main(argv=None):
                   f"{item['trigger']}, expected remaining {item['expected_remaining_requests']}; "
                   f"cache break entry {item['cache_break_entry']}, reasons {item['reasons']}")
     print("Estimates: cached input 0.1x; full rebuild surcharge OpenAI 0.9x, Anthropic 1.15x; no model calls.")
-    print("Compaction columns are first predicted 40% crossings (not a simulated model summary).")
-    print("Trigger usage after simulated drops: retained bytes times the latest measured rate (predicted).")
+    if args.recorded_passes:
+        print("Recorded passes use traced net byte/rebuild metrics, including added reference content; crossings are not predicted.")
+    else:
+        print("Compaction columns are first predicted 40% crossings (not a simulated model summary).")
+        print("Trigger usage after simulated drops: retained bytes times the latest measured rate (predicted).")
     print("Identity approximation: old traces lack dispatch-time aliases; lexical result paths only.")
-    print("Not reconstructed: external edits, symlink changes, future recalls, changed model behavior.")
+    print("Not reconstructed: external edits, symlink changes, future recalls, changed model behavior, inherited savings before this trace.")
 
 
 if __name__ == "__main__":

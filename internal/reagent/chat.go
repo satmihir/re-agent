@@ -328,7 +328,7 @@ func (c *conversation) commandStatus(stderr io.Writer) {
 			fmt.Fprintln(stderr, routerUsageLine(a.usage))
 		}
 	}
-	if window := contextWindow(c.session.cfg.Model); window > 0 {
+	if window := effectiveContextWindow(c.session.cfg); window > 0 {
 		if line := lastRequestLine(c.session.lastRequest, window); line != "" {
 			fmt.Fprintln(stderr, line)
 		}
@@ -368,7 +368,7 @@ func (c *conversation) commandContext(stderr io.Writer) {
 		breakdown.parts = append(breakdown.parts, contextPart{label: "historical transcript", bytes: n})
 	}
 	breakdown.lastUsage = c.session.lastRequest
-	breakdown.window = contextWindow(c.session.cfg.Model)
+	breakdown.window = effectiveContextWindow(c.session.cfg)
 	fmt.Fprintln(stderr, breakdown.render())
 }
 
@@ -415,7 +415,7 @@ func printCompacted(stderr io.Writer, result RunResult, replacedBytes int) {
 const autoCompactPercent = 80
 
 func (c *conversation) shouldAutoCompact() bool {
-	window := contextWindow(c.session.cfg.Model)
+	window := effectiveContextWindow(c.session.cfg)
 	last := c.session.lastRequest
 	return c.scripted == nil && !c.autoCompactOff && c.session.blocked == "" && len(c.session.history) > 0 &&
 		window > 0 && last.Known && last.InputTokens*100 >= autoCompactPercent*window
@@ -424,7 +424,7 @@ func (c *conversation) shouldAutoCompact() bool {
 // autoCompact compacts before a turn and reports whether the turn should go on.
 // Only a cancellation stops it: a failed compaction leaves the session as it was.
 func (c *conversation) autoCompact(ctx context.Context, stderr io.Writer) bool {
-	percent := 100 * float64(c.session.lastRequest.InputTokens) / float64(contextWindow(c.session.cfg.Model))
+	percent := 100 * float64(c.session.lastRequest.InputTokens) / float64(effectiveContextWindow(c.session.cfg))
 	line := fmt.Sprintf("context %.0f%% of the window; compacting before this turn", percent)
 	if styledOutput(stderr) {
 		line = ansiDim + line + ansiReset
@@ -701,7 +701,10 @@ func planSwitchLine(on, styled bool) string {
 
 func (c *conversation) regionStatus() regionStatus {
 	status := regionStatus{plan: c.session.planMode, blocked: c.session.blocked != "", model: c.session.cfg.Model, effort: c.session.cfg.ReasoningEffort,
-		usage: c.session.lastRequest, window: contextWindow(c.session.cfg.Model)}
+		usage: c.session.lastRequest, window: effectiveContextWindow(c.session.cfg)}
+	if c.session.cfg.ContextWindowTokens > 0 {
+		status.effort += " · window " + formatWindow(status.window) + " override"
+	}
 	if label := authModeLabel(c.session.cfg.AuthMode); label != "" {
 		if status.effort != "" {
 			status.effort += " · " + label
@@ -1001,7 +1004,7 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 		}
 	}
 	if result.Steps > 0 && c.session.blocked != string(StatusLimitExceeded) {
-		c.session.display.contextWarning(c.session.lastRequest, contextWindow(c.session.cfg.Model), c.shouldAutoCompact())
+		c.session.display.contextWarning(c.session.lastRequest, effectiveContextWindow(c.session.cfg), c.shouldAutoCompact())
 	}
 	c.session.display.spacer()
 	if result.Status != StatusCompleted || !c.session.planMode {

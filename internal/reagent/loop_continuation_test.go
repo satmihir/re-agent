@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -220,18 +221,19 @@ func TestLoop_InRunContinuationFailureLeavesHistoryIntact(t *testing.T) {
 	}
 }
 
-func TestLoop_InRunContinuationStopsAtEightSummaries(t *testing.T) {
+func TestLoop_InRunContinuationCompactsThirtyTwoTimes(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider = openaiName
-	cfg.MaxSteps = 25
-	cfg.MaxToolCalls = 25
+	cfg.MaxSteps = 100
+	cfg.MaxToolCalls = 100
 	var replies []ModelResponse
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 32; i++ {
 		replies = append(replies, continuationResponse(string(rune('a'+i))), turn(textBlock("stage")))
 	}
+	replies = append(replies, turn(textBlock("done")))
 	model := &compactModel{replies: replies}
 	_, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusCompleted || result.Steps != 18 || result.ToolCalls != 9 || len(model.requests) != 18 {
+	if result.Status != StatusCompleted || result.Steps != 65 || result.ToolCalls != 32 || len(model.requests) != 65 {
 		t.Fatalf("cap stopped a safe final request: %+v requests=%d", result, len(model.requests))
 	}
 	finished := 0
@@ -246,7 +248,7 @@ func TestLoop_InRunContinuationStopsAtEightSummaries(t *testing.T) {
 			skipped++
 		}
 	}
-	if finished != 8 || skipped != 1 {
+	if finished != 32 || skipped != 0 {
 		t.Fatalf("summaries committed=%d skipped=%d", finished, skipped)
 	}
 }
@@ -409,5 +411,97 @@ func TestLoop_ContinuationPreservesCallIDsAfterSummary(t *testing.T) {
 	s, result, _ := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
 	if result.Status != StatusProtocolError || !strings.Contains(result.Reason, "duplicate call_id") || result.ToolCalls != 1 || len(results(s)) != 0 {
 		t.Fatalf("summary reset call IDs or replayed effects: %+v", result)
+	}
+}
+
+func TestLoop_InRunContinuationNonShrinkingSummaryWaitsForOrdinarySteps(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider, cfg.InRunCompact = openaiName, true
+	model := &compactModel{replies: []ModelResponse{turn(textBlock(strings.Repeat("summary", 100)))}}
+	s := NewSession(cfg, model, NewTrace(io.Discard), io.Discard)
+	task := &UserTurn{Text: "keep the task"}
+	s.history = []Entry{{Kind: EntryUser, User: task}}
+	s.lastRequest = Usage{Known: true, InputTokens: 40_000}
+	s.tokensPerByte = 0.25
+	r := newRun(s, "run")
+	r.task, r.steps, r.window = task, 1, 100_000
+	for i := 0; i < 10; i++ {
+		if status, reason := r.compactWithinRun(context.Background()); status != "" {
+			t.Fatalf("status=%s reason=%s", status, reason)
+		}
+	}
+	if len(model.requests) != 1 || r.compactOff || r.compactFailures != 1 || r.compactRetryAfter != 4 || r.compactions != 0 || len(s.history) != 1 || s.history[0].User != task {
+		t.Fatalf("nonshrinking summary retried or changed history: requests=%d run=%+v", len(model.requests), r)
+	}
+}
+
+func TestLoop_InRunContinuationRecoversWithBoundedFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sequence  string
+		requested []int
+		finished  []int
+		failures  []int
+		disabled  bool
+	}{
+		{"fail then succeed", "tool reject tool tool summary done", []int{2, 5}, []int{5}, []int{1}, false},
+		{"three failures stop", "tool reject tool tool reject tool tool reject tool tool done", []int{2, 5, 8}, nil, []int{1, 2, 3}, true},
+		{"success resets streak", "tool reject tool tool summary tool reject tool tool summary done", []int{2, 5, 7, 10}, []int{5, 10}, []int{1, 1}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Provider, cfg.MaxSteps, cfg.MaxToolCalls = openaiName, 30, 30
+			var replies []ModelResponse
+			sequence := strings.Fields(test.sequence)
+			for i, kind := range sequence {
+				switch kind {
+				case "tool":
+					id := string(rune('a' + i))
+					reply := continuationResponse(id)
+					if i > 0 && sequence[i-1] != "summary" {
+						// Keep growing history within the reserve while measured input
+						// still reaches the trigger after the cooldown.
+						reply = continuationCall(id, "echo", `{"text":"check"}`)
+						reply.Usage.InputTokens = 40_000
+					}
+					replies = append(replies, reply)
+				case "reject":
+					replies = append(replies, turn(textBlock("  ")))
+				case "summary":
+					replies = append(replies, turn(textBlock("checkpoint retained; next verify")))
+				case "done":
+					replies = append(replies, turn(textBlock("done")))
+				}
+			}
+			model := &compactModel{replies: replies}
+			s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
+			if result.Status != StatusCompleted || result.Reply != "done" || len(model.requests) != len(replies) {
+				t.Fatalf("result=%+v requests=%d want=%d", result, len(model.requests), len(replies))
+			}
+			var requested, finished, failures []int
+			var disabled bool
+			for _, e := range events {
+				switch e.Type {
+				case "compaction.requested":
+					requested = append(requested, e.Step)
+				case "compaction.finished":
+					finished = append(finished, e.Step)
+				case "compaction.skipped":
+					data := e.Data.(map[string]any)
+					failures = append(failures, int(data["consecutive_failures"].(float64)))
+					disabled = data["disabled"].(bool)
+					retry := int(data["retry_after_step"].(float64))
+					if (!disabled && retry != e.Step+2) || (disabled && retry != 0) {
+						t.Fatalf("bad retry boundary: step=%d data=%+v", e.Step, data)
+					}
+				}
+			}
+			if fmt.Sprint(requested) != fmt.Sprint(test.requested) || fmt.Sprint(finished) != fmt.Sprint(test.finished) || fmt.Sprint(failures) != fmt.Sprint(test.failures) || disabled != test.disabled {
+				t.Fatalf("requested=%v finished=%v failures=%v disabled=%v", requested, finished, failures, disabled)
+			}
+			if len(s.seenCalls) != result.ToolCalls {
+				t.Fatalf("accepted calls replayed or lost: seen=%d calls=%d", len(s.seenCalls), result.ToolCalls)
+			}
+		})
 	}
 }

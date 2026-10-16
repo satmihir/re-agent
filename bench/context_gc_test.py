@@ -1,13 +1,15 @@
 """Offline GC policy and cache accounting boundary tests."""
 
+import contextlib
 import copy
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from context_gc import (Frame, Policy, candidates, content_size, encoded, evaluate,
-                        expected_remaining, fixed_prefix_bytes, load_frames, placeholder,
+                        expected_remaining, fixed_prefix_bytes, load_frames, main, placeholder,
                         reasoning_bytes, rebuild_surcharge, records, result_offset)
 
 
@@ -180,6 +182,36 @@ class PolicyTest(unittest.TestCase):
         frames[1].max_steps = 18
         self.assertTrue(evaluate(frames, policy, window=6000).passes)
 
+    def test_near_compaction_cooldown_uses_completed_run_step_boundary(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size = 2200
+        frames = [Frame(1, 6000, 0, 1500, results[:1], True, 1, provider="anthropic"),
+                  Frame(17, 6000, 0, 1500, results, True, 16, provider="anthropic",
+                        in_run_compact=True, compaction_limit=0, retry_after_step=17)]
+        for step, allowed in ((17, False), (18, True), (19, True)):
+            with self.subTest(step=step):
+                frames[1].step = step
+                report = evaluate(frames, Policy(0), window=6000)
+                self.assertEqual(bool(report.passes), allowed)
+                if allowed:
+                    self.assertEqual(report.passes[0].trigger, "near_compaction")
+        # Cooldown blocks the exception, not an independently profitable GC pass.
+        frames[1].step = 17
+        results[0].size = 3000
+        self.assertEqual(evaluate(frames, Policy(0), window=6000).passes[0].trigger,
+                         "break_even")
+
+    def test_healthy_new_compaction_policy_has_no_count_cap(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size = 2200
+        frames = [Frame(1, 6000, 0, 1500, results[:1], True, 1, provider="anthropic"),
+                  Frame(17, 6000, 0, 1500, results, True, 16, provider="anthropic",
+                        in_run_compact=True, compactions=35, compaction_limit=0)]
+        self.assertEqual(evaluate(frames, Policy(0), window=6000).passes[0].trigger,
+                         "near_compaction")
+        frames[1].compact_off = True
+        self.assertFalse(evaluate(frames, Policy(0), window=6000).passes)
+
     def test_fixed_prefix_measured_from_both_provider_requests(self):
         for instructions in ("instructions", "system"):
             fixed = {instructions: 'quoted " < &', "tools": [{"description": "x" * 10_000}]}
@@ -351,6 +383,91 @@ class PolicyTest(unittest.TestCase):
         self.assertAlmostEqual(report.passes[0].full_price_tokens,
                                (frame.size - report.passes[0].bytes_freed - frame.fixed_bytes) * frame.tokens / frame.size)
 
+    def test_lean_header_restores_initial_history_and_traced_window(self):
+        history = batch("old")
+        original = history[1]["tool"]["outcome"]
+        result = records(history)[0][0]
+        projected = copy.deepcopy(history)
+        projected[1]["tool"]["outcome"] = placeholder(result, "aged", 20)
+        body = encoded({"instructions": "fixed", "input": [{
+            "type": "function_call_output", "call_id": "old",
+            "output": encoded(projected[1]["tool"]["outcome"]).decode()}]})
+        events = [{"type": "run.started", "data": {
+            "configured": "gpt-6.1-sol", "context_window_tokens": 70_000,
+            "in_run_compact_min_shrink": .1,
+            "initial_history": history, "gc_state": {"dropped": {"old": "aged"},
+                                                       "inherited_ids": ["old"]}}},
+                  {"type": "model.requested", "step": 1, "data": {"history": projected}},
+                  {"type": "api.attempt.started", "data": {"request_body": body.decode()}},
+                  {"type": "model.accepted", "data": {"usage": {"known": True, "input_tokens": 100}}}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.write_text("\n".join(json.dumps(event) for event in events))
+            frames = load_frames(path)
+            self.assertEqual(frames[0].window, 70_000)
+            self.assertEqual(frames[0].compaction_limit, 0)
+            self.assertEqual(frames[0].results[0].digest, original["data"]["sha256"])
+            events[0]["data"]["initial_history"] = projected
+            path.write_text("\n".join(json.dumps(event) for event in events))
+            with self.assertRaisesRegex(ValueError, "counterfactual replay lacks original.*inherited"):
+                load_frames(path)
+            self.assertEqual(len(load_frames(path, recorded=True)), 1)
+            # Old headers may have originals only in their inherited map.
+            events[0]["data"]["gc_state"]["inherited"] = {"old": original}
+            del events[0]["data"]["in_run_compact_min_shrink"]
+            path.write_text("\n".join(json.dumps(event) for event in events))
+            self.assertEqual(load_frames(path)[0].compaction_limit, 8)
+
+    def test_recorded_reference_pass_uses_net_bytes_and_full_rebuild(self):
+        history = [{"kind": "user", "user": {"source": "context_gc", "text": "reference data"}}]
+        body = encoded({"instructions": "fixed", "input": ["reference data"]})
+        event = {"dropped": [{"call_id": "not_in_local_history", "reason": "consolidated", "step": 16}],
+                 "bytes_freed": 100, "estimated_tokens_freed": 25,
+                 "rebuild_bytes": 168, "estimated_rebuild_tokens": 42,
+                 "cache_break_entry": 2, "expected_remaining_requests": 30,
+                 "trigger": "break_even", "cache_write_price": 1, "cached_ratio": .1}
+        events = [{"type": "run.started", "data": {"context_window_tokens": 70_000}},
+                  {"type": "context.gc", "data": event}]
+        for step in (17, 18):
+            events.extend([{"type": "model.requested", "step": step, "data": {"history": history}},
+                           {"type": "api.attempt.started", "data": {"request_body": body.decode()}},
+                           {"type": "model.accepted", "data": {"usage": {"known": True, "input_tokens": len(body)}}}])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.write_text("\n".join(json.dumps(item) for item in events))
+            with self.assertRaisesRegex(ValueError, "does not support consolidated references"):
+                load_frames(path)
+            report = evaluate(load_frames(path, recorded=True), recorded=True)
+            self.assertEqual(report.accounting, "recorded_net_bytes")
+            self.assertEqual(report.passes[0].bytes_freed, 100)
+            self.assertEqual(report.passes[0].tokens_freed, 25)
+            self.assertEqual(report.full_price_tokens, 42)
+            self.assertAlmostEqual(report.net_saving, 2 * 100 * .1 - 42 * .9)
+            self.assertEqual(report.passes[0].trigger, "recorded:break_even")
+            self.assertEqual(report.final_tokens_freed, 100)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                main([str(path), "--recorded-passes", "--json"])
+            self.assertEqual(json.loads(output.getvalue())[0]["full_price_tokens"], 42)
+            events.insert(-3, {"type": "compaction.finished", "data": {}})
+            path.write_text("\n".join(json.dumps(item) for item in events))
+            report = evaluate(load_frames(path, recorded=True), recorded=True)
+            self.assertAlmostEqual(report.net_saving, 100 * .1 - 42 * .9)
+            self.assertEqual(report.final_tokens_freed, 0)
+            # A pass consumed by compaction never saves ordinary-request input.
+            events.insert(2, {"type": "compaction.finished", "data": {}})
+            path.write_text("\n".join(json.dumps(item) for item in events))
+            report = evaluate(load_frames(path, recorded=True), recorded=True)
+            self.assertEqual(len(report.passes), 1)
+            self.assertAlmostEqual(report.net_saving, -42 * .9)
+            self.assertEqual(report.final_tokens_freed, 0)
+
+    def test_recorded_mode_requires_metrics_instead_of_fabricating_gross_savings(self):
+        frame = Frame(17, 2000, 0, 500, [], True, 16, recorded_view=True,
+                      recorded_drops=[{"call_id": "foreign", "reason": "consolidated"}])
+        with self.assertRaisesRegex(ValueError, "lacks net byte/rebuild metrics"):
+            evaluate([frame], recorded=True)
+
     def test_loader_rejects_auto_model_switches_not_stays(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.jsonl"
@@ -362,6 +479,38 @@ class PolicyTest(unittest.TestCase):
                             load_frames(path)
                     else:
                         self.assertEqual(load_frames(path), [])
+
+    def test_loader_distinguishes_transient_permanent_and_legacy_compaction_skips(self):
+        body = '{"instructions":"fixed","input":[]}'
+        cases = (({"reason": "insufficient shrink", "disabled": False,
+                   "consecutive_failures": 1, "retry_after_step": 18}, False, 18),
+                 ({"reason": "insufficient shrink", "disabled": True,
+                   "consecutive_failures": 3, "retry_after_step": 0}, True, 0),
+                 ({"reason": "insufficient shrink"}, True, 0))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            for skip, disabled, retry_after in cases:
+                with self.subTest(skip=skip):
+                    events = [{"type": "run.started", "data": {
+                        "in_run_compact": True, "in_run_compact_min_shrink": .1}},
+                              {"type": "compaction.skipped", "step": 16, "data": skip}]
+                    for step in (17, 18, 19):
+                        if step == 19 and not disabled:
+                            events.append({"type": "compaction.finished", "data": {}})
+                        events.extend([
+                            {"type": "model.requested", "step": step, "data": {"history": []}},
+                            {"type": "api.attempt.started", "data": {"request_body": body}},
+                            {"type": "model.accepted", "data": {
+                                "usage": {"known": True, "input_tokens": 100}}}])
+                    path.write_text("\n".join(json.dumps(event) for event in events))
+                    frames = load_frames(path)
+                    self.assertEqual([f.compact_off for f in frames], [disabled] * 3)
+                    self.assertEqual([f.retry_after_step for f in frames],
+                                     [retry_after, retry_after, 0])
+                    self.assertEqual([f.completed_requests for f in frames], [0, 1, 2])
+                    self.assertEqual([f.compactions for f in frames],
+                                     [0, 0, 0 if disabled else 1])
+                    self.assertTrue(all(f.compaction_limit == 0 for f in frames))
 
     def test_loader_session_counter_includes_failure_not_retry_or_summary(self):
         body = '{"instructions":"fixed","input":[]}'
