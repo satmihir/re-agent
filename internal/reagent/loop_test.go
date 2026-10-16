@@ -1,6 +1,7 @@
 package reagent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -277,12 +278,36 @@ func TestLoop_ProtocolRejectedResponseStillCountsReportedUsage(t *testing.T) {
 
 // v1 §7.3.4: text next to a tool call is progress, never the final answer.
 func TestLoop_ProgressTextWithCallIsNotFinal(t *testing.T) {
-	_, result := runScript(t, testConfig(t),
-		turn(textBlock("looking now"), callBlock("call_1", "echo", `{"text":"hi"}`)),
+	var progress, output bytes.Buffer
+	model := NewScriptedModel(
+		turn(textBlock("looking **now**"), callBlock("call_1", "echo", `{"text":"hi"}`)),
+		turn(textBlock("checking `again`"), callBlock("call_2", "echo", `{"text":"bye"}`)),
 		turn(textBlock("the real answer")))
-
-	if result.Reply != "the real answer" {
-		t.Fatalf("got reply %q", result.Reply)
+	session := NewSession(testConfig(t), model, NewTrace(io.Discard), &progress)
+	session.display.styled = true
+	result, err := session.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted || result.Reply != "the real answer" || result.ToolCalls != 2 {
+		t.Fatalf("got result %+v", result)
+	}
+	session.display.reply(&output, result.Reply, false)
+	if got := output.String(); got != "the real answer\n" {
+		t.Fatalf("stdout: %q", got)
+	}
+	got := progress.String()
+	first := "looking " + ansiBold + "now" + ansiReset + "\n"
+	second := "checking " + ansiCode + "again" + ansiReset + "\n"
+	if !strings.HasPrefix(got, first) || !strings.Contains(got, "\n\n"+second) || strings.Contains(got, result.Reply) || strings.Contains(got, "  · ") {
+		t.Fatalf("progress output: %q", got)
+	}
+	firstTool, secondText, lastTool := strings.Index(got, "echo"), strings.Index(got, second), strings.LastIndex(got, "echo")
+	if firstTool < len(first) || secondText <= firstTool || lastTool <= secondText {
+		t.Fatalf("progress/tool order: %q", got)
+	}
+	if got := blockText(*session.history[1].Assistant, BlockText); got != "looking **now**" {
+		t.Fatalf("stored progress changed: %q", got)
 	}
 }
 

@@ -67,7 +67,7 @@ Plus's five-hour usage limit is shared across all plan-using apps; Pro has no su
 - **Auto** (`--auto`, `/auto on`) asks TypeSafe Jev which model and effort to use at each turn and some mid-run boundaries, among `gpt-6-luna`, `gpt-6-sol` and the configured model.
 - **Resume.** Live chat prints a session ID; `--resume ID` restores the checkpointed history. Nothing in flight is retried: interrupted tools are reported as unknown effects. Agents end with the process; resumed rosters label them `ended at resume`, never restart them. An agent working at the checkpoint, or with undelivered effects, is also marked `effects_unknown: true`: it may have left changes. This is a conservative observation, not a reconstructed effects ledger.
 
-Replies and auth command results go to stdout; chat status and diagnostics go to stderr. On a styled terminal replies render as Markdown. `NO_COLOR` turns styling off.
+Replies and auth command results go to stdout; intermediate model text, chat status and diagnostics go to stderr. On a styled terminal, intermediate model text and final replies share Markdown styling and wrapping, without dimming the prose. Harness notices and tool status keep their subdued styling. Redirects and `NO_COLOR` keep literal Markdown without styling or wrapping.
 
 ## Traces
 

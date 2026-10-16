@@ -259,7 +259,7 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		}
 		if text := blockText(resp, BlockText); text != "" {
 			// Text alongside tool calls is progress, not an answer (v1 §7.3.4).
-			s.display.note(text)
+			s.display.progressText(text)
 		}
 
 		if reason, reserved := r.reserve(len(calls)); !reserved {

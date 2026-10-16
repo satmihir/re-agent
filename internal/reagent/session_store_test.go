@@ -186,7 +186,7 @@ type sabotageWriter struct {
 }
 
 func (w sabotageWriter) Write(p []byte) (int, error) {
-	if strings.Contains(string(p), "· progress") {
+	if string(p) == "progress\n" {
 		w.store.dir = w.bad
 	}
 	return len(p), nil

@@ -297,6 +297,37 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "markdown-progress": {
+        "size": (32, 48),
+        "script": [tool("## Progress check\n"
+                        "I am checking the parser and its tests before making any changes to the display.\n\n"
+                        "- Read **parser.go**\n- Inspect `display.go`\n\n"
+                        "```go\nready := true\n```",
+                        "progress-sleep", "exec", {"argv": ["sleep", "2"], "cwd": "."}),
+                   tool("Next **check**.", "progress-list", "list_files", {"path": "."}),
+                   reply("Finished **checking**.")],
+        "steps": [
+            ("idle", 1.0),
+            ("type", "check progress"),
+            ("key", "enter"),
+            ("wait", "ready := true", 5),
+            ("type", "follow-up"),
+            ("show", "Markdown progress while the tool runs"),
+            ("expect", "all_lines", ["Progress check", "I am checking the parser and its tests before",
+                                     "making any changes to the display.", "• Read parser.go",
+                                     "• Inspect display.go", "ready := true"]),
+            ("expect", "all_lack", ["## Progress check", "**parser.go**", "`display.go`"]),
+            ("expect", "screen_has", "❯ follow-up"),
+            ("wait", "Finished checking.", 8),
+            ("wait_status", "scripted / low", 5),
+            ("show", "Progress, tools and final reply at 48 columns"),
+            ("expect", "all_lines", ["Next check.", "Finished checking.", "completed"]),
+            ("expect", "all_lack", ["Next **check**.", "Finished **checking**."]),
+            ("expect", "screen_has", "❯ follow-up"),
+            ("expect", "region_after_output"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "long-reply-during-turn": {
         # Output written while a turn runs must arrive whole, even when the
         # pty's buffer fills. A command first, so the reply follows real work.
