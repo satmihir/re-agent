@@ -208,6 +208,19 @@ func (d *Display) note(text string) {
 	}
 	d.write(text + "\n")
 }
+func (d *Display) progressText(text string) {
+	if text == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.eraseStatusLocked()
+	if d.styled && d.printed {
+		fmt.Fprintln(d.w)
+	}
+	fmt.Fprintln(d.w, display(text, d.styled, min(d.columns(), maxReplyColumns)))
+	d.printed = true
+}
 func (d *Display) toolFinished(call ToolCall, outcome ToolOutcome) {
 	d.stopStatus()
 	d.mu.Lock()

@@ -19,6 +19,55 @@ func TestDisplay_PlanBlockDropsTheTags(t *testing.T) {
 	}
 }
 
+func TestDisplay_ProgressTextRendersLikeReplies(t *testing.T) {
+	plain := "# Checking **files**\n  - `parser.go`\n" + strings.Repeat("long prose ", 20)
+	for _, test := range []struct {
+		name   string
+		styled bool
+		text   string
+		want   string
+	}{
+		{"empty", true, "", ""},
+		{"prose", true, "Checking files.", "Checking files.\n"},
+		{"heading", true, "## Checking", ansiBold + "Checking" + ansiReset + "\n"},
+		{"bold", true, "Checking **files**.", "Checking " + ansiBold + "files" + ansiReset + ".\n"},
+		{"list", true, "- Check files", ansiDim + "•" + ansiReset + " Check files\n"},
+		{"inline code", true, "Read `parser.go`", "Read " + ansiCode + "parser.go" + ansiReset + "\n"},
+		{"fenced code", true, "```go\nx := 1\n```", ansiDim + "```go" + ansiReset + "\n" + ansiCode + "x := 1" + ansiReset + "\n" + ansiDim + "```" + ansiReset + "\n"},
+		{"controls", true, "Check\x1b[31mfiles\r", "Check\\x1b[31mfiles\\x0d\n"},
+		{"plain markdown", false, plain, plain + "\n"},
+		{"plain controls", false, "Check\x1b[31mfiles\r", "Check\\x1b[31mfiles\\x0d\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var b bytes.Buffer
+			d := NewDisplay(&b)
+			d.styled = test.styled
+			d.progressText(test.text)
+			if got := b.String(); got != test.want {
+				t.Fatalf("progress text: %q, want %q", got, test.want)
+			}
+			if d.printed != (test.text != "") {
+				t.Fatalf("printed = %t for %q", d.printed, test.text)
+			}
+		})
+	}
+}
+
+func TestDisplay_ProgressTextSeparatesMessagesWithoutChangingNotices(t *testing.T) {
+	var b bytes.Buffer
+	d := NewDisplay(&b)
+	d.styled = true
+	d.note("notice")
+	d.progressText("first")
+	d.progressText("")
+	d.progressText("second")
+	d.reply(&b, "final", false)
+	want := ansiDim + "  · notice" + ansiReset + "\n\nfirst\n\nsecond\n\nfinal\n"
+	if got := b.String(); got != want {
+		t.Fatalf("message spacing: %q, want %q", got, want)
+	}
+}
+
 func TestDisplay_PlainOutputHasNoEscapes(t *testing.T) {
 	var b bytes.Buffer
 	d := NewDisplay(&b)
