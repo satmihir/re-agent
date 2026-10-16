@@ -259,6 +259,7 @@ class Frame:
     compaction_limit: int = 8  # Historical traces stopped after eight summaries.
     recorded_gc: dict = field(default_factory=dict)
     recorded_view: bool = False
+    retry_after_step: int = 0  # Completed Run step boundary, not request count.
 
 
 def trace_events(path):
@@ -276,6 +277,7 @@ def load_frames(path, recorded=False):
     originals = {}
     recorded_drops, recorded_gc = [], {}
     compaction_limit = 8
+    retry_after_step = 0
     provider, in_run_compact, window = "openai", False, 0
     completed_requests, max_steps, compactions, compact_off = 0, 0, 0, False
     for event in trace_events(path):
@@ -289,6 +291,7 @@ def load_frames(path, recorded=False):
             if completed_requests is None:
                 completed_requests = sum(entry["kind"] == "assistant" for entry in (data.get("initial_history") or []))
             max_steps, compactions, compact_off = data.get("max_steps", 0), 0, False
+            retry_after_step = 0
             # Distinguish the shrink safeguard from historical count caps
             # independently of whether the window override is being tested.
             compaction_limit = 0 if "in_run_compact_min_shrink" in data else 8
@@ -312,8 +315,11 @@ def load_frames(path, recorded=False):
         if kind == "tool.finished":
             originals[data["call_id"]] = data["outcome"]
         if kind == "compaction.skipped":
-            compact_off = True
+            # Legacy skips disabled compaction for the remainder of the Run.
+            compact_off = data.get("disabled", True)
+            retry_after_step = data.get("retry_after_step", 0)
         if kind == "compaction.finished":
+            retry_after_step = 0
             compaction = True
             compactions += 1
             originals = {}
@@ -378,7 +384,7 @@ def load_frames(path, recorded=False):
                                 results, settled, steps, compaction, bool(usage.get("known")),
                                 fixed, provider, in_run_compact, window, recorded_drops,
                                 completed_requests, max_steps, compactions, compact_off,
-                                compaction_limit, recorded_gc, recorded))
+                                compaction_limit, recorded_gc, recorded, retry_after_step))
             completed_requests += 1
             request, body, compaction, recorded_drops, recorded_gc = None, None, False, [], {}
     return frames
@@ -499,6 +505,7 @@ def evaluate(frames, policy=Policy(), window=None, recorded=False):
         surcharge = rebuild_surcharge(frame.provider)
         break_even = freed * remaining * 0.1 > rebuild * surcharge
         near_compaction = (frame.in_run_compact and frame.step > 1 and not frame.compact_off
+                           and frame.step - 1 >= frame.retry_after_step
                            and (frame.compaction_limit == 0 or frame.compactions < frame.compaction_limit)
                            and (frame.max_steps <= 0 or frame.step + 1 <= frame.max_steps)
                            and math.ceil((frame.size - existing) * admission_rate) >= policy.compact_close * threshold and

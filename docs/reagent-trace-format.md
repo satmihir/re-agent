@@ -34,7 +34,7 @@ The table lists emitted keys; `?` means conditional or omitted. Dotted paths ind
 | `compaction.requested` | Same shape as `model.requested`; temporary summary prompt is in `history[]`. |
 | `compaction.finished` | `summary`, `replaced_entries`; within-run summaries also record `request_bytes_before`, `request_bytes_after` (non-reasoning request sizes used by the 15% minimum-shrink check). |
 | `compaction.failed` | `reason`. |
-| `compaction.skipped` | `reason` (within-run compaction only). |
+| `compaction.skipped` | `reason`, `disabled`, `consecutive_failures`, `retry_after_step` (within-run only). Rejected summaries wait two ordinary model steps; the third consecutive failure disables attempts. Success resets the streak. Preflight skips disable immediately. `retry_after_step` is the completed Run step boundary at which another attempt is allowed, or 0 when disabled. Historical events without `disabled` mean permanent disablement. |
 | `model.switch.requested` | `source_model`, `source_provider`, `source_effort`, `destination_model`, `destination_provider`, `destination_effort`, `fresh`. |
 | `model.switch.finished` | Above plus `request_bytes`, `latency_ms`; if a handoff was needed: `handoff_entries`, `handoff_bytes`, `omitted_native_items`, `handoff_sha256`. |
 | `model.switch.failed` | Requested fields plus `request_bytes`, `latency_ms`, `reason`. |

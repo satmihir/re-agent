@@ -71,11 +71,13 @@ type Run struct {
 	routingOff                                                      bool
 	routingPostSwitch                                               bool
 	// v0 §10.4: the submitted task survives lossy in-run summaries.
-	task           *UserTurn
-	window         int64
-	compactions    int
-	compactOff     bool
-	agentCostStart Usage
+	task              *UserTurn
+	window            int64
+	compactions       int
+	compactOff        bool
+	compactFailures   int
+	compactRetryAfter int
+	agentCostStart    Usage
 }
 
 func newRun(session *Session, runID string) *Run {

@@ -3,6 +3,7 @@ package reagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -413,7 +414,7 @@ func TestLoop_ContinuationPreservesCallIDsAfterSummary(t *testing.T) {
 	}
 }
 
-func TestLoop_InRunContinuationRejectsNonShrinkingSummaryOnce(t *testing.T) {
+func TestLoop_InRunContinuationNonShrinkingSummaryWaitsForOrdinarySteps(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider, cfg.InRunCompact = openaiName, true
 	model := &compactModel{replies: []ModelResponse{turn(textBlock(strings.Repeat("summary", 100)))}}
@@ -429,7 +430,78 @@ func TestLoop_InRunContinuationRejectsNonShrinkingSummaryOnce(t *testing.T) {
 			t.Fatalf("status=%s reason=%s", status, reason)
 		}
 	}
-	if len(model.requests) != 1 || !r.compactOff || r.compactions != 0 || len(s.history) != 1 || s.history[0].User != task {
+	if len(model.requests) != 1 || r.compactOff || r.compactFailures != 1 || r.compactRetryAfter != 4 || r.compactions != 0 || len(s.history) != 1 || s.history[0].User != task {
 		t.Fatalf("nonshrinking summary retried or changed history: requests=%d run=%+v", len(model.requests), r)
+	}
+}
+
+func TestLoop_InRunContinuationRecoversWithBoundedFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sequence  string
+		requested []int
+		finished  []int
+		failures  []int
+		disabled  bool
+	}{
+		{"fail then succeed", "tool reject tool tool summary done", []int{2, 5}, []int{5}, []int{1}, false},
+		{"three failures stop", "tool reject tool tool reject tool tool reject tool tool done", []int{2, 5, 8}, nil, []int{1, 2, 3}, true},
+		{"success resets streak", "tool reject tool tool summary tool reject tool tool summary done", []int{2, 5, 7, 10}, []int{5, 10}, []int{1, 1}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Provider, cfg.MaxSteps, cfg.MaxToolCalls = openaiName, 30, 30
+			var replies []ModelResponse
+			sequence := strings.Fields(test.sequence)
+			for i, kind := range sequence {
+				switch kind {
+				case "tool":
+					id := string(rune('a' + i))
+					reply := continuationResponse(id)
+					if i > 0 && sequence[i-1] != "summary" {
+						// Keep growing history within the reserve while measured input
+						// still reaches the trigger after the cooldown.
+						reply = continuationCall(id, "echo", `{"text":"check"}`)
+						reply.Usage.InputTokens = 40_000
+					}
+					replies = append(replies, reply)
+				case "reject":
+					replies = append(replies, turn(textBlock("  ")))
+				case "summary":
+					replies = append(replies, turn(textBlock("checkpoint retained; next verify")))
+				case "done":
+					replies = append(replies, turn(textBlock("done")))
+				}
+			}
+			model := &compactModel{replies: replies}
+			s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
+			if result.Status != StatusCompleted || result.Reply != "done" || len(model.requests) != len(replies) {
+				t.Fatalf("result=%+v requests=%d want=%d", result, len(model.requests), len(replies))
+			}
+			var requested, finished, failures []int
+			var disabled bool
+			for _, e := range events {
+				switch e.Type {
+				case "compaction.requested":
+					requested = append(requested, e.Step)
+				case "compaction.finished":
+					finished = append(finished, e.Step)
+				case "compaction.skipped":
+					data := e.Data.(map[string]any)
+					failures = append(failures, int(data["consecutive_failures"].(float64)))
+					disabled = data["disabled"].(bool)
+					retry := int(data["retry_after_step"].(float64))
+					if (!disabled && retry != e.Step+2) || (disabled && retry != 0) {
+						t.Fatalf("bad retry boundary: step=%d data=%+v", e.Step, data)
+					}
+				}
+			}
+			if fmt.Sprint(requested) != fmt.Sprint(test.requested) || fmt.Sprint(finished) != fmt.Sprint(test.finished) || fmt.Sprint(failures) != fmt.Sprint(test.failures) || disabled != test.disabled {
+				t.Fatalf("requested=%v finished=%v failures=%v disabled=%v", requested, finished, failures, disabled)
+			}
+			if len(s.seenCalls) != result.ToolCalls {
+				t.Fatalf("accepted calls replayed or lost: seen=%d calls=%d", len(s.seenCalls), result.ToolCalls)
+			}
+		})
 	}
 }

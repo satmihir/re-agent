@@ -123,26 +123,22 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if err := validateHTTPEnvironment(); err != nil {
 		return startupError(stderr, err.Error())
 	}
+	// Validate even on resume; the saved configuration replaces these values below.
 	var contextWindowTokens int64
-	if raw, set := os.LookupEnv("REAGENT_CONTEXT_WINDOW_TOKENS"); set && options.resume == "" {
+	if raw := os.Getenv("REAGENT_CONTEXT_WINDOW_TOKENS"); raw != "" {
 		value, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || value <= 0 {
-			return usage(stderr, command, "REAGENT_CONTEXT_WINDOW_TOKENS must be a positive integer")
+			return startupError(stderr, "REAGENT_CONTEXT_WINDOW_TOKENS must be a positive integer")
 		}
 		contextWindowTokens = value
 	}
 
-	var gcAgeSteps int
-	var gcConsolidate bool
-	if options.resume == "" {
-		var err error
-		gcAgeSteps, gcConsolidate, err = readContextGCExperiments()
-		if err != nil {
-			return usage(stderr, command, err.Error())
-		}
-		if (gcAgeSteps > 0 || gcConsolidate) && !options.contextGC {
-			return usage(stderr, command, "context GC experiments require --context-gc")
-		}
+	gcAgeSteps, gcConsolidate, err := readContextGCExperiments()
+	if err != nil {
+		return startupError(stderr, err.Error())
+	}
+	if options.resume == "" && (gcAgeSteps > 0 || gcConsolidate) && !options.contextGC {
+		return startupError(stderr, "context GC experiments require --context-gc")
 	}
 
 	var saved chatCheckpoint
@@ -581,6 +577,10 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)")
 	fmt.Fprintln(w, "  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)")
 	fmt.Fprintln(w, "  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume")
+	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables")
+	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: boolean, default false")
+	fmt.Fprintln(w, "                                      experiments are exclusive and require --context-gc")
+	fmt.Fprintln(w, "                                      empty is unset; validated on resume, saved settings win")
 	fmt.Fprintln(w, "  NO_COLOR                            turn off styling")
 }
 

@@ -39,6 +39,61 @@ func TestContextGC_ExperimentEnvironment(t *testing.T) {
 	}
 }
 
+func TestMain_ContextGCExperimentEnvironment(t *testing.T) {
+	t.Setenv("REAGENT_CONTEXT_WINDOW_TOKENS", "")
+	for _, test := range []struct {
+		name, age, consolidate string
+		gc                     bool
+		message                string
+	}{
+		{"empty", "", "", false, ""},
+		{"disabled", "0", "false", false, ""},
+		{"age", "16", "", true, ""},
+		{"consolidate", "", "true", true, ""},
+		{"negative age", "-1", "", true, "REAGENT_CONTEXT_GC_AGE_STEPS must be 0 or an integer greater than 3"},
+		{"recent age", "3", "", true, "REAGENT_CONTEXT_GC_AGE_STEPS must be 0 or an integer greater than 3"},
+		{"invalid age", "private-age", "", true, "REAGENT_CONTEXT_GC_AGE_STEPS must be 0 or an integer greater than 3"},
+		{"overflow age", "9223372036854775808", "", true, "REAGENT_CONTEXT_GC_AGE_STEPS must be 0 or an integer greater than 3"},
+		{"invalid bool", "", "private-bool", true, "REAGENT_CONTEXT_GC_CONSOLIDATE must be a boolean"},
+		{"exclusive", "16", "true", true, "choose only one context GC experiment"},
+		{"age requires gc", "16", "", false, "context GC experiments require --context-gc"},
+		{"consolidate requires gc", "", "true", false, "context GC experiments require --context-gc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("REAGENT_CONTEXT_GC_AGE_STEPS", test.age)
+			t.Setenv("REAGENT_CONTEXT_GC_CONSOLIDATE", test.consolidate)
+			args := []string{"run", "--workspace", t.TempDir(), "--show-context"}
+			if test.gc {
+				args = append(args, "--context-gc")
+			}
+			var out, errs bytes.Buffer
+			code := Main(context.Background(), append(args, "task"), strings.NewReader(""), &out, &errs)
+			if test.message == "" {
+				if code != exitOK || out.Len() == 0 || errs.Len() != 0 {
+					t.Fatalf("exit=%d out=%s err=%s", code, out.String(), errs.String())
+				}
+				return
+			}
+			if code != exitUsage || out.Len() != 0 || errs.String() != "error: "+test.message+"\n" {
+				t.Fatalf("exit=%d out=%s err=%s", code, out.String(), errs.String())
+			}
+		})
+	}
+}
+
+func TestMain_ContextGCEnvironmentHelp(t *testing.T) {
+	var out, errs bytes.Buffer
+	code := Main(context.Background(), []string{"help"}, strings.NewReader(""), &out, &errs)
+	if code != exitOK || errs.Len() != 0 {
+		t.Fatalf("exit=%d err=%s", code, errs.String())
+	}
+	for _, variable := range []string{"REAGENT_CONTEXT_WINDOW_TOKENS", "REAGENT_CONTEXT_GC_AGE_STEPS", "REAGENT_CONTEXT_GC_CONSOLIDATE"} {
+		if !strings.Contains(out.String(), variable) {
+			t.Errorf("environment help omits %s", variable)
+		}
+	}
+}
+
 func TestContextGC_AgeUsesExplicitReferencesAndRecall(t *testing.T) {
 	for _, test := range []struct {
 		name, tool, args string

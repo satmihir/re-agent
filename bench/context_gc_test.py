@@ -182,6 +182,25 @@ class PolicyTest(unittest.TestCase):
         frames[1].max_steps = 18
         self.assertTrue(evaluate(frames, policy, window=6000).passes)
 
+    def test_near_compaction_cooldown_uses_completed_run_step_boundary(self):
+        results, _, _ = records(batch("old") + batch("new"))
+        results[0].size = 2200
+        frames = [Frame(1, 6000, 0, 1500, results[:1], True, 1, provider="anthropic"),
+                  Frame(17, 6000, 0, 1500, results, True, 16, provider="anthropic",
+                        in_run_compact=True, compaction_limit=0, retry_after_step=17)]
+        for step, allowed in ((17, False), (18, True), (19, True)):
+            with self.subTest(step=step):
+                frames[1].step = step
+                report = evaluate(frames, Policy(0), window=6000)
+                self.assertEqual(bool(report.passes), allowed)
+                if allowed:
+                    self.assertEqual(report.passes[0].trigger, "near_compaction")
+        # Cooldown blocks the exception, not an independently profitable GC pass.
+        frames[1].step = 17
+        results[0].size = 3000
+        self.assertEqual(evaluate(frames, Policy(0), window=6000).passes[0].trigger,
+                         "break_even")
+
     def test_healthy_new_compaction_policy_has_no_count_cap(self):
         results, _, _ = records(batch("old") + batch("new"))
         results[0].size = 2200
@@ -460,6 +479,38 @@ class PolicyTest(unittest.TestCase):
                             load_frames(path)
                     else:
                         self.assertEqual(load_frames(path), [])
+
+    def test_loader_distinguishes_transient_permanent_and_legacy_compaction_skips(self):
+        body = '{"instructions":"fixed","input":[]}'
+        cases = (({"reason": "insufficient shrink", "disabled": False,
+                   "consecutive_failures": 1, "retry_after_step": 18}, False, 18),
+                 ({"reason": "insufficient shrink", "disabled": True,
+                   "consecutive_failures": 3, "retry_after_step": 0}, True, 0),
+                 ({"reason": "insufficient shrink"}, True, 0))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            for skip, disabled, retry_after in cases:
+                with self.subTest(skip=skip):
+                    events = [{"type": "run.started", "data": {
+                        "in_run_compact": True, "in_run_compact_min_shrink": .1}},
+                              {"type": "compaction.skipped", "step": 16, "data": skip}]
+                    for step in (17, 18, 19):
+                        if step == 19 and not disabled:
+                            events.append({"type": "compaction.finished", "data": {}})
+                        events.extend([
+                            {"type": "model.requested", "step": step, "data": {"history": []}},
+                            {"type": "api.attempt.started", "data": {"request_body": body}},
+                            {"type": "model.accepted", "data": {
+                                "usage": {"known": True, "input_tokens": 100}}}])
+                    path.write_text("\n".join(json.dumps(event) for event in events))
+                    frames = load_frames(path)
+                    self.assertEqual([f.compact_off for f in frames], [disabled] * 3)
+                    self.assertEqual([f.retry_after_step for f in frames],
+                                     [retry_after, retry_after, 0])
+                    self.assertEqual([f.completed_requests for f in frames], [0, 1, 2])
+                    self.assertEqual([f.compactions for f in frames],
+                                     [0, 0, 0 if disabled else 1])
+                    self.assertTrue(all(f.compaction_limit == 0 for f in frames))
 
     def test_loader_session_counter_includes_failure_not_retry_or_summary(self):
         body = '{"instructions":"fixed","input":[]}'

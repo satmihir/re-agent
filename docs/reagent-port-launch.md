@@ -66,7 +66,8 @@ Submit the complete #141 task as one message (or paste it with `/edit`). Include
   interfaces. Require each writer to reread before edits; forked context does not
   copy file-write authorization. Use follow-up tasks when agent budgets expire.
 - Maintain `rust/PORT_STATUS.md` before handing work off and after each build,
-  parity batch, compaction checkpoint or blocker. Read it after a summary.
+  parity batch, compaction checkpoint or blocker. Read it after a summary and
+  record summary Steps and gaps; shrinking gaps signal excessive retained detail.
 - Use the parallel-build isolation decision in the #140 readiness report. Until
   measured, serialize Cargo commands; separate targets isolate build outputs,
   not simultaneous incompatible source edits.
@@ -97,6 +98,9 @@ Updated: <UTC timestamp>; stage: <current milestone>
 ## Verification
 | UTC | Rust commit or dirty checkpoint | Command | Passed / total | Evidence |
 | --- | --- | --- | --- | --- |
+
+## Summary cadence
+- <recent summary Steps and gaps; link older detail rather than copying it>
 
 ## Blockers and uncertain effects
 - <finding, affected paths, trace/call IDs, inspection needed; or none>
