@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "freeze_status": "blocked",
+  "reference_commit": "7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f",
+  "reference_binary_sha256": "93180c8c4eadbb69f3e7309657767bbaac6b993134c8f17e04f6fc9cb8ca5e9b",
+  "reference_platform": "darwin/arm64",
+  "reference_build": "go build -o /tmp/reagent-parity-reference ./cmd/reagent",
+  "goldens_frozen": false,
+  "inventory_status": "draft; declared counts are not a claim of matrix completeness or passing cases",
+  "counts": {
+    "total": 1198,
+    "runnable": 1183,
+    "pending": 15,
+    "slow": 61,
+    "by_area": {"wire": 1198, "cli": 0, "tools": 0, "agents": 0, "checkpoint": 0},
+    "by_platform": {"darwin": 1198, "linux": 1198},
+    "by_comparison": {"N": 1192, "B": 6},
+    "by_family": {
+      "W01": 23, "W02": 12, "W03": 15, "W04": 24, "W05": 64,
+      "W06": 14, "W07": 24, "W08": 12, "W09": 12, "W10": 7,
+      "W11": 11, "W12": 3, "W13": 4, "W14": 3, "W15": 2,
+      "W16": 4, "W17": 27, "W18": 18, "W19": 13, "W20": 6,
+      "W21": 9, "W22": 5, "W23": 13, "W24": 37, "W25": 10,
+      "W26": 57, "W27": 38, "W28": 23, "W29": 10, "W30": 3,
+      "W31": 30, "W32": 25, "W33": 4, "W34": 8, "W35": 9,
+      "W36": 3, "W37": 7, "W38": 1, "W39": 4, "W40": 4,
+      "W41": 15, "W42": 11, "W43": 21, "W44": 6, "W45": 3,
+      "W46": 2, "W47": 3, "W48": 2, "W49": 3, "W50": 9,
+      "W51": 2, "W52": 10, "W53": 324, "W54": 189
+    }
+  },
+  "pending": {
+    "W10.source": "agents: synthetic agent-source Entry in native child prefix",
+    "W11.roster-change": "agents: deterministic admitted-child roster lifecycle",
+    "W13.four-point-ceiling": "agents: native/nested fork admission",
+    "W13.native-fork": "agents: controlled native child requests",
+    "W13.nested-fork": "agents: controlled nested child requests",
+    "W13.subsequent-child": "agents: subsequent child request",
+    "W24.subscription-checkpoint-resume": "checkpoint: restore usage-limit session and complete next turn",
+    "W39.agent": "agents A03-A14 lifecycle",
+    "W47.agent": "agents A03-A14 lifecycle",
+    "W50.picker": "CLI C20 PTY driver",
+    "W52.gc": "agents A29-A32 GC fixtures",
+    "W52.resume": "checkpoint A34-A37 fixtures",
+    "W53.propagation.child": "agents: child endpoint propagation",
+    "W53.propagation.git-do": "tools: git_do endpoint propagation",
+    "W53.propagation.nested-child": "agents: nested-child endpoint propagation"
+  },
+  "reference_blockers": {
+    "W17.invalid-utf8": "provider native RawMessage introduces invalid UTF-8 into JSONL trace",
+    "W23.final-null": "response.completed with response:null panics: assignment to entry in nil map at openai_stream.go:88",
+    "W33.openai-invalid-utf8": "provider native RawMessage introduces invalid UTF-8 into JSONL trace",
+    "W33.proxy-invalid-utf8": "provider native RawMessage introduces invalid UTF-8 into JSONL trace"
+  },
+  "accepted_gaps": [],
+  "unverified": [
+    "Full wire leaf-matrix exhaustiveness review",
+    "Complete B/N/S artifact policy and normalization/invariant integration",
+    "Golden capture/review and three parallel plus one serial full passes",
+    "Linux execution and platform goldens",
+    "GOCOVERDIR area contribution and mutation execution"
+  ]
+}

@@ -4,9 +4,10 @@
 #   make check    format, vet, and the offline suite; needs no credentials
 #   make live     conformance runs against both providers; reads ./.env or main checkout .env in a worktree
 #   make tty-check  drive the chat in a pseudo-terminal and check the screen; offline
+#   make parity BIN=/absolute/reagent  offline executable parity against frozen goldens
 #   make git-do-eval  repeated git_do decisions; MODE=jev|recipe N=5 SET=all|tuning|held_out; Jev reads .env
 
-.PHONY: all build check live tty-check git-do-eval
+.PHONY: all build check live tty-check git-do-eval parity
 
 all: build
 
@@ -54,3 +55,9 @@ git-do-eval:
 MODE ?= jev
 N ?= 5
 SET ?= all
+
+# Never loads .env or builds the candidate; the executable is the boundary.
+JOBS ?= 4
+parity:
+	python3 -m unittest discover -s parity -p '*test.py'
+	python3 -m parity.run --bin "$(BIN)" --jobs "$(JOBS)" $(if $(AREA),--area "$(AREA)") $(if $(CASE),--case "$(CASE)")

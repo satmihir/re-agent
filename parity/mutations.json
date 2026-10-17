@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "scope": "Wire subset of design section 6. Each patch applies independently to git archive HEAD, never the working tree.",
+  "unmapped": [
+    {"ids": [1, 2, 4, 6, 7, 8, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35], "reason": "Outside this wire-only milestone; no mutation-strength claim for these IDs."}
+  ],
+  "mutations": [
+    {
+      "id": 3,
+      "description": "Strip CRLF instead of just one LF from a prompt file",
+      "cases": ["W07.gpt-6-luna-crlf", "W07.claude-haiku-4-5-crlf"],
+      "intended_assertion": "CR survives prompt-file LF removal and appears in encoded prompt bytes",
+      "failure_pattern": "(?i)(request|body|prompt|escape|byte)",
+      "patches": [{"path": "internal/reagent/cli.go", "old": "prompt := strings.TrimSuffix(string(raw), \"\\n\")", "new": "prompt := strings.TrimSuffix(strings.TrimSuffix(string(raw), \"\\n\"), \"\\r\")"}]
+    },
+    {
+      "id": 5,
+      "description": "Record shell output as trusted ordinary user text",
+      "cases": ["W47.projection"],
+      "intended_assertion": "Shell command retains shell Entry kind and untrusted_tool_data provenance in handoff",
+      "failure_pattern": "(?i)(shell|trust|handoff|request|body|entry)",
+      "patches": [{"path": "internal/reagent/session.go", "old": "s.history = append(s.history, Entry{Kind: EntryShell, Shell: &command})", "new": "s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: command.Output}})"}]
+    },
+    {
+      "id": 9,
+      "description": "Disable HTML escaping in the OpenAI request encoder",
+      "cases": ["W07"],
+      "intended_assertion": "OpenAI request retains Go JSON HTML escaping for < > and &",
+      "failure_pattern": "(?i)(request|body|escape|byte)",
+      "patches": [
+        {"path": "internal/reagent/openai.go", "old": "import (\n\t\"crypto/sha256\"", "new": "import (\n\t\"bytes\"\n\t\"crypto/sha256\""},
+        {"path": "internal/reagent/openai.go", "old": "body, err := json.Marshal(responsesRequest{", "new": "var buffer bytes.Buffer\n\tencoder := json.NewEncoder(&buffer)\n\tencoder.SetEscapeHTML(false)\n\terr = encoder.Encode(responsesRequest{"},
+        {"path": "internal/reagent/openai.go", "old": "\t\tStream:            proxied,\n\t})", "new": "\t\tStream:            proxied,\n\t})\n\tbody := bytes.TrimSuffix(buffer.Bytes(), []byte{10})"}
+      ]
+    },
+    {
+      "id": 10,
+      "description": "Reverse two Responses request struct fields",
+      "cases": ["W02", "W08"],
+      "intended_assertion": "Request JSON token order keeps model before instructions",
+      "failure_pattern": "(?i)(request|body|order|byte)",
+      "patches": [{"path": "internal/reagent/openai.go", "old": "\tModel             string              `json:\"model\"`\n\tInstructions      string              `json:\"instructions\"`", "new": "\tInstructions      string              `json:\"instructions\"`\n\tModel             string              `json:\"model\"`"}]
+    },
+    {
+      "id": 11,
+      "description": "Include the first workspace snapshot in the cache hash",
+      "cases": ["W10.base", "W11.turns"],
+      "intended_assertion": "Independent cache-key derivation excludes first workspace snapshot",
+      "failure_pattern": "(?i)(cache|hash|key|request|body)",
+      "patches": [{"path": "internal/reagent/openai.go", "old": "\t\t\tuser.Workspace = nil\n", "new": ""}]
+    },
+    {
+      "id": 12,
+      "description": "Omit the last Anthropic tool-result cache breakpoint",
+      "cases": ["W12"],
+      "intended_assertion": "Last result block carries the ephemeral cache_control marker",
+      "failure_pattern": "(?i)(cache|marker|result|request|body)",
+      "patches": [{"path": "internal/reagent/anthropic.go", "old": "\tcase []messagesToolResult:\n\t\tif len(content) > 0 {\n\t\t\tcontent[len(content)-1].CacheControl = ephemeralCache\n\t\t}", "new": "\tcase []messagesToolResult:\n\t\treturn"}]
+    },
+    {
+      "id": 13,
+      "description": "Retry HTTP 408 in the default policy",
+      "cases": ["W26.openai-408", "W26.proxy-408", "W26.anthropic-408"],
+      "intended_assertion": "HTTP 408 causes exactly one attempt without default retry",
+      "failure_pattern": "(?i)(attempt|request|count|408|trace)",
+      "patches": [{"path": "internal/reagent/transport.go", "old": "return status == http.StatusTooManyRequests || (status >= 500 && status <= 599)", "new": "return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || (status >= 500 && status <= 599)"}]
+    },
+    {
+      "id": 14,
+      "description": "Treat an incomplete SSE terminal event as transient overload",
+      "cases": ["W28.no-retry-incomplete"],
+      "intended_assertion": "Incomplete SSE is not retried even with retry-window admission enabled",
+      "failure_pattern": "(?i)(attempt|request|count|incomplete|status|trace)",
+      "patches": [
+        {"path": "internal/reagent/openai_stream.go", "old": "\t\tcase \"response.completed\", \"response.incomplete\":\n\t\t\treturn \"\", Usage{}", "new": "\t\tcase \"response.incomplete\":\n\t\t\treturn \"server_is_overloaded\", Usage{}\n\t\tcase \"response.completed\":\n\t\t\treturn \"\", Usage{}"},
+        {"path": "internal/reagent/openai_stream.go", "old": "\t}\n\treturn \"\", Usage{}\n}\n\nfunc transientStreamCode", "new": "\t}\n\treturn \"server_is_overloaded\", Usage{}\n}\n\nfunc transientStreamCode"}
+      ]
+    },
+    {
+      "id": 15,
+      "description": "Use the retry-window admission deadline as an in-flight deadline",
+      "cases": ["W29.held-success"],
+      "availability_note": "Requires a successful response held past the admission window; unknown/pending leaf is reported unmapped, never counted as a kill.",
+      "intended_assertion": "A successful response held past admission deadline still completes",
+      "failure_pattern": "(?i)(success|complete|status|deadline|exit|stdout|trace)",
+      "patches": [{"path": "internal/reagent/transport.go", "old": "\tdeadline := time.Now().Add(policy.window)\n\tprior := Usage{Known: true}", "new": "\tdeadline := time.Now().Add(policy.window)\n\tif overnight {\n\t\tvar cancel context.CancelFunc\n\t\tctx, cancel = context.WithDeadline(ctx, deadline)\n\t\tdefer cancel()\n\t}\n\tprior := Usage{Known: true}"}]
+    },
+    {
+      "id": 16,
+      "description": "Add cached input to inclusive OpenAI input totals again",
+      "cases": ["W32"],
+      "intended_assertion": "Input-token totals already include cached tokens and are not double counted",
+      "failure_pattern": "(?i)(usage|input|token|counter|trace)",
+      "patches": [{"path": "internal/reagent/openai_response.go", "old": "\t\tInputTokens:       u.InputTokens,", "new": "\t\tInputTokens:       u.InputTokens + u.InputTokensDetails.CachedTokens,"}]
+    },
+    {
+      "id": 17,
+      "description": "Choose maximum probability instead of cheapest sufficient cumulative route",
+      "cases": ["W43"],
+      "intended_assertion": "Route follows the cheapest cumulative .80 threshold, not classifier argmax",
+      "failure_pattern": "(?i)(route|model|effort|cumulative|trace|request)",
+      "patches": [{"path": "internal/reagent/auto.go", "old": "\t\tif selected == \"\" && sum >= autoSufficiency {\n\t\t\tselected = route.ID\n\t\t}", "new": "\t\tif selected == \"\" || probabilities[route.ID] > probabilities[selected] {\n\t\t\tselected = route.ID\n\t\t}"}]
+    },
+    {
+      "id": 18,
+      "description": "Leak provider-native reasoning items into model-switch visible text",
+      "cases": ["W47.projection", "W48.roundtrip"],
+      "intended_assertion": "Handoff bytes omit opaque encrypted native reasoning while preserving visible blocks",
+      "failure_pattern": "(?i)(native|reason|handoff|request|body|opaque|secret)",
+      "patches": [
+        {"path": "internal/reagent/model_switch.go", "old": "\tOmittedNativeItems int           `json:\"omitted_native_items\"`", "new": "\tOmittedNativeItems int           `json:\"omitted_native_items\"`\n\tNativeItems []json.RawMessage `json:\"native_items,omitempty\"`"},
+        {"path": "internal/reagent/model_switch.go", "old": "\t\t\t\tBlocks: response.Blocks, OmittedNativeItems: len(response.Native.Items),", "new": "\t\t\t\tBlocks: response.Blocks, OmittedNativeItems: len(response.Native.Items), NativeItems: response.Native.Items,"}
+      ]
+    },
+    {
+      "id": 36,
+      "description": "Byte-slice routing previews through a multibyte codepoint",
+      "cases": ["W39.history"],
+      "intended_assertion": "Routing preview trims to a valid UTF-8 prefix without a replacement rune",
+      "failure_pattern": "(?i)(utf|preview|trim|replacement|state|body|request|recent)",
+      "patches": [{"path": "internal/reagent/routing_packet.go", "old": "return truncateUTF8(text, routingPreviewBytes)", "new": "return text[:routingPreviewBytes]"}]
+    }
+  ]
+}

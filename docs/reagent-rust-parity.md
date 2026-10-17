@@ -4,15 +4,36 @@ Design for [#138](https://github.com/satmihir/re-agent/issues/138), step 1 of
 [#143](https://github.com/satmihir/re-agent/issues/143). Implementation and its
 approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 
-**Status:** revised for human approval following the owner's confirmed decisions
-on PR #148. Research and independent reviews are recorded below; no suite or
-reference hardening is implemented by this document.
+**Status:** runner/wire implementation under #139; the remaining three areas
+retain their planned status. Earlier design research/reviews are recorded below.
 
-Reference inspected: `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492` (Go main).
-That commit establishes the inventory, **not the final oracle**. Freeze the
-reference and capture goldens only after the separate Go hardening prerequisite,
-#140 and #136 have landed. Reconcile their changes against this matrix first;
-do not freeze the old library quirks or silently refresh candidate goldens.
+Reference pinned for the area suite: `7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f`
+(`origin/main`, including #150–#156 and strict parsing #159). The earlier
+inventory reference was `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492`.
+`parity/manifest.json` records the protected binary SHA-256 and executable leaf
+inventory; candidate runs never regenerate goldens. See `parity/README.md` for
+capture, pending dependencies and verification evidence. Hardening #154 and the
+#140/#136 integrations have landed; this reconciliation precedes capture.
+
+### Reconciliation before the area-1 freeze (#139)
+
+| Landed change | Audited contract and matrix disposition |
+| --- | --- |
+| #150 ChatGPT auth | W02 plan inference is streaming; UUIDv5 `session_id` and `x-oai-request-id` differ from proxy headers (`openai_client.go:62–65,96–110`). W24 covers seven owned `subscription_sharing_*` mappings and terminal versus temporary errors (`transport.go:541–577`). Auth issuer routing is W53; credential lifecycle/checkpoint recovery remains in later areas. |
+| #151 pinned instructions | W11/W52 retain request instructions across workspace and effort changes; `switch_workspace` carries project instructions (`workspace_selection.go:265–297`). Session/reset/summary/model transition pinning is in `session.go:79,387,414`, `model_switch.go:238`. Saved prompt is `session_store.go:67`; recovery is a checkpoint-area dependency. |
+| #153 Git inspection | T-series, not a wire exclusion: status/worktree/staged diffs need the tools area. |
+| #154 hardening | W53/W54 now exercise landed native/issuer env controls and real second deadlines. Canonical v2 is implemented by `checkpoint_json.go:9–77`, `session_store.go:154–163,219–231`; checkpoint cases remain owned by area 4. |
+| #152 context controls | Window cap, lean GC trace state, 15% shrink, cooldown/failure streak replace earlier assumptions; GC area owns behavioral cases. Wire snapshots retain the new header fields exactly. |
+| #156 terminal rendering | CLI/PTY area owns intermediate Markdown screens. |
+| #159 parsing follow-up | Freezes ASCII digits for all integer environment variables and command positions; booleans accept exactly true/false/1/0. `provider.go:253–272`, `context_gc_experiments.go:13–32`, `cli.go:126–138`. No leading-plus/ParseBool quirks are preserved. |
+
+**Freeze blocked:** the draft has 1,198 declared wire leaves (1,183 runnable,
+15 explicitly cross-area pending; 61 slow), not an assertion of complete matrix
+coverage or green oracle integration. The protected binary reproduces a nil-map
+panic for W23.final-null (`openai_stream.go:69–88`) and invalid-UTF-8 JSONL native
+items for W33. No goldens are frozen. Review/fix the reference and explicitly
+repin before capture; do not normalize away these defects. Draft inventory and
+remaining harness work are recorded in `parity/manifest.json` and `parity/README.md`.
 
 ## 1. Harness architecture
 
@@ -61,6 +82,7 @@ Proposed ownership in #139 (not files added by #138):
 
 | Path | Owns |
 | --- | --- |
+| `parity/manifest.json` | Exact draft family/platform/slow/pending counts, protected reference commit/digest and freeze blockers; counts are not approval evidence |
 | `parity/run.py` | Case selection, worker processes, artifact/report lifecycle, environment isolation and loopback endpoint preflight |
 | `parity/provider.py` | Recording loopback HTTP/SSE endpoints for both providers and Jev, keyed response scripts and barriers |
 | `parity/observe.py` | Lossless JSON token spans, allowed substitutions, invariants, trace correlation and diffs |
@@ -194,7 +216,7 @@ proxy precedence, invalid-config/no-request behavior, redaction and propagation
 to nested clients. Compare actual method/path/headers/body/trace endpoint;
 an ignored override is a failure, not a skipped lane. Defaults are checked via
 owned configuration diagnostics/preview without making public API requests.
-These new reference controls are prerequisites, not claims about today's binary.
+These controls landed in #154 and are present at the pinned reference.
 No injected clock or private model constructor is needed.
 
 Scripts key requests by unique task/history marker, destination model/provider,
@@ -407,7 +429,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | ID | Inputs | Compared observations / method |
 | --- | --- | --- |
 | W01 | Default/explicit/env target; catalog and unknown models/efforts | Target resolution, omission versus pass-through, exact errors; N |
-| W02 | Direct OpenAI preview and L exchange for every model | Field order/store:false/encrypted reasoning/include/tools/verbosity/stream:false/truncation; N |
+| W02 | Direct OpenAI preview and L exchange for every model; ChatGPT plan streaming inference with synthetic config credentials | Direct field order/store:false/encrypted reasoning/include/tools/verbosity/stream:false/truncation; plan stream:true/no truncation, bearer and UUIDv5 `session_id` from cache key, `x-oai-request-id` (proxy retains `session-id`/`x-request-id`); N/B headers |
 | W03 | Proxy preview/live/key/userinfo; endpoint-only/provider-only/unsupported provider/no host/no scheme/ftp/malformed password-bearing URL | Valid stream/cache/header contract; exact invalid-env startup errors/channel/exit2/no request, no password leak; N/S |
 | W04 | Anthropic preview/L exchange, catalog and unknown effort | System/messages/tools/order, max_tokens:16000, effort omission/output_config; N |
 | W05 | Authority and optional declaration combinations | Lexical tool order, exact descriptions/schemas; plan marker without declaration filtering; N |
@@ -416,7 +438,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W08 | Preview/live unchanged fixture; UTC and America/Los_Angeles plus fixed-offset non-UTC zone, fixed FETCH_HEAD mtime | Body equality/no preview I/O; local date/zone and last_fetch independently validated before substitution, including DST offset from fixture epoch; N/S |
 | W09 | Encoded body 10 MiB boundary, escaping-heavy content | Exact bytes/limit comparison, no HTTP on overflow; N/S, both encoders |
 | W10 | Independently compute cache key from actual instructions/schemas/first Entry | Exact SHA-256 prefix algorithm and 32 lowercase hex; B per execution, §3 dependency rules |
-| W11 | Steps/turns/snapshot/effort/root/model/reset/compaction/roster/plan changes | Cache identity stable only for unchanged hashed prefix; do not erase roster/plan/source; B/S |
+| W11 | Steps/turns/snapshot/effort/root/model/reset/compaction/roster/plan changes | Instructions pinned across effort/workspace changes (#151); cache identity stable only for unchanged hashed prefix, new project instructions arrive in switch result; reset/compaction/model transitions re-render. Do not erase roster/plan/source; B/S |
 | W12 | L Anthropic first history, result batch and subsequent user text | System plus final eligible block's cache marker; results-first user merging; N |
 | W13 | L native/nested Anthropic forks and subsequent child request | Inherited cache boundaries/four-point ceiling and first-request-only prefix; N |
 | W14 | Reasoning/native tool/text response then continuation | Resent native fields/order/opaque strings; invisible reasoning; re-marshaled Go bytes, not original JSON whitespace; N |
@@ -429,7 +451,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W21 | SSE LF/CRLF/comments/multiline data/DONE/EOF/chunk splits | JSON type wins over event name, assembled response and raw stream trace; N/B stream |
 | W22 | Indexed done items; final empty/absent/nonempty disagreeing output | Index order, final nonempty precedence, ignored deltas; N |
 | W23 | Bad event JSON, negative/gapped/duplicate index, empty/deltas-only stream | Exact failure/overwrite semantics; no fabricated completion or effects; N |
-| W24 | error/response.failed/nested error/overflow/incomplete, known failed usage | Nested precedence, status/message and retained usage; N |
+| W24 | error/response.failed/nested error/overflow/incomplete, known failed usage; all `subscription_sharing_*` mappings over HTTP and SSE | Nested precedence, owned plan-admission/usage messages and retained usage; only usage_unavailable/user_unavailable are default bounded stream retries, other subscription errors terminal/resumable; N/S |
 | W25 | Completion followed by malformed/error events; delayed EOF/content-type variants | First terminal assembly wins, no live delta rendering, whole body read before decoding; N/S |
 | W26 | 429/500/529/599 then success/twice; 400/401/403/408/201/204/3xx | Default two attempts only on 429/5xx, same request bytes, ~500ms delay, exactly 200 success; N/S |
 | W27 | Connection/reset/partial-body/redirect; valid/corrupt/truncated gzip JSON/SSE/error bodies on direct and proxy forms | Owned transport failure categories/retry behavior, no redirect/key forwarding; decoded adapter/trace body versus raw compressed server artifact, Accept-Encoding and status classification; N/S |
@@ -457,9 +479,9 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W49 | Unknown window/oversized handoff/calibrated input/provider change | Admission thresholds/reserved 16000, failed switch leaves source usable; N/S |
 | W50 | Fresh/same-model fresh/unavailable/numeric/bad selection | Different-model fresh resets; same-model fresh is Go's pinning no-op; N |
 | W51 | L cross-provider round trips; applied/unknown/unacknowledged timeout | Projection/uncertainty gate then later assistant acknowledgment permits timeout sharing; N/S |
-| W52 | After switch: effort/reset/compact/workspace/plan/GC | Next request uses correct handoff, prefix/cache and authority; N |
-| W53 | Native provider/Jev base-URL overrides on both OSes: path prefix/trailing slash/default/invalid URL/proxy precedence; child/switch/Auto/git_do | Loopback method/path/headers/body/trace endpoint N, no request on invalid settings/redaction S; default diagnostics without public requests |
-| W54 | Header/read-idle env overrides, unset defaults/invalid durations; stalled headers/body and progressing body beyond short idle limit | Defaults 10min/5min in diagnostics, shortened real limits exercised in seconds, reads reset idle/no total deadline, owned errors and cancellation; S/N §4 |
+| W52 | After switch: effort/reset/compact/workspace/plan/GC; pinned instructions across effort-only changes | Next request uses correct handoff, prefix/cache and authority; workspace result carries AGENTS.md without changing the pin; effort changes only the parameter, model/reset/compact re-pin; N |
+| W53 | Native provider/Jev base-URL overrides on both OSes: path prefix/trailing slash/default/invalid URL/proxy precedence; separate OAuth issuer; child/switch/Auto/git_do | Landed #154: REAGENT_OPENAI_BASE_URL/REAGENT_ANTHROPIC_BASE_URL/REAGENT_JEV_BASE_URL/REAGENT_OPENAI_AUTH_ISSUER; loopback method/path/headers/body/trace endpoint N, no request on invalid settings/redaction S; issuer does not route inference, proxy does not route issuer; default diagnostics without public requests |
+| W54 | REAGENT_RESPONSE_HEADER_TIMEOUT / REAGENT_RESPONSE_IDLE_TIMEOUT; empty/unset defaults, ASCII-digit whole seconds 1–3600, malformed/overflow values; stalled headers/body and progressing body beyond short idle limit, auth included | Landed #154: defaults 600s/300s in diagnostics, shortened real limits exercised in seconds, reads reset idle/no total deadline, owned errors and cancellation; auth retains its separate overall deadlines; S/N §4 |
 
 **Show-context expansion:** run direct OpenAI, proxy OpenAI and Anthropic with
 all catalog models plus unknown names; effort auto/empty/supported/unsupported;
@@ -721,7 +743,10 @@ checkpoint digest and handoff/packet hash against the actual raw bytes or named
 source bytes. Cache keys are checked against `openai.go:229–245`: hash
 `model+NUL+instructions+NUL`, each ordered tool `name+NUL+raw_schema+NUL`, then
 Go serialization of first Entry with **only User.Workspace removed**, hex prefix
-32 characters. Roster/plan/source are retained; tool descriptions are not directly
+32 characters. `raw_schema` means the original ToolSpec bytes, including their
+whitespace, not the compacted schema in a trace/request. The suite freezes those
+inputs from the reference declarations and verifies their compacted wire forms;
+candidate runs do not need Go source. Roster/plan/source are retained; tool descriptions are not directly
 hashed. Compare raw key/header equality for same-root preview/live and across
 steps. Do not replace cache keys with generic IDs.
 
@@ -1108,6 +1133,10 @@ approval or 85% coverage independently. Keep stable IDs/shared runner contracts.
 Cross-area leaves may require later fixtures; each earlier PR names those
 unimplemented dependencies, while its implemented cases pass on Go. The final
 PR completes the whole manifest rather than leaving optional green skips.
+Area 1 is currently an **unapproved draft**: the reference defects above block
+its all-green proof and golden freeze. Counts in its manifest describe declared
+cases, not completed acceptance. No coverage/mutation/repeatability success is
+claimed while that gate is blocked.
 
 Final #139 acceptance: instrumented black-box Go run with missed-source-range
 reconciliation, all **36 independent mutations** killed by intended assertions,
