@@ -2,7 +2,6 @@ package reagent
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -96,9 +95,10 @@ func (m modelInfo) accepts(effort string) bool {
 // selectModel resolves what was typed after /model: a list position or an
 // exact model id.
 func selectModel(choice string) (modelInfo, error) {
-	if position, err := strconv.Atoi(choice); err == nil {
+	if n, ok := decimalSetting(choice); ok {
+		position := int(min(n, int64(len(modelCatalog)+1)))
 		if position < 1 || position > len(modelCatalog) {
-			return modelInfo{}, fmt.Errorf("there is no model %d; /model lists them", position)
+			return modelInfo{}, fmt.Errorf("there is no model %s; /model lists them", choice)
 		}
 		return modelCatalog[position-1], nil
 	}
@@ -114,9 +114,10 @@ func selectEffort(info modelInfo, choice string) (string, error) {
 	if len(info.Efforts) == 0 {
 		return "", fmt.Errorf("%s takes no reasoning effort setting", info.ID)
 	}
-	if position, err := strconv.Atoi(choice); err == nil {
+	if n, ok := decimalSetting(choice); ok {
+		position := int(min(n, int64(len(info.Efforts)+1)))
 		if position < 1 || position > len(info.Efforts) {
-			return "", fmt.Errorf("there is no effort %d; /effort lists them", position)
+			return "", fmt.Errorf("there is no effort %s; /effort lists them", choice)
 		}
 		return info.Efforts[position-1], nil
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -247,6 +248,28 @@ func endpointBaseURL(variable, fallback string) string {
 		return strings.TrimRight(value, "/")
 	}
 	return fallback
+}
+
+// decimalSetting reads an environment integer written as ASCII digits only.
+// Signs, spaces and other bases are refused, so the accepted spellings are
+// re:agent's contract rather than one parser's.
+func decimalSetting(value string) (int64, bool) {
+	if value == "" || strings.Trim(value, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	return n, err == nil
+}
+
+// booleanSetting accepts exactly true, false, 1 and 0.
+func booleanSetting(value string) (bool, bool) {
+	switch value {
+	case "true", "1":
+		return true, true
+	case "false", "0":
+		return false, true
+	}
+	return false, false
 }
 
 func validateHTTPEnvironment() error {

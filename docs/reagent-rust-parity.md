@@ -127,9 +127,12 @@ no usage hint), never raw values or parser errors.
 - `REAGENT_CONTEXT_WINDOW_TOKENS`: positive int64 testing window cap; a known
   model's real window remains the upper bound.
 - `REAGENT_CONTEXT_GC_AGE_STEPS`: 0 disables; otherwise an integer greater than 3.
-- `REAGENT_CONTEXT_GC_CONSOLIDATE`: boolean, default false; accepts the Go boolean
-  spellings (`1`, `t`, `T`, `TRUE`, `true`, `True` and their false equivalents
-  `0`, `f`, `F`, `FALSE`, `false`, `False`).
+- `REAGENT_CONTEXT_GC_CONSOLIDATE`: boolean, default false; accepts exactly
+  `true`, `false`, `1` and `0`.
+
+Every integer environment setting (these and the two response timeouts) is ASCII
+digits only: no sign, whitespace, separator or other base. `/model` and
+`/effort` positions follow the same rule; anything else is treated as a name.
 
 Positive age and enabled consolidation are mutually exclusive. New sessions
 require `--context-gc` for either enabled experiment. Resume still validates

@@ -3,26 +3,26 @@ package reagent
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 )
 
 func readContextGCExperiments() (int, bool, error) {
 	age, consolidate := 0, false
 	if raw := os.Getenv("REAGENT_CONTEXT_GC_AGE_STEPS"); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil || value < 0 || (value > 0 && value <= contextGCRecentSteps) {
+		value, ok := decimalSetting(raw)
+		if !ok || value > math.MaxInt32 || (value > 0 && value <= contextGCRecentSteps) {
 			return 0, false, fmt.Errorf("REAGENT_CONTEXT_GC_AGE_STEPS must be 0 or an integer greater than %d", contextGCRecentSteps)
 		}
-		age = value
+		age = int(value)
 	}
 	if raw := os.Getenv("REAGENT_CONTEXT_GC_CONSOLIDATE"); raw != "" {
-		value, err := strconv.ParseBool(raw)
-		if err != nil {
-			return 0, false, fmt.Errorf("REAGENT_CONTEXT_GC_CONSOLIDATE must be a boolean")
+		value, ok := booleanSetting(raw)
+		if !ok {
+			return 0, false, fmt.Errorf("REAGENT_CONTEXT_GC_CONSOLIDATE must be true, false, 1 or 0")
 		}
 		consolidate = value
 	}
