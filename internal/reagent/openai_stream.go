@@ -67,7 +67,7 @@ func assembleOpenAIStream(raw []byte) ([]byte, error) {
 	}
 
 	var body map[string]json.RawMessage
-	if err := json.Unmarshal(final, &body); err != nil {
+	if err := json.Unmarshal(final, &body); err != nil || body == nil {
 		return nil, &ModelError{Status: StatusProtocolError, Message: "final stream event carries no response object"}
 	}
 	var output []json.RawMessage

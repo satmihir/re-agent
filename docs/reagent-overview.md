@@ -62,6 +62,8 @@ Plus's five-hour usage limit is shared across all plan-using apps; Pro has no su
 
 **Timeouts.** `REAGENT_RESPONSE_HEADER_TIMEOUT` and `REAGENT_RESPONSE_IDLE_TIMEOUT` override 600-second header and 300-second body-idle defaults for every harness HTTP client, auth included. Values are whole integer seconds in 1–3600; invalid values fail at startup. Existing auth total deadlines still bound those calls.
 
+Completed/incomplete stream events must carry a JSON response object; null or non-object responses stop with `protocol_error`, without dispatch or retry.
+
 **Retries.** By default a request gets two attempts, retrying 429 and 5xx once after 500 ms (except non-retryable ChatGPT admission/usage errors). ChatGPT 401s get one serialized refresh and retry; only the two documented subscription availability stream errors get default bounded retries. Generic stream overloads/rate limits remain non-retried by default. `--model-retry-window 12h` instead retries transport failures, 429/5xx and overload stream errors with backoff until the window closes, including proven pre-send refresh connection failures (TLS negotiation, proxy CONNECT or dial) and explicit temporary auth responses. HTTP connection-acquisition tracing distinguishes these from potentially sent refreshes; untraced injected transports must still prove a dial failure. Ambiguous refresh failures after sending retain tokens but persist `NeedsLogin`, preventing replay even on later turns because rotation may already have consumed the token. Usage from failed attempts is counted; attempts with unknown usage are counted separately.
 
 ## Chat
@@ -81,7 +83,7 @@ Tool argument type errors name the field and expected JSON type without decoder-
 
 ## Traces
 
-One JSONL file per root run (and per compaction or model-switch attempt), and one lifetime trace per agent with its thread and parent IDs, mode 0600, with exact request and response bytes. Parent traces record spawn, send and delivered results, not child histories. Writing is best effort: a failure warns and the run goes on. Event fields and `jq` recipes are in `docs/reagent-trace-format.md`.
+One JSONL file per root run (and per compaction or model-switch attempt), and one lifetime trace per agent with its thread and parent IDs, mode 0600, with request and response bodies (credential redaction and UTF-8 replacement where necessary). Invalid UTF-8 runs in embedded native JSON are replaced only in the emitted trace; retained history, continuation requests and checkpoint bytes are unchanged. Parent traces record spawn, send and delivered results, not child histories. Writing is best effort: a failure warns and the run goes on. Event fields and `jq` recipes are in `docs/reagent-trace-format.md`.
 
 ## Checking changes
 
