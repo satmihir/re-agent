@@ -1,12 +1,14 @@
 package reagent
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 )
 
 // testCachePath is installed only by TestMain; production keeps best-effort tracing.
@@ -125,6 +127,10 @@ func (t *Trace) Write(kind string, step int, data any) {
 	if err != nil {
 		t.disable(err)
 		return
+	}
+	// RawMessage bypasses JSON string encoding; repair only the trace copy.
+	if !utf8.Valid(line) {
+		line = bytes.ToValidUTF8(line, []byte("�"))
 	}
 	if _, err := t.file.Write(append(line, '\n')); err != nil {
 		t.disable(err)

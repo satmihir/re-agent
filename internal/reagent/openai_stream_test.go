@@ -375,3 +375,34 @@ func TestOpenAICacheKey_FollowsThePrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAIProxy_FinalResponseMustBeObject(t *testing.T) {
+	for _, kind := range []string{"response.completed", "response.incomplete"} {
+		for _, response := range []string{"null", `"text"`, "[]", "true", "7"} {
+			t.Run(kind+"/"+response, func(t *testing.T) {
+				api := newFakeAPI(t, okReply(sse(fmt.Sprintf(`{"type":%q,"response":%s}`, kind, response))))
+				cfg := testConfig(t)
+				cfg.Provider, cfg.Model, cfg.Proxied = openaiName, DefaultOpenAIModel, true
+				trace := NewTrace(io.Discard)
+				model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+				path := filepath.Join(t.TempDir(), "events.jsonl")
+				_, result := oneTurn(t, context.Background(), cfg, model, trace, path, "task")
+				if result.Status != StatusProtocolError || result.Reason != "final stream event carries no response object" || result.ToolCalls != 0 {
+					t.Fatalf("result: %+v", result)
+				}
+				if len(api.received()) != 1 {
+					t.Fatal("malformed final response was retried")
+				}
+				events := readEvents(t, path)
+				for _, e := range events {
+					if e.Type == "model.accepted" || e.Type == "tool.started" {
+						t.Fatalf("malformed response produced %s", e.Type)
+					}
+				}
+				if events[len(events)-1].Type != "run.finished" {
+					t.Fatal("protocol failure did not finish the run")
+				}
+			})
+		}
+	}
+}
