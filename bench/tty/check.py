@@ -330,6 +330,8 @@ SCENARIOS = {
             ("key", "enter"),
             ("wait", "ready := true", 5),
             ("type", "follow-up"),
+            # Typed input echoes asynchronously; wait for it before capturing the screen.
+            ("wait", "❯ follow-up", 5),
             ("show", "Markdown progress while the tool runs"),
             ("expect", "all_lines", ["Progress check", "I am checking the parser and its tests before",
                                      "making any changes to the display.", "• Read parser.go",
