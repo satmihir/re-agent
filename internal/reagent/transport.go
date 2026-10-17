@@ -56,8 +56,8 @@ func responseTimeout(variable string, fallback time.Duration) (time.Duration, er
 	if value == "" {
 		return fallback, nil
 	}
-	seconds, err := strconv.Atoi(value)
-	if err != nil || seconds < 1 || seconds > 3600 || strings.Trim(value, "0123456789") != "" {
+	seconds, ok := decimalSetting(value)
+	if !ok || seconds < 1 || seconds > 3600 {
 		return fallback, fmt.Errorf("%s must be an integer number of seconds from 1 to 3600", variable)
 	}
 	return time.Duration(seconds) * time.Second, nil

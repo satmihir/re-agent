@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -126,8 +125,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	// Validate even on resume; the saved configuration replaces these values below.
 	var contextWindowTokens int64
 	if raw := os.Getenv("REAGENT_CONTEXT_WINDOW_TOKENS"); raw != "" {
-		value, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || value <= 0 {
+		value, ok := decimalSetting(raw)
+		if !ok || value <= 0 {
 			return startupError(stderr, "REAGENT_CONTEXT_WINDOW_TOKENS must be a positive integer")
 		}
 		contextWindowTokens = value
@@ -578,7 +577,7 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)")
 	fmt.Fprintln(w, "  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume")
 	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables")
-	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: boolean, default false")
+	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false")
 	fmt.Fprintln(w, "                                      experiments are exclusive and require --context-gc")
 	fmt.Fprintln(w, "                                      empty is unset; validated on resume, saved settings win")
 	fmt.Fprintln(w, "  NO_COLOR                            turn off styling")

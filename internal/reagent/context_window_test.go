@@ -31,7 +31,7 @@ func TestContextWindow_CapsKnownModelsAndAdmitsUnknown(t *testing.T) {
 func TestMain_ContextWindowEnvironment(t *testing.T) {
 	t.Setenv("REAGENT_CONTEXT_GC_AGE_STEPS", "")
 	t.Setenv("REAGENT_CONTEXT_GC_CONSOLIDATE", "")
-	for _, raw := range []string{"", "70000", "0", "-1", "private-window", "1.5", "9223372036854775808"} {
+	for _, raw := range []string{"", "70000", "0", "-1", "+70000", " 70000", "70000 ", "0x10", "private-window", "1.5", "9223372036854775808"} {
 		t.Run(raw, func(t *testing.T) {
 			t.Setenv("REAGENT_CONTEXT_WINDOW_TOKENS", raw)
 			var out, errs bytes.Buffer
@@ -158,7 +158,7 @@ func TestMain_ContextEnvironmentValidatedOnResume(t *testing.T) {
 	}{
 		{"window", "private-window", "", "", "REAGENT_CONTEXT_WINDOW_TOKENS must be a positive integer"},
 		{"age", "", "private-age", "", "REAGENT_CONTEXT_GC_AGE_STEPS must be 0 or an integer greater than 3"},
-		{"consolidate", "", "", "private-bool", "REAGENT_CONTEXT_GC_CONSOLIDATE must be a boolean"},
+		{"consolidate", "", "", "private-bool", "REAGENT_CONTEXT_GC_CONSOLIDATE must be true, false, 1 or 0"},
 		{"exclusive", "", "16", "true", "choose only one context GC experiment"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
