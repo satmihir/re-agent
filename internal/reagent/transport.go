@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -294,7 +293,8 @@ func retryBackoff(attempt int, header string) time.Duration {
 		backoff = min(backoff*2, 2*time.Minute)
 	}
 	backoff = time.Duration(float64(backoff) * (0.8 + 0.4*rand.Float64()))
-	if seconds, err := strconv.ParseInt(strings.TrimSpace(header), 10, 64); err == nil && seconds > 0 {
+	// HTTP delay-seconds is digits only; a signed or other value is ignored like any invalid header.
+	if seconds, ok := decimalSetting(strings.TrimSpace(header)); ok && seconds > 0 {
 		return max(backoff, time.Duration(min(seconds, int64(86400*365)))*time.Second)
 	}
 	if when, err := http.ParseTime(header); err == nil {

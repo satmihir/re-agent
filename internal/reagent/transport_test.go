@@ -255,6 +255,9 @@ func TestTransport_RetryDelaysAndAttemptLimit(t *testing.T) {
 		{"overnight backoff and cap", true, "", true, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 64 * time.Second, 2 * time.Minute, 2 * time.Minute}},
 		{"integer Retry-After", true, "60", false, []time.Duration{time.Minute}},
 		{"date Retry-After", true, date.Format(http.TimeFormat), true, []time.Duration{30 * time.Second}},
+		{"padded Retry-After", true, " 60 ", false, []time.Duration{time.Minute}},
+		// delay-seconds has no sign; an invalid header leaves the ordinary jittered backoff.
+		{"signed Retry-After", true, "+60", true, []time.Duration{time.Second}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			replies := make([]apiReply, len(tc.delays)+1)
