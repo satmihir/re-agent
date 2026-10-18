@@ -45,9 +45,11 @@ def process_env(directory):
     home = directory / "process-home"
     home.mkdir(exist_ok=True)
     go = shutil.which("go")
+    # The oracle process shares reference evidence; each executable case still owns isolated XDG paths.
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")).absolute()
     return {"PATH": (str(Path(go).resolve().parent) + os.pathsep if go else "") + os.defpath,
             "HOME": str(home), "TMPDIR": tempfile.gettempdir(),
-            "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(cache),
             "LANG": "C", "LC_ALL": "C", "TZ": "UTC", "PYTHONDONTWRITEBYTECODE": "1",
             "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_TERMINAL_PROMPT": "0", "GOPROXY": "off", "GOSUMDB": "off",

@@ -1,10 +1,8 @@
-"""Rejected admission lengths use retained observations, never another Go execution."""
+"""Rejected admission certificates use explicit public traces, without Go or a cache."""
 
 import copy
-import gzip
 import json
 import unittest
-from pathlib import Path
 
 from parity.observe import Normalizer, go_json, sha256
 from parity.observe_admission import PREAMBLE, REASONS, admission_request, failed_admission_fields, failed_admission_source
@@ -14,56 +12,74 @@ CASES = ('W49.window', 'W49.unknown-window', 'W49.edges-cross-0-opaque-0',
          'W49.edges-cross-1-opaque-0', 'W49.edges-cross-0-opaque-1')
 
 
-def frozen_traces(name):
-    directory = Path(__file__).with_name('golden')/'darwin'/name
-
-    def read(descriptor):
-        path = directory/descriptor['path']
-        with (gzip.open(path, 'rb') if descriptor['codec'] == 'gzip' else path.open('rb')) as stream:
-            raw = stream.read(descriptor['length']+1)
-        if len(raw) != descriptor['length'] or sha256(raw) != descriptor['sha256']:
-            raise AssertionError('immutable admission evidence failed its descriptor hash')
-        return raw
-
-    metadata = json.loads((directory/'metadata.json').read_bytes())
-    evidence = json.loads(read(metadata['substitutions.json']))[-1]['frozen_evidence']['raw']
-    replay = json.loads(read(metadata['replay.json']))
-    return [(name, line) for name in replay['traces'] for line in read(evidence[name]).splitlines(keepends=True)]
-
-
-def scenario():
-    data = dict(source_model='gpt-6-sol', source_provider='openai', source_effort='low',
-                destination_model='claude-opus-5-5', destination_provider='anthropic',
-                destination_effort='low', fresh=False, reason=REASONS[1], request_bytes=1)
-    event = dict(type='model.switch.failed', session_id='s', run_id='switch', seq=2, data=data)
-    instructions = ('fixed\n# Runtime\n\nProvider: openai\nModel: gpt-6-sol\nReasoning effort: low\n'
+def scenario(name=None):
+    source, source_provider = ('claude-haiku-4-5', 'anthropic') if name == 'W49.window' else ('gpt-6-sol', 'openai')
+    destination, destination_provider = ('gpt-6-luna', 'openai')
+    if name == 'W49.unknown-window':
+        destination = 'gpt-5.6-luna'
+    if name in (None, 'W49.edges-cross-1-opaque-0'):
+        destination, destination_provider = 'claude-opus-5-5', 'anthropic'
+    data = dict(source_model=source, source_provider=source_provider, source_effort='low',
+                destination_model=destination, destination_provider=destination_provider,
+                destination_effort='low', fresh=False,
+                reason=REASONS[0 if name == 'W49.unknown-window' else 1], request_bytes=1)
+    event = dict(type='model.switch.failed', session_id='a'*16, run_id='b'*16, seq=2, data=data)
+    instructions = (f'fixed\n# Runtime\n\nProvider: {source_provider}\nModel: {source}\nReasoning effort: low\n'
                     'Workspace: /allocated/root\nMode: read only\nBudget: unchanged\n'
                     '# Project instructions (AGENTS.md)\nProvider: openai\n')
     history = [dict(kind='user', user=dict(text='source <&> 雪', workspace=dict(date='2026-10-17', order=1))),
                dict(kind='assistant', assistant=dict(model='served-model', response_id='opaque-id',
                     blocks=[dict(kind='text', text='answer')], usage=dict(known=True, input_tokens=8),
-                    native=dict(provider='openai.responses', items=[dict(type='reasoning', encrypted_content='secret')]))),
+                    native=dict(provider={'openai': 'openai.responses', 'anthropic': 'anthropic.messages'}[source_provider],
+                                items=[dict(type='reasoning', encrypted_content='secret')]))),
                dict(kind='user', user=dict(text='follow-up', workspace=dict(date='2026-10-18')))]
-    logical = dict(type='model.requested', session_id='s', run_id='follow-up', seq=1,
-                   data=dict(model='gpt-6-sol', reasoning_effort='low', instructions=instructions,
+    logical = dict(type='model.requested', session_id='a'*16, run_id='c'*16, seq=1,
+                   data=dict(model=source, reasoning_effort='low', instructions=instructions,
                              history=history, tools=[dict(name='test', description='exact schema',
                                                         input_schema=dict(z=1, a=False), effect='read')]))
+    if name:
+        logical['data']['tools'] = [dict(name='echo', description='exact schema', effect='read',
+            input_schema=dict(type='object', properties=dict(text=dict(type='string', description='Text to return unchanged.')),
+                              required=['text'], additionalProperties=False))]
+    if name and name.startswith('W49.edges-'):
+        history[2:2] = [dict(kind='user', user=dict(text='measure', workspace=dict(date='2026-10-18'))),
+                        copy.deepcopy(history[1])]
+        if name.endswith('opaque-1'):
+            history[1]['assistant']['native']['items'][0]['encrypted_content'] = 'opaque-admission-secret' * 8
     raw = go_json(logical).replace(b'"order":1', b'"order":1e+09').replace(b'"z":1', b'"z":1e+09')
-    data['request_bytes'] = len(admission_request(data, raw))
+    # Profile cases use independently pinned synthetic lengths below, not the
+    # implementation's own encoder as the expected length.
+    expected = dict(zip(CASES, (1882, 1884, 2208, 2143, 2208)))
+    data['request_bytes'] = expected[name] if name else len(admission_request(data, raw))
     return event, [('switch', go_json(event)), ('follow-up', raw)]
 
 
+def guard_scenario(code):
+    reason = {'output_wait_failed': 'entry 3 has uncertain tool effects',
+              'timeout': 'entry 3 has uncertain tool effects: exec timeout has not reached a later model response'}[code]
+    event = dict(type='model.switch.failed', session_id='a'*16, run_id='b'*16, seq=4,
+                 data=dict(source_model='gpt-6-sol', fresh=False, reason=reason, request_bytes=0))
+    events = [dict(type='model.requested', session_id='a'*16, run_id='d'*16, seq=1,
+                   data=dict(model='gpt-6-sol', history=[dict(kind='user', user=dict(text='run tool'))])),
+              dict(type='model.accepted', session_id='a'*16, run_id='d'*16, seq=2,
+                   data=dict(blocks=[dict(kind='tool_call', call=dict(call_id='exec-1', name='exec',
+                                                                     arguments=dict(argv=['sleep', '30'])))])),
+              dict(type='tool.finished', session_id='a'*16, run_id='d'*16, seq=3,
+                   data=dict(call_id='exec-1', name='exec', outcome=dict(ok=False, effect='unknown', code=code))),
+              event]
+    return event, [('guard', go_json(item)) for item in events]
+
+
 class FailedAdmissionTests(unittest.TestCase):
-    def test_five_immutable_reference_lengths_and_canonical_sizes(self):
-        for name, expected, canonical_size in zip(CASES, (86830, 86841, 87375, 87031, 87375),
-                                                  (86838, 86849, 87391, 87047, 87391)):
-            traces = frozen_traces(name)
-            event = next(json.loads(raw) for _, raw in traces if json.loads(raw)['type'] == 'model.switch.failed')
+    def test_five_public_trace_profiles_have_fixed_lengths_and_canonical_sizes(self):
+        for name, expected, canonical_size in zip(CASES, (1882, 1884, 2208, 2143, 2208),
+                                                  (1883, 1885, 2209, 2144, 2209)):
+            event, traces = scenario(name)
             source = failed_admission_source(event, traces)
             with self.subTest(case=name):
                 self.assertEqual(len(source), expected)
                 self.assertEqual(event['data']['request_bytes'], expected)
-                canonical = Normalizer('/unallocated', '').json(source, 'admission-source')
+                canonical = Normalizer('/allocated/root', '').json(source, 'admission-source')
                 self.assertEqual(len(canonical), canonical_size)
                 for bad in (0, expected-1, expected+1, str(expected), True):
                     changed = copy.deepcopy(event)
@@ -71,10 +87,30 @@ class FailedAdmissionTests(unittest.TestCase):
                     with self.subTest(request_bytes=bad), self.assertRaises(AssertionError):
                         failed_admission_source(changed, traces)
 
+    def test_profiles_retain_snapshot_and_workspace_but_only_count_native_items(self):
+        for name in CASES:
+            event, traces = scenario(name)
+            result = failed_admission_fields(event, traces)
+            body = json.loads(result['source'])
+            records = json.loads(result['handoff'].decode()[len(PREAMBLE):])
+            with self.subTest(case=name):
+                self.assertEqual(records[0]['user']['workspace'], dict(date='2026-10-17', order=1e9))
+                self.assertIn('"order":1e+09', result['handoff'].decode())
+                self.assertEqual(records[1]['assistant']['omitted_native_items'], 1)
+                self.assertNotIn(b'secret', result['source'])
+                self.assertNotIn(b'follow-up', result['source'])
+                instructions = body['instructions'] if 'instructions' in body else body['system'][0]['text']
+                self.assertIn('Workspace: /allocated/root', instructions)
+                self.assertIn('Provider: '+event['data']['destination_provider']+'\nModel: '+event['data']['destination_model'], instructions)
+                self.assertEqual(len(records), 4 if name.startswith('W49.edges-') else 2)
+                changed = copy.deepcopy(event)
+                changed['data']['fresh'] = True
+                with self.assertRaises(AssertionError):
+                    failed_admission_fields(changed, traces)
+
     def test_handoff_fields_use_projected_bytes_not_supplied_length_or_hash(self):
         for name in CASES:
-            traces = frozen_traces(name)
-            event = next(json.loads(raw) for _, raw in traces if json.loads(raw)['type'] == 'model.switch.failed')
+            event, traces = scenario(name)
             result = failed_admission_fields(event, traces)
             self.assertIsNone(result['guard'])
             self.assertTrue(result['handoff'].startswith(PREAMBLE.encode()))
@@ -87,10 +123,9 @@ class FailedAdmissionTests(unittest.TestCase):
                 with self.subTest(case=name, field=key), self.assertRaises(AssertionError):
                     failed_admission_fields(invalid, traces)
 
-    def test_two_immutable_early_guards_prove_zero_before_encoding(self):
-        for name, code in (('W51.effect-unknown', 'output_wait_failed'), ('W51.timeout', 'timeout')):
-            traces = frozen_traces(name)
-            event = next(json.loads(raw) for _, raw in traces if json.loads(raw)['type'] == 'model.switch.failed')
+    def test_two_public_early_guards_prove_zero_before_encoding(self):
+        for code in ('output_wait_failed', 'timeout'):
+            event, traces = guard_scenario(code)
             result = failed_admission_fields(event, traces)
             self.assertIsNone(result['source'])
             self.assertIsNone(result['handoff'])
@@ -101,12 +136,11 @@ class FailedAdmissionTests(unittest.TestCase):
                                ('reason', REASONS[0]), ('handoff_bytes', 0)):
                 changed = copy.deepcopy(event)
                 changed['data'][field] = bad
-                with self.subTest(case=name, field=field), self.assertRaises(AssertionError):
+                with self.subTest(code=code, field=field), self.assertRaises(AssertionError):
                     failed_admission_fields(changed, traces)
 
     def test_early_guard_requires_observed_unknown_tool_without_later_acknowledgment(self):
-        traces = frozen_traces('W51.timeout')
-        event = next(json.loads(raw) for _, raw in traces if json.loads(raw)['type'] == 'model.switch.failed')
+        event, traces = guard_scenario('timeout')
         for mutation in ('missing', 'session', 'effect', 'code', 'call', 'assistant', 'human', 'unknown-stage'):
             changed = []
             for name, raw in traces:
@@ -170,7 +204,7 @@ class FailedAdmissionTests(unittest.TestCase):
     def test_missing_ambiguous_intervening_and_wrong_session_sources_fail(self):
         event, traces = scenario()
         for changed in (traces[:1], traces+traces[:1],
-                        traces[:1]+[('other', go_json(dict(type='model.switch.requested', session_id='s')))]+traces[1:]):
+                        traces[:1]+[('other', go_json(dict(type='model.switch.requested', session_id='a'*16)))]+traces[1:]):
             with self.subTest(traces=len(changed)), self.assertRaises(AssertionError):
                 failed_admission_source(event, changed)
         logical = json.loads(traces[1][1])

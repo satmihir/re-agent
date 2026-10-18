@@ -643,11 +643,13 @@ def _overall_deadline(ctx, kind, phase):
             else:
                 response = Response(chunks=(b" ", b"{}"), delays=(0, 4))
         else:
-            env.update({TIMEOUTS[0]: "3", TIMEOUTS[1]: "2"})
+            env.update({TIMEOUTS[0]: "3", TIMEOUTS[1]: "10"})
             _credentials(ctx, expired=True)
             path = "/issuer/api/accounts/oauth/token"
-            # Read progress defeats the idle timer, but not refresh's separate 30s bound.
-            response = Response(chunks=(b" ",) * 34, delays=(0,) + (1,) * 33)
+            # The held tail's idle expiry is beyond the 36s assertion, not a substitute for the 30s bound.
+            # Hold the boundary chunk so a fake write cannot race the cancellation.
+            response = Response(chunks=(b" ",) * 34, delays=(0,) + (.98,) * 33,
+                                chunk_barriers=(None,) * 30 + ("refresh-overall-after-progress",))
         server.expect(path, response)
         started = time.monotonic()
         result = (ctx.run(env=env, flags=("--auto",), timeout=12) if kind == "jev"

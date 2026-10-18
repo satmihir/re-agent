@@ -45,7 +45,7 @@ class DerivedSourceTests(unittest.TestCase):
     def admission_boundary(self, traces):
         captures = [dict(body=json.loads(raw)['data']['request_body'].encode())
                     for _, raw in traces if json.loads(raw)['type'] == 'api.attempt.started']
-        normal = Normalizer('/unallocated', '')
+        normal = Normalizer('/allocated/root', '')
         derived = Derived(normal, traces, captures)
         raw = next(raw for _, raw in traces if json.loads(raw)['type'] == 'model.switch.failed')
         normalized = normal.json(raw, 'trace')
@@ -53,15 +53,17 @@ class DerivedSourceTests(unittest.TestCase):
 
     def test_failed_admission_positive_counters_validate_and_replace_at_trace_boundary(self):
         from parity.observe_admission import failed_admission_fields
-        from parity.observe_admission_test import CASES, frozen_traces
-        for case in CASES:
-            traces = frozen_traces(case)
+        from parity.observe_admission_test import CASES, scenario
+        for case, raw_size, canonical_size in zip(CASES, (1882, 1884, 2208, 2143, 2208),
+                                                  (1883, 1885, 2209, 2144, 2209)):
+            _, traces = scenario(case)
             derived, raw, result = self.admission_boundary(traces)
             event = json.loads(raw)
             source = failed_admission_fields(event, traces)['source']
-            expected = len(derived.normal.json(source, 'expected', opaque=True))
             with self.subTest(case=case):
-                self.assertEqual(json.loads(result)['data']['request_bytes'], expected)
+                self.assertEqual(len(source), raw_size)
+                self.assertEqual(len(derived.normal.json(source, 'expected', opaque=True)), canonical_size)
+                self.assertEqual(json.loads(result)['data']['request_bytes'], canonical_size)
                 self.assertTrue(any(row.get('path') == ['data', 'request_bytes'] and
                                     row.get('kind') == 'independently-validated-derived-value'
                                     for row in derived.normal.ledger))
@@ -78,8 +80,8 @@ class DerivedSourceTests(unittest.TestCase):
 
     def test_failed_handoff_fields_are_canonicalized_together_and_reject_changed_lengths_or_hashes(self):
         from parity.observe_admission import failed_admission_fields
-        from parity.observe_admission_test import CASES, frozen_traces
-        traces = frozen_traces(CASES[0])
+        from parity.observe_admission_test import CASES, scenario
+        _, traces = scenario(CASES[0])
         raw = next(raw for _, raw in traces if json.loads(raw)['type'] == 'model.switch.failed')
         event = json.loads(raw)
         handoff = failed_admission_fields(event, traces)['handoff']
@@ -102,9 +104,9 @@ class DerivedSourceTests(unittest.TestCase):
                 self.admission_boundary(bad_traces)
 
     def test_failed_zero_counters_require_observed_uncertain_exec_guard_and_virtual_semantic_proof(self):
-        from parity.observe_admission_test import frozen_traces
-        for case in ('W51.effect-unknown', 'W51.timeout'):
-            traces = frozen_traces(case)
+        from parity.observe_admission_test import guard_scenario
+        for case, code in (('W51.effect-unknown', 'output_wait_failed'), ('W51.timeout', 'timeout')):
+            _, traces = guard_scenario(code)
             derived, raw, result = self.admission_boundary(traces)
             event = json.loads(raw)
             with self.subTest(case=case):

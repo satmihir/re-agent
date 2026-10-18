@@ -161,6 +161,16 @@ class MutationTests(unittest.TestCase):
         self.assertTrue(Path(env["HOME"]).is_relative_to(self.root))
         self.assertEqual(env["GOPROXY"], "off")
 
+    def test_oracle_process_reuses_reference_cache_without_sharing_case_configuration(self):
+        for configured in (None, str(self.root / "reference-cache")):
+            settings = {} if configured is None else {"XDG_CACHE_HOME": configured}
+            with self.subTest(configured=configured), patch.dict(os.environ, settings, clear=True):
+                expected = Path(configured) if configured else Path.home() / ".cache"
+                env = mutate.process_env(self.root)
+                self.assertEqual(Path(env["XDG_CACHE_HOME"]), expected.absolute())
+                self.assertEqual(Path(env["XDG_CONFIG_HOME"]), self.root / "process-home/.config")
+                self.assertEqual(Path(env["GOCACHE"]), self.root / "process-home/go-build")
+
     def test_unfrozen_goldens_block_execution_before_archive_or_build(self):
         with patch.object(mutate.json, "loads", side_effect=[self.manifest, {"goldens_frozen": False}]), \
              patch.object(mutate, "archive_reference") as archive, \

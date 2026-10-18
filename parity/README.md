@@ -14,6 +14,10 @@ This is the first of four areas, not overall-suite approval or an 85% claim.
 | Go | `go version go1.23.3 darwin/arm64` |
 | Python | `Python 3.11.5` |
 
+Regeneration requires the exact Go/Python identities above and locally available
+Go module dependencies: the build uses `GOPROXY=off`, never a provider API.
+A verified cache can be compared without rebuilding Go.
+
 `7e0408f` and `f37aa5a` observations were exploratory, never golden inputs.
 #160's null-final and trace UTF-8 repairs and #161's digits-only Retry-After
 parser are ordinary asserted behavior here. `+2` uses jittered backoff; ` 2 `
@@ -22,13 +26,15 @@ still imposes the two-second floor. No production Go changes are included.
 ## Run
 
 ```sh
-make parity BIN=/absolute/reagent
+make parity-golden                    # exact pinned build, clean capture and lock check
+make parity BIN=/absolute/reagent      # reuse or regenerate missing/stale reference cache
 make parity BIN=/absolute/reagent CASE=W33 JOBS=4
 python3 -m parity.run --list
 python3 -m unittest discover -s parity -p '*test.py'
 ```
 
-Candidate runs cannot regenerate expected outputs. Bad invocation exits 2;
+Candidate runs cannot update the committed oracle. They may regenerate its cache
+from the pinned reference, never from the candidate. Bad invocation exits 2;
 comparison/assertion failure exits 1. A declared later-area dependency is
 reported as pending, never passed. Undeclared runtime skips, unavailable cases,
 changed pending reasons and failures cannot be waived. A passing area gate
@@ -42,21 +48,82 @@ preserved; budget overflow fails instead of comparing a truncated prefix.
 Provider barriers order cancellation without sleep-based races.
 
 `--probe` runs assertions and normalization but explicitly does **not** compare
-goldens or claim a passing gate. Official `--capture` requires the pinned binary
-digest, manifest readiness and full inventory, refuses an existing lane, and
-publishes the complete lane atomically. Raw reference observations were captured
-once per final case. Mutation 14 exposed one missing terminal-event vector; that
-new leaf received its own single capture. Reviewed normalization revisions and
-lossless compression reused the **same immutable raw observations**, not new Go
-runs or candidate output. Internal maintenance helpers refuse overwrites or
-unapproved IDs and return an explicit hash/length/policy audit.
+expected outputs or claim a passing gate. `make parity-golden` builds from
+`git archive` of the pinned commit with the recorded flags, checks the toolchain
+identity and binary SHA-256, captures the full inventory, validates raw replay,
+and verifies normalized locks before atomically publishing the external cache.
+A wrong binary, missing/extra case or changed digest fails closed with case IDs.
+Neither a candidate comparison nor an ordinary regeneration can refresh locks.
+Raw evidence, detailed ledgers and complete expected bytes are regenerable cache
+data, not Git content. The committed `parity/` tree is about **4.30 MB across 94 files**,
+below the roughly 5 MB budget. The former `parity/golden/darwin/` observation tree
+is absent from every commit reachable on this branch; this is not a claim that
+unreachable objects or historical GitHub caches have been purged.
+
+## Storage and integrity
+
+Git keeps `inventory.json`, `expected/darwin.json`, `policy.json`, the reference
+identity and suite seal in `manifest.json`, and `samples/`. The plain JSON lock
+interns repeated `(length, normalized SHA-256, comparison policy)` triples; every
+case still names every artifact, its descriptor, its aggregate normalized digest
+and its substitution-ledger contract digest. No raw observation hashes are locked.
+The complete normalized-tree digest remains `e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484`.
+The suite seal covers executable oracle source, fixtures, inventory, policy, locks
+and samples. Human docs and generated proof summaries are excluded from that seal;
+the #141 approved-tree check below still protects **all** of `parity/`.
+
+A ledger contract is the sorted typed substitution-site multiset (artifact, path,
+kind and multiplicity), plus certificate ownership/witness metadata. Eligible root
+trace timing sites count even when zero required no replacement. Raw before/after
+bytes, hashes, lengths, offsets, ports, durations and runner identities are excluded.
+Full detailed rows remain in the cache and must equal an independent replay from
+raw evidence. Thus contract ledgers are repeatable; raw debug ledgers intentionally
+are not. This changes storage/integrity checking, not normalization or comparison.
+
+The cache lane is `$XDG_CACHE_HOME/reagent-parity/<commit>/<platform>/` (default
+`~/.cache/reagent-parity/...`). Only this dedicated namespace is authorized;
+ordinary case evidence still cannot use real private caches/configuration or the
+repository. An absent lane or stale identity rebuilds automatically. A cache claiming
+the current identity but missing/corrupt evidence fails rather than hiding damage.
+`make parity-golden` always rebuilds and captures fresh observations. Do not
+regenerate/re-pin a shared lane while comparisons are reading it; concurrent
+comparisons against an unchanged cache are supported. It verifies all
+locks and all selected sample bytes before publication; full raw evidence, ledgers
+and the verified `reference` binary stay there. A clean-cache invocation can set
+`XDG_CACHE_HOME` to a new empty external directory. Regeneration and candidate
+execution use the same temporary-workspace layout: fixture-input framing remains
+byte-exact, so changing the host `TMPDIR` layout is not a comparison exemption.
+
+The 56 complete samples cover all 53 implemented W families (W13 is all pending),
+including the full 10 MiB W09 boundary and W33 opaque bytes. `samples/index.json`
+explains the selection and gives `tar -tzf` / `tar -xOzf` review commands; the bundles
+contain **all normalized artifacts**, not excerpts. Binary artifacts remain binary.
+
+## Re-pin (before #139 approval only)
+
+1. Review the new reference commit; update `reference_commit`, recorded build flags,
+   toolchain identity and independently established `reference_binary_sha256` in
+   `manifest.json`. A hash mismatch is never auto-approved by update mode.
+2. Run `make parity-golden UPDATE=1` (or `python3 -m parity.golden --update`).
+   GNU make treats `--update` as a make option, so the conceptual
+   `make parity-golden --update` is spelled `UPDATE=1` here.
+3. Review the emitted changed-case digest list, inventory, policy/typed ledger
+   contracts and selected **full-case** samples, then rerun integrity, candidate
+   comparison, repeatability and mutations. Do not bless an unexplained difference.
+4. Commit the updated small locks, samples and reference identity together.
+
+For #141, **do not modify `parity/`**. Pin the #139-approved oracle commit outside
+of the translation branch and require `git diff --exit-code APPROVED -- parity/`
+before running it. Committed normalized locks and the suite digest detect cache
+or local changes; changing a manifest to attest to itself is not authorization.
+A translation candidate cannot enter update mode through `make parity`.
 
 ## Inventory and dependencies
 
 **2,752 leaves: 2,737 implemented, 15 pending, 89 slow.** The W01–W54 audit and
 family counts are in `docs/reagent-rust-parity.md`; `manifest_test.py` checks
 counts, pending reasons and the exact metadata digest. Every leaf is listed in
-`golden/darwin/inventory.json`, including its description, class, platform,
+`inventory.json`, including its description, class, platform,
 implemented/pending status and reason. Darwin was executed; Linux is declared
 but not verified and has no golden lane.
 
@@ -97,14 +164,14 @@ security exposure and whole-family blockers stop the area.
   projections fail closed. Replay proves transformation correspondence, not
   correctness of the allowlist; negative controls and mutations test that risk.
 
-Each case has raw evidence, normalized oracle bytes, policies, replay inputs
-and its substitution ledger. `metadata.json` identifies metadata codecs/paths;
+Each cached case has raw evidence, normalized oracle bytes, policies, replay inputs
+and its full substitution ledger. `metadata.json` identifies metadata codecs/paths;
 the ledger's final `frozen_evidence` entry identifies artifact codecs/paths.
 Hashes and lengths always describe **logical, decompressed bytes**. Small files
 are plaintext; larger compressible files use deterministic gzip (`mtime=0`).
 Never infer a codec solely from the filename suffix. Compression starts at
-8 KiB only when smaller; it reduced the captured lane from roughly 518 MiB to
-122 MiB without changing logical bytes.
+8 KiB only when smaller. None of these raw evidence descriptors/hashes is a
+committed oracle lock; they are local integrity checks for replay/debugging.
 
 Cancellation input framing has one narrow S rule: a fixture cleanup release
 could write **after the Go process exited**. Sixteen registered W54 cases and the first cancelled response in two W30 cases
@@ -114,14 +181,18 @@ and effects are never hidden; rotating-token refresh, W30's completed follow-up,
 and its retry-wait response are excluded. The fixture
 now holds that barrier through teardown. See §3 for the exact ownership rules.
 
-One reference-evidence caveat remains explicit in the manifest: legacy
-`W27.connection-refused` lacks an independently recorded closed-port input.
-Its bounded S certificate checks consistency of pinned trace fields; candidates
-also assert the separately allocated input endpoint and retain it for replay.
-This is not presented as an independent baseline-input check or an approval.
+Fresh `W27.connection-refused` evidence records the independently allocated
+closed-port input. Cache verification requires that input and rejects legacy
+trace-only certificates; the old baseline-input caveat no longer applies.
+
+W41's progressing router deadline and W54's overall refresh deadline use held
+fixture tails and progress margins, not extra normalization exceptions. Their
+original byte-exact prefixes remain locked. Refresh idle expiry falls outside the
+allowed overall-deadline window; a temporary Go 30s-to-120s deadline mutation was
+caught by the elapsed assertion at 38.904s.
 
 ```sh
-cat parity/golden/darwin/W01.default/metadata.json
+cat "$CACHE/W01.default/metadata.json"  # CACHE is the external platform lane
 # Resolve the desired path using its descriptor, then:
 gzip -dc CASE/raw-gzip/FILE.gz | less
 gzip -dc CASE/metadata-gzip/substitutions.json.gz | less
@@ -143,12 +214,17 @@ presented as a compared artifact.
 
 ## Verification evidence
 
-Reference capture: **2,737 executable cases, 0 failures; 15 declared pending
-dependencies**, including the separately added mutation-14 catcher. All 2,737
-reference raw captures were replayed and audited with zero normalization errors;
-a separate saved-candidate diagnostic compared 2,736 original leaves with zero
-differences. Those diagnostics are **not fresh repeatability passes**. Final
+`acceptance.json` records completed proofs separately from interrupted or failed
+attempts. No partial run is counted as a pass.
+
+The final clean-cache `make parity-golden JOBS=4` took **580.261 seconds**
+(9m40s including the exact pinned build). All **2,737 executable cases** passed
+raw replay, normalized locks and selected-sample checks; **15 declared dependencies**
+remain pending. The old committed tree was not used as cache evidence. Final
 parallel/serial comparison evidence is recorded separately in `acceptance.json`.
+The parallel runs took **682.351s, 665.680s and 671.335s**; the instrumented serial
+run took **2446.429s**, yielding fresh **36.8% internal coverage** (3,841/10,437
+statements), with the same covered-statement set as the original proof.
 All **three full parallel passes and one serial pass** passed, with identical
 2,752-entry case ledgers and **24,595 normalized artifacts** (1,045,441,036 bytes).
 The independently hashed normalized tree is
@@ -163,24 +239,24 @@ $ make check
 go vet ./...
 go test ./...
 ? github.com/satmihir/re-agent/cmd/reagent [no test files]
-ok github.com/satmihir/re-agent/internal/reagent 77.192s
+ok github.com/satmihir/re-agent/internal/reagent (cached)
 $ go test -race ./...
-ok github.com/satmihir/re-agent/internal/reagent 118.458s
+ok github.com/satmihir/re-agent/internal/reagent 87.753s
 $ python3 -m unittest discover -s bench -p '*test.py'
-Ran 64 tests in 25.954s
+Ran 64 tests in 22.094s
 OK
 $ make tty-check
 all 26 scenarios passed
 $ make parity BIN=/tmp/reagent-parity-go-38da0d6 JOBS=4
-Ran 158 tests in 62.279s
+Ran 199 tests in 17.412s
 OK
 summary: total=2752, selected=2752, omitted=0, passed=2737, failed=0, pending=15, unavailable=0, not_executed=0
 ```
 
-One captured TTY screen excerpt follows. A concurrent-load TTY invocation first
-reported one failed scenario; the bounded original output omitted its name.
-The unchanged gate then passed all 26, with complete screens retained at
-`/tmp/parity-final-tty-check.out`; no Go or TTY code was changed.
+One captured TTY screen excerpt follows. This rework's TTY gate passed all 26
+without retry; complete screens are retained at `/tmp/parity-rework-final-tty-gate.out`.
+No Go or TTY code was changed. Earlier original-design failures remain historical
+context, not fresh rework proof.
 
 ```text
 ── Login cancelled cleanly through the real terminal (24x110, cursor 11:1)
@@ -195,9 +271,8 @@ Coverage was collected from an instrumented archive build of the pinned source:
 `go build -cover -trimpath -buildvcs=false ...`; each invocation received its own
 `GOCOVERDIR`. The area executed **2,910 instrumented invocations**, contributing
 **36.8% of internal/reagent statements** (3,841/10,437), not overall 85%.
-The full coverage probe initially had one oracle-only past-date rejection;
-that rule was corrected and the affected ordinary case passed. Coverage records
-actual Go execution, separately from golden-comparison approval.
+The serial comparison uses the freshly built instrumented reference, so its exact
+comparison and coverage records describe the same full pass, not old evidence.
 
 Important uncovered ranges (all under `internal/reagent/`):
 
@@ -219,12 +294,18 @@ python3 -m parity.mutate --bin /tmp/reagent-parity-go-38da0d6 \
 ```
 
 The runner archives the pinned commit and patches only temporary copies. A
-baseline must pass first. Build failures, crashes and unrelated failures do not
+baseline must pass first. The mutation orchestrator shares only the reference
+cache setting with the caller; each executable case retains isolated HOME/XDG
+configuration and fake credentials. Build failures, crashes and unrelated failures do not
 count as catches. Thirteen wire-area mutations are applicable (3, 5, 9–18, 36);
 the manifest gives explicit later-area reasons for the other 23. **13/13 were
 caught by their intended assertions**, after 89 baseline case executions and
 13 temporary builds passed. Exact patch digests and every catcher are in
-`mutation-results.json`. Mutation 14 initially survived because EOF did not
+`mutation-results.json`. The fresh rework run exited 0 in **10,540.990s**;
+independent reclassification of the retained process/report evidence confirmed
+all baselines and catches, with the **same patch hashes and exact catcher IDs**.
+The reference cache and production sources were unchanged throughout.
+Mutation 14 initially survived because EOF did not
 exercise the incomplete-terminal branch; the added
 `W28.no-retry-incomplete-event` catches the unchanged mutation. Build failures,
 unrelated failures and raw definitions were not counted as catches.

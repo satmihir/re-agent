@@ -1,0 +1,281 @@
+{
+  "schema_version": 1,
+  "comparison": {
+    "default": "Fail closed. Compare every accounted artifact, including exact artifact names and policies. Missing, extra, truncated, corrupt or unaccounted evidence fails.",
+    "B": "Byte-exact: no substitution. Unconsumed raw artifacts are retained under retained/ and compared literally.",
+    "N": "Lossless normalization at the registered typed slots below, followed by byte-exact comparison.",
+    "S": "Only the explicitly scoped fixture-input projection/certificates below are semantic. Their obligations are validated independently before the resulting normalized bytes are compared exactly.",
+    "json": "Parsing discovers token spans only. Preserve untouched object order, whitespace, duplicate keys, number spelling, escapes, SSE framing and opaque native bytes. Do not sort/re-encode provider JSON.",
+    "http_headers": "Captured request header names are lowercased and sorted; only User-Agent is excluded as language-library metadata. All other header values remain exact except registered substitutions. Response headers are lowercased and sorted; none are generically ignored.",
+    "stdout": "Model stdout stays literal. Only certified auth-status output and recognized request previews receive their registered normalization.",
+    "replay": "Retain complete raw evidence and full raw substitution rows outside git. Independently reconstruct normalized artifacts, policies and ledger from raw bytes; require equality before comparison or publication. Never commit a digest of a raw observation."
+  },
+  "deny_by_default": [
+    "No arbitrary UUID, ID, port, URL, date, duration, hash, length or numeric substitution.",
+    "Provider-native IDs, tool call IDs, assistant/refusal text and opaque native items stay literal.",
+    "A provider response with type and seq is not a trace event.",
+    "Instruction-like text and session-like lines injected by a fixture do not register new runner identities.",
+    "A normalization slot is admitted by its complete owner/event/path/shape and input checks, never its field name alone.",
+    "Candidates cannot update expected locks, policies, inventory or samples. No pending dependency or runtime skip is a pass."
+  ],
+  "typed_allowlist": [
+    {
+      "kind": "trace-time",
+      "owner": "Trace event root time",
+      "validation": "Strict UTC RFC3339Nano string within the invocation interval plus/minus two seconds",
+      "replacement": "<TIME>"
+    },
+    {
+      "kind": "typed-identity",
+      "owner": "Trace envelope session_id/run_id",
+      "validation": "16 lowercase hexadecimal digits; per-kind first-seen identity map",
+      "replacement": "SESSION_n/RUN_n"
+    },
+    {
+      "kind": "typed-scope-identity",
+      "owner": "scope.session_id/run_id or data.scope.session_id/run_id",
+      "validation": "Same typed identity grammar/map",
+      "replacement": "SESSION_n/RUN_n"
+    },
+    {
+      "kind": "build-metadata",
+      "owner": "run.started data.build",
+      "validation": "Must be a string",
+      "replacement": "<BUILD>"
+    },
+    {
+      "kind": "model-switch-latency-ms",
+      "owner": "model.switch.finished/failed data.latency_ms",
+      "validation": "Integer from zero through the captured invocation duration",
+      "replacement": 0
+    },
+    {
+      "kind": "duration-ms",
+      "owner": "api.attempt.finished data.duration_ms; auto.route data.router_latency_ms; typed non-native shell/exec outcomes",
+      "validation": "Non-boolean numeric value in [0,3600000], with the exact event or command/argv/timeout ownership predicates in Normalizer.json",
+      "replacement": 0
+    },
+    {
+      "kind": "retry-delay-policy",
+      "owner": "api.retry.scheduled data.delay_ms",
+      "validation": "Integer in [0,144000]",
+      "replacement": 0
+    },
+    {
+      "kind": "snapshot-date",
+      "owner": "Non-native workspace_state date",
+      "validation": "ISO date within the captured invocation dates in the recorded supported time zone",
+      "replacement": "<DATE>"
+    },
+    {
+      "kind": "allocated-path-or-reference",
+      "owner": "Only registered path-bearing text slots and process stderr",
+      "validation": "Exact allocated workspace/artifact prefix with path boundary, allocated fixture authority in URL/Host slots, or previously registered runner identity reference; startup banner ownership and workspace are checked before registering a display session",
+      "replacement": "<ROOT>, <ARTIFACTS>, <SERVER>, SESSION_n/RUN_n"
+    },
+    {
+      "kind": "registered-text-span",
+      "owner": "Normalizer.json permitted_text: instructions/system text; structured workspace snapshots and command/tool/switch results; owned trace endpoint/error/trace_path; handoff and workspace markers; explicitly named switch-workspace arguments",
+      "validation": "Complete parent schema and event/path predicates; recurse through only declared JSON-string layers, preserving untouched lexemes",
+      "replacement": "Only nested registered allocation spans"
+    },
+    {
+      "kind": "approved-workspace-path",
+      "owner": "run.started data.approved_workspaces entries",
+      "validation": "Exact allocated path boundaries",
+      "replacement": "<ROOT>/<ARTIFACTS>"
+    },
+    {
+      "kind": "effect-record-workspace",
+      "owner": "run.finished/model.switch.failed/auto.route data.effects[i].workspace",
+      "validation": "Complete effect-record schema, nonempty call/tool, valid step and none/applied/unknown effect",
+      "replacement": "Allocated workspace prefix only"
+    },
+    {
+      "kind": "owned-run-reason-authority",
+      "owner": "run.finished data.reason",
+      "validation": "Exact allocated authority inside a URL",
+      "replacement": "<SERVER>"
+    },
+    {
+      "kind": "captured-transport-socket",
+      "owner": "api.attempt.finished/model.failed data.error",
+      "validation": "Exact connection-reset tuple bound to captured request peer and the same Run/Step/attempt",
+      "replacement": "read tcp <CLIENT>-><SERVER>: read: connection reset by peer"
+    },
+    {
+      "kind": "case-specific-closed-endpoint",
+      "owner": "W27.connection-refused only: traced endpoint/error",
+      "validation": "One separately allocated closed loopback endpoint, one matching failed attempt, no response/capture; independently captured invocation environment on regenerated evidence",
+      "replacement": "<CLOSED_SERVER> authority only"
+    },
+    {
+      "kind": "case-specific-closed-port-invocation-env",
+      "owner": "W27.connection-refused closed-endpoint-certificate",
+      "validation": "Invocation environment and trace endpoint agree; exact owned failed-dial error",
+      "replacement": "http://<CLOSED_SERVER>/v1/responses"
+    },
+    {
+      "kind": "case-specific-closed-port-legacy-trace",
+      "owner": "Historical W27.connection-refused evidence only",
+      "validation": "Legacy replay checks trace consistency; regenerated evidence must use invocation-env certificate",
+      "replacement": "http://<CLOSED_SERVER>/v1/responses"
+    },
+    {
+      "kind": "embedded-request",
+      "owner": "api.attempt.started data.request_body",
+      "validation": "Declared embedded JSON layer; request hash independently checked against captured bytes",
+      "replacement": "Nested registered slots only"
+    },
+    {
+      "kind": "embedded-response",
+      "owner": "api.attempt.finished data.response_body",
+      "validation": "Declared embedded JSON/SSE layer; preserve W33 trace repair versus opaque byte contracts",
+      "replacement": "Nested registered fixture allocation slots only"
+    },
+    {
+      "kind": "allocated-fixture-authority",
+      "owner": "Provider response detail/error.message/response.error.message; actual GET catalog models[i].display_name; actual GET discovery issuer/authorization_endpoint/token_endpoint/revocation_endpoint/models_endpoint/jwks_uri",
+      "validation": "Exact allocated authority, proper endpoint role; model slug/native IDs stay literal",
+      "replacement": "<SERVER>"
+    },
+    {
+      "kind": "validated-auth-refresh-expiry",
+      "owner": "Certified auth status stdout Access token expires",
+      "validation": "Strict RFC3339 UTC expiry matches captured positive expires_in and invocation interval",
+      "replacement": "<AUTH-EXPIRY>"
+    },
+    {
+      "kind": "auth-status-catalog-display-name",
+      "owner": "Certified auth status stdout models display names",
+      "validation": "Display name comes from a successful captured GET models response; only allocated authority changes",
+      "replacement": "<SERVER>"
+    },
+    {
+      "kind": "cache-prefix",
+      "owner": "Logical request cache-key certificate",
+      "validation": "Independently derive original and normalized keys from original schema strings and logical first Entry",
+      "replacement": "Normalized logical-prefix key"
+    },
+    {
+      "kind": "independently-validated-cache-key",
+      "owner": "Root prompt_cache_key in request/preview",
+      "validation": "Must equal a separately derived registered logical-prefix key; preview first Entry reconstructed independently",
+      "replacement": "Normalized logical-prefix key"
+    },
+    {
+      "kind": "cache-header",
+      "owner": "HTTP request session_id/session-id",
+      "validation": "Exact UUIDv5(URL, validated wire cache key) for plan session_id, exact wire cache key for proxy session-id",
+      "replacement": "Corresponding normalized-key-derived value"
+    },
+    {
+      "kind": "validated-derived-digest",
+      "owner": "api.attempt.started data.request_sha256",
+      "validation": "SHA-256 of independently captured actual HTTP request bytes, not repaired trace text",
+      "replacement": "SHA-256 of normalized captured request"
+    },
+    {
+      "kind": "validated-derived-length",
+      "owner": "HTTP request Content-Length",
+      "validation": "Must equal actual captured request byte count",
+      "replacement": "Normalized captured request byte count"
+    },
+    {
+      "kind": "independently-validated-derived-value",
+      "owner": "Trace data.packet_sha256/packet_bytes/generation_request_bytes/handoff_sha256/handoff_bytes/request_bytes/request_bytes_before/request_bytes_after",
+      "validation": "Independently reconstruct packet/handoff/admission/compaction source bytes before replacing derived values; exact event-specific checks in Derived and failed_admission_fields",
+      "replacement": "Corresponding digest/size of normalized independently reconstructed source"
+    },
+    {
+      "kind": "independently-validated-failed-admission-guard",
+      "owner": "W51.effect-unknown and W51.timeout zero-byte rejected switches",
+      "validation": "Observed uncertain exec, same Session/call, no later acknowledgment, exact owned guard reason",
+      "replacement": "No executable output is waived; certificate only"
+    },
+    {
+      "kind": "footer-elapsed",
+      "owner": "Complete runner status footer in stderr",
+      "validation": "Full footer grammar, elapsed within invocation interval",
+      "replacement": "0.0s"
+    },
+    {
+      "kind": "retry-display-delay",
+      "owner": "Complete runner retry line in stderr",
+      "validation": "Attempt/reason match a range-checked api.retry.scheduled delay to rounding precision",
+      "replacement": "<RETRY_DELAY>"
+    },
+    {
+      "kind": "allocated-retry-date",
+      "owner": "Captured response Retry-After HTTP-date header",
+      "validation": "Zoned parsed date within [invocation start-2s, invocation end+65s]; literal historical dates remain exact",
+      "replacement": "<HTTP-DATE>"
+    },
+    {
+      "kind": "registered-fixture-cancel-delivery",
+      "owner": "Only response-delivery certificates for the exact cases below",
+      "validation": "Exact independently scripted request/response plan, whole-chunk prefix, allowed headers/status/transport and linked cancelled trace; W30 also requires a completed following Run",
+      "replacement": "Certificate; full raw observation stays only in the external cache"
+    },
+    {
+      "kind": "registered-fixture-cancel-delivery-projection",
+      "owner": "Only fake response .wire-body/.headers/.transport artifacts for the exact cases below",
+      "validation": "Delivery certificate succeeds; no Go trace, output, status, effect, completed follow-up or rotating-refresh input is projected",
+      "replacement": "Header cancellation: empty body/headers; body cancellation: exact heartbeat/headers; canonical incomplete transport"
+    }
+  ],
+  "semantic_allowlist": {
+    "cancelled_fixture_response_input": [
+      "W30.cancel-request",
+      "W30.cancel-partial",
+      "W54.openai.cancel",
+      "W54.openai.cancel-body",
+      "W54.anthropic.cancel",
+      "W54.anthropic.cancel-body",
+      "W54.proxy.cancel",
+      "W54.proxy.cancel-body",
+      "W54.chatgpt.cancel",
+      "W54.chatgpt.cancel-body",
+      "W54.jev.cancel",
+      "W54.jev.cancel-body",
+      "W54.auth-discovery.cancel",
+      "W54.auth-discovery.cancel-body",
+      "W54.auth-models.cancel",
+      "W54.auth-models.cancel-body",
+      "W54.auth-revoke.cancel",
+      "W54.auth-revoke.cancel-body"
+    ],
+    "closed_port_certificate": [
+      "W27.connection-refused"
+    ],
+    "zero_byte_failed_admission_guard": [
+      "W51.effect-unknown",
+      "W51.timeout"
+    ]
+  },
+  "implementation": [
+    "observe.py:Normalizer.json",
+    "observe.py:finish",
+    "observe_derived.py:Derived",
+    "observe_admission.py:failed_admission_fields",
+    "observe_delivery.py:project_delivery",
+    "run.py:account_raw",
+    "run.py:validate_replay"
+  ],
+  "binding": "The suite digest locks this policy, observer sources, inventory, normalized locks and samples together. This allowlist documents the exact executable predicates; it is not permission to add wider substitutions.",
+  "ledger_contract": {
+    "rows": "sorted multiset of artifact, typed path, substitution kind and multiplicity",
+    "timing_sites": "include eligible top-level trace timing slots even when already zero",
+    "certificates": "typed ownership and witness metadata; never raw values or raw digests",
+    "closed_endpoint": "legacy trace and independent invocation certificates share one site kind",
+    "validation": "complete raw replay must reproduce every original ledger row before locking",
+    "excluded": [
+      "before",
+      "after",
+      "offsets",
+      "raw hashes",
+      "raw lengths",
+      "raw identities"
+    ]
+  }
+}

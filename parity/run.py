@@ -912,8 +912,8 @@ def suite_digest(suite):
     """Hash source and oracle inputs, excluding generated evidence and self-digest fields."""
     suite = Path(suite)
     sources = set(suite.glob("*.py"))
-    sources.update(path for path in (suite / "manifest.json", suite / "mutations.json") if path.exists())
-    for name in ("cases", "fixtures", "golden"):
+    sources.update(path for path in (suite / "manifest.json", suite / "mutations.json", suite / "inventory.json", suite / "policy.json") if path.exists())
+    for name in ("cases", "fixtures", "expected", "samples"):
         sources.update(path for path in (suite / name).rglob("*")
                        if (path.is_file() or path.is_symlink()) and "__pycache__" not in path.parts and path.name != ".DS_Store")
 
@@ -1122,10 +1122,17 @@ def main(argv=None):
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--list", action="store_true")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--capture", action="store_true")
+    mode.add_argument("--golden-update", action="store_true", help="explicitly update normalized locks and samples from the pinned reference")
     mode.add_argument("--probe", action="store_true", help="run assertions and normalization only; never a golden comparison or parity gate")
     args = parser.parse_args(argv)
     try:
+        if args.golden_update:
+            if args.jobs < 1:
+                raise HarnessError("--jobs must be positive")
+            if args.bin or args.case or args.area or args.artifacts or args.list:
+                raise HarnessError("--golden-update cannot be combined with candidate or selection arguments")
+            from parity import golden as reference
+            return reference.main(["--update", "--jobs", str(args.jobs)])
         cases = collect_cases()
         selected = select_cases(cases, args.case, args.area)
         if args.list:
@@ -1140,12 +1147,8 @@ def main(argv=None):
             raise HarnessError("requires Linux or Darwin, Python and Git")
         suite = Path(__file__).resolve().parent
         manifest = json.loads((suite / "manifest.json").read_bytes())
-        golden = suite / "golden" / sys.platform
-        if args.capture:
-            validate_capture(args.bin, manifest, golden)
-            if len(selected) != len(cases):
-                raise HarnessError("capture requires the entire declared case inventory")
-            leaf_inventory(cases, manifest)
+        from parity import golden as reference
+        golden = None
         artifacts = args.artifacts.absolute() if args.artifacts else Path(tempfile.mkdtemp(prefix="reagent-parity-artifacts-"))
         guard_artifacts(artifacts)
         if artifacts.exists() and any(artifacts.iterdir()):
@@ -1156,7 +1159,8 @@ def main(argv=None):
             coverage = str(Path(coverage).absolute() / artifacts.name)
             guard_artifacts(coverage)
         inventory_error = None
-        if not (args.capture or args.probe):
+        if not args.probe:
+            golden = reference.ensure_cache(suite, manifest, cases, args.jobs)
             try:
                 verify_inventory(golden, cases, manifest)
             except (HarnessError, OSError, ValueError, TypeError) as exc:
@@ -1165,7 +1169,7 @@ def main(argv=None):
             with ProcessPoolExecutor(max_workers=args.jobs) as pool:
                 futures = [pool.submit(execute_case, case.id, args.bin, str(Path(temporary) / case.id),
                                        str(artifacts / case.id), str(Path(coverage) / case.id) if coverage else None,
-                                       None if args.capture or args.probe else str(golden), inventory_error)
+                                       None if args.probe else str(golden), inventory_error)
                            for case in selected]
                 results = []
                 for case, future in zip(selected, futures):
@@ -1175,12 +1179,6 @@ def main(argv=None):
                         result = {"id": case.id, "status": "failed", "reason": "worker failed: %s" % exc, "artifacts": {}, "artifact_policies": {}}
                     results.append(result)
         has_executable = any(not case.pending for case in selected)
-        capture_allowed = args.capture and has_executable and accepted_outcomes(selected, results, "passed")
-        if capture_allowed:
-            validate_capture(args.bin, manifest, golden)
-            freeze_lane(artifacts, golden, cases, results, manifest)
-        if args.capture and not capture_allowed:
-            print("capture withheld: unacceptable outcome or no executable case selected; no goldens written", file=sys.stderr)
         for result in results:
             if args.probe and result["status"] == "passed":
                 result.update(status="observed", comparison="not_run")
@@ -1190,10 +1188,10 @@ def main(argv=None):
         selected_ids = {case.id for case in selected}
         selected_areas = sorted({case.area for case in selected})
         scope = "full-platform" if len(selected) == len(cases) else "area" if args.area and not args.case else "selection"
-        gate_success = not (args.probe or args.capture) and not inventory_error and scope != "selection" and has_executable and accepted_outcomes(selected, results, "passed")
+        gate_success = not args.probe and not inventory_error and scope != "selection" and has_executable and accepted_outcomes(selected, results, "passed")
         pending_reasons = {result["id"]: result.get("reason", "") for result in results if result["status"] == "pending"}
-        report = {"mode": "probe" if args.probe else "capture" if args.capture else "compare",
-                  "golden_comparison": not (args.probe or args.capture),
+        report = {"mode": "probe" if args.probe else "compare",
+                  "golden_comparison": not args.probe,
                   "gate_success": gate_success,
                   "complete_suite": gate_success and len(selected) == len(cases) and not any(case.pending for case in cases),
                   "scope": scope, "areas": selected_areas,
@@ -1210,8 +1208,8 @@ def main(argv=None):
                   "pending": [{"id": case.id, "reason": case.pending or pending_reasons.get(case.id),
                                "selected": case.id in selected_ids}
                               for case in cases if case.pending or case.id in pending_reasons],
-                  "capture_written": capture_allowed,
-                  "inventory_verified": not (args.capture or args.probe) and inventory_error is None,
+                  "capture_written": False,
+                  "inventory_verified": not args.probe and inventory_error is None,
                   "inventory_error": inventory_error, "suite_digest": suite_digest(suite)}
         result_by_id = {result["id"]: result for result in results}
         report["case_ledger"] = [{"id": case.id, "area": case.area, "platforms": list(case.platforms),
@@ -1224,7 +1222,7 @@ def main(argv=None):
         print("artifacts: " + str(artifacts))
         if args.probe:
             print("PROBE ONLY: assertions/normalization observed; no golden comparison or gate success")
-        return int(bool(inventory_error) or (args.capture and not capture_allowed) or not accepted_outcomes(selected, results, "observed" if args.probe else "passed"))
+        return int(bool(inventory_error) or not accepted_outcomes(selected, results, "observed" if args.probe else "passed"))
     except (HarnessError, OSError, ValueError, ImportError) as exc:
         print("parity: " + str(exc), file=sys.stderr)
         return 2

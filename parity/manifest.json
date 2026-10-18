@@ -4,15 +4,18 @@
   "reference_commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
   "reference_binary_sha256": "925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a",
   "reference_platform": "darwin/arm64",
+  "reference_build_flags": ["-trimpath", "-buildvcs=false"],
   "reference_build": "git archive 38da0d664abae80cbd1cc1793b10b11204bc8031; go build -trimpath -buildvcs=false -o /tmp/reagent-parity-go-38da0d6 ./cmd/reagent",
   "go_version": "go version go1.23.3 darwin/arm64",
   "python_version": "Python 3.11.5",
   "exploratory_only": ["7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f", "f37aa5a38815fe159fba87f23ffdd0d5b09cf63b"],
   "goldens_frozen": true,
+  "normalized_lock": "expected/darwin.json",
+  "normalized_tree_sha256": "e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484",
   "inventory_status": "audited",
   "inventory_scope": "Named W01-W54 clauses audited against the pinned source; deterministic declared leaves, not unrestricted Cartesian exhaustion or acceptance evidence",
   "leaf_inventory": {
-    "path": "golden/darwin/inventory.json",
+    "path": "inventory.json",
     "metadata_sha256": "97ffefd3b933f4920c495d5f7d6dc94ce0023702ff1c59c122bd07d839b9484c",
     "metadata_fields": ["id", "description", "comparison", "slow", "pending", "platforms"],
     "metadata_encoding": "Cases sorted by id; UTF-8 json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(',', ':')); no final newline"
@@ -58,7 +61,8 @@
   },
   "reference_blockers": {},
   "accepted_gaps": [],
-  "known_limitations": ["Legacy W27.connection-refused reference lacks independent endpoint-input metadata: its bounded S certificate checks pinned trace consistency, while candidates additionally check the independently allocated fixture endpoint. This exception is confined to that Case ID and remains a review caveat, not an approval claim."],
+  "known_limitations": [],
+  "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
   "verification_evidence": "acceptance.json",
   "unverified": ["Linux execution and platform goldens"]
 }

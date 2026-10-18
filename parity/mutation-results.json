@@ -8,6 +8,16 @@
   "all_baselines_passed": true,
   "all_temporary_builds_passed": true,
   "real_go_tree_modified": false,
+  "fresh_rework_proof": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
+    "report": "/tmp/parity-rework-approved-mutations/report.json",
+    "independent_check": "/tmp/parity-rework-approved-mutations-parent-proof.json",
+    "seconds": 10540.990,
+    "exit_code": 0,
+    "all_patch_hashes_and_exact_catcher_ids_unchanged": true,
+    "independently_reclassified_from_retained_evidence": true,
+    "cache_and_production_sources_unchanged": true
+  },
   "initial_finding": "Mutation 14 initially survived because incomplete EOF did not exercise an explicit response.incomplete terminal. Added W28.no-retry-incomplete-event; the unchanged mutation now fails the intended one-attempt assertion.",
   "mutations": [
     {"id": 3, "status": "caught", "patch_sha256": "4336e12432c8f7423c3925ff06f81bfa11fd1c86e1ed731696d34fda8a486da3", "cases_caught": ["W07.claude-haiku-4-5-crlf", "W07.gpt-6-luna-crlf", "W07.gpt-6-luna-crlf-proxy"]},

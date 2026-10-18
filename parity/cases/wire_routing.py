@@ -836,7 +836,9 @@ def _router_transport(ctx, kind):
     marker = "W41 transport-shape"
     response = {
         "body-deadline": Response(chunks=(b'{"model":', _json(_choice()).encode()), delays=(0, 2.6)),
-        "progress-deadline": Response(chunks=tuple(_json(_choice()).encode()[i:i + 1] for i in range(20)), delays=.15),
+        # Keep progress away from the 2s boundary race; never release the held write after exit.
+        "progress-deadline": Response(chunks=tuple(_json(_choice()).encode()[i:i + 1] for i in range(20)),
+                                      delays=.12, chunk_barriers=(None,) * 13 + ("router-overall-after-progress",)),
         "whole-deadline": Response(body=_choice(), header_delay=1.2, delays=1.2),
         "short-body": Response(body=b'{', headers={"Content-Length": "20"}),
     }[kind]

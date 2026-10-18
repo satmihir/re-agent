@@ -32,7 +32,7 @@ class ManifestTests(unittest.TestCase):
     def test_leaf_metadata_digest_covers_more_than_counts(self):
         manifest = json.loads(Path(__file__).with_name('manifest.json').read_text())
         inventory = manifest['leaf_inventory']
-        self.assertEqual(inventory['path'], 'golden/darwin/inventory.json')
+        self.assertEqual(inventory['path'], 'inventory.json')
         fields = ['id', 'description', 'comparison', 'slow', 'pending', 'platforms']
         self.assertEqual(inventory['metadata_fields'], fields)
         metadata = [{field: list(case.platforms) if field == 'platforms' else getattr(case, field)
@@ -41,7 +41,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(inventory['metadata_sha256'], hashlib.sha256(raw).hexdigest())
         self.assertEqual(manifest['inventory_status'], 'audited')
         if manifest['goldens_frozen']:
-            self.assertTrue(Path(__file__).with_name('golden').joinpath('darwin', 'inventory.json').is_file())
+            self.assertTrue(Path(__file__).with_name('inventory.json').is_file())
 
     def test_mutation14_covers_explicit_incomplete_terminal_event(self):
         cases = {case.id: case for case in collect()}
