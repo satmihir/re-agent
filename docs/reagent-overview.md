@@ -93,6 +93,6 @@ One JSONL file per root run (and per compaction or model-switch attempt), and on
 - `make live`: opt-in live tests for providers whose key is present.
 - `bench/` holds offline checkers for friction, behavior comparison and workflow evidence (`docs/reagent-requirement-discovery.md`, `docs/reagent-task-workflow.md`).
 
-## Executable parity draft
+## Executable parity
 
-`parity/` is a Python-standard-library black-box runner for a supplied absolute binary path (`make parity BIN=/absolute/reagent`). Each case uses isolated HOME/XDG/cache/config/workspace/artifacts, with scripted loopback provider traffic and fake credentials only. The wire draft's inventory, pending cross-area dependencies, reference hash and binary digest are in `parity/manifest.json`. Its freeze is currently blocked by Go reference defects; no reviewed goldens or all-green/coverage/mutation approval is claimed. See `parity/README.md` before running or extending it.
+`parity/` is a Python-standard-library black-box runner for a supplied absolute binary path (`make parity BIN=/absolute/reagent`). Each case uses isolated HOME/XDG/cache/config/workspace/artifacts, scripted loopback traffic and fake credentials only. The wire inventory, explicit cross-area dependencies and pinned reference are in `parity/manifest.json`. Candidate runs compare lossless normalized artifacts against separately captured reference evidence; typed substitutions have a replayable audit ledger, and large artifacts use deterministic gzip storage without changing their logical bytes. See `parity/README.md` for scope, verification evidence and remaining platform work.

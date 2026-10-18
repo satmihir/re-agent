@@ -8,6 +8,8 @@ import copy
 import hashlib
 import math
 import json
+import os
+import signal
 from urllib.parse import urlsplit
 
 from .. import model
@@ -481,6 +483,10 @@ def _switch(ctx, destination=LUNA, fresh=False, roundtrip=False):
 
 
 def _switch_only(ctx):
+    for ordinal, destination in enumerate((LUNA, SOL), 1):
+        _ok(ctx.run(prompt=f"parity:switch-source:{ordinal}",
+                    flags=("--show-context", "--model", destination, "--reasoning-effort", "low"), env=_env(ctx)))
+    assert not ctx.server.requests
     _ok(ctx.chat(("/model " + LUNA + "\n/model " + SOL + "\n/exit\n").encode(),
                  flags=("--model", SOL), env=_env(ctx)))
     assert not ctx.server.requests
@@ -1033,6 +1039,196 @@ def _admission_edges(ctx, provider_change=False, opaque=False):
     assert all("opaque-admission-secret" not in _json(_body(r)) for r in _requests(ctx, "anthropic"))
 
 
+def _candidate_admission(ctx, single=False):
+    destination = "claude-haiku-4-5" if single else SOL
+    settings = {"OPENAI_API_KEY": ""} if single else {"REAGENT_CONTEXT_WINDOW_TOKENS": "1"}
+    _expect(ctx, _reply(destination), destination=destination)
+    flags = ("--auto", "--model", destination) if single else ("--auto",)
+    _ok(ctx.run("W38 candidate-admission", flags=flags, env=_env(ctx, **settings)))
+    assert not _requests(ctx, "jev")
+    route = _routes(ctx)[0]
+    assert len(route["candidates"] or []) == int(single)
+    assert route["reason"] == ("fewer_than_two_admitted_routes" if single else "no_compatible_fallback")
+    assert route["action"] == ("fallback" if single else "defer")
+    if single:
+        assert route["selected_route"]["id"] == "capable"
+    else:
+        assert len(route["excluded"]) == 6
+        assert all("window allowance" in item for item in route["excluded"])
+    _pair(ctx.server.requests[0], destination, "" if single else "medium")
+
+
+def _auto_terminal(ctx, unknown=False):
+    marker = "W44 terminal-boundary"
+    _router(ctx, marker)
+    if unknown:
+        _expect(ctx, _openai(calls=(("auto-unknown", "exec", {"argv": ["/bin/sh", "-c", "sleep 30 &"], "cwd": "."}),)), marker, LUNA)
+    else:
+        _expect(ctx, b"deliberate generation failure", marker, LUNA, status=400)
+    result = ctx.run(marker, flags=("--auto",), env=_env(ctx))
+    assert result.returncode != 0
+    assert len(_requests(ctx, "jev")) == len(_requests(ctx, "openai")) == 1
+    assert len(_routes(ctx)) == 1
+    finished = _events(ctx, "run.finished")[0]["data"]
+    assert finished["status"] == ("effect_unknown" if unknown else "provider_error")
+    post = [e["data"] for e in _events(ctx, "auto.route") if e["data"]["action"] == "post_switch_usage"]
+    assert len(post) == 1 and post[0]["usage_known"] is unknown
+
+
+def _auto_cancel(ctx):
+    marker = "W44 cancel-routing"
+    ctx.server.expect(_path(ctx, "jev"), Response(body=_choice(), barrier="cancel-router"), marker=marker, model=JEV)
+
+    def cancel(process):
+        ctx.server.wait(1)
+        os.killpg(process.pid, signal.SIGINT)
+
+    result = ctx.run(marker, flags=("--auto",), env=_env(ctx), on_start=cancel)
+    assert result.returncode != 0
+    assert len(_requests(ctx, "jev")) == 1 and not _requests(ctx, "openai")
+    assert _routes(ctx)[0]["action"] == "cancelled"
+    assert _events(ctx, "run.finished")[0]["data"]["status"] == "cancelled"
+
+
+def _auto_timeout(ctx):
+    marker = "W44 timeout-routing"
+    _router(ctx, marker)
+    command = {"argv": ["/bin/sh", "-c", "printf timeout-evidence; sleep 30"], "cwd": ".", "timeout_ms": 10000}
+    _expect(ctx, _openai(calls=(("auto-timeout", "exec", command),)), marker, LUNA)
+    for index in range(3):
+        _expect(ctx, _openai(calls=((f"ack-{index}", "list_files", {"path": "."}),)), marker, LUNA)
+    _router(ctx, marker, _choice({LUNA + "/" + e: float(e == "high") for e in ("low", "medium", "high")}))
+    _expect(ctx, _openai("timeout acknowledged and routed"), marker, LUNA)
+    _ok(ctx.run(marker, flags=("--auto",), env=_env(ctx), timeout=40))
+    routes = _routes(ctx)
+    assert [r["action"] for r in routes] == ["switch", "defer", "switch"]
+    assert "exec timeout has not reached a later model response" in routes[1]["reason"]
+    assert len(_requests(ctx, "jev")) == 2
+    assert _body(_requests(ctx, "openai")[-1])["reasoning"]["effort"] == "high"
+
+
+def _assistant_preview(ctx, size):
+    text = {511: "é" * 255 + "x", 512: "é" * 256, 513: "é" * 255 + "€"}[size]
+    arguments = {"path": "a" * (size - len(_json({"path": ""}).encode()))}
+    _expect(ctx, _openai(text, calls=(("preview-call", "list_files", arguments),)), destination=SOL)
+    _expect(ctx, _openai(text), destination=SOL)
+    probabilities = {r: float(r == LADDER[0]) for r in LADDER if r != SOL + "/low"}
+    probabilities[SOL + "/medium"] = 0
+    _router(ctx, "preview-next", _choice(probabilities))
+    _expect(ctx, _openai(), "preview-next", LUNA)
+    _ok(ctx.chat(b"W39 assistant-preview\n/auto on\npreview-next\n/exit\n", flags=("--model", SOL), env=_env(ctx)))
+    state, _ = _packet(ctx, _requests(ctx, "jev")[0])
+    assistants = [r for r in state["recent_evidence"] if r["kind"] == "assistant"]
+    assert len(assistants) == 2
+    assert assistants[0]["assistant"]["blocks"][0]["text"] == text.encode()[:512].decode("utf-8", errors="ignore")
+    assert assistants[0]["assistant"]["blocks"][1]["call"]["arguments"] == _json(arguments)[:512]
+    markers = {(p["entry"], p["field"]): p["original_bytes"] for p in state.get("previews", [])}
+    assert ((2, "assistant.blocks.0.text") in markers) is (size > 512)
+    assert ((2, "assistant.blocks.1.arguments") in markers) is (size > 512)
+    assert ((4, "assistant.blocks.0.text") in markers) is (size > 512)
+
+
+def _evidence_fit(ctx):
+    lines = []
+    for index in range(38):
+        marker = f"W40 evidence-{index:02d}"
+        lines.append(marker)
+        _expect(ctx, _openai(f"evidence-{index:02d}:" + "x" * 500), marker)
+    probabilities = {r: float(r == LADDER[0]) for r in LADDER if r != SOL + "/low"}
+    probabilities[SOL + "/medium"] = 0
+    _router(ctx, "evidence-latest", _choice(probabilities))
+    _expect(ctx, _openai(), "evidence-latest", LUNA)
+    script = "\n".join(lines) + "\n/auto on\nevidence-latest " + "y" * 15000 + "\n/exit\n"
+    _ok(ctx.chat(script.encode(), flags=("--model", SOL), env=_env(ctx), timeout=60))
+    state, _ = _packet(ctx, _requests(ctx, "jev")[0])
+    recent = state["recent_evidence"]
+    assert 1 < len(recent) < 38
+    assert [r["entry"] for r in recent] == list(range(recent[0]["entry"], 77, 2))
+    assert state["omitted_earlier_entries"] == 38 - len(recent)
+    assert len(state["user_requests_and_summaries"]) == 39
+    assert state["user_requests_and_summaries"][-1]["user"]["text"].endswith("y" * 15000)
+
+
+def _origin_roundtrip(ctx, destination, refusal=False):
+    marker = "W51 anthropic-origin"
+    source = _anthropic("origin text", opaque=True)
+    source["content"].insert(1, {"type": "redacted_thinking", "data": "native-secret-redacted"})
+    _expect(ctx, source, marker, OPUS)
+    reply = _reply(destination, "destination text", opaque=True)
+    if refusal:
+        reply["output"][1]["content"] = [{"type": "refusal", "refusal": "cannot comply <> &"}]
+    _expect(ctx, reply, "origin-next", destination)
+    _expect(ctx, _reply(destination, "destination native continuation"), "origin-tail", destination)
+    _expect(ctx, _anthropic("origin restored"), "origin-back", OPUS)
+    script = marker + "\n/model " + destination + "\norigin-next\norigin-tail\n/model " + OPUS + "\norigin-back\n/exit\n"
+    _ok(ctx.chat(script.encode(), flags=("--model", OPUS, "--plan"), env=_env(ctx)))
+    requests = ctx.server.requests
+    records, _ = _handoff(requests[1])
+    assert records[0]["user"]["workspace"]["workspace"] == str(ctx.workspace)
+    assert records[0]["user"]["plan"]
+    assert records[1]["assistant"]["omitted_native_items"] == 3
+    assert records[1]["assistant"]["provider"] == "anthropic.messages"
+    assert "native-secret" in _json(_body(requests[2]))
+    records, text = _handoff(requests[-1])
+    assert len(records) == 6
+    assert "native-secret" not in text
+    if refusal:
+        assert records[3]["assistant"]["blocks"] == [{"kind": "refusal", "text": "cannot comply <> &"}]
+    transitions = [e["data"] for e in _events(ctx, "model.switch.finished")]
+    assert len(transitions) == 2
+    outbound = next(t for t in transitions if t["destination_model"] == destination)
+    inbound = next(t for t in transitions if t["destination_model"] == OPUS)
+    assert outbound["source_provider"] == "anthropic"
+    assert inbound["destination_provider"] == "anthropic"
+
+
+def _excluded_fallback(ctx, failed=False):
+    base = [m + "/" + e for m in (LUNA, SOL) for e in ("low", "medium", "high")]
+    ladder = base + ["capable", OPUS + "/high"]
+    first = lambda raw: "exclusion-first" in _json(_body_latest(raw))
+    second = lambda raw: "exclusion-second" in _json(_body_latest(raw))
+    _router(ctx, first, _choice({r: float(r == SOL + "/low") for r in ladder}))
+    _expect(ctx, _openai("large-exclusion " + "x" * 70000), first, SOL)
+    _router(ctx, second, b"not logged" if failed else _choice({r: float(r == SOL + "/low") for r in base}), status=500 if failed else 200)
+    _expect(ctx, _openai("source remains usable"), second, SOL)
+    _ok(ctx.chat(b"exclusion-first\nexclusion-second\n/exit\n", flags=("--auto", "--model", OPUS), env=_env(ctx, REAGENT_CONTEXT_WINDOW_TOKENS="50000")))
+    route = next(r for r in _routes(ctx) if r["source_model"] == SOL)
+    assert {r["id"] for r in route["candidates"]} == set(base)
+    assert len(route["excluded"]) == 2 and all("window allowance" in e for e in route["excluded"])
+    assert route["action"] == ("defer" if failed else "stay")
+    if failed:
+        assert route["reason"] == "no_compatible_fallback"
+    else:
+        assert route["selected_route"]["id"] == SOL + "/low"
+    _pair(_requests(ctx, "openai")[-1], SOL, "low")
+
+
+def _plan_selection(ctx):
+    plans = ("<plan>\nfirst complete\n</plan>", "<plan>\nsecond complete\n</plan>", "<plan>\nunfinished")
+    for index, plan in enumerate(plans):
+        _expect(ctx, _openai(plan), f"plan-source-{index}")
+    probabilities = {r: float(r == LADDER[0]) for r in LADDER if r != SOL + "/low"}
+    probabilities[SOL + "/medium"] = 0
+    _router(ctx, "plan-selection-next", _choice(probabilities))
+    _expect(ctx, _openai(), "plan-selection-next", LUNA)
+    _ok(ctx.chat(b"plan-source-0\nplan-source-1\nplan-source-2\n/auto on\nplan-selection-next\n/exit\n", flags=("--model", SOL), env=_env(ctx)))
+    state, _ = _packet(ctx, _requests(ctx, "jev")[0])
+    assert state["latest_complete_plan"]["entry"] == 4
+    assert state["latest_complete_plan"]["assistant"]["blocks"][0]["text"] == plans[1]
+    assert state["recent_evidence"][-1]["assistant"]["blocks"][0]["text"] == plans[2]
+
+
+def _usage_edges(ctx, value):
+    response = _choice()
+    response["usage"] = {"input_tokens": value, "output_tokens": value}
+    _router_success(ctx, response)
+    route = _routes(ctx)[0]
+    assert route["router_usage"]["input_tokens"] == route["router_usage"]["output_tokens"] == value
+    finished = _events(ctx, "run.finished")[0]["data"]
+    assert finished["router_usage"]["input_tokens"] == value
+    assert finished["usage"]["input_tokens"] == 101
+
+
 def collect():
     cases = []
 
@@ -1294,6 +1490,56 @@ def collect():
     for switched in (False, True):
         for operation in ("effort", "plan", "reset", "compact", "model"):
             add(f"W52.anthropic-{int(switched)}-{operation}", "Anthropic signed native tail and pinned system transition", _anthropic_pin, operation, switched)
+    add("W38.excluded-fallback", "Calibrated source admits six routes but excludes configured cross-provider fallback", _excluded_fallback)
+    add("W44.excluded-fallback-failure", "Router failure with excluded fallback defers and preserves source", _excluded_fallback, True)
+    add("W39.plan-selection", "Latest complete plan survives a later incomplete plan", _plan_selection)
+    add("W38.single-admitted", "Unavailable OpenAI leaves one configured route and no Jev send", _candidate_admission, True)
+    add("W38.none-admitted", "Every candidate excluded by admission defers without compatible fallback", _candidate_admission)
+    add("W44.generation-failure", "Failed post-switch generation is not rerouted or replayed", _auto_terminal)
+    add("W44.unknown-effect", "Unknown exec effects stop Auto and generation without replay", _auto_terminal, True)
+    add("W44.cancel", "SIGINT at router receipt cancels without generation", _auto_cancel)
+    cases.append(model.Case("W44.timeout-ack", "Timeout defers one Auto boundary until later model acknowledgment", _auto_timeout, slow=True))
+    for size in (511, 512, 513):
+        add(f"W39.assistant-preview-{size}", "Assistant text and arguments preview boundary metadata", _assistant_preview, size)
+    add("W40.evidence-fit", "Newest contiguous evidence suffix fills remaining packet capacity", _evidence_fit)
+    for destination, refusal in ((SOL, False), (SOL, True), ("claude-sonnet-5-5", False)):
+        add("W51.anthropic-origin-" + ("refusal" if refusal else destination),
+            "Anthropic-origin roundtrip preserves snapshot/plan and omits signed/redacted native state", _origin_roundtrip, destination, refusal)
+    for value in (0, 2**63 - 1):
+        add("W45.int64-" + str(value), "Router usage zero/int64 maximum remains separate and exact", _usage_edges, value)
+    for suffix, path, value in [
+        ("root-string", (), "invalid"), ("root-number", (), 1), ("root-bool", (), True),
+        ("model-object", ("model",), {}), ("answers-array", ("answers",), []),
+        ("answers-string", ("answers",), "invalid"), ("answer-array", ("answers", "route"), []),
+        ("answer-type-number", ("answers", "route", "type"), 1),
+        ("choice-object", ("answers", "route", "choice"), {}),
+        ("confidence-bool", ("answers", "route", "confidence"), True),
+        ("probabilities-array", ("answers", "route", "probabilities"), []),
+        ("probability-bool", ("answers", "route", "probabilities", LADDER[1]), False),
+        ("usage-bool", ("usage",), True), ("usage-input-string", ("usage", "input_tokens"), "13"),
+        ("usage-output-bool", ("usage", "output_tokens"), False),
+        ("usage-input-underflow", ("usage", "input_tokens"), -(2**63) - 1),
+        ("usage-input-overflow", ("usage", "input_tokens"), 2**63),
+    ]:
+        body = copy.deepcopy(valid)
+        if not path:
+            body = _json(value).encode()
+        else:
+            parent = body
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = value
+        add("W41.shape-" + suffix, "Malformed Jev scalar/container or int64 usage is rejected before usage admission", _bad_router, body, "invalid Jev response JSON")
+    for destination, effort in ((SOL, "none"), (OPUS, "low")):
+        ladder = base[:3] + ["capable"] + base[3:] if destination == SOL else base + ["capable", OPUS + "/high"]
+        for boundary in range(len(ladder) - 1):
+            for suffix, mass in (("below", .799), ("exact", .8), ("above", .801)):
+                probabilities = {r: 0 for r in ladder}
+                probabilities[ladder[boundary]], probabilities[ladder[boundary + 1]] = mass, 1 - mass
+                selected = ladder[boundary + (mass < .8)]
+                add(f"W43.routes-{len(ladder)}-boundary-{boundary + 1}-{suffix}",
+                    "Configured seven/eight-route cumulative threshold", _distribution, probabilities, selected,
+                    ladder=ladder, flags=("--model", destination, "--reasoning-effort", effort), configured=(destination, effort))
     for case_id, description, dependency in [
         ("W39.agent", "Router agent-result trust and roster provenance", "agent lifecycle fixtures (A03–A14)"),
         ("W47.agent", "Agent-labelled Entries in model handoff", "agent lifecycle fixtures (A03–A14)"),

@@ -1,0 +1,87 @@
+{
+  "status": "verified_area",
+  "complete_suite": false,
+  "scope": "Area 1 runner and W01-W54 wire, Darwin/arm64",
+  "reference_commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
+  "reference_binary_sha256": "925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a",
+  "go_version": "go version go1.23.3 darwin/arm64",
+  "python_version": "Python 3.11.5",
+  "counts": {"total": 2752, "implemented": 2737, "pending": 15, "slow": 89},
+  "inventory_metadata_sha256": "97ffefd3b933f4920c495d5f7d6dc94ce0023702ff1c59c122bd07d839b9484c",
+  "suite_digest": "c47d0c93c19bf193c23fdef27c73a361acb4bd0f112618692c440dbcd3cfa07d",
+  "repeatability": {
+    "parallel_passes": 3,
+    "serial_passes": 1,
+    "all_counts_and_case_ledgers_identical": true,
+    "all_normalized_artifact_bytes_identical": true,
+    "normalized_tree_sha256": "e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484",
+    "tree_hash_encoding": "Sorted case IDs then artifact paths; append UTF-8 case/path, NUL, ASCII logical length, NUL, binary SHA-256 of artifact bytes",
+    "normalized_artifacts_per_pass": 24595,
+    "normalized_logical_bytes_per_pass": 1045441036,
+    "passed_per_pass": 2737,
+    "failed_per_pass": 0,
+    "pending_per_pass": 15,
+    "omitted_unavailable_not_executed_per_pass": 0,
+    "passes": [
+      {"mode": "parallel", "jobs": 4, "seconds": 454.544, "report": "/tmp/parity-final2-parallel-1-38/report.json"},
+      {"mode": "parallel", "jobs": 4, "seconds": 473.676, "report": "/tmp/parity-final2-parallel-2-38/report.json"},
+      {"mode": "parallel", "jobs": 4, "command": "make parity BIN=/tmp/reagent-parity-go-38da0d6 JOBS=4", "seconds_including_self_tests": 523.604},
+      {"mode": "serial", "jobs": 1, "seconds": 1754.436, "report": "/tmp/parity-final2-serial-38/report.json"}
+    ]
+  },
+  "gates": {
+    "go_build": "passed",
+    "make_check": "passed: go vet ./...; go test ./... (77.192s)",
+    "go_test_race": "passed: go test -race ./... (118.458s)",
+    "bench_python": "passed: 64 tests in 25.954s",
+    "tty_check": "passed: all 26 scenarios; complete screens saved at /tmp/parity-final-tty-check.out",
+    "parity_python": "passed: 158 tests in 62.279s",
+    "make_parity": "passed: 2737 compared, zero failures, 15 predeclared dependencies"
+  },
+  "coverage": {
+    "build": "go build -cover -trimpath -buildvcs=false from an archive of the pinned reference",
+    "instrumented_invocations": 2910,
+    "internal_reagent_covered_statements": 3841,
+    "internal_reagent_total_statements": 10437,
+    "internal_reagent_percent": 36.8,
+    "overall_85_percent_claimed": false,
+    "important_uncovered": [
+      "internal/reagent/jev.go:201-238: tools-area multi-question git_do",
+      "internal/reagent/model_switch.go:83-88: agent/context-GC trust labels",
+      "internal/reagent/endpoint_redaction.go:63-66,71-72: escaped JSON-token rewrite",
+      "internal/reagent/transport.go:325-340: refresh failure/error wrapping",
+      "internal/reagent/trace.go:61-105: reopen/append and persistence-error paths"
+    ]
+  },
+  "mutations": {
+    "applicable": 13,
+    "caught_by_intended_assertions": 13,
+    "baseline_case_executions_passed": 89,
+    "temporary_builds_passed": 13,
+    "later_area_pending": 23,
+    "details": "mutation-results.json",
+    "real_go_tree_modified": false
+  },
+  "reference_capture": {
+    "raw_observations_once_per_final_case": true,
+    "new_terminal_incomplete_vector_captured_once_after_mutation_14_finding": true,
+    "exploratory_7e0408f_or_f37aa5a_outputs_used": false,
+    "raw_observations_preserved_during_all_normalization_revisions": true,
+    "normalization_revisions": "Reviewed typed metadata/source-size/auth-expiry and post-process fixture-delivery rules were rerendered from the original immutable raw observations; no Go outcomes were resampled to refresh expectations.",
+    "expected_output_review": "All case descriptors/hashes/inventories audited; meaningful samples from every implemented W family, all W09 boundaries and W33 byte planes, W53 credential outputs, and new typed-rule negative controls reviewed."
+  },
+  "earlier_failures_and_disposition": [
+    "Initial mutation 14 survived: missing explicit incomplete-terminal vector. Added W28.no-retry-incomplete-event; unchanged mutation now caught.",
+    "Initial coverage probe rejected a literal past Retry-After date in the observer. Corrected the typed date rule; affected ordinary assertion passed.",
+    "Early comparison attempts exposed missing typed session/socket/owned-field handling and fake-writer cleanup races. Rules were narrowed and reviewed; immutable raw evidence retained. These attempts and stopped serial runs are not counted as repeatability passes.",
+    "One concurrent-load TTY invocation reported one of 26 scenarios failed; the bounded original output omitted the failing scenario name. The unchanged TTY gate subsequently passed all 26 with full output retained. No Go or TTY code was changed."
+  ],
+  "known_limitations": [
+    "Legacy W27.connection-refused reference lacks independent endpoint-input metadata; its bounded S certificate checks consistency of pinned trace fields, not baseline input correctness. Candidates independently assert and record the allocated endpoint. Scope is confined to that Case ID.",
+    "W33 checks checkpoint byte planes and checksum, not full checkpoint canonical-order/format parity; that remains in the checkpoint area.",
+    "15 explicitly named later-area case dependencies remain pending; see manifest.json and golden/darwin/inventory.json."
+  ],
+  "go_defects_found_at_current_pin": [],
+  "not_run": ["Linux execution and platform goldens", "live provider APIs"],
+  "merged": false
+}

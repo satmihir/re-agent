@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "reference_commit": "f37aa5a38815fe159fba87f23ffdd0d5b09cf63b",
+  "reference_commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
   "scope": "All 36 design section 6 IDs: 13 applicable wire mutations, including cross-area catchers 3, 5 and 36; 23 explicit later-pending mutations. Each applicable patch independently targets git archive REF_COMMIT, never HEAD or the working tree. Later-pending is not a kill, waiver or completed 36/36 gate.",
   "later_pending": [
     {"id": 1, "owner": "cli", "catchers": ["C01"], "reason": "Unknown-command output channels need CLI fixtures."},
@@ -91,7 +91,7 @@
     {
       "id": 14,
       "description": "Treat an incomplete SSE terminal event as transient overload",
-      "cases": ["W28.no-retry-incomplete"],
+      "cases": ["W28.no-retry-incomplete-event"],
       "intended_assertion": "Incomplete SSE is not retried even with retry-window admission enabled",
       "failure_pattern": "assert len\\(requests\\) == count|assert len\\(starts\\) == len\\(finishes\\) == count|assert result\\[\"status\"\\] == status",
       "patches": [

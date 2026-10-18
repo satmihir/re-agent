@@ -25,7 +25,7 @@ import time
 
 SUITE = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).with_name("mutations.json")
-REF_COMMIT = "f37aa5a38815fe159fba87f23ffdd0d5b09cf63b"
+REF_COMMIT = "38da0d664abae80cbd1cc1793b10b11204bc8031"
 
 
 def sha256(data):

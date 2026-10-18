@@ -7,9 +7,9 @@ approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 **Status:** runner/wire implementation under #139; the remaining three areas
 retain their planned status. Earlier design research/reviews are recorded below.
 
-Reference pinned for the area suite: `f37aa5a38815fe159fba87f23ffdd0d5b09cf63b`
-(`origin/main`, including #150–#160). Observations from `7e0408f` were
-exploratory only and are not golden output. The earlier
+Reference pinned for the area suite: `38da0d664abae80cbd1cc1793b10b11204bc8031`
+(`origin/main`, including #150–#161). Observations from `7e0408f` and `f37aa5a`
+were exploratory only and are not golden output. The earlier
 inventory reference was `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492`.
 `parity/manifest.json` records the protected binary SHA-256 and executable leaf
 inventory; candidate runs never regenerate goldens. See `parity/README.md` for
@@ -28,21 +28,30 @@ capture, pending dependencies and verification evidence. Hardening #154 and the
 | #156 terminal rendering | CLI/PTY area owns intermediate Markdown screens. |
 | #159 parsing follow-up | Freezes ASCII digits for all integer environment variables and command positions; booleans accept exactly true/false/1/0. `provider.go:253–272`, `context_gc_experiments.go:13–32`, `cli.go:126–138`. No leading-plus/ParseBool quirks are preserved. |
 | #160 stream/trace repairs | W23 null final response is an owned `protocol_error`, not a panic (`openai_stream.go:69–72`). W33 trace lines repair invalid byte runs without changing native history/continuation/checkpoint opaque bytes (`trace.go:130–135`). The three distinct UTF-8 rules below are separate contracts, not comparison substitutions. |
+| #161 Retry-After grammar | W29 uses ordinary assertions: `+2` is invalid and retains jittered backoff; ASCII digits with surrounding HTTP whitespace (` 2 `) still impose the two-second floor (`transport.go:291–313`). |
 
-**Freeze audit in progress:** #160 fixes the two previous reference blockers.
-The draft is rebased onto its merge commit and the protected binary rebuilt
-from that exact source archive. No exploratory `7e0408f` output is reused.
-Leaf audit, oracle integration and fresh capture must finish before approval;
-the manifest records their status and the final inventory.
+**Leaf inventory audited; Darwin lane captured:** #160 fixes the stream/trace
+blockers and #161 rejects signed Retry-After delay-seconds. The branch is rebased
+onto #161's merge commit and the protected binary rebuilt from that exact source
+archive. No exploratory output is reused. The W01–W54 named-clause/source audit
+is complete: **2,752 declared leaves, 2,737 runnable, 15 explicitly pending**.
+These are implementation counts, not unrestricted Cartesian-exhaustion or
+acceptance claims. The manifest retains the captured Darwin lane's
+`freeze_status: ready` and `goldens_frozen: true`; the mutation-14 leaf extension
+uses the same reference pin and does not replace existing captured leaves.
+`parity/acceptance.json` records the completed Darwin evidence: three parallel
+passes and one serial pass with identical normalized trees, 13/13 applicable
+mutations caught, and this area's 36.8% internal/reagent statement contribution.
+Linux remains unverified; these are not final whole-suite approval claims.
 
 ## 1. Harness architecture
 
-### Required Go reference hardening before the freeze
+### Required Go reference hardening before the freeze (landed #154)
 
 The owner confirmed three reference changes in the PR #148 design review.
-Track them in **one separate Go hardening prerequisite issue/PR under #143**;
-creating that tracking issue and landing its PR are scheduling gates, not work
-performed by this design change. Its acceptance checklist is:
+The following prerequisite checklist was implemented by the separate Go
+hardening PR #154 under #143; #150–#161 follow-ups are reconciled above.
+It remains here as the acceptance-contract crosswalk, not outstanding work:
 
 | Reference change | Required contract and parity dependents |
 | --- | --- |
@@ -82,7 +91,7 @@ Proposed ownership in #139 (not files added by #138):
 
 | Path | Owns |
 | --- | --- |
-| `parity/manifest.json` | Exact draft family/platform/slow/pending counts, protected reference commit/digest and freeze blockers; counts are not approval evidence |
+| `parity/manifest.json` | Audited family/platform/slow/pending counts, deterministic Case-metadata digest and full leaf-inventory path, protected reference commit/digest and freeze status; counts are not approval evidence |
 | `parity/run.py` | Case selection, worker processes, artifact/report lifecycle, environment isolation and loopback endpoint preflight |
 | `parity/provider.py` | Recording loopback HTTP/SSE endpoints for both providers and Jev, keyed response scripts and barriers |
 | `parity/observe.py` | Lossless JSON token spans, allowed substitutions, invariants, trace correlation and diffs |
@@ -456,11 +465,11 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W26 | 429/500/529/599 then success/twice; 400/401/403/408/201/204/3xx | Default two attempts only on 429/5xx, same request bytes, ~500ms delay, exactly 200 success; N/S |
 | W27 | Connection/reset/partial-body/redirect; valid/corrupt/truncated gzip JSON/SSE/error bodies on direct and proxy forms | Owned transport failure categories/retry behavior, no redirect/key forwarding; decoded adapter/trace body versus raw compressed server artifact, Accept-Encoding and status classification; N/S |
 | W28 | Retry window transport/429/5xx/complete overload versus bad/incomplete stream | Four transient stream codes admitted only in window mode; metadata cannot disable retry; attempt identity N/S |
-| W29 | Short window; Retry-After integer/date/invalid; long successful first attempt | Admission deadline not in-flight deadline, scheduled/exhausted sequence N; only actual delay values/derived countdown wording S with policy bounds (§3/4) |
+| W29 | Short window; Retry-After ASCII digits/date/invalid (including signed `+2`), surrounding HTTP whitespace; long successful first attempt | Admission deadline not in-flight deadline, scheduled/exhausted sequence N; only actual delay values/derived countdown wording S with policy bounds (§3/4) |
 | W30 | SIGINT at request receipt/partial-read/retry-wait barrier | Cancelled/resumable status, no further attempt/tool, following chat turn; N/S |
 | W31 | HTTP400 overflow codes/type/message/mixed case; non400; HTML; long UTF-8 detail | Exact overflow classification/bounded error wording and trimming; N |
 | W32 | Missing/null/empty/known usage; cached/reasoning/Anthropic creation; failed retries | All counters, lower bounds and known flags; default retries differ from window accounting; B/N |
-| W33 | Request/response bytes, request-ID headers, failed read; truncated sequence/adjacent invalid bytes/invalid beside valid non-ASCII across trace, JSON strings, retained native history/next request/checkpoint opaque fields | Exact body/hash/replacement flag; trace invalid-run versus JSON invalid-byte rules and untouched opaque bytes independently asserted (§3); next request retains original native bytes. Failed reads trace error, not partial-body fiction; B/N/S |
+| W33 | Request/response bytes, request-ID headers, failed read; truncated sequence/adjacent invalid bytes/invalid beside valid non-ASCII across trace, JSON strings, retained native history/next request/checkpoint opaque fields | Exact body/hash/replacement flag; trace invalid-run versus JSON invalid-byte rules and untouched opaque bytes independently asserted (§3); next request retains original native bytes. Checkpoint assertions and focused artifacts cover these byte planes, not full checkpoint canonical-order/format parity (later A34–A37). Failed reads trace error, not partial-body fiction; B/N/S |
 | W34 | Chat after provider/protocol/incomplete/overflow failures then reset/compact | Preserved unanswered history versus blocking, no model request while blocked; N/S |
 | W35 | Auto default/explicit/env fallback, catalog/unknown-window/unsupported effort | Default sol/medium only in applicable launch branch; fallback errors; N |
 | W36 | Missing/blank/CRLF Jev key, multiple steps and next turn | Local validation/fallback, disable for this run not forever, no transmission; N/S |
@@ -486,13 +495,120 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 **Show-context expansion:** run direct OpenAI, proxy OpenAI and Anthropic with
 all catalog models plus unknown names; effort auto/empty/supported/unsupported;
 read-only×plan; agents/GC/friction/git-do recipe individually and all together;
-project states W06; escaping/input states W07. Exhaust model/effort omission and
-mode combinations, then deterministic pairwise secondary combinations with the
-combination manifest committed. `--auto --show-context` is **invalid**, not a
+project states W06; escaping/input states W07. Declared leaves cover the named
+model/effort omission and mode combinations, with deterministic pairwise
+secondary combinations committed in the inventory; this is not a claim that
+every arbitrary cross-product has been executed. `--auto --show-context` is **invalid**, not a
 missing preview golden: cover rejection in C05 and capture actual Auto requests
 in W35–W45. Nonempty roster/history is likewise a live agent case, not something
 a fresh preview flag can synthesize. L cases exercise native decoders on both
 platforms rather than counting proxy tests twice; W53 covers the new env schema.
+
+#### Audited wire leaf inventory
+
+Counts below come from `parity.cases.wire.collect()` at the pinned reference.
+“Implemented” means a runnable assertion fixture exists, not that its golden
+comparison, repeatability or Linux run has passed. “Mixed” names every pending
+leaf; W13 is wholly pending. No wire family is silently omitted. The case-module
+runnable totals are input 1,189, decode 538, routing 315 and endpoints 695.
+All named clauses above were audited against source; the finite stable-ID
+inventory is not unrestricted Cartesian exhaustion.
+
+```text
+python3 -m parity.run --area wire --list
+python3 -m parity.run --case W13 --list
+python3 -m unittest parity.manifest_test
+```
+
+`--list` prints every stable leaf ID and its pending reason without a binary or
+network request. `parity/manifest.json` points to the capture inventory at
+`parity/golden/darwin/inventory.json`; that destination is not a claim that capture
+is complete. Its independently reproducible metadata SHA-256 is
+`97ffefd3b933f4920c495d5f7d6dc94ce0023702ff1c59c122bd07d839b9484c`.
+The digest covers the ID-sorted array of `id`, `description`, `comparison`, `slow`,
+`pending` and `platforms` (in their declared order), serialized as UTF-8
+`json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(',', ':'))`
+without a final newline; `parity/manifest_test.py` recomputes it from `collect()`.
+The digest is distinct from the suite-source and eventual golden-tree digests.
+
+| Family | Declared | Implemented | Status / pending stable IDs |
+| --- | ---: | ---: | --- |
+| W01 | 611 | 611 | Implemented |
+| W02 | 16 | 16 | Implemented |
+| W03 | 15 | 15 | Implemented |
+| W04 | 48 | 48 | Implemented |
+| W05 | 316 | 316 | Implemented |
+| W06 | 42 | 42 | Implemented |
+| W07 | 36 | 36 | Implemented |
+| W08 | 48 | 48 | Implemented |
+| W09 | 18 | 18 | Implemented |
+| W10 | 13 | 12 | Mixed: `W10.source` |
+| W11 | 21 | 20 | Mixed: `W11.roster-change` |
+| W12 | 4 | 4 | Implemented |
+| W13 | 4 | 0 | Pending: `W13.four-point-ceiling`, `W13.native-fork`, `W13.nested-fork`, `W13.subsequent-child` |
+| W14 | 3 | 3 | Implemented |
+| W15 | 2 | 2 | Implemented |
+| W16 | 4 | 4 | Implemented |
+| W17 | 45 | 45 | Implemented |
+| W18 | 38 | 38 | Implemented |
+| W19 | 24 | 24 | Implemented |
+| W20 | 6 | 6 | Implemented |
+| W21 | 13 | 13 | Implemented |
+| W22 | 9 | 9 | Implemented |
+| W23 | 32 | 32 | Implemented |
+| W24 | 82 | 81 | Mixed: `W24.subscription-checkpoint-resume` |
+| W25 | 15 | 15 | Implemented |
+| W26 | 58 | 58 | Implemented |
+| W27 | 39 | 39 | Implemented |
+| W28 | 24 | 24 | Implemented |
+| W29 | 29 | 29 | Implemented |
+| W30 | 3 | 3 | Implemented |
+| W31 | 30 | 30 | Implemented |
+| W32 | 133 | 133 | Implemented |
+| W33 | 16 | 16 | Implemented |
+| W34 | 8 | 8 | Implemented |
+| W35 | 16 | 16 | Implemented |
+| W36 | 3 | 3 | Implemented |
+| W37 | 7 | 7 | Implemented |
+| W38 | 48 | 48 | Implemented |
+| W39 | 14 | 13 | Mixed: `W39.agent` |
+| W40 | 9 | 9 | Implemented |
+| W41 | 71 | 71 | Implemented |
+| W42 | 25 | 25 | Implemented |
+| W43 | 60 | 60 | Implemented |
+| W44 | 13 | 13 | Implemented |
+| W45 | 5 | 5 | Implemented |
+| W46 | 2 | 2 | Implemented |
+| W47 | 3 | 2 | Mixed: `W47.agent` |
+| W48 | 2 | 2 | Implemented |
+| W49 | 6 | 6 | Implemented |
+| W50 | 9 | 8 | Mixed: `W50.picker` |
+| W51 | 7 | 7 | Implemented |
+| W52 | 20 | 18 | Mixed: `W52.gc`, `W52.resume` |
+| W53 | 414 | 411 | Mixed: `W53.propagation.child`, `W53.propagation.git-do`, `W53.propagation.nested-child` |
+| W54 | 213 | 213 | Implemented |
+
+All **15 pending dependencies** are later-area fixtures, not standalone wire
+clauses left unaudited; their exact executable reasons are in the manifest and
+`--list`. They remain required work, not accepted deviations or green skips.
+
+| Pending stable ID | Required later-area fixture |
+| --- | --- |
+| `W10.source` | Agents: synthetic agent-source Entry in a native child prefix |
+| `W11.roster-change` | Agents: deterministic admitted-child roster lifecycle |
+| `W13.four-point-ceiling` | Agents: native/nested fork admission and controlled child requests |
+| `W13.native-fork` | Agents: native/nested fork admission and controlled child requests |
+| `W13.nested-fork` | Agents: native/nested fork admission and controlled child requests |
+| `W13.subsequent-child` | Agents: native/nested fork admission and controlled child requests |
+| `W24.subscription-checkpoint-resume` | Checkpoints: restore a usage-limit session and complete its next turn |
+| `W39.agent` | Agents: lifecycle fixtures A03–A14 |
+| `W47.agent` | Agents: lifecycle fixtures A03–A14 |
+| `W50.picker` | CLI: PTY driver C20 |
+| `W52.gc` | Agents: GC fixtures A29–A32 |
+| `W52.resume` | Checkpoints: fixtures A34–A37 |
+| `W53.propagation.child` | Agents: explicit child client exchange |
+| `W53.propagation.git-do` | Tools: git_do client exchange |
+| `W53.propagation.nested-child` | Agents: explicit nested-child client exchange |
 
 ### Tools and workspace — T01–T60 (60 families)
 
@@ -727,6 +843,8 @@ check below is an invariant, not a general reserialization normalization.
 | Times | Trace `.time`: validate UTC RFC3339Nano/process bounds then `<TIME>`; snapshot date/zone: validate against case TZ and observed clock interval then substitute dynamic date only; zone stays literal | W08 non-UTC/FETCH_HEAD mtime offset independently checked, timestamps at trace boundary UTC regardless of local TZ; provider dates literal |
 | Durations | Declared duration_ms/latency_ms/elapsed fields: validate type/nonnegative/bounds, substitute `0` for N; timing-sensitive trimming rule below | Presence/unit retained; timeout_ms/budgets/counts never erased; retry delay has its own explicit exception, not this rule |
 | Retry delay | Only `api.retry.scheduled.data.delay_ms` and the corresponding retry/countdown display lexeme get a range-checked sentinel for N; raw delay kept and policy checked with S (§4) | Attempt/reason/order/time window/Retry-After rules remain mandatory; no other retry field is hidden |
+| Auth-status display | Only the certified `auth status` invocation's captured catalog display-name URL slots may replace its allocated authority; model slugs stay literal. A refreshed `Access token expires:` lexeme is range-checked against the captured positive `expires_in` and invocation bounds before `<AUTH-EXPIRY>`; fixed credential dates stay literal | Model-like stdout never enters this rule. Catalog payloads and all surrounding text still compare exactly; provider dates elsewhere remain opaque |
+| Cancelled fixture delivery | W54's registered non-refresh cancellation barriers and W30's first cancelled request/partial-read stop at the held prefix: no response for header cancellation, the declared partial chunk only for body cancellation. W30's completed follow-up and retry-wait case remain literal. Verify recorded successful writes against that case's independently declared response plan and headers, then compare the held prefix with S accounting | Legacy cleanup could release the fake writer **after the Go process exited**. Preserve all raw bytes and its prefix/length proof; only these unobservable fixture writes are canonicalized. Never hide any Go trace, HTTP status, accepted item, tool effect or output; rotating-token refresh is excluded |
 | Trace artifact ID | Validate independent 16-hex component in `agent-HEX/events.jsonl`, bind `<AGENT_TRACE_1>` to admitted child and referenced existing private file | Distinct from Session/Run ID, stable for child lifetime, unique across C19 launches, all trace links checked; no generic path erasure |
 | Roots and ports | Use a runner-owned fixed **same absolute case root** sequentially for Go capture/candidate/import, e.g. `PARITY_ROOT/case-ID/workspace`, with per-job unique IDs. If environments differ, replace only canonical allocated root prefixes and allocated server authority in registered path/URL/text spans by `<ROOT>`/`<SERVER>` | Longest-prefix first, path-component boundaries, JSON-string escaping retained; relative paths, separator form, case, `..`, symlink resolution, outside sentinel relationships remain exact. Do not replace arbitrary substrings in file contents |
 | Build metadata | Version suffix and trace run.started.build have a typed build sentinel; stable name/schema stays exact | Compiler/revision differs by design; not instruction/tool descriptions or arbitrary headers |
@@ -806,13 +924,20 @@ Rust port must not apply one global `String::from_utf8_lossy` conversion.
 The vectors above include adjacent invalid bytes, a truncated multi-byte
 sequence, and invalid bytes adjacent to valid non-ASCII text. Request digests
 are computed over actual sent bytes, even when those bytes are not valid UTF-8.
+`api.attempt.started.request_body` is an ordinary JSON-encoded Go string, so its
+invalid-byte repair is per byte, unlike `response_body`'s run replacement. Its
+sanitized trace text is never used as the source for the raw request digest.
 The comparison engine rejects invalid UTF-8 at declared textual JSONL boundaries;
 it must not corrupt or reject declared opaque native-byte spans for that reason.
 
 Prompt/model/script/call IDs, content whitespace, newlines, Unicode normalization,
 JSON number spellings, map/struct order, tool codes/messages/effects, count fields
 and enum spellings are never normalized. A port must mimic observed quirks or
-seek an explicit reference change before the oracle freezes.
+seek an explicit reference change before the oracle freezes. Crashes/panics,
+data loss/corruption, credential/security exposure and whole-family blockers
+stop the area. Smaller defects are listed with source/reproduction/impact in
+the PR and their affected leaves remain pending; defective behavior is never
+captured as expected output.
 
 ## 4. Determinism under concurrency and time
 
@@ -1028,7 +1153,7 @@ requires explanation/replacement, not a waived green check.
 | 11 | Include first workspace snapshot in cache hash | W10/W11 independent hash/stability |
 | 12 | Omit last Anthropic result cache breakpoint | W12 exact marker |
 | 13 | Retry HTTP408 in default policy | W26 attempt count |
-| 14 | Retry incomplete SSE as if it were overload | W28 no retry/status |
+| 14 | Retry incomplete SSE as if it were overload | `W28.no-retry-incomplete-event`: explicit `response.incomplete` terminal event, no retry/status |
 | 15 | Turn retry-window admission deadline into per-attempt timeout | W29 held successful response |
 | 16 | Add cached input to input totals a second time | W32 exact counters |
 | 17 | Choose Jev's maximum probability instead of cheapest cumulative route | W43 selected route |
@@ -1051,6 +1176,15 @@ requires explanation/replacement, not a waived green check.
 | 34 | Truncate away exec_unknown from large delivered reply | A21/A22 preserved effects |
 | 35 | Drop latest-third-step outcome in GC off-by-one | A29 protected request record |
 | 36 | Byte-slice bounded preview through a multibyte codepoint | T11/W39/T59 valid UTF-8/exact trim |
+
+The initial mutation-14 run exposed a coverage gap: existing incomplete-stream
+vectors did not include an explicit `response.incomplete` terminal event under
+the retry window. `W28.no-retry-incomplete-event` adds that standalone vector while retaining the
+existing `W28.no-retry-incomplete` fixture unchanged. Its shared Case description
+is "Window does not retry malformed/incomplete/nontransient streams"; the new
+vector specifically checks the explicit terminal event, calls and usage.
+Its capture extends the existing Darwin lane at the same reference pin; adding
+the vector alone does not claim a successful mutation kill or repeated full pass.
 
 Spread: CLI/chat 8, providers/wire 10, tools/workspace 11, agents/context 7
 (including cross-area catchers). These mutations test strength, not a statistical
@@ -1150,10 +1284,14 @@ approval or 85% coverage independently. Keep stable IDs/shared runner contracts.
 Cross-area leaves may require later fixtures; each earlier PR names those
 unimplemented dependencies, while its implemented cases pass on Go. The final
 PR completes the whole manifest rather than leaving optional green skips.
-Area 1 is currently an **unapproved draft**: the reference defects above block
-its all-green proof and golden freeze. Counts in its manifest describe declared
-cases, not completed acceptance. No coverage/mutation/repeatability success is
-claimed while that gate is blocked.
+Area 1 has **completed mechanical verification on Darwin**: all 54 family
+inventories are reconciled, with 15 named later-area dependencies. Reviewed raw
+reference observations and typed ledgers accompany 2,737 executable goldens.
+Three parallel passes and one serial pass compare byte-identically; all 13
+applicable mutations are caught. `parity/acceptance.json` records gates, coverage,
+initial findings and the bounded legacy closed-port input-evidence caveat.
+Linux and final whole-suite acceptance remain unverified; no overall 85% claim
+or human approval is implied.
 
 Final #139 acceptance: instrumented black-box Go run with missed-source-range
 reconciliation, all **36 independent mutations** killed by intended assertions,

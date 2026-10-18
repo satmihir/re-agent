@@ -88,7 +88,7 @@ def _reply(ctx, provider):
     return Response(body=_openai())
 
 
-def _cache_key(body):
+def _cache_key(body, summary=None):
     schemas = json.loads((Path(__file__).parents[1] / "fixtures/cache_schemas.json").read_text())["schemas"]
     digest = hashlib.sha256((body["model"] + "\0" + body["instructions"] + "\0").encode())
     for tool in body["tools"]:
@@ -107,10 +107,15 @@ def _cache_key(body):
             user["plan"] = "on"
         else:
             assert text.startswith(WORKSPACE), text
-    raw = _json({"kind": "user", "user": user}).decode()
+    first = {"kind": "user", "user": user}
+    if summary is not None:
+        assert parts[0]["text"] == SUMMARY + summary["text"]
+        first = {"kind": "summary", "summary": summary}
+    raw = _json(first).decode()
     for literal, escape in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
         raw = raw.replace(literal, escape)
     digest.update(raw.encode())
+    assert re.fullmatch(r"[0-9a-f]{32}", body["prompt_cache_key"])
     assert body["prompt_cache_key"] == digest.hexdigest()[:32]
 
 
@@ -216,6 +221,7 @@ def _openai_contract(ctx, model, live):
         _, record, body = _exchange(ctx, model)
         assert _headers(record)["authorization"] == "Bearer " + ctx.env["OPENAI_API_KEY"]
         assert _headers(record)["content-type"] == "application/json"
+        assert not {"session-id", "session_id"} & _headers(record).keys()
     else:
         _, body = _preview(ctx, ("--model", model))
     assert list(body) == ["model", "instructions", "input", "tools", "reasoning", "text",
@@ -244,7 +250,7 @@ def _proxy(ctx, live, key, userinfo):
     env["OPENAI_API_KEY"] = "wire-never-forward-key" if key else ""
     if live:
         ctx.server.expect(urlsplit(env["API_PROXY_URL"]).path,
-                          Response(body=_sse(_openai()), headers={"Content-Type": "text/event-stream"}),
+                          Response(body=_sse(_openai()), headers={"Content-Type": "text/event-stream", "x-request-id": "wire-proxy-id"}),
                           marker="wire sentinel", model="gpt-6-luna")
         result = ctx.run(env=env)
         _ok(result)
@@ -254,6 +260,8 @@ def _proxy(ctx, live, key, userinfo):
         body = _body(record)
         headers = _headers(record)
         assert headers["session-id"] == body["prompt_cache_key"]
+        assert "session_id" not in headers
+        assert any(b'"request_id":"wire-proxy-id"' in path.read_bytes() for path in ctx.trace_paths)
         if userinfo:
             # URL Basic auth is independent from provider Bearer auth.
             import base64
@@ -317,6 +325,26 @@ def _declarations(ctx, readonly, plan, friction, gitdo, gc, agents):
         assert parts[-1]["text"].startswith("re:agent plan mode is on")
     else:
         assert len(parts) == 2 + int(agents)
+
+
+def _declaration_mapping(ctx, readonly, plan):
+    flags = ("--agents", "--context-gc", "--report-friction", "--git-do", "recipe")
+    flags += tuple(flag for yes, flag in ((readonly, "--read-only"), (plan, "--plan")) if yes)
+    model = ctx.env.get("REAGENT_MODEL", OPENAI[0])
+    preview, expected = _preview(ctx, flags)
+    _, record, body = _exchange(ctx, model, flags)
+    assert preview.stdout[:-1] == record.body
+    events = [json.loads(line) for path in ctx.trace_paths for line in path.read_bytes().splitlines()]
+    requested = [event["data"] for event in events if event["type"] == "model.requested"]
+    assert len(requested) == 1
+    specs = requested[0]["tools"]
+    assert [spec["name"] for spec in specs] == _tool_names(readonly, True, True, True, True)
+    schema_key = "input_schema" if model.startswith("claude-") else "parameters"
+    assert [{"name": tool["name"], "description": tool["description"], "schema": tool[schema_key]}
+            for tool in body["tools"]] == [
+                {"name": spec["name"], "description": spec["description"], "schema": spec["input_schema"]}
+                for spec in specs]
+    assert body == expected
 
 
 def _tool_names(readonly, friction, gitdo, gc, agents):
@@ -449,17 +477,34 @@ def _moved_snapshot(ctx, model, readonly, plan):
     flags = ("--allow-workspace", str(destination))
     flags += tuple(flag for yes, flag in ((readonly, "--read-only"), (plan, "--plan")) if yes)
     provider = "anthropic" if model.startswith("claude-") else "openai"
-    _, _, bodies = _chat_sequence(ctx, provider, [("cache-turn-one", _anthropic() if provider == "anthropic" else _openai()),
-        ("cache-turn-two", _anthropic() if provider == "anthropic" else _openai())],
-        f"cache-turn-one\n/workspace {destination}\ncache-turn-two\n/quit\n", flags)
-    first, second = (json.loads(_parts({**body, "input": body["input"][-1:]} if "input" in body else {**body, "messages": body["messages"][-1:]})[1]["text"][len(WORKSPACE):]) for body in bodies)
+    switch = {"path": str(destination)}
+    if provider == "anthropic":
+        response = _anthropic(blocks=[_tool("switch_workspace", switch)])
+        final = _anthropic()
+        marker = "toolu_wire"
+    else:
+        response = _openai(items=[_call("switch_workspace", switch)])
+        final = _openai()
+        marker = "call_wire"
+    _, _, bodies = _chat_sequence(ctx, provider, [("cache-turn-one", response),
+        (marker, final), ("cache-turn-two", final)],
+        "cache-turn-one\ncache-turn-two\n/exit\n", flags)
+    states = []
+    for body in (bodies[0], bodies[-1]):
+        messages = body.get("input", body.get("messages"))
+        last = next(message for message in reversed(messages) if message.get("role") == "user")
+        states.append(json.loads(last["content"][1]["text"][len(WORKSPACE):]))
+    first, second = states
     assert first["workspace"] == str(ctx.workspace) and "counts" not in first
     assert second["workspace"] == str(destination)
     assert ("counts" in second) == (readonly or plan)
     if readonly or plan:
         assert second["counts"] == "omitted in read-only/plan mode"
         assert not {"staged", "modified", "untracked"} & second.get("git", {}).keys()
-    assert bodies[0].get("prompt_cache_key") == bodies[1].get("prompt_cache_key")
+    assert bodies[0].get("prompt_cache_key") == bodies[-1].get("prompt_cache_key")
+    if provider == "openai":
+        for body in bodies:
+            _cache_key(body)
 
 
 def _prompt_order(ctx, model, roster, plan):
@@ -572,7 +617,8 @@ def _cache_inputs(ctx, variant):
         flags = ("--model", "gpt-6-sol")
     preview_result, body = _preview(ctx, flags, prompt)
     _, record, live = _exchange(ctx, model=body["model"], flags=flags, prompt=prompt)
-    assert preview_result.stdout[:-1] == record.body
+    assert preview_result.stdout[:-1] == record.body, {
+        "variant": variant, "preview": body, "live": live}
     assert live["prompt_cache_key"] == body["prompt_cache_key"]
     _cache_key(body)
     assert (body["prompt_cache_key"] != original["prompt_cache_key"]) == (variant != "base")
@@ -643,9 +689,9 @@ def _cache_changes(ctx, variant):
     flags = ("--allow-workspace", str(ctx.workspace / "destination")) if variant in ("workspace", "workspace-reset") else ()
     _, _, bodies = _chat_sequence(ctx, "openai", script, stdin, flags)
     keys = [body["prompt_cache_key"] for body in bodies]
-    if variant != "compaction":
-        for body in bodies:
-            _cache_key(body)
+    for index, body in enumerate(bodies):
+        summary = {"text": "cache-summary", "replaced_entries": 2, "model": OPENAI[0]} if variant == "compaction" and index == len(bodies) - 1 else None
+        _cache_key(body, summary)
     if variant in ("reset", "compaction", "workspace-reset"):
         assert keys[0] != keys[-1]
     else:
@@ -691,11 +737,17 @@ def _anthropic_history(ctx, variant):
         return
     script = [("anthropic-first", _anthropic(blocks=calls))]
     stdin = "anthropic-first\n"
-    if variant == "results-then-text":
+    mixed = variant.startswith("results-then-")
+    if mixed:
         # A non-transient provider failure leaves already-dispatched results resumable.
         stdin += "anthropic-next\n/exit\n"
         script.append(("toolu_two", Response(body={"error": {"message": "fixture failure"}}, status=400)))
-        script.append(("anthropic-next", _anthropic()))
+        if variant == "results-then-two-texts":
+            stdin = "anthropic-first\nanthropic-next\nanthropic-third\n/exit\n"
+            script.append(("anthropic-next", Response(body={"error": {"message": "fixture failure"}}, status=400)))
+            script.append(("anthropic-third", _anthropic()))
+        else:
+            script.append(("anthropic-next", _anthropic()))
         flags = ()
     else:
         script += [("toolu_two", _anthropic("anthropic-first-answer")),
@@ -705,14 +757,17 @@ def _anthropic_history(ctx, variant):
     _, _, bodies = _chat_sequence(ctx, "anthropic", script, stdin, flags)
     for body in bodies:
         _cache_markers(body)
-    results = bodies[-1 if variant == "results-then-text" else 1]["messages"][2]["content"]
+    results = bodies[-1 if mixed else 1]["messages"][2]["content"]
     assert [block["tool_use_id"] for block in results[:2]] == ["toolu_one", "toolu_two"]
     assert "is_error" not in results[0] and results[1]["is_error"] is True
     assert json.loads(results[0]["content"])["ok"] is True
     assert json.loads(results[1]["content"])["ok"] is False
-    if variant == "results-then-text":
+    if mixed:
         assert results[2]["type"] == "text" and results[2]["text"] == "anthropic-next"
         assert "cache_control" not in results[1]
+        if variant == "results-then-two-texts":
+            assert results[4]["text"] == "anthropic-third"
+            assert [block["text"] for block in results[2:] if not block["text"].startswith(WORKSPACE)] == ["anthropic-next", "anthropic-third"]
     else:
         assert results[-1]["cache_control"] == {"type": "ephemeral"}
         assert bodies[-1]["messages"][-1]["content"][0]["text"] == "anthropic-next"
@@ -929,7 +984,7 @@ def collect():
         add("W11." + variant, "Cache prefix identity across " + variant, partial(_cache_changes, variant=variant))
     add("W11.roster-change", "Cache identity with actual changing agent roster", None,
         pending="Later agents area: deterministic admitted-child roster lifecycle")
-    for variant in ("first", "batch-and-next", "results-then-text"):
+    for variant in ("first", "batch-and-next", "results-then-text", "results-then-two-texts"):
         add("W12." + variant, "Anthropic final-eligible-block cache markers: " + variant,
             partial(_anthropic_history, variant=variant))
     for variant in ("native-fork", "nested-fork", "four-point-ceiling", "subsequent-child"):
@@ -963,7 +1018,7 @@ def collect():
             for lane in ("proxy", "anthropic"):
                 add(case.id + "-" + lane, case.description + " via " + lane,
                     partial(_lane, lane=lane, run=case.run), slow=case.slow)
-        if family in ("W07", "W09", "W10") and not case.pending and (family == "W10" or OPENAI[0] in case.id):
+        if family in ("W07", "W09", "W10", "W11") and not case.pending and (family in ("W10", "W11") or OPENAI[0] in case.id):
             add(case.id + "-proxy", case.description + " via proxy",
                 partial(_lane, lane="proxy", run=case.run), comparison=case.comparison, slow=case.slow)
     for zone, readonly, plan in product(("UTC", "America/Los_Angeles", "Etc/GMT+7"), (False, True), (False, True)):
@@ -990,4 +1045,8 @@ def collect():
         add(f"W08.moved-{lane}-ro{int(readonly)}-plan{int(plan)}", "Launch counts versus moved-root refs-only snapshot",
             partial(_lane, lane=lane, run=partial(_moved_snapshot,
                 model=ANTHROPIC[0] if lane == "anthropic" else OPENAI[0], readonly=readonly, plan=plan)))
+    for lane, readonly, plan in product(("direct", "proxy", "anthropic"), (False, True), (False, True)):
+        add(f"W05.live-mapping-{lane}-ro{int(readonly)}-plan{int(plan)}",
+            "Exact logical description/schema to provider declaration mapping and unchanged preview",
+            partial(_lane, lane=lane, run=partial(_declaration_mapping, readonly=readonly, plan=plan)))
     return cases

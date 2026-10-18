@@ -3,11 +3,15 @@
 import argparse
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
+import gzip
 import hashlib
+import io
 import json
+import math
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import signal
 import subprocess
@@ -16,6 +20,8 @@ import tempfile
 import threading
 import time
 import traceback
+from types import SimpleNamespace
+import zlib
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +31,7 @@ from parity.provider import Provider
 
 RAW_FILE_LIMIT = 32 * 1024 * 1024
 RAW_CASE_LIMIT = 128 * 1024 * 1024
+GZIP_THRESHOLD = 8 * 1024
 
 
 class HarnessError(Exception):
@@ -324,7 +331,9 @@ class Context:
         overflow = []
         self._raw_sizes = {}
         for path in sorted(self.artifacts.rglob("*")):
-            if path.is_file() and not path.is_symlink() and "coverage" not in path.relative_to(self.artifacts).parts:
+            if path.is_symlink():
+                raise HarnessError("raw evidence contains symlink: " + str(path))
+            if path.is_file() and "coverage" not in path.relative_to(self.artifacts).parts:
                 name = str(path.relative_to(self.artifacts))
                 size = path.stat().st_size
                 retained = min(size, RAW_FILE_LIMIT, max(0, RAW_CASE_LIMIT - total))
@@ -432,15 +441,29 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
         context.close()
         if context._server is not None:
             context._server.assert_complete()
+        raw = evidence_files(context.artifacts, excluded=("coverage",))
+        replay = {"root": str(context.root), "artifacts": str(context.artifacts),
+                  "server": context._server.url if context._server else "",
+                  "invocations": [{"started": item["started"], "ended": item["ended"]} for item in context.invocations],
+                  "traces": [str(path.relative_to(context.artifacts)) for path in context.trace_paths],
+                  "requests": len(context._server.requests) if context._server else 0}
+        if case.id == "W27.connection-refused":
+            replay["case_id"] = case.id
+            for bounds, item in zip(replay["invocations"], context.invocations):
+                bounds["closed_openai_base"] = item["env"]["REAGENT_OPENAI_BASE_URL"]
         normalized = observe.finish(context)
         if not isinstance(normalized, dict) or not normalized or any(not isinstance(name, str) or not isinstance(value, bytes) for name, value in normalized.items()):
             raise HarnessError("observe.finish must return a nonempty dict[str, bytes]")
         policies = context.artifact_policies
         if not isinstance(policies, dict) or policies.keys() != normalized.keys() or any(policy not in ("B", "N", "S") for policy in policies.values()):
             raise HarnessError("observe.finish must declare B/N/S in context.artifact_policies for every artifact")
+        ledger = json.loads((context.artifacts / "substitutions.json").read_bytes())
+        replay["raw_policies"] = account_raw(raw, normalized, policies, replay)
+        validate_replay(raw, replay, normalized, policies, ledger)
+        (context.artifacts / "replay.json").write_text(json.dumps(replay, indent=2) + "\n")
         (context.artifacts / "artifact-policies.json").write_text(json.dumps(policies, indent=2) + "\n")
         for name, data in normalized.items():
-            target = Path(artifacts) / "normalized" / name
+            target = Path(artifacts) / "normalized" / artifact_name(name)
             if target.is_absolute() and not target.resolve().is_relative_to((Path(artifacts) / "normalized").resolve()):
                 raise HarnessError("invalid normalized artifact name")
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -461,67 +484,428 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
     return result
 
 
-def freeze_case(source, destination, normalized, policies):
-    """Freeze oracle bytes beside review-only raw evidence and its hash ledger."""
-    source, destination = Path(source), Path(destination)
-    ledger = json.loads((source / "substitutions.json").read_bytes())
-    if not isinstance(ledger, list):
-        raise HarnessError("substitutions.json must contain a ledger list")
-    evidence = {"raw": {}, "normalized": {}}
-    for path in sorted(source.rglob("*")):
-        name = path.relative_to(source)
-        if name.parts[0] in ("normalized", "coverage") or str(name) in ("substitutions.json", "artifact-policies.json"):
-            continue
+def execute_case(case_id, binary, root, artifacts, coverage=None, golden=None, inventory_error=None):
+    """Compare ordinary candidates inside workers, returning no artifact byte payloads."""
+    result = run_case(case_id, binary, root, artifacts, coverage)
+    if golden is None:
+        return result
+    if result["status"] == "passed":
+        from parity.observe import compare
+        try:
+            if inventory_error:
+                raise HarnessError(inventory_error)
+            stored = load_golden(Path(golden) / result["id"], result["artifact_policies"])
+            compare(stored, result["artifacts"])
+        except Exception as exc:
+            result.update(status="failed", reason=str(exc))
+            (Path(artifacts) / "comparisonfailure.txt").write_text(str(exc))
+    result.pop("artifacts", None)
+    return result
+
+
+def artifact_name(name):
+    """Require canonical relative artifact names before reading or publishing bytes."""
+    if not isinstance(name, str) or not name or Path(name).is_absolute() or any(part in ("", ".", "..") for part in name.split("/")):
+        raise HarnessError("invalid artifact name: " + repr(name))
+    return name
+
+
+def evidence_files(root, excluded=(), file_limit=RAW_FILE_LIMIT):
+    """Read complete regular evidence, rejecting links, special files and overflow."""
+    root = Path(root)
+    if not root.is_dir() or root.is_symlink():
+        raise HarnessError("missing or linked evidence directory: " + str(root))
+    files = {}
+    for path in sorted(root.rglob("*")):
+        name = str(path.relative_to(root))
         if path.is_symlink():
-            raise HarnessError("capture refuses symlink evidence: " + str(name))
-        if path.is_file():
-            data = path.read_bytes()
-            target = destination / "raw" / name
+            raise HarnessError("symlink evidence: " + name)
+        if Path(name).parts[0] in excluded:
+            continue
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise HarnessError("non-regular evidence: " + name)
+        if path.stat().st_size > file_limit:
+            raise HarnessError("raw artifact budget exceeded: " + name)
+        files[name] = path.read_bytes()
+        if sum(map(len, files.values())) > RAW_CASE_LIMIT:
+            raise HarnessError("raw artifact budget exceeded")
+    return files
+
+
+def replay_response(raw, index):
+    """Validate captured framing against every response field used by the observer."""
+    prefix = "response-%03d" % index
+    if prefix + ".json" not in raw:
+        return None
+    metadata = json.loads(raw[prefix + ".json"])
+    if not isinstance(metadata, dict) or metadata.keys() != {"request", "status", "headers", "reset", "close", "completed", "chunk_lengths"}:
+        raise HarnessError("invalid response metadata fields")
+    headers, status = metadata["headers"], metadata["status"]
+    if metadata["request"] != index or type(status) is not int or not 100 <= status <= 999 or any(type(metadata[key]) is not bool for key in ("reset", "close", "completed")):
+        raise HarnessError("invalid response status or transport metadata")
+    if not isinstance(headers, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in headers.items()) or len({key.lower() for key in headers}) != len(headers):
+        raise HarnessError("invalid or duplicate response headers")
+    body, lengths = raw[prefix + ".body"], metadata["chunk_lengths"]
+    if not isinstance(lengths, list) or any(type(size) is not int or size < 0 for size in lengths) or sum(lengths) != len(body):
+        raise HarnessError("response chunks differ from retained bytes")
+    if prefix + ".headers" in raw:
+        line, separator, fields = raw[prefix + ".headers"].partition(b"\r\n")
+        expected = b"".join((key + ": " + value + "\r\n").encode("latin-1") for key, value in headers.items()) + b"\r\n"
+        if not separator or line.split(b" ", 2)[:2] != [b"HTTP/1.1", str(status).encode()] or fields != expected:
+            raise HarnessError("raw response header frame differs from metadata")
+    elif headers or body or metadata["completed"]:
+        raise HarnessError("missing raw response header frame")
+    chunks, offset = [], 0
+    for size in lengths:
+        chunks.append(body[offset:offset + size])
+        offset += size
+    return SimpleNamespace(**metadata, body=body, chunks=chunks)
+
+
+def replay_case(raw, replay):
+    """Re-run the typed observer from raw captures, not ledger-declared replacements."""
+    from parity import observe
+    root, server = replay["root"], replay["server"]
+    artifact_root = replay.get("artifacts", root)
+    if not isinstance(root, str) or not Path(root).is_absolute() or not isinstance(artifact_root, str) or not Path(artifact_root).is_absolute() or (server and not server.startswith("http://127.0.0.1:")):
+        raise HarnessError("invalid replay allocation")
+    with tempfile.TemporaryDirectory(prefix="parity-replay-") as temporary:
+        directory = Path(temporary)
+        for name, data in raw.items():
+            target = directory / artifact_name(name)
             target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("xb") as stream:
-                stream.write(data)
-            evidence["raw"][str(name)] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
-    for name, data in normalized.items():
-        target = destination / "normalized" / name
+            target.write_bytes(data)
+        invocations = []
+        for index, bounds in enumerate(replay["invocations"], 1):
+            if bounds.keys() - {"started", "ended", "closed_openai_base"}:
+                raise HarnessError("unexpected replay invocation fields")
+            if any(type(bounds[key]) not in (int, float) or not math.isfinite(bounds[key]) for key in ("started", "ended")) or bounds["started"] > bounds["ended"]:
+                raise HarnessError("invalid replay process bounds")
+            prefix = "invoke-%03d" % index
+            status = raw[prefix + ".status"]
+            code = int(status)
+            if status != str(code).encode() + b"\n":
+                raise HarnessError("invalid raw invocation status")
+            invocation = dict(bounds, stdout=raw[prefix + ".stdout"], stderr=raw[prefix + ".stderr"], returncode=code)
+            if "closed_openai_base" in bounds:
+                base = bounds["closed_openai_base"]
+                match = re.fullmatch(r"http://127\.0\.0\.1:([1-9][0-9]{0,4})/v1/?", base) if isinstance(base, str) else None
+                if replay.get("case_id") != "W27.connection-refused" or Path(root).name != replay["case_id"] or match is None or int(match[1]) > 65535:
+                    raise HarnessError("invalid case-specific closed endpoint allocation")
+                invocation["env"] = {"REAGENT_OPENAI_BASE_URL": base}
+            invocations.append(invocation)
+        traces = []
+        for name in replay["traces"]:
+            artifact_name(name)
+            if not raw[name] or not raw[name].endswith(b"\n"):
+                raise HarnessError("empty or truncated raw trace")
+            traces.append(directory / name)
+        if len(set(traces)) != len(traces):
+            raise HarnessError("duplicate replay traces")
+        requests = []
+        if type(replay["requests"]) is not int or replay["requests"] < 0:
+            raise HarnessError("invalid replay request count")
+        for index in range(1, replay["requests"] + 1):
+            prefix = "request-%03d" % index
+            request = json.loads(raw[prefix + ".json"])
+            if server != "http://" + request["authority"] or request["client_address"][0] != "127.0.0.1":
+                raise HarnessError("request escaped allocated loopback provider")
+            response = replay_response(raw, index)
+            requests.append(dict(request, body=raw[prefix + ".body"], response=response))
+        ctx = SimpleNamespace(root=Path(root), artifacts=directory, artifact_root=Path(artifact_root),
+                              invocations=invocations,
+                              trace_paths=traces, observations=dict(raw), artifact_policies={},
+                              _server=SimpleNamespace(url=server, requests=requests) if server else None)
+        normalized = observe.finish(ctx)
+        ledger = json.loads((directory / "substitutions.json").read_bytes())
+        return normalized, ctx.artifact_policies, ledger
+
+
+def account_raw(raw, normalized, policies, replay):
+    """Compare residual bytes exactly; only incidental HTTP metadata is semantic."""
+    accounted = {}
+    for index in range(1, len(replay["invocations"]) + 1):
+        for channel in ("stdout", "stderr", "status"):
+            accounted["invoke-%03d.%s" % (index, channel)] = "N"
+    accounted.update({name: "N" for name in replay["traces"]})
+    for index in range(1, replay["requests"] + 1):
+        accounted["request-%03d.body" % index] = "N"
+        # §3 excludes framing, library headers and client port; meaningful fields replay through http-*.
+        accounted["request-%03d.json" % index] = "S"
+        response = "response-%03d" % index
+        if response + ".json" in raw:
+            projection = "http-%d.response" % index
+            if any(projection + suffix not in normalized for suffix in (".wire-body", ".headers", ".transport", ".status")):
+                raise HarnessError("missing semantic response projection")
+            accounted[response + ".body"] = "N"
+            accounted[response + ".json"] = "S"
+            if response + ".headers" in raw:
+                accounted[response + ".headers"] = "S"
+    if not accounted.keys() <= raw.keys():
+        raise HarnessError("missing accounted raw artifacts")
+    for name in raw.keys() - accounted.keys():
+        if name in ("raw-overflow.json", "failure.txt"):
+            raise HarnessError("failed or truncated raw capture")
+        target = "retained/" + name
+        if target in normalized:
+            raise HarnessError("retained artifact collision")
+        normalized[target], policies[target] = raw[name], "B"
+        accounted[name] = "B"
+    return accounted
+
+
+def validate_replay(raw, replay, normalized, policies, ledger):
+    """Require complete replay, identical typed substitutions and exact artifact policies."""
+    if not isinstance(ledger, list) or not normalized or policies.keys() != normalized.keys() or any(value not in ("B", "N", "S") for value in policies.values()):
+        raise HarnessError("incomplete artifact policies or substitution ledger")
+    replayed, replay_policies, replay_ledger = replay_case(raw, replay)
+    accounted = account_raw(raw, replayed, replay_policies, replay)
+    if accounted != replay["raw_policies"] or (normalized, policies, ledger) != (replayed, replay_policies, replay_ledger):
+        raise HarnessError("raw replay, artifact accounting or substitution ledger differs")
+
+
+def storage_path(kind, name, codec):
+    """Keep small metadata reviewable at the root and gzip in a separate namespace."""
+    if codec == "gzip":
+        return (kind or "metadata") + "-gzip/" + name + ".gz"
+    return (kind + "/" if kind else "") + name
+
+
+def freeze_evidence(destination, kind, files):
+    """Store large compressible artifacts without changing their logical identities."""
+    evidence = {}
+    file_limit = RAW_FILE_LIMIT if kind else RAW_CASE_LIMIT
+    if sum(map(len, files.values())) > RAW_CASE_LIMIT:
+        raise HarnessError("logical artifact budget exceeded")
+    for name, data in sorted(files.items()):
+        artifact_name(name)
+        if len(data) > file_limit:
+            raise HarnessError("logical artifact budget exceeded: " + name)
+        encoded, codec = data, "identity"
+        if len(data) >= GZIP_THRESHOLD:
+            compressed = gzip.compress(data, mtime=0)
+            if len(compressed) < len(data):
+                encoded, codec = compressed, "gzip"
+        path = storage_path(kind, name, codec)
+        target = destination / path
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("xb") as stream:
-            stream.write(data)
-        evidence["normalized"][name] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
-    ledger.append({"frozen_evidence": evidence})
-    for name, data in (("substitutions.json", ledger), ("artifact-policies.json", policies)):
-        with (destination / name).open("x") as stream:
-            stream.write(json.dumps(data, indent=2) + "\n")
+            stream.write(encoded)
+        evidence[name] = {"codec": codec, "path": path, "sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
+    return evidence
+
+
+def load_evidence(expected, kind, evidence):
+    """Decode only declared artifacts, bounding both stored and logical bytes."""
+    physical = {}
+    file_limit = RAW_FILE_LIMIT if kind else RAW_CASE_LIMIT
+    if kind:
+        directories, excluded = (kind, kind + "-gzip"), ()
+    else:
+        directories = ("", "metadata-gzip")
+        excluded = ("raw", "raw-gzip", "normalized", "normalized-gzip", "metadata-gzip", "metadata.json")
+    for directory in directories:
+        physical.update({(directory + "/" if directory else "") + name: data
+                         for name, data in evidence_files(expected / directory, excluded=excluded if not directory else (), file_limit=file_limit).items()})
+    files, paths, total = {}, set(), 0
+    for name, metadata in evidence.items():
+        artifact_name(name)
+        if not isinstance(metadata, dict) or metadata.keys() != {"codec", "path", "sha256", "length"}:
+            raise HarnessError("invalid artifact storage descriptor")
+        codec, path, length = metadata["codec"], metadata["path"], metadata["length"]
+        if codec not in ("identity", "gzip") or type(length) is not int or not 0 <= length <= file_limit:
+            raise HarnessError("invalid artifact codec or logical length")
+        canonical = storage_path(kind, name, codec)
+        if path != canonical or path in paths or path not in physical:
+            raise HarnessError("missing or invalid artifact storage path")
+        paths.add(path)
+        total += length
+        if total > RAW_CASE_LIMIT:
+            raise HarnessError("logical artifact budget exceeded")
+        data = physical[path]
+        if codec == "gzip":
+            try:
+                with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
+                    data = stream.read(length + 1)
+            except (OSError, EOFError, zlib.error) as exc:
+                raise HarnessError("corrupt gzip evidence: " + path) from exc
+        if len(data) != length or hashlib.sha256(data).hexdigest() != metadata["sha256"]:
+            raise AssertionError("golden " + kind + " evidence hashes or lengths differ")
+        files[name] = data
+    if paths != physical.keys():
+        raise AssertionError("golden " + kind + " evidence hashes or lengths differ: extra storage")
+    return files
+
+
+def load_capture(case, artifacts):
+    """Recover replay-verified persisted capture evidence without executing its case."""
+    artifact_name(case.id)
+    artifacts = Path(artifacts)
+    if case.pending or sys.platform not in case.platforms:
+        raise HarnessError("saved capture requires an executable case on this platform")
+    if any((artifacts / name).exists() for name in ("failure.txt", "comparisonfailure.txt", "raw-overflow.json")):
+        raise HarnessError("saved capture contains failure or truncation evidence")
+    documents = {}
+    for name in ("substitutions.json", "artifact-policies.json", "replay.json"):
+        path = artifacts / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > RAW_CASE_LIMIT:
+            raise HarnessError("missing or invalid saved capture metadata: " + name)
+        documents[name] = json.loads(path.read_bytes())
+    raw = evidence_files(artifacts, excluded=("normalized", "coverage", "substitutions.json", "artifact-policies.json", "replay.json"))
+    normalized = evidence_files(artifacts / "normalized")
+    policies = documents["artifact-policies.json"]
+    if not isinstance(policies, dict):
+        raise HarnessError("invalid saved capture policies")
+    validate_replay(raw, documents["replay.json"], normalized, policies, documents["substitutions.json"])
+    return {"id": case.id, "status": "passed", "artifacts": normalized, "artifact_policies": policies}
+
+
+def freeze_case(source, destination, normalized, policies):
+    """Freeze only independently replayed oracle bytes beside complete raw evidence."""
+    source, destination = Path(source), Path(destination)
+    ledger = json.loads((source / "substitutions.json").read_bytes())
+    replay_bytes = (source / "replay.json").read_bytes()
+    replay = json.loads(replay_bytes)
+    raw = evidence_files(source, excluded=("normalized", "coverage", "substitutions.json", "artifact-policies.json", "replay.json"))
+    validate_replay(raw, replay, normalized, policies, ledger)
+    if destination.exists() or destination.is_symlink():
+        raise HarnessError("capture refuses an existing case destination")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".freeze-", dir=destination.parent) as temporary:
+        staging = Path(temporary) / "case"
+        for directory in ("raw", "raw-gzip", "normalized", "normalized-gzip", "metadata-gzip"):
+            (staging / directory).mkdir(parents=True)
+        evidence = {kind: freeze_evidence(staging, kind, files) for kind, files in (("raw", raw), ("normalized", normalized))}
+        ledger.append({"frozen_evidence": evidence})
+        documents = {name: (json.dumps(data, indent=2) + "\n").encode()
+            for name, data in (("substitutions.json", ledger), ("artifact-policies.json", policies))}
+        documents["replay.json"] = replay_bytes
+        metadata = freeze_evidence(staging, "", documents)
+        (staging / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        staging.rename(destination)
+
+
+def read_metadata(expected):
+    """Read complete case documents using only their verified storage descriptors."""
+    expected = Path(expected)
+    if not expected.is_dir() or expected.is_symlink():
+        raise AssertionError("missing or linked golden for " + expected.name)
+    index = expected / "metadata.json"
+    if index.is_symlink() or index.stat().st_size > 256 * 1024:
+        raise HarnessError("invalid metadata inventory")
+    metadata = json.loads(index.read_bytes())
+    if not isinstance(metadata, dict) or metadata.keys() != {"substitutions.json", "artifact-policies.json", "replay.json"}:
+        raise HarnessError("incomplete metadata inventory")
+    names = {"raw", "raw-gzip", "normalized", "normalized-gzip", "metadata-gzip", "metadata.json"}
+    names.update(item["path"] for item in metadata.values() if item["codec"] == "identity")
+    if set(path.name for path in expected.iterdir()) != names or any(path.is_symlink() for path in expected.iterdir()):
+        raise AssertionError("golden layout differs or contains linked evidence")
+    return load_evidence(expected, "", metadata)
+
+
+def read_frozen_case(expected):
+    """Verify stored case bytes without invoking normalization or replay."""
+    expected = Path(expected)
+    documents = read_metadata(expected)
+    ledger = json.loads(documents["substitutions.json"])
+    if not isinstance(ledger, list) or not ledger or not isinstance(ledger[-1], dict) or ledger[-1].keys() != {"frozen_evidence"}:
+        raise AssertionError("golden lacks frozen evidence ledger")
+    evidence = ledger[-1]["frozen_evidence"]
+    if evidence.keys() != {"raw", "normalized"}:
+        raise HarnessError("invalid frozen evidence inventory")
+    captured = {kind: load_evidence(expected, kind, evidence[kind]) for kind in ("raw", "normalized")}
+    if captured["normalized"].keys() != json.loads(documents["artifact-policies.json"]).keys():
+        raise AssertionError("golden artifact policies do not cover normalized artifacts")
+    return documents, ledger, captured
 
 
 def load_golden(expected, policies):
-    """Verify retained evidence integrity and return only normalized oracle bytes."""
-    expected = Path(expected)
-    if not expected.is_dir():
-        raise AssertionError("missing golden for " + expected.name)
-    stored_policies = json.loads((expected / "artifact-policies.json").read_bytes())
-    if stored_policies != policies:
+    """Verify retained evidence and replay before returning normalized oracle bytes."""
+    documents, ledger, captured = read_frozen_case(expected)
+    if json.loads(documents["artifact-policies.json"]) != policies:
         raise AssertionError("golden artifact policies differ")
-    ledger = json.loads((expected / "substitutions.json").read_bytes())
-    if not isinstance(ledger, list) or not ledger or "frozen_evidence" not in ledger[-1]:
-        raise AssertionError("golden lacks frozen evidence ledger")
-    evidence = ledger[-1]["frozen_evidence"]
-    stored = {}
-    for kind in ("raw", "normalized"):
-        files = {}
-        for path in (expected / kind).rglob("*"):
-            if path.is_symlink():
-                raise AssertionError("golden contains symlink evidence")
-            if path.is_file():
-                name = str(path.relative_to(expected / kind))
-                data = path.read_bytes()
-                files[name] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
-                if kind == "normalized":
-                    stored[name] = data
-        if files != evidence[kind]:
-            raise AssertionError("golden " + kind + " evidence hashes or lengths differ")
-    if stored.keys() != stored_policies.keys():
-        raise AssertionError("golden artifact policies do not cover normalized artifacts")
-    return stored
+    validate_replay(captured["raw"], json.loads(documents["replay.json"]), captured["normalized"], policies, ledger[:-1])
+    return captured["normalized"]
+
+
+def storage_row_span(raw):
+    """Locate only the final storage row in an already-validated JSON ledger."""
+    text, decoder = raw.decode("utf-8"), json.JSONDecoder()
+    position = text.index("[") + 1
+    while True:
+        while text[position] in " \t\r\n":
+            position += 1
+        start = position
+        row, end = decoder.raw_decode(text, position)
+        position = end
+        while text[position] in " \t\r\n":
+            position += 1
+        if text[position] == "]":
+            break
+        position += 1
+    if not isinstance(row, dict) or row.keys() != {"frozen_evidence"}:
+        raise HarnessError("ledger does not end in a storage row")
+    return len(text[:start].encode("utf-8")), len(text[:end].encode("utf-8"))
+
+
+def read_lane_inventory(source):
+    """Verify a lane's complete leaf inventory without replaying its cases."""
+    source = Path(source)
+    if not source.is_dir() or source.is_symlink():
+        raise HarnessError("invalid source lane")
+    inventory_path = source / "inventory.json"
+    if inventory_path.is_symlink() or not inventory_path.is_file() or inventory_path.stat().st_size > RAW_FILE_LIMIT:
+        raise HarnessError("invalid repack inventory")
+    inventory_raw = inventory_path.read_bytes()
+    inventory = json.loads(inventory_raw)
+    leaves, fields = inventory["cases"], inventory["metadata_fields"]
+    metadata = [{field: leaf[field] for field in fields} for leaf in leaves]
+    canonical = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if hashlib.sha256(canonical).hexdigest() != inventory["metadata_sha256"] or [leaf["id"] for leaf in leaves] != sorted({leaf["id"] for leaf in leaves}):
+        raise HarnessError("repack inventory metadata differs")
+    if any(leaf["status"] != ("pending" if leaf["pending"] else "implemented") for leaf in leaves):
+        raise HarnessError("repack inventory status differs")
+    ids = [artifact_name(leaf["id"]) for leaf in leaves if leaf["status"] == "implemented"]
+    if set(path.name for path in source.iterdir()) != {"inventory.json", *ids} or any(path.is_symlink() for path in source.iterdir()):
+        raise HarnessError("repack source does not match its complete inventory")
+    return inventory_raw, inventory, ids
+
+
+def repack_lane(source, destination):
+    """Losslessly re-encode an existing capture into a new lane without observing it."""
+    source, destination = Path(source), Path(destination)
+    if destination.exists() or destination.is_symlink() or destination.resolve().is_relative_to(source.resolve()):
+        raise HarnessError("repack requires a new external destination")
+    inventory_raw, _, ids = read_lane_inventory(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".repack-", dir=destination.parent) as temporary:
+        staging = Path(temporary) / "lane"
+        staging.mkdir()
+        for case_id in ids:
+            documents, ledger, captured = read_frozen_case(source / case_id)
+            target = staging / case_id
+            for directory in ("raw", "raw-gzip", "normalized", "normalized-gzip", "metadata-gzip"):
+                (target / directory).mkdir(parents=True)
+            evidence = {kind: freeze_evidence(target, kind, files) for kind, files in captured.items()}
+            for kind in evidence:
+                for name, entry in evidence[kind].items():
+                    if any(entry[key] != ledger[-1]["frozen_evidence"][kind][name][key] for key in ("sha256", "length")):
+                        raise HarnessError("repack changed logical artifact inventory")
+            original = documents["substitutions.json"]
+            start, end = storage_row_span(original)
+            replacement = json.dumps({"frozen_evidence": evidence}, ensure_ascii=False, indent=2).encode("utf-8")
+            updated = dict(documents, **{"substitutions.json": original[:start] + replacement + original[end:]})
+            index = freeze_evidence(target, "", updated)
+            (target / "metadata.json").write_text(json.dumps(index, indent=2) + "\n")
+            checked_documents, checked_ledger, checked = read_frozen_case(target)
+            if checked != captured or checked_documents != updated or checked_ledger[:-1] != ledger[:-1]:
+                raise HarnessError("repack changed captured bytes or substitutions")
+        (staging / "inventory.json").write_bytes(inventory_raw)
+        if destination.exists() or destination.is_symlink():
+            raise HarnessError("repack refuses an existing destination")
+        staging.rename(destination)
 
 
 def suite_digest(suite):
@@ -580,6 +964,143 @@ def report_counts(cases, results):
     return count(cases, outcomes), dimensions
 
 
+def accepted_outcomes(cases, results, success):
+    """Exempt only pending outcomes matching their predeclared dependency exactly."""
+    return len(cases) == len(results) and all(
+        result.get("id") == case.id and (
+            result.get("status") == "pending" and result.get("reason") == case.pending
+            if case.pending else result.get("status") == success)
+        for case, result in zip(cases, results))
+
+
+def leaf_inventory(cases, manifest):
+    """Describe every declared leaf, independently of the current selection or outcome."""
+    fields = ["id", "description", "comparison", "slow", "pending", "platforms"]
+    metadata = [{field: list(case.platforms) if field == "platforms" else getattr(case, field)
+                 for field in fields} for case in sorted(cases, key=lambda case: case.id)]
+    raw = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    declared = manifest.get("leaf_inventory")
+    if declared is not None and (not isinstance(declared, dict) or declared.get("metadata_fields") != fields or declared.get("metadata_sha256") != digest):
+        raise HarnessError("manifest leaf inventory fields or metadata SHA-256 differ from current cases")
+    return {"platform": sys.platform, "reference_commit": manifest.get("reference_commit"),
+            "reference_binary_sha256": manifest.get("reference_binary_sha256"),
+            "metadata_fields": fields, "metadata_sha256": digest,
+            "cases": [dict(item, status="pending" if item["pending"] else "implemented") for item in metadata]}
+
+
+def verify_inventory(golden, cases, manifest):
+    """Reject missing or changed global metadata even for a selected candidate run."""
+    path = golden / "inventory.json"
+    if not path.is_file():
+        raise HarnessError("missing golden inventory: " + str(path))
+    if golden.is_symlink() or path.is_symlink() or path.stat().st_size > RAW_FILE_LIMIT:
+        raise HarnessError("invalid golden inventory storage")
+    if json.loads(path.read_bytes()) != leaf_inventory(cases, manifest):
+        raise HarnessError("golden inventory metadata differs from current cases or reference")
+
+
+def freeze_lane(artifacts, golden, cases, results, manifest):
+    """Publish the inventory and all executable goldens together, never a partial lane."""
+    inventory = leaf_inventory(cases, manifest)
+    golden.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".freeze-lane-", dir=golden.parent) as temporary:
+        staging = Path(temporary) / golden.name
+        staging.mkdir()
+        for result in results:
+            if result["status"] == "passed":
+                freeze_case(artifacts / result["id"], staging / result["id"], result["artifacts"], result["artifact_policies"])
+        (staging / "inventory.json").write_text(json.dumps(inventory, ensure_ascii=False, indent=2) + "\n")
+        if golden.exists() or golden.is_symlink():
+            raise HarnessError("capture refuses an existing golden lane")
+        staging.rename(golden)
+
+
+def extend_capture(source, destination, additions, manifest, cases, binary):
+    """Capture only new leaves beside losslessly preserved expectations in a new lane."""
+    source, destination = Path(source), Path(destination)
+    validate_capture(binary, manifest, destination)
+    if destination.resolve().is_relative_to(source.resolve()):
+        raise HarnessError("extension destination must be outside the source lane")
+    current = leaf_inventory(cases, manifest)
+    _, previous, _ = read_lane_inventory(source)
+    if any(previous[key] != current[key] for key in ("platform", "reference_commit", "reference_binary_sha256", "metadata_fields")):
+        raise HarnessError("extension requires the same protected reference and metadata fields")
+    old = {leaf["id"]: leaf for leaf in previous["cases"]}
+    new = {leaf["id"]: leaf for leaf in current["cases"]}
+    if len(new) != len(cases) or any(new.get(case_id) != leaf for case_id, leaf in old.items()):
+        raise HarnessError("extension cannot remove or change existing leaf metadata")
+    required = {case_id for case_id in new.keys() - old.keys() if new[case_id]["status"] == "implemented"}
+    supplied = [result.get("id") for _, result in additions]
+    if not required or set(supplied) != required or len(supplied) != len(required) or any(result.get("status") != "passed" for _, result in additions):
+        raise HarnessError("extension requires one passed capture for each new executable ID and no existing IDs")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".extend-", dir=destination.parent) as temporary:
+        staging = Path(temporary) / "lane"
+        repack_lane(source, staging)
+        for artifacts, result in additions:
+            freeze_case(Path(artifacts), staging / artifact_name(result["id"]), result["artifacts"], result["artifact_policies"])
+        (staging / "inventory.json").write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n")
+        verify_inventory(staging, cases, manifest)
+        if destination.exists() or destination.is_symlink():
+            raise HarnessError("extension refuses an existing destination")
+        staging.rename(destination)
+
+
+def revise_normalization(source, destination, case_ids, manifest, cases, reason):
+    """Audit approved normalization revisions over immutable raw captures in a new lane."""
+    source, destination = Path(source), Path(destination)
+    if not isinstance(reason, str) or not reason.strip():
+        raise HarnessError("normalization revision requires a review reason")
+    if destination.exists() or destination.is_symlink() or destination.resolve().is_relative_to(source.resolve()):
+        raise HarnessError("normalization revision requires a new external destination")
+    inventory_bytes, _, implemented = read_lane_inventory(source)
+    verify_inventory(source, cases, manifest)
+    if not case_ids or len(set(case_ids)) != len(case_ids) or not set(case_ids) <= set(implemented):
+        raise HarnessError("normalization revision requires unique existing executable IDs")
+    audit = []
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".revise-", dir=destination.parent) as temporary:
+        staging = Path(temporary) / "lane"
+        repack_lane(source, staging)
+        for case_id in sorted(case_ids):
+            original_documents, _, original = read_frozen_case(source / case_id)
+            replay = json.loads(original_documents["replay.json"])
+            normalized, policies, ledger = replay_case(dict(original["raw"]), replay)
+            if account_raw(original["raw"], normalized, policies, replay) != replay["raw_policies"]:
+                raise HarnessError("normalization revision changed raw accounting")
+            if normalized.keys() != original["normalized"].keys():
+                raise HarnessError("normalization revision changed artifact keys")
+            capture = Path(temporary) / "capture" / case_id
+            for name, data in original["raw"].items():
+                path = capture / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            (capture / "replay.json").write_bytes(original_documents["replay.json"])
+            (capture / "substitutions.json").write_text(json.dumps(ledger, indent=2) + "\n")
+            replacement = Path(temporary) / "replacement" / case_id
+            freeze_case(capture, replacement, normalized, policies)
+            documents, _, checked = read_frozen_case(replacement)
+            if checked["raw"] != original["raw"] or checked["normalized"].keys() != original["normalized"].keys() or documents["replay.json"] != original_documents["replay.json"]:
+                raise HarnessError("normalization revision changed protected inputs or artifact keys")
+            old_policies = json.loads(original_documents["artifact-policies.json"])
+            for kind, old, new in (("normalized", original["normalized"], checked["normalized"]),
+                                   ("metadata", {name: original_documents[name] for name in ("substitutions.json", "artifact-policies.json")},
+                                    {name: documents[name] for name in ("substitutions.json", "artifact-policies.json")})):
+                for name in sorted(old):
+                    audit.append({"case": case_id, "kind": kind, "artifact": name, "reason": reason,
+                        "old": {"sha256": hashlib.sha256(old[name]).hexdigest(), "length": len(old[name]), "policy": old_policies[name] if kind == "normalized" else None},
+                        "new": {"sha256": hashlib.sha256(new[name]).hexdigest(), "length": len(new[name]), "policy": policies[name] if kind == "normalized" else None}})
+            shutil.rmtree(staging / case_id)
+            replacement.rename(staging / case_id)
+        if (staging / "inventory.json").read_bytes() != inventory_bytes:
+            raise HarnessError("normalization revision changed the inventory")
+        if destination.exists() or destination.is_symlink():
+            raise HarnessError("normalization revision refuses an existing destination")
+        staging.rename(destination)
+    return audit
+
+
 def validate_capture(binary, manifest, golden):
     """Require the protected reference digest and a never-created golden lane."""
     if manifest.get("freeze_status") != "ready":
@@ -622,6 +1143,9 @@ def main(argv=None):
         golden = suite / "golden" / sys.platform
         if args.capture:
             validate_capture(args.bin, manifest, golden)
+            if len(selected) != len(cases):
+                raise HarnessError("capture requires the entire declared case inventory")
+            leaf_inventory(cases, manifest)
         artifacts = args.artifacts.absolute() if args.artifacts else Path(tempfile.mkdtemp(prefix="reagent-parity-artifacts-"))
         guard_artifacts(artifacts)
         if artifacts.exists() and any(artifacts.iterdir()):
@@ -631,10 +1155,17 @@ def main(argv=None):
         if coverage:
             coverage = str(Path(coverage).absolute() / artifacts.name)
             guard_artifacts(coverage)
+        inventory_error = None
+        if not (args.capture or args.probe):
+            try:
+                verify_inventory(golden, cases, manifest)
+            except (HarnessError, OSError, ValueError, TypeError) as exc:
+                inventory_error = str(exc)
         with tempfile.TemporaryDirectory(prefix="reagent-parity-cases-") as temporary:
             with ProcessPoolExecutor(max_workers=args.jobs) as pool:
-                futures = [pool.submit(run_case, case.id, args.bin, str(Path(temporary) / case.id),
-                                       str(artifacts / case.id), str(Path(coverage) / case.id) if coverage else None)
+                futures = [pool.submit(execute_case, case.id, args.bin, str(Path(temporary) / case.id),
+                                       str(artifacts / case.id), str(Path(coverage) / case.id) if coverage else None,
+                                       None if args.capture or args.probe else str(golden), inventory_error)
                            for case in selected]
                 results = []
                 for case, future in zip(selected, futures):
@@ -643,37 +1174,29 @@ def main(argv=None):
                     except Exception as exc:
                         result = {"id": case.id, "status": "failed", "reason": "worker failed: %s" % exc, "artifacts": {}, "artifact_policies": {}}
                     results.append(result)
-        capture_allowed = args.capture and all(item["status"] == "passed" for item in results)
+        has_executable = any(not case.pending for case in selected)
+        capture_allowed = args.capture and has_executable and accepted_outcomes(selected, results, "passed")
         if capture_allowed:
             validate_capture(args.bin, manifest, golden)
-            golden.mkdir(parents=True, exist_ok=False)
+            freeze_lane(artifacts, golden, cases, results, manifest)
         if args.capture and not capture_allowed:
-            print("capture withheld: selected cases failed; no goldens written", file=sys.stderr)
+            print("capture withheld: unacceptable outcome or no executable case selected; no goldens written", file=sys.stderr)
         for result in results:
-            if result["status"] == "passed":
-                expected = golden / result["id"]
-                actual = result["artifacts"]
-                if args.capture:
-                    if capture_allowed:
-                        freeze_case(artifacts / result["id"], expected, actual, result["artifact_policies"])
-                elif args.probe:
-                    result.update(status="observed", comparison="not_run")
-                else:
-                    from parity.observe import compare
-                    try:
-                        stored = load_golden(expected, result["artifact_policies"])
-                        compare(stored, actual)
-                    except (AssertionError, OSError, ValueError, KeyError, TypeError) as exc:
-                        result.update(status="failed", reason=str(exc))
+            if args.probe and result["status"] == "passed":
+                result.update(status="observed", comparison="not_run")
             result.pop("artifacts", None)
             print("%s %s%s" % (result["status"].upper(), result["id"], ": " + result["reason"] if result.get("reason") else ""))
         counts, coverage_counts = report_counts(cases, results)
         selected_ids = {case.id for case in selected}
+        selected_areas = sorted({case.area for case in selected})
+        scope = "full-platform" if len(selected) == len(cases) else "area" if args.area and not args.case else "selection"
+        gate_success = not (args.probe or args.capture) and not inventory_error and scope != "selection" and has_executable and accepted_outcomes(selected, results, "passed")
         pending_reasons = {result["id"]: result.get("reason", "") for result in results if result["status"] == "pending"}
         report = {"mode": "probe" if args.probe else "capture" if args.capture else "compare",
                   "golden_comparison": not (args.probe or args.capture),
-                  "gate_success": not (args.probe or args.capture) and len(selected) == len(cases) and all(result["status"] == "passed" for result in results),
-                  "scope": "full-platform" if len(selected) == len(cases) else "selection",
+                  "gate_success": gate_success,
+                  "complete_suite": gate_success and len(selected) == len(cases) and not any(case.pending for case in cases),
+                  "scope": scope, "areas": selected_areas,
                   "unexecuted_platforms": sorted({platform for case in cases for platform in case.platforms} - {sys.platform}),
                   "raw_artifact_policy": {"file_bytes": RAW_FILE_LIMIT, "case_bytes": RAW_CASE_LIMIT,
                                           "overflow": "fail; retain bounded prefixes only, never compare them",
@@ -687,7 +1210,9 @@ def main(argv=None):
                   "pending": [{"id": case.id, "reason": case.pending or pending_reasons.get(case.id),
                                "selected": case.id in selected_ids}
                               for case in cases if case.pending or case.id in pending_reasons],
-                  "capture_written": capture_allowed, "suite_digest": suite_digest(suite)}
+                  "capture_written": capture_allowed,
+                  "inventory_verified": not (args.capture or args.probe) and inventory_error is None,
+                  "inventory_error": inventory_error, "suite_digest": suite_digest(suite)}
         result_by_id = {result["id"]: result for result in results}
         report["case_ledger"] = [{"id": case.id, "area": case.area, "platforms": list(case.platforms),
                                  "slow": case.slow, "pending": case.pending,
@@ -699,7 +1224,7 @@ def main(argv=None):
         print("artifacts: " + str(artifacts))
         if args.probe:
             print("PROBE ONLY: assertions/normalization observed; no golden comparison or gate success")
-        return int(any(result["status"] != ("observed" if args.probe else "passed") for result in results))
+        return int(bool(inventory_error) or (args.capture and not capture_allowed) or not accepted_outcomes(selected, results, "observed" if args.probe else "passed"))
     except (HarnessError, OSError, ValueError, ImportError) as exc:
         print("parity: " + str(exc), file=sys.stderr)
         return 2

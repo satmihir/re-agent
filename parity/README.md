@@ -1,146 +1,160 @@
-# Executable parity — area 1 draft, freeze blocked
+# Executable parity — area 1: runner and wire
 
-This is **not an approved suite or a completed area PR**. No commit, push or PR
-has been made. The worktree is `../re-agent-parity`, branch
-`feat/parity-runner-wire`, based on the fetched `origin/main`.
+Python 3.11+ standard library only; the supplied executable is the boundary. Tests use
+loopback providers and fake credentials, never live APIs or Go internals.
+This is the first of four areas, not overall-suite approval or an 85% claim.
 
-## Reference and blockers
+## Reference
 
-Provisional Go reference: `7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f`.
-Built before suite changes with:
+| Item | Value |
+|---|---|
+| Commit | `38da0d664abae80cbd1cc1793b10b11204bc8031` (#161 merge) |
+| SHA-256 | `925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a` |
+| Build | `go build -trimpath -buildvcs=false -o /tmp/reagent-parity-go-38da0d6 ./cmd/reagent` in an archive of that commit |
+| Go | `go version go1.23.3 darwin/arm64` |
+| Python | `Python 3.11.5` |
 
-```text
-go build -o /tmp/reagent-parity-reference ./cmd/reagent
-shasum -a 256 /tmp/reagent-parity-reference
-93180c8c4eadbb69f3e7309657767bbaac6b993134c8f17e04f6fc9cb8ca5e9b  /tmp/reagent-parity-reference
-```
+`7e0408f` and `f37aa5a` observations were exploratory, never golden inputs.
+#160's null-final and trace UTF-8 repairs and #161's digits-only Retry-After
+parser are ordinary asserted behavior here. `+2` uses jittered backoff; ` 2 `
+still imposes the two-second floor. No production Go changes are included.
 
-The protected binary reproducibly fails these required wire boundaries:
-
-* **W23.final-null:** HTTP 200 SSE containing
-  `data: {"type":"response.completed","response":null}\n\n` causes
-  `panic: assignment to entry in nil map`, rather than `protocol_error`.
-  `internal/reagent/openai_stream.go:69–88` accepts JSON null into a nil map,
-  then assigns `body["output"]`.
-* **W33.openai-invalid-utf8 / W33.proxy-invalid-utf8:** a response containing
-  invalid UTF-8 in a native text item produces invalid UTF-8 in the
-  `model.accepted` JSONL event. The transport records a replacement flag and
-  sanitized response-body string, but retained `json.RawMessage` native items
-  still introduce original invalid bytes into the trace. The oracle rejects
-  this; it does not decode with replacement and silently bless the corruption.
-  W17.invalid-utf8 exposes the same boundary.
-
-Local reproduction evidence is outside the checkout:
-`/tmp`'s platform-equivalent directory
-`parity-reference-blockers-ybx9cfqq/`, with per-case stdout/stderr/traces.
-Reproduce through the public executable boundary:
-
-```sh
-python3 -m parity.run --bin /tmp/reagent-parity-reference --case W23.final-null
-python3 -m parity.run --bin /tmp/reagent-parity-reference --case W33.openai-invalid-utf8
-```
-
-**Do not freeze these defects as goldens.** Fix/review Go reference hardening
-separately, then explicitly update the reference commit/digest and capture once.
-The manifest's `freeze_status: blocked` prevents capture. One preliminary
-single-case capture used to debug runner integration was removed; no oracle
-observations are presented as frozen or approved.
-
-## Layout and invocation
-
-Python 3 standard library only. No Go imports, private constructors, TLS
-interception or public provider requests. Cases configure loopback through public
-endpoint variables and synthetic credentials. Python/Git are the candidate-run
-prerequisites; building mutations or coverage additionally requires Go.
-
-* `run.py`: isolation, process groups, worker processes, artifact lifecycle,
-  invocation/selection/capture validation and reports.
-* `model.py`: stable case metadata. `cases/wire.py` aggregates the four wire
-  modules in manifest order.
-* `provider.py`: recorded HTTP requests; keyed response-attempt scripts; native
-  JSON, proxy/plan SSE and Jev; HTTP errors, split bodies, delays and barriers.
-* `observe.py`: UTF-8-strict lossless JSON token spans, byte comparison,
-  substitution ledger, raw digest correlation and independent cache-prefix
-  computation. `fixtures/cache_schemas.json` freezes original ToolSpec schema
-  bytes, including whitespace omitted by wire JSON compaction, with source
-  anchors/digests. This fixture needs review with the goldens.
-* `mutate.py` / `mutations.json`: temporary-tree wire mutation tooling. It has
-  **not been run against a frozen oracle**.
-* `manifest.json`: exact declared counts, named pending dependencies, reference
-  digest, blockers and unverified acceptance gates.
+## Run
 
 ```sh
 make parity BIN=/absolute/reagent
-make parity BIN=/absolute/reagent AREA=wire CASE=W23 JOBS=1
+make parity BIN=/absolute/reagent CASE=W33 JOBS=4
 python3 -m parity.run --list
 python3 -m unittest discover -s parity -p '*test.py'
 ```
 
-Ordinary candidate runs never update goldens. Missing goldens fail rather than
-pass/skip; bad invocation is exit 2, case failure exit 1. Reports include the
-suite digest, selections/omissions, per-area/platform/slow/class counts and
-explicit pending cases. Raw stdout/stderr and traces remain outside the Git
-workspace. Each case has its own HOME, XDG/cache/config directories, workspace,
-provider port and artifacts. Real-home/cache/config aliases and repository
-artifact destinations are rejected. This is isolation from ambient user
-configuration, **not an OS sandbox against a malicious supplied executable**.
+Candidate runs cannot regenerate expected outputs. Bad invocation exits 2;
+comparison/assertion failure exits 1. A declared later-area dependency is
+reported as pending, never passed. Undeclared runtime skips, unavailable cases,
+changed pending reasons and failures cannot be waived. A passing area gate
+still reports `complete_suite: false` while dependencies remain.
 
-The provider supports barriers before headers and before chosen chunks.
-`ctx.invoke/run/chat(on_start=callback)` allows a callback to wait for receipt
-and signal the owned process group; tests do not order cancellation with sleeps.
-Normal completion is graceful for future GOCOVERDIR collection. No automatic
-case/tool retries occur in the runner.
+Each case gets separate HOME, XDG/cache/config, workspace, HTTP server and
+process groups. Artifacts stay outside the checkout; real-home/cache/config
+aliases are rejected. This is ambient-configuration isolation, not an OS sandbox
+for a malicious executable. Raw stdout/stderr whitespace and opaque bytes are
+preserved; budget overflow fails instead of comparing a truncated prefix.
+Provider barriers order cancellation without sleep-based races.
 
-## Draft inventory, not completeness evidence
+`--probe` runs assertions and normalization but explicitly does **not** compare
+goldens or claim a passing gate. Official `--capture` requires the pinned binary
+digest, manifest readiness and full inventory, refuses an existing lane, and
+publishes the complete lane atomically. Raw reference observations were captured
+once per final case. Mutation 14 exposed one missing terminal-event vector; that
+new leaf received its own single capture. Reviewed normalization revisions and
+lossless compression reused the **same immutable raw observations**, not new Go
+runs or candidate output. Internal maintenance helpers refuse overwrites or
+unapproved IDs and return an explicit hash/length/policy audit.
 
-1,198 declared wire leaves: **1,183 runnable, 15 cross-area pending, 61 slow**.
-Both Darwin and Linux are declared targets (1,198 each); only Darwin has been
-probed. Exact W01–W54 counts and the complete pending list are in the manifest;
-`manifest_test.py` checks them against executable definitions.
+## Inventory and dependencies
 
-Pending IDs:
+**2,752 leaves: 2,737 implemented, 15 pending, 89 slow.** The W01–W54 audit and
+family counts are in `docs/reagent-rust-parity.md`; `manifest_test.py` checks
+counts, pending reasons and the exact metadata digest. Every leaf is listed in
+`golden/darwin/inventory.json`, including its description, class, platform,
+implemented/pending status and reason. Darwin was executed; Linux is declared
+but not verified and has no golden lane.
 
-```text
-W10.source W11.roster-change
-W13.four-point-ceiling W13.native-fork W13.nested-fork W13.subsequent-child
-W24.subscription-checkpoint-resume
-W39.agent W47.agent W50.picker W52.gc W52.resume
-W53.propagation.child W53.propagation.git-do W53.propagation.nested-child
+| Pending IDs | Later dependency |
+|---|---|
+| `W10.source`, `W11.roster-change` | Agent-source Entry and admitted-child roster lifecycle |
+| `W13.native-fork`, `W13.nested-fork`, `W13.four-point-ceiling`, `W13.subsequent-child` | Agent fork/admission and controlled child requests |
+| `W24.subscription-checkpoint-resume` | Restore subscription-limit session and complete next turn |
+| `W39.agent`, `W47.agent` | Agent lifecycle fixtures A03–A14 |
+| `W50.picker` | PTY picker driver C20 |
+| `W52.gc`, `W52.resume` | GC A29–A32; checkpoint A34–A37 |
+| `W53.propagation.child`, `W53.propagation.nested-child` | Explicit child and nested-child HTTP exchanges |
+| `W53.propagation.git-do` | Tools-area git_do client exchange |
+
+There are currently no additional pending Go defects. New smaller Go defects
+must be listed with source, reproduction, impact and affected IDs in the PR;
+those IDs stay pending, never blessed as expected behavior. Crashes, corruption,
+security exposure and whole-family blockers stop the area.
+
+## Oracle and review evidence
+
+- `observe.py` tokenizes JSON losslessly: ordering, whitespace, duplicate keys,
+  numeric spelling, escapes and unmodified token bytes remain significant.
+- Only §3's typed allocation/clock/display rules may substitute spans. Every
+  substitution records artifact/path, kind, offsets, before/after bytes,
+  independent SHA-256 and lengths. Native/provider IDs and opaque content are
+  not generic substitution sites.
+- Actual HTTP bytes independently validate request hashes. Cache prefixes use
+  original ToolSpec schema bytes, not their compacted wire form; the fixture
+  includes source anchors and hashes. Fresh previews reconstruct their first
+  Entry independently. Packet, handoff, compaction and switch sizes/hashes are
+  checked from their source bytes before canonical replacement. Rejected model
+  switches reconstruct the destination envelope from public logical traces;
+  zero sizes require an observed pre-encoding history guard, not a silent skip.
+- Raw evidence is replayed through the observer before freezing, loading and
+  comparing. All artifacts require B/N/S accounting; an unconsumed artifact is
+  retained byte-exactly. Missing evidence, forged inventories or unmatched
+  projections fail closed. Replay proves transformation correspondence, not
+  correctness of the allowlist; negative controls and mutations test that risk.
+
+Each case has raw evidence, normalized oracle bytes, policies, replay inputs
+and its substitution ledger. `metadata.json` identifies metadata codecs/paths;
+the ledger's final `frozen_evidence` entry identifies artifact codecs/paths.
+Hashes and lengths always describe **logical, decompressed bytes**. Small files
+are plaintext; larger compressible files use deterministic gzip (`mtime=0`).
+Never infer a codec solely from the filename suffix. Compression starts at
+8 KiB only when smaller; it reduced the captured lane from roughly 518 MiB to
+122 MiB without changing logical bytes.
+
+Cancellation input framing has one narrow S rule: a fixture cleanup release
+could write **after the Go process exited**. Sixteen registered W54 cases and the first cancelled response in two W30 cases
+validate the actual writes as whole-chunk prefixes of their independently declared input
+plan, then compare the prefix held at cancellation. Go statuses, traces, outputs
+and effects are never hidden; rotating-token refresh, W30's completed follow-up,
+and its retry-wait response are excluded. The fixture
+now holds that barrier through teardown. See §3 for the exact ownership rules.
+
+One reference-evidence caveat remains explicit in the manifest: legacy
+`W27.connection-refused` lacks an independently recorded closed-port input.
+Its bounded S certificate checks consistency of pinned trace fields; candidates
+also assert the separately allocated input endpoint and retain it for replay.
+This is not presented as an independent baseline-input check or an approval.
+
+```sh
+cat parity/golden/darwin/W01.default/metadata.json
+# Resolve the desired path using its descriptor, then:
+gzip -dc CASE/raw-gzip/FILE.gz | less
+gzip -dc CASE/metadata-gzip/substitutions.json.gz | less
 ```
 
-These are genuine later-area fixtures, **not** an excuse for missing standalone
-wire breadth. Remaining work includes:
+W33 separately asserts Go's three UTF-8 planes, using truncated multibyte,
+adjacent-invalid-byte and valid-non-ASCII-neighbor vectors:
 
-* Finish B/N/S policy at artifact boundaries. Current declarations are mostly N
-  with independent semantic assertions; they are not a completed S oracle.
-* Finish and review normalization/invariant integration: preview cache-prefix
-  derivation, every derived length/token estimate, exact endpoint-redaction
-  correlation, error/socket incidental fields, and full instruction/snapshot
-  span rules. Tighten every rule to its schema allowlist; do not erase
-  provider-native fields by generic key spelling. Exercise large-input
-  performance and re-run oracle self-tests after these changes.
-* Complete the design-to-leaf audit. In W35–W52 especially, current cases are
-  representative rather than exhaustive: configured seventh/eighth routes,
-  all fallback/default branches, shell/plan/preview packet combinations,
-  escaping-heavy exact size boundaries, summary fallback, complete Jev
-  answer/usage/probability shapes and numerical tolerance boundaries, real
-  Location redirect tripwires/body deadline variants, dwell/cap reset across
-  turns, calibrated admission threshold triples, unknown-effect switch
-  rejection and full Anthropic instruction-pinning transition combinations.
-  These absent standalone vectors are **not** silently counted as pending.
-* Investigate/reset fixture determinism, and review all W17–W34 negative shapes
-  against the reference. Source implementation equivalence alone is not proof.
-* Freeze/review raw and normalized goldens, run three full parallel passes and
-  one serial pass, and verify Linux separately.
-* Run the area under `go build -cover` plus isolated `GOCOVERDIR` collection;
-  report this area's contribution and uncovered regions, not overall 85%.
-* Run applicable §6 mutations in independent archived Go trees against frozen
-  goldens. Thirteen mutation definitions exist (3, 5, 9–18, 36), not thirteen
-  demonstrated catches. Mutation 15's exact W29 selector must be reconciled.
+1. Trace response bodies and embedded native items: one U+FFFD per invalid run.
+2. JSON-encoded ordinary strings: one literal `\ufffd` escape per invalid byte.
+3. Retained history, actual follow-up requests and checkpoint opaque fields:
+   original bytes unchanged.
 
-## Verification actually performed
+Checkpoint evidence here deliberately retains exact ordinary-string tokens and
+base64-decoded native items, after checking the complete checkpoint checksum.
+It tests these byte planes, **not full checkpoint format/canonical-order parity**;
+that belongs to the checkpoint area. The full checkpoint is not silently
+presented as a compared artifact.
 
-Parent gate output on Darwin:
+## Verification evidence
+
+Reference capture: **2,737 executable cases, 0 failures; 15 declared pending
+dependencies**, including the separately added mutation-14 catcher. All 2,737
+reference raw captures were replayed and audited with zero normalization errors;
+a separate saved-candidate diagnostic compared 2,736 original leaves with zero
+differences. Those diagnostics are **not fresh repeatability passes**. Final
+parallel/serial comparison evidence is recorded separately in `acceptance.json`.
+All **three full parallel passes and one serial pass** passed, with identical
+2,752-entry case ledgers and **24,595 normalized artifacts** (1,045,441,036 bytes).
+The independently hashed normalized tree is
+`e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484`.
+
+Actual offline gate output on Darwin:
 
 ```text
 $ go build ./...
@@ -148,26 +162,25 @@ $ go build ./...
 $ make check
 go vet ./...
 go test ./...
-?   github.com/satmihir/re-agent/cmd/reagent [no test files]
-ok  github.com/satmihir/re-agent/internal/reagent 56.450s
-
+? github.com/satmihir/re-agent/cmd/reagent [no test files]
+ok github.com/satmihir/re-agent/internal/reagent 77.192s
 $ go test -race ./...
-?   github.com/satmihir/re-agent/cmd/reagent [no test files]
-ok  github.com/satmihir/re-agent/internal/reagent 120.163s
-
+ok github.com/satmihir/re-agent/internal/reagent 118.458s
 $ python3 -m unittest discover -s bench -p '*test.py'
-Ran 64 tests in 20.192s
+Ran 64 tests in 25.954s
 OK
-
 $ make tty-check
 all 26 scenarios passed
+$ make parity BIN=/tmp/reagent-parity-go-38da0d6 JOBS=4
+Ran 158 tests in 62.279s
+OK
+summary: total=2752, selected=2752, omitted=0, passed=2737, failed=0, pending=15, unavailable=0, not_executed=0
 ```
 
-The first race invocation timed out at 120 seconds. The owned processes were
-checked absent before a separately reported rerun with a 600-second command
-budget; that rerun produced the successful output above. No Go source changed.
-The TTY command output was bounded by the tool (60,064 bytes, middle omitted).
-One real captured screen excerpt:
+One captured TTY screen excerpt follows. A concurrent-load TTY invocation first
+reported one failed scenario; the bounded original output omitted its name.
+The unchanged gate then passed all 26, with complete screens retained at
+`/tmp/parity-final-tty-check.out`; no Go or TTY code was changed.
 
 ```text
 ── Login cancelled cleanly through the real terminal (24x110, cursor 11:1)
@@ -175,55 +188,43 @@ One real captured screen excerpt:
  8│Waiting for approval (Ctrl-C cancels). If the callback cannot reach this machine, paste the final http://127.0
  9│.0.1:1455/auth/callback?... URL here, or use ssh -L 1455:127.0.0.1:1455.
 10│^Cerror: ChatGPT sign-in cancelled or timed out
-11│
   ok
 ```
 
-New oracle self-tests reject bad digests, reordered bytes/events, missing events
-and invalid UTF-8. They also check preservation of duplicate keys, whitespace,
-number spelling, string escapes, and cache-prefix sensitivity. Runner tests
-cover ambient config/credential isolation, filesystem aliases, script errors,
-barrier-driven cancellation, missing goldens and capture guards. Final parent self-test and next-user-step results:
+Coverage was collected from an instrumented archive build of the pinned source:
+`go build -cover -trimpath -buildvcs=false ...`; each invocation received its own
+`GOCOVERDIR`. The area executed **2,910 instrumented invocations**, contributing
+**36.8% of internal/reagent statements** (3,841/10,437), not overall 85%.
+The full coverage probe initially had one oracle-only past-date rejection;
+that rule was corrected and the affected ordinary case passed. Coverage records
+actual Go execution, separately from golden-comparison approval.
 
-```text
-$ python3 -m unittest discover -s parity -p '*test.py'
-Ran 35 tests in 2.899s
-OK
+Important uncovered ranges (all under `internal/reagent/`):
 
-$ make parity BIN=/tmp/reagent-parity-reference CASE=W23.final-null JOBS=1
-Ran 35 tests in 3.080s
-OK
-FAILED W23.final-null: reference defect: provider input panicked the executable
-summary: total=1198, selected=1, omitted=1197, passed=0, failed=1
-make: *** [parity] Error 1
+- `jev.go:201–238`: git_do's multi-question path, tools-area dependency.
+- `model_switch.go:83–88`: agent/context-GC trust labels, later-area fixtures.
+- `endpoint_redaction.go:63–66,71–72`: escaped JSON-token rewrite path.
+- `transport.go:325–340`: token-refresh failure/error-wrapping paths.
+- `trace.go:61–105`: reopening/appending traces and persistence-error paths.
 
-$ python3 -m parity.run --bin /tmp/reagent-parity-reference --case W01.default --capture
-parity: capture blocked: manifest freeze_status must be ready
-(exit 2)
+These are reported gaps, not evidence of 100% branch coverage. Ordinary wire
+files reached, for example, 96.7% in `openai_stream.go`, 97.5% in
+`routing_packet.go`, 93.1% in `auto.go`, and 87.1% in `transport.go`.
+
+## Mutations
+
+```sh
+python3 -m parity.mutate --bin /tmp/reagent-parity-go-38da0d6 \
+  --reference-tree /path/to/this/repository --artifacts /tmp/new-mutation-evidence
 ```
 
-A separate two-launch ChatGPT smoke test produced byte-identical normalized
-observations, with cache-prefix and session UUID independently verified. That
-is not a full serial/parallel repeatability claim. Self-tests intentionally
-exercise missing-golden/invalid-invocation failures; their diagnostic lines are
-expected when the unittest verdict is OK.
-
-No full all-green candidate gate, frozen-golden repeatability run, Linux run,
-coverage percentage or mutation catches are claimed. No live model call was
-made. Because acceptance is blocked, no push or PR has been attempted.
-
-## Delegation accounting
-
-Six direct agents, no descendants; token counts reported by the harness (input
-includes cached input; reasoning is included in output). No monetary cost was
-provided.
-
-| Agent | Input | Cached input | Output |
-| --- | ---: | ---: | ---: |
-| runner | 5,751,262 | 5,470,464 | 40,771 |
-| wire-input | 4,758,172 | 4,586,752 | 35,703 |
-| wire-decode | 5,572,054 | 5,253,504 | 39,428 |
-| wire-routing | 2,193,659 | 2,052,864 | 26,952 |
-| wire-endpoints | 6,063,879 | 5,763,456 | 21,042 |
-| mutations | 1,631,550 | 1,540,608 | 15,739 |
-| Total | 25,970,576 | 24,667,648 | 179,635 |
+The runner archives the pinned commit and patches only temporary copies. A
+baseline must pass first. Build failures, crashes and unrelated failures do not
+count as catches. Thirteen wire-area mutations are applicable (3, 5, 9–18, 36);
+the manifest gives explicit later-area reasons for the other 23. **13/13 were
+caught by their intended assertions**, after 89 baseline case executions and
+13 temporary builds passed. Exact patch digests and every catcher are in
+`mutation-results.json`. Mutation 14 initially survived because EOF did not
+exercise the incomplete-terminal branch; the added
+`W28.no-retry-incomplete-event` catches the unchanged mutation. Build failures,
+unrelated failures and raw definitions were not counted as catches.

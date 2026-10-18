@@ -122,7 +122,7 @@ def _valid_preview(ctx, variable, value):
         _private(ctx, result, "private-url-password")
 
 
-def _native(ctx, kind, trailing, password=False, prefix=None):
+def _native(ctx, kind, trailing, password=False, prefix=None, proxy=False):
     with ctx.server as server:
         env = _environment(server)
         if prefix is None:
@@ -133,6 +133,9 @@ def _native(ctx, kind, trailing, password=False, prefix=None):
         variable = {"openai": URLS[0], "anthropic": URLS[1], "jev": URLS[2]}[kind]
         env[variable] = base + prefix + trailing
         flags = ()
+        fallback = "/proxy" if proxy else "/openai/v1/responses"
+        if proxy:
+            env.update(API_PROXY_URL=server.url + fallback, API_PROXY_PROVIDER="openai")
         if kind == "anthropic":
             path, body = prefix + "/messages", ANTHROPIC
             flags = ("--model", "claude-haiku-4-5")
@@ -140,7 +143,7 @@ def _native(ctx, kind, trailing, password=False, prefix=None):
             # An invalid classifier answer deliberately exercises the native fallback.
             path, body = prefix + "/systemone", {"model": "jev-1.13.0", "answers": {}}
             flags = ("--auto",)
-            server.expect("/openai/v1/responses", Response(body=OPENAI))
+            server.expect(fallback, Response(body=_stream() if proxy else OPENAI))
         else:
             path, body = prefix + "/responses", OPENAI
         server.expect(path, Response(body=body))
@@ -148,13 +151,18 @@ def _native(ctx, kind, trailing, password=False, prefix=None):
         assert result.returncode == 0, result.stderr
         requests = [request for request in server.requests if request.path == path]
         assert len(requests) == 1, server.requests
-        assert [request.path for request in server.requests] == ([path, "/openai/v1/responses"] if kind == "jev" else [path])
+        assert [request.path for request in server.requests] == ([path, fallback] if kind == "jev" else [path])
         request = requests[0]
         assert request.method == "POST"
         headers = _headers(request)
         assert headers["content-type"].startswith("application/json")
         assert headers.get("x-api-key", "") == ("parity-anthropic-key" if kind == "anthropic" else "")
-        if kind != "anthropic":
+        if kind == "anthropic":
+            assert headers.get("anthropic-version") == "2023-06-01"
+            assert ("authorization" in headers) == password
+            if password:
+                assert headers["authorization"].startswith("Basic ")
+        else:
             assert headers.get("authorization") == "Bearer parity-" + kind + "-key"
         body = json.loads(request.body)
         assert b"wire sentinel" in request.body
@@ -166,6 +174,13 @@ def _native(ctx, kind, trailing, password=False, prefix=None):
         if kind != "jev":
             endpoint = base.replace("private-url-password", "xxxxx") + path
             assert [event["endpoint"] for event in _events(ctx, "api.attempt.started")] == [endpoint]
+        else:
+            assert [event["endpoint"] for event in _events(ctx, "api.attempt.started")] == [server.url + fallback]
+            if proxy:
+                fallback_headers = _headers(server.requests[1])
+                assert "authorization" not in fallback_headers and "x-api-key" not in fallback_headers
+                assert "session-id" in fallback_headers and "session_id" not in fallback_headers
+                assert server.requests[1].json()["stream"] is True
         _private(ctx, result, "private-url-password")
         if password and kind != "jev":
             assert b"xxxxx" in trace, "password masking absent from endpoint trace"
@@ -354,8 +369,26 @@ def _chatgpt(ctx, mode="explicit"):
         assert session_ids[0] == session_ids[1]
         assert re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", session_ids[0])
         trace = _trace(ctx)
-        assert b'"request_id":"plan-wire-id"' in trace
+        assert [event["request_id"] for event in _events(ctx, "api.attempt.finished")] == ["", "plan-wire-id"]
         assert b"wrong-header-id" not in trace
+        _private(ctx, result)
+
+
+def _chatgpt_request_id(ctx, headers, expected):
+    with ctx.server as server:
+        env = _environment(server)
+        _credentials(ctx)
+        server.expect("/openai/v1/responses", Response(body=_stream(), headers=headers))
+        result = ctx.run(flags=("--openai-auth", "chatgpt"), env=env)
+        assert result.returncode == 0, result.stderr
+        assert len(server.requests) == 1 and server.requests[0].path == "/openai/v1/responses"
+        request_headers = _headers(server.requests[0])
+        assert request_headers["authorization"] == "Bearer " + SECRETS[0]
+        assert "session_id" in request_headers and "session-id" not in request_headers
+        # A missing/empty plan header does not fall back to the API/proxy header.
+        assert [event["request_id"] for event in _events(ctx, "api.attempt.finished")] == [expected]
+        assert b"wrong-header-id" not in _trace(ctx)
+        assert not server.errors, server.errors
         _private(ctx, result)
 
 
@@ -370,7 +403,7 @@ SUBSCRIPTION = (
 )
 
 
-def _subscription(ctx, suffix, status, message, retry, shape, exhausted=False, param="service_tier"):
+def _subscription(ctx, suffix, status, message, retry, shape, exhausted=False, param="service_tier", known_usage=False):
     with ctx.server as server:
         env = _environment(server)
         _, config = _credentials(ctx)
@@ -378,7 +411,12 @@ def _subscription(ctx, suffix, status, message, retry, shape, exhausted=False, p
         error = {"code": "subscription_sharing_" + suffix, "message": "provider diagnostic", "param": param}
         body = {"error": error}
         if shape == "failed":
-            status, body = 200, _sse({"type": "response.failed", "response": {"error": error}})
+            failed = {"error": error}
+            if known_usage:
+                failed["usage"] = {"input_tokens": 31, "output_tokens": 5,
+                                   "input_tokens_details": {"cached_tokens": 7},
+                                   "output_tokens_details": {"reasoning_tokens": 2}}
+            status, body = 200, _sse({"type": "response.failed", "response": failed})
         elif shape == "error":
             status, body = 200, _sse({"type": "error", **error})
         elif shape == "nested_error":
@@ -396,6 +434,16 @@ def _subscription(ctx, suffix, status, message, retry, shape, exhausted=False, p
             finished = _events(ctx, "run.finished")[-1]
             assert finished["status"] == "provider_error" and finished["reason"] == message
             assert finished["resumable"] is True
+        if known_usage:
+            attempts = 2 if retry and exhausted else 1
+            expected = {"known": True, "input_tokens": 31 * attempts,
+                        "cached_input_tokens": 7 * attempts, "output_tokens": 5 * attempts,
+                        "reasoning_tokens": 2 * attempts}
+            if retry and not exhausted:
+                expected["input_tokens"] += 17
+                expected["output_tokens"] += 3
+            assert _events(ctx, "run.finished")[-1]["usage"] == expected
+        assert not server.errors, server.errors
         _private(ctx, result)
 
 
@@ -562,8 +610,12 @@ def _cancel(ctx, kind, phase="header"):
                     server.release("cancel-request")
                 result = future.result(timeout=5)
             finally:
-                server.release("cancel-request")
+                if not future.done():
+                    server.release("cancel-request")
         assert len(server.requests) == 1, "cancellation admitted another HTTP attempt"
+        if kind != "auth-refresh":
+            # Leave the successful cancellation barrier held until Provider.close stops writes.
+            assert request.response.chunks == ([heartbeat] if phase == "body" else [])
         assert result.returncode == (0 if kind == "auth-revoke" else 2 if action != "run" else 1), result.stderr
         if action == "run":
             assert b"cancelled" in result.stdout + result.stderr + _trace(ctx)
@@ -669,6 +721,8 @@ def collect():
             add(f"W53.native.{kind}.{label}", "Native endpoint retains encoded path bytes without path cleaning", bound(_native, kind, "///", False, prefix))
     add("W53.proxy.precedence", "Full proxy endpoint overrides OpenAI base without receiving its key", _proxy)
     add("W53.proxy.anthropic", "OpenAI proxy does not reroute Anthropic", bound(_proxy, True))
+    add("W53.proxy.jev", "OpenAI proxy does not reroute Jev; only fallback generation uses the keyless proxy",
+        bound(_native, "jev", "///", False, None, True))
     for action in ("login", "logout"):
         add(f"W53.issuer.{action}", "Issuer prefix/trailing slash and OAuth credential separation", bound(_issuer, action))
         add(f"W53.issuer.{action}.redirect", "Auth redirects never forward credentials", bound(_issuer, action, "/", True))
@@ -687,6 +741,13 @@ def collect():
                     "Saved plan, API key, explicit mode and full proxy endpoint precedence", bound(_auth_precedence, mode, key, proxy))
     for mode in ("explicit", "auto"):
         add(f"W02.chatgpt-{mode}", "Plan inference streams, stable session UUID, x-oai-request-id, no token leak", bound(_chatgpt, mode))
+    for label, headers, expected in (
+            ("preferred-only", {"x-oai-request-id": "plan-wire-id"}, "plan-wire-id"),
+            ("fallback-only", {"x-request-id": "wrong-header-id"}, ""),
+            ("neither", {}, ""),
+            ("empty-preferred", {"x-oai-request-id": "", "x-request-id": "wrong-header-id"}, "")):
+        add("W02.chatgpt-request-id." + label, "Plan request-ID header has no API/proxy fallback",
+            bound(_chatgpt_request_id, headers, expected))
     for suffix, status, message, retry in SUBSCRIPTION:
         for shape in ("http", "failed", "error", "nested_error"):
             add(f"W24.subscription-{suffix}.{shape}", "Plan error recovery mapping agrees across HTTP and stream shapes",
@@ -699,6 +760,14 @@ def collect():
                 if alternate != status:
                     add(f"W24.subscription-{suffix}.http-{alternate}", "Terminal subscription code overrides retryable HTTP status",
                         bound(_subscription, suffix, alternate, message, False, "http"))
+    for suffix, status, message, retry in SUBSCRIPTION:
+        if suffix not in ("usage_limit_exceeded", "usage_unavailable"):
+            continue
+        for exhausted in ((False, True) if retry else (False,)):
+            label = "exhausted" if exhausted else "returned"
+            add(f"W24.subscription-{suffix}.failed.known-usage.{label}",
+                "Failed plan usage survives terminal errors and both recovered/exhausted retries",
+                bound(_subscription, suffix, status, message, retry, "failed", exhausted, "service_tier", True))
     for label, param in (("empty", ""), ("at-bound", "é" * 100), ("past-bound", "é" * 101)):
         message = "ChatGPT plan does not support the requested capability" + (": " + param[:100] if param else "")
         for shape in ("http", "failed", "error", "nested_error"):
