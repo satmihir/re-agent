@@ -824,7 +824,9 @@ aggregate uncertainty and skipped steps.
 upper deadline, never exact scheduler milliseconds. Window backoff has real
 random ×0.8–1.2 jitter. Assert reported delay range by attempt, doubling nominal
 base capped at 120s **before** jitter; integer/date Retry-After is a lower bound,
-then remaining window clips delay. Only registered delay/countdown values have
+then remaining window clips delay. The integer form is HTTP delay-seconds: ASCII
+digits only after trimming surrounding whitespace; a sign or any other text is
+invalid and ignored (`+2` keeps the ordinary backoff). Only registered delay/countdown values have
 semantic comparison (§3); every other event field remains N. For HTTP-date headers
 bound the computed lower wait from controller timestamps bracketing response
 receipt/scheduling, including HTTP date's one-second resolution. Compare the
