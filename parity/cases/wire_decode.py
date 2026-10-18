@@ -4,13 +4,15 @@ Each parameter is a separately selectable leaf; provider output is fixture input
 not the verdict. Trace/body goldens supplement the assertions below.
 """
 
+import base64
 import gzip
 import hashlib
 import json
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from email.utils import formatdate
+from datetime import datetime
+from email.utils import formatdate, parsedate_to_datetime
 
 from parity.model import Case
 from parity.provider import Response
@@ -113,7 +115,7 @@ def _request_field(request, name):
     return request[name] if isinstance(request, dict) else getattr(request, name)
 
 
-def _request_checks(ctx, events, count, lane):
+def _request_checks(ctx, events, count, lane, opaque=()):
     requests = list(ctx.server.requests)
     assert len(requests) == count, (len(requests), count)
     starts = _data(events, "api.attempt.started")
@@ -122,7 +124,10 @@ def _request_checks(ctx, events, count, lane):
     for request, start in zip(requests, starts):
         body = _request_field(request, "body")
         assert start["request_sha256"] == hashlib.sha256(body).hexdigest()
-        assert start["request_body"].encode() == body
+        traced_body = body
+        for original, encoded in opaque:
+            traced_body = traced_body.replace(original, encoded.encode())
+        assert start["request_body"].encode() == traced_body
         assert _request_field(request, "method") == "POST"
         headers = {key.lower(): value for key, value in _request_field(request, "headers").items()}
         assert headers["content-type"] == "application/json"
@@ -291,6 +296,77 @@ def _decoder_cases():
             {"type": "message", "content": [{"type": "refusal", "refusal": value}]}]),
             status="completed" if not value.strip() else "refused", output="" if not value.strip() else value,
             reason=None if not value.strip() else "the model refused the task"))
+    cases.extend(_decoder_boundaries())
+    return cases
+
+
+def _decoder_boundaries():
+    cases = []
+    empty = "response contains no visible text, refusal, or tool call"
+    for lane in ("openai", "anthropic"):
+        build = anthropic if lane == "anthropic" else reply
+        gate = "stop_reason" if lane == "anthropic" else "status"
+        collection = "content" if lane == "anthropic" else "output"
+        for suffix, body, reason in (
+            ("top-null", b"null", "response has no " + gate),
+            ("top-string", b'"wrong"', "response is not valid JSON"),
+            ("top-number", b"17", "response is not valid JSON"),
+            ("top-bool", b"true", "response is not valid JSON"),
+            ("top-array", b"[]", "response is not valid JSON"),
+            ("trailing-json", raw(build()) + b" {}", "response is not valid JSON"),
+            ("gate-object", dict(build(), **{gate: {}}), "response is not valid JSON"),
+            ("collection-object", dict(build(), **{collection: {}}), "response is not valid JSON"),
+            ("collection-string", dict(build(), **{collection: "wrong"}), "response is not valid JSON")):
+            cases.append(_leaf("W18" if lane == "anthropic" else "W17", lane + "-" + suffix,
+                               "Provider top-level JSON type boundary", body, lane=lane,
+                               status="protocol_error", reason=reason, usage=UNKNOWN))
+        for suffix, value in (("absent", None), ("null", None), ("empty", [])):
+            body = build()
+            body.pop(collection)
+            if suffix != "absent":
+                body[collection] = value
+            cases.append(_leaf("W19", lane + "-collection-" + suffix,
+                               "Absent/null/empty provider collection is not visible completion", body,
+                               lane=lane, status="protocol_error", reason=empty))
+    for suffix, item, reason in (
+        ("content-null-item", {"type": "message", "content": [None]}, "unsupported message content type "),
+        ("content-number", {"type": "message", "content": [17]}, "output item is not valid JSON"),
+        ("content-text-number", {"type": "message", "content": [{"type": "output_text", "text": 17}]}, "output item is not valid JSON"),
+        ("arguments-object", dict(call(), arguments={}), "output item is not valid JSON"),
+        ("item-status-number", dict(text(), status=17), "output item is not valid JSON")):
+        cases.append(_leaf("W17", suffix, "Nested typed JSON rejection loses envelope usage", reply([call(), item], usage=USAGE),
+                           status="protocol_error", reason=reason, usage=UNKNOWN))
+    for suffix, value in (("absent", None), ("null", None), ("empty", ""), ("completed", "completed")):
+        item = text()
+        item.pop("status")
+        if suffix != "absent":
+            item["status"] = value
+        cases.append(_leaf("W17", "item-status-" + suffix, "Optional completed item status", reply([item])))
+    for suffix, content, reason in (
+        ("null-block", [None], "unsupported content block type "),
+        ("block-text-number", [{"type": "text", "text": 17}], "content block is not valid JSON"),
+        ("block-type-number", [{"type": 17}], "content block is not valid JSON")):
+        cases.append(_leaf("W18", suffix, "Anthropic malformed block loses usage before dispatch", anthropic(content, usage={}),
+                           lane="anthropic", status="protocol_error", reason=reason, usage=UNKNOWN))
+    for suffix, details, output in (("null", None, "the model declined this request"),
+                                     ("empty", {}, "the model declined this request"),
+                                     ("empty-explanation", {"explanation": ""}, "the model declined this request"),
+                                     ("whitespace", {"explanation": " \t"}, "")):
+        cases.append(_leaf("W18", "refusal-details-" + suffix, "Refusal explanation fallback tests exact emptiness",
+                           anthropic([], stop_reason="refusal", stop_details=details), lane="anthropic",
+                           status="completed" if suffix == "whitespace" else "refused", output=output,
+                           reason=None if suffix == "whitespace" else "the model refused the task"))
+    for suffix, content, reason in (
+        ("duplicate-id", [{"type": "tool_use", "id": "wire_call", "name": "write_file", "input": {}}] * 2, "duplicate call_id wire_call"),
+        ("missing-id", [{"type": "tool_use", "name": "write_file", "input": {}}], "tool call has an empty call_id"),
+        ("missing-name", [{"type": "tool_use", "id": "wire_call", "input": {}}], "tool call has an empty name")):
+        cases.append(_leaf("W19", "anthropic-" + suffix, "Anthropic whole-envelope call validation", anthropic(content),
+                           lane="anthropic", status="protocol_error", reason=reason))
+    for suffix, wire, output in (
+        ("duplicate-key", b'{"stop_reason":"wrong","STOP_REASON":"end_turn","content":[{"type":"text","text":"ok"}]}', "ok"),
+        ("surrogate", raw(anthropic([{"type": "text", "text": "MARK"}])).replace(b"MARK", b"\\ud800"), "�"),
+        ("invalid-utf8", raw(anthropic([{"type": "text", "text": "MARK"}])).replace(b"MARK", b"\xff\xfe"), "��")):
+        cases.append(_leaf("W18", suffix, "Permissive Anthropic JSON decoding", wire, lane="anthropic", output=output))
     return cases
 
 
@@ -373,7 +449,7 @@ def _stream_cases():
         ("deltas-only", sse(event("response.output_text.delta", delta="not final")), "incomplete_response", "stream ended before the response completed"),
         ("items-only", sse(done(0, call())), "incomplete_response", "stream ended before the response completed"),
         ("final-scalar", sse(event(body=17)), "protocol_error", "final stream event carries no response object"),
-        ("final-null", sse({"type": "response.completed", "response": None}), "protocol_error", None),
+        ("final-null", sse({"type": "response.completed", "response": None}), "protocol_error", "final stream event carries no response object"),
         ("final-empty", sse(event(body=reply([]))), "protocol_error", "response contains no visible text, refusal, or tool call")):
         cases.append(_leaf("W23", suffix, "Malformed SSE never fabricates completion/effects", body, lane="proxy", status=status, reason=reason))
     for suffix, fault, status, reason, usage in (
@@ -396,6 +472,55 @@ def _stream_cases():
                            lane="proxy", headers={"Content-Type": content_type}))
         cases.append(_leaf("W25", "native-content-type-" + suffix, "Native adapter always reads JSON", reply(),
                            headers={"Content-Type": content_type}))
+    return cases
+
+
+def _stream_boundaries():
+    cases = []
+    complete = sse(event(body=reply()))
+    incomplete = "stream ended before the response completed"
+    for suffix, body, status, reason in (
+        ("event-null", b"data: null\n\n", "incomplete_response", incomplete),
+        ("empty-data", b"data:\n\n" + complete, "protocol_error", "stream event is not valid JSON"),
+        ("event-array", b"data: []\n\n", "protocol_error", "stream event is not valid JSON"),
+        ("event-type-number", b'data: {"type":17}\n\n', "protocol_error", "stream event is not valid JSON"),
+        ("index-fraction", sse(done(.5, call())), "protocol_error", "stream event is not valid JSON"),
+        ("index-string", sse(done("0", call())), "protocol_error", "stream event is not valid JSON"),
+        ("index-null", sse(done(None, call())), "protocol_error", "output_item.done carries no indexed item"),
+        ("item-null", sse(done(0, None), event(body=reply([]))), "protocol_error", "unsupported output item type "),
+        ("item-scalar", sse(done(0, 17), event(body=reply([]))), "protocol_error", "output item is not valid JSON"),
+        ("final-array", sse(event(body=[])), "protocol_error", "final stream event carries no response object"),
+        ("final-bool", sse(event(body=True)), "protocol_error", "final stream event carries no response object"),
+        ("final-absent", sse({"type": "response.completed"}), "incomplete_response", incomplete),
+        ("event-field-is-not-type", b"event: response.completed\ndata: {}\n\n", "incomplete_response", incomplete),
+        ("bad-item-even-final", sse({"type": "response.output_item.done"}, event(body=reply())), "protocol_error", "output_item.done carries no indexed item")):
+        cases.append(_leaf("W23", suffix, "Strict event/index/final shape with no dispatch", body, lane="proxy", status=status, reason=reason))
+    for suffix, body in (
+        ("two-spaces", complete.replace(b"data: ", b"data:  ")),
+        ("tab-space", complete.replace(b"data: ", b"data:\t")),
+        ("unknown-event", sse({"type": "response.unknown", "opaque": 17}) + complete),
+        ("nonascii-split", sse(event(body=reply([text("雪é🦀")]))))):
+        cases.append(_leaf("W21", suffix, "Permissive data whitespace/unknown events and UTF-8 chunk boundaries", body,
+                           lane="proxy", output="雪é🦀" if suffix == "nonascii-split" else REPLY,
+                           chunks=[body[i:i + 1] for i in range(len(body))] if suffix == "nonascii-split" else None))
+    for suffix, items in (("negative", [done(-1, call())]), ("gap", [done(4, call())]),
+                          ("null", [done(0, None)]), ("scalar", [done(0, 17)])):
+        cases.append(_leaf("W22", "nonempty-overrides-" + suffix, "Final nonempty output ignores invalid collected item positions/shapes",
+                           sse(*items, event(body=reply())), lane="proxy"))
+    for suffix, fault, status, reason, usage in (
+        ("failed-null", {"type": "response.failed", "response": None}, "provider_error", "provider reported a failed response", UNKNOWN),
+        ("failed-string", event("response.failed", body="wrong"), "provider_error", "provider reported a failed response", UNKNOWN),
+        ("failed-empty-detail", event("response.failed", body={"error": {"message": ""}, "usage": {}}), "provider_error", "provider reported a failed response", KNOWN),
+        ("nested-empty", event("error", code="context_length_exceeded", message="WRONG", error={}), "provider_error", "provider reported a stream error: ", UNKNOWN),
+        ("nested-null", event("error", code="bad", message="top", error=None), "provider_error", "provider reported a stream error (bad): top", UNKNOWN),
+        ("overflow-top", event("error", code="context_length_exceeded", message="  too long  "), "limit_exceeded", OVERFLOW + " (too long)", UNKNOWN),
+        ("incomplete-unspecified", event("response.incomplete", body=reply(status="incomplete")), "incomplete_response", "provider returned an incomplete response: unspecified", UNKNOWN),
+        ("incomplete-event-completed-body", event("response.incomplete", body=reply()), "completed", None, UNKNOWN)):
+        cases.append(_leaf("W24", suffix, "Failed/incomplete stream detail precedence and permissive failure decoding", sse(fault),
+                           lane="proxy", status=status, reason=reason, usage=usage))
+    for suffix, trailer in (("item", sse(done(0, call()))), ("incomplete", sse(event("response.incomplete", body=reply(status="incomplete")))),
+                            ("null-final", sse({"type": "response.completed", "response": None}))):
+        cases.append(_leaf("W25", "completed-before-" + suffix, "First final completion ignores every later terminal/item event", complete + trailer, lane="proxy"))
     return cases
 
 
@@ -512,6 +637,97 @@ def _window_exhaustion(header):
         assert exhausted == [{"attempt": 1, "http_status": 429}]
         assert elapsed >= 0.20 and process.returncode == 1
     return run
+
+
+def _window_exhausted(lane, status, attempts):
+    def run(ctx):
+        path, env, model = _setup(ctx, lane)
+        for attempt in range(attempts):
+            ctx.server.expect(path, Response(status=status, body={"error": {"message": "still busy"}},
+                                            headers={"Retry-After": "2"}), marker=PROMPT, model=model)
+        process = ctx.run(flags=("--model", model, "--model-retry-window", f"{2 * attempts - 1}s"), env=env)
+        events = _events(ctx)
+        _request_checks(ctx, events, attempts, lane)
+        schedules = _data(events, "api.retry.scheduled")
+        assert [entry["attempt"] for entry in schedules] == list(range(1, attempts + 1))
+        for attempt, entry in enumerate(schedules[:-1], 1):
+            assert max(2000, .8 * 2 ** (attempt - 1) * 1000 - 1) <= entry["delay_ms"] <= max(2000, 1.2 * 2 ** (attempt - 1) * 1000)
+        assert 0 < schedules[-1]["delay_ms"] <= 1100
+        assert _data(events, "api.retry.exhausted") == [{"attempt": attempts, "http_status": status}]
+        assert len({request.body for request in ctx.server.requests}) == 1
+        _result(events, "provider_error", reason=f"model retry window exhausted after {attempts} attempts: provider returned HTTP {status}: still busy",
+                usage=dict(KNOWN, unreported_attempts=attempts))
+        assert not _data(events, "tool.started")
+        assert process.returncode == 1
+    return run
+
+
+def _retry_date(ctx):
+    path, env, model = _setup(ctx, "openai")
+    headers = {}
+    ctx.server.expect(path, Response(status=429, body={"error": {"message": "wait"}},
+                                    headers=headers, barrier="date-response"), marker=PROMPT, model=model)
+    ctx.server.expect(path, Response(body=reply()), marker=PROMPT, model=model)
+    bracket = {}
+    def release(process):
+        ctx.server.wait()
+        headers["Retry-After"] = formatdate(time.time() + 5, usegmt=True)
+        bracket["before"] = time.time()
+        ctx.server.release("date-response")
+    process = ctx.run(flags=("--model", model, "--model-retry-window", "15s"), env=env, on_start=release)
+    bracket["after"] = time.time()
+    events = _events(ctx)
+    _request_checks(ctx, events, 2, "openai")
+    schedules = [entry for entry in events if entry["type"] == "api.retry.scheduled"]
+    finishes = [entry for entry in events if entry["type"] == "api.attempt.finished"]
+    assert len(schedules) == 1
+    target = parsedate_to_datetime(headers["Retry-After"]).timestamp()
+    finished = datetime.fromisoformat(finishes[0]["time"].replace("Z", "+00:00")).timestamp()
+    scheduled = datetime.fromisoformat(schedules[0]["time"].replace("Z", "+00:00")).timestamp()
+    assert bracket["before"] <= finished <= scheduled <= bracket["after"]
+    delay = schedules[0]["data"]["delay_ms"]
+    # HTTP-date resolution is already included in target, not rounded a second time.
+    assert target - scheduled > 1.3, "fixture failed to separate HTTP-date floor from jitter"
+    assert (target - scheduled) * 1000 - 20 <= delay <= (target - finished) * 1000 + 20
+    gap = ctx.server.requests[1].received - ctx.server.requests[0].received
+    assert gap >= delay / 1000 - .03
+    assert not _data(events, "api.retry.exhausted")
+    _result(events, "completed", output=REPLY, usage=dict(UNKNOWN, unreported_attempts=1))
+    assert process.returncode == 0
+
+
+def _retry_cap(ctx):
+    path, env, model = _setup(ctx, "openai")
+    for attempt in range(9):
+        ctx.server.expect(path, Response(status=429, body={"error": {"message": "busy"}}), marker=PROMPT, model=model)
+    def cancel_after_cap(process):
+        deadline = time.monotonic() + 450
+        while True:
+            entries = []
+            for trace in ctx.trace_paths:
+                entries.extend(json.loads(line) for line in trace.read_bytes().splitlines() if line.endswith(b"}"))
+            if len(_data(entries, "api.retry.scheduled")) == 9:
+                assert ctx.interrupt()
+                return
+            assert time.monotonic() < deadline and process.poll() is None, "ninth capped backoff never scheduled"
+            threading.Event().wait(.02)
+    process = ctx.run(flags=("--model", model, "--model-retry-window", "20m"), env=env,
+                      timeout=460, on_start=cancel_after_cap)
+    events = _events(ctx)
+    _request_checks(ctx, events, 9, "openai")
+    schedules = _data(events, "api.retry.scheduled")
+    assert [entry["attempt"] for entry in schedules] == list(range(1, 10))
+    for attempt, schedule in enumerate(schedules, 1):
+        nominal = min(2 ** (attempt - 1), 120) * 1000
+        assert .8 * nominal - 1 <= schedule["delay_ms"] <= 1.2 * nominal, schedule
+        assert schedule["reason"] == "HTTP 429"
+    for first, second, schedule in zip(ctx.server.requests, ctx.server.requests[1:], schedules):
+        assert second.received - first.received >= schedule["delay_ms"] / 1000 - .03
+    bodies = {request.body for request in ctx.server.requests}
+    assert len(bodies) == 1, "retry changed the prepared request"
+    assert not _data(events, "api.retry.exhausted")
+    _result(events, "cancelled", reason="cancelled before a retry", usage=dict(KNOWN, unreported_attempts=9))
+    assert process.returncode == 1
 
 
 def _fault(lane, mode, window=False):
@@ -698,14 +914,51 @@ def _usage_cases():
     return cases
 
 
+def _usage_boundaries():
+    cases = []
+    for lane in ("openai", "proxy", "anthropic"):
+        fields = (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"))
+        fields += (("cache_creation_input_tokens", "input_tokens"), ("cache_read_input_tokens", "cached_input_tokens")) if lane == "anthropic" else (("input_tokens_details.cached_tokens", "cached_input_tokens"), ("output_tokens_details.reasoning_tokens", "reasoning_tokens"))
+        for field, counter in fields:
+            for suffix, value, valid in (("null", None, True), ("negative", -1, True),
+                                         ("int64-max", 9223372036854775807, True),
+                                         ("string", "1", False), ("bool", True, False),
+                                         ("array", [], False), ("object", {}, False),
+                                         ("fraction", 1.5, False)):
+                parts = field.split(".")
+                usage = {parts[0]: value} if len(parts) == 1 else {parts[0]: {parts[1]: value}}
+                body = anthropic(usage=usage) if lane == "anthropic" else reply(usage=usage)
+                if lane == "proxy":
+                    body = sse(event(body=body))
+                expected = dict(KNOWN)
+                if valid and value is not None:
+                    expected[counter] = value
+                    if field == "cache_read_input_tokens":
+                        expected["input_tokens"] = value
+                cases.append(_leaf("W32", lane + "-" + field.replace(".", "-") + "-" + suffix,
+                                   "Every typed usage counter preserves int64/null and rejects wrong JSON shapes", body,
+                                   lane=lane, status="completed" if valid else "protocol_error",
+                                   usage=expected if valid else UNKNOWN,
+                                   reason=None if valid else "response is not valid JSON"))
+        for suffix, usage in (("array", []), ("string", "bad"), ("number", 17), ("boolean", True)):
+            body = anthropic(usage=usage) if lane == "anthropic" else reply(usage=usage)
+            if lane == "proxy":
+                body = sse(event(body=body))
+            cases.append(_leaf("W32", lane + "-usage-shape-" + suffix, "Usage must be an object or null", body,
+                               lane=lane, status="protocol_error", reason="response is not valid JSON", usage=UNKNOWN))
+    return cases
+
+
 def _trace_body(lane, invalid):
     def run(ctx):
         path, env, model = _setup(ctx, lane)
-        body = raw(reply([text("PLACEHOLDER")])).replace(b"PLACEHOLDER", b"\xff\xfeX\xc0" if invalid else REPLY.encode().replace(b"\n", b"\\n"))
+        envelope = anthropic([{"type": "text", "text": "PLACEHOLDER"}]) if lane == "anthropic" else reply([text("PLACEHOLDER")])
+        body = raw(envelope).replace(b"PLACEHOLDER", b"\xff\xfeX\xc0" if invalid else REPLY.encode().replace(b"\n", b"\\n"))
         if lane == "proxy":
             body = b'data: {"type":"response.completed","response":' + body + b'}\n\n'
-        header = "x-request-id"
-        ctx.server.expect(path, Response(body=body, headers={header: "wire-request-id", "request-id": "wrong-provider-id"}), marker=PROMPT, model=model)
+        header = "request-id" if lane == "anthropic" else "x-request-id"
+        other_header = "x-request-id" if lane == "anthropic" else "request-id"
+        ctx.server.expect(path, Response(body=body, headers={header: "wire-request-id", other_header: "wrong-provider-id"}), marker=PROMPT, model=model)
         process = ctx.run(flags=("--model", model), env=env)
         events = _events(ctx)
         finish = _request_checks(ctx, events, 1, lane)[0]
@@ -716,6 +969,60 @@ def _trace_body(lane, invalid):
         assert finish["response_body"].encode() == traced
         _result(events, "completed", output="��X�" if invalid else REPLY)
         assert process.returncode == 0
+    return run
+
+
+UTF8_VECTORS = (
+    ("truncated", b"\xe2\x82", "�", "��"),
+    ("adjacent-invalid", b"\xff\xfe", "�", "��"),
+    ("adjacent-nonascii", b"\xff\xc3\xa9\xfe", "�é�", "�é�"),
+)
+
+
+def _utf8_contracts(lane, original, grouped, per_byte):
+    def run(ctx):
+        path, env, model = _setup(ctx, lane)
+        item = raw({"type": "text", "text": "native-MARK-end"} if lane == "anthropic" else text("native-MARK-end")).replace(b"MARK", original)
+        collection = b'"content":[]' if lane == "anthropic" else b'"output":[]'
+        envelope = anthropic([]) if lane == "anthropic" else reply([])
+        body = raw(envelope).replace(collection, collection[:-1] + item + b']')
+        if lane == "proxy":
+            body = b'data: {"type":"response.completed","response":' + body + b'}\n\n'
+        ctx.server.expect(path, Response(body=body), marker=b"ordinary-", model=model)
+        success = sse(event(body=reply())) if lane == "proxy" else anthropic() if lane == "anthropic" else reply()
+        # This request intentionally is not UTF-8 JSON; the native item is opaque.
+        ctx.server.expect(path, Response(body=success), marker=b"follow-up")
+        process = ctx.chat(b"ordinary-" + original + b"-end\nfollow-up\n/exit\n",
+                           flags=("--model", model), env=env)
+        events = _events(ctx)
+        finishes = _request_checks(ctx, events, 2, lane, opaque=((original, per_byte),))
+        assert finishes[0]["body_utf8_replaced"] is True
+        assert finishes[0]["response_body"].encode() == body.replace(original, grouped.encode())
+        accepted = _data(events, "model.accepted")[0]
+        traced_item = accepted["native"]["items"][0]
+        assert (traced_item["text"] if lane == "anthropic" else traced_item["content"][0]["text"]) == "native-" + grouped + "-end"
+        assert accepted["blocks"][0]["text"] == "native-" + per_byte + "-end"
+        second = ctx.server.requests[1].body
+        assert item in second, "retained native item changed on the next HTTP request"
+        assert original in second and b"\\ufffd" not in item and "�".encode() not in item
+        checkpoints = list(ctx.home.rglob("checkpoint.json"))
+        assert len(checkpoints) == 1, checkpoints
+        checkpoint_bytes = checkpoints[0].read_bytes()
+        checkpoint = json.loads(checkpoint_bytes)
+        state = checkpoint["state"]
+        checkpoint_text = checkpoint_bytes.decode("utf-8")
+        state_start = checkpoint_text.index('"state":') + len('"state":')
+        _, state_end = json.JSONDecoder().raw_decode(checkpoint_text, state_start)
+        assert hashlib.sha256(checkpoint_text[state_start:state_end].encode()).hexdigest() == checkpoint["sha256"]
+        users = [entry["user"] for entry in state["history"] if entry.get("user")]
+        assert users[0]["text"] == "ordinary-" + per_byte + "-end"
+        ordinary_token = (b'"text":"ordinary-' + per_byte.encode().replace("�".encode(), b"\\ufffd") + b'-end"')
+        assert ordinary_token in checkpoint_bytes, "ordinary strings must encode one \\ufffd per invalid byte"
+        assistants = [entry["assistant"] for entry in state["history"] if entry.get("assistant")]
+        assert base64.b64decode(assistants[0]["native"]["items"][0], validate=True) == item
+        assert process.returncode == 0
+        assert len(_data(events, "run.finished")) == 2
+        assert not _data(_events(ctx), "tool.started")
     return run
 
 
@@ -755,7 +1062,15 @@ def _chat_recovery(kind, action):
 
 
 def collect():
-    cases = _decoder_cases() + _stream_cases() + _usage_cases()
+    cases = _decoder_cases() + _stream_cases() + _stream_boundaries() + _usage_cases() + _usage_boundaries()
+    cases.append(Case("W29.http-date-floor", "Real HTTP-date lower bound bracketed around receipt/scheduling without injected clocks", _retry_date, slow=True))
+    cases.append(Case("W29.multi-attempt-cap", "Nine attempts prove exponential backoff and 120s cap before jitter twice", _retry_cap, slow=True))
+    for lane in ("openai", "proxy", "anthropic"):
+        for status in (429, 503):
+            for attempts in (2, 3):
+                cases.append(Case(f"W29.{lane}-exhaust-{status}-{attempts}",
+                                  "Multiple attempts clip only final wait and exhaust once with exact usage and request identity",
+                                  _window_exhausted(lane, status, attempts), slow=True))
     cases.append(Case("W25.delayed-eof", "Read whole SSE body before completion; no live delta rendering", _delayed_eof))
     cases.append(Case("W29.held-success", "Retry window is admission deadline, not in-flight timeout", _held_success))
     for stage in ("request", "partial", "retry"):
@@ -816,7 +1131,7 @@ def collect():
         cases.append(Case("W28.no-retry-" + suffix, "Window does not retry malformed/incomplete/nontransient streams", run))
     for value in ("60", "date", "invalid", "-1", "0"):
         cases.append(Case("W29.short-" + value, "Short admission window clips Retry-After/backoff and exhausts once", _window_exhaustion(value)))
-    for value in ("2", "invalid", "0", "-1"):
+    for value in ("2", "invalid", "0", "-1", " 2 ", "+2", "1.5", "9223372036854775808", "Wed, 01 Jan 2020 00:00:00 GMT"): 
         cases.append(Case("W29.retry-after-" + value, "Retry-After integer floor versus invalid fallback",
                           _retry(429, "openai", window="8s", headers={"Retry-After": value}), slow=True))
     for suffix, body, status, detail in (
@@ -848,10 +1163,15 @@ def collect():
             cases.append(_leaf("W31", "provider-utf8-" + suffix, "Provider detail truncates on 500-byte rune boundary",
                                {"error": {"message": detail}}, response_status=401,
                                status="provider_error", reason="provider returned HTTP 401: " + bounded))
-    for lane in ("openai", "proxy"):
+    for lane in ("openai", "proxy", "anthropic"):
         for invalid in (False, True):
             cases.append(Case(f"W33.{lane}-" + ("invalid-utf8" if invalid else "exact-bytes"),
                               "Raw request hash, response bytes/request ID and UTF-8 replacement flag", _trace_body(lane, invalid)))
+    for lane in ("openai", "proxy", "anthropic"):
+        for suffix, original, grouped, per_byte in UTF8_VECTORS:
+            cases.append(Case(f"W33.{lane}-contracts-{suffix}",
+                              "Distinct trace-run, ordinary-string per-byte and unchanged opaque native UTF-8 contracts",
+                              _utf8_contracts(lane, original, grouped, per_byte)))
     for kind in ("provider", "protocol", "incomplete", "overflow"):
         for action in ("reset", "compact"):
             cases.append(Case(f"W34.{kind}-{action}", "Unanswered history, blocked turns and explicit recovery",

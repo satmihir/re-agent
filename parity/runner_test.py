@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,14 @@ from urllib.request import Request as HTTPRequest, urlopen
 
 from parity.model import Case
 from parity.provider import Provider, Response
-from parity.run import Context, HarnessError, guard_artifacts, guard_private, main, report_counts, run_case, select_cases, suite_digest, validate_capture
+from parity.run import Context, HarnessError, freeze_case, guard_artifacts, guard_private, load_golden, main, report_counts, run_case, select_cases, suite_digest, validate_capture
+
+
+def observed(ctx):
+    """Supply the observer contract without substituting its independent tests."""
+    ctx.artifact_policies = {"exact": "B"}
+    (ctx.artifacts / "substitutions.json").write_text("[]\n")
+    return {"exact": b"normalized"}
 
 
 class RunnerTest(unittest.TestCase):
@@ -200,6 +208,8 @@ while True: time.sleep(1)
             with self.subTest(freeze_status=status), self.assertRaisesRegex(HarnessError, "freeze_status"):
                 validate_capture(self.binary, {**manifest, "freeze_status": status}, golden)
         golden.mkdir()
+        with self.assertRaisesRegex(HarnessError, "refuses"):
+            validate_capture(self.binary, manifest, golden)
         (golden / "existing").write_bytes(b"protected")
         with self.assertRaises(HarnessError):
             validate_capture(self.binary, manifest, golden)
@@ -207,7 +217,7 @@ while True: time.sleep(1)
 
     def test_worker_keeps_raw_failure_and_passes_context_to_observer(self):
         case = Case("W01", "fixture", lambda ctx: ctx.run())
-        with patch("parity.run.collect_cases", return_value=[case]), patch("parity.observe.finish", return_value={"exact": b"normalized"}) as finish:
+        with patch("parity.run.collect_cases", return_value=[case]), patch("parity.observe.finish", side_effect=observed) as finish:
             result = run_case("W01", str(self.binary), str(self.root / "worker"), str(self.root / "worker-artifacts"))
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["artifacts"], {"exact": b"normalized"})
@@ -224,6 +234,105 @@ while True: time.sleep(1)
         self.assertEqual(result["status"], "failed")
         self.assertIn("independent invariant failed", result["reason"])
         self.assertIn(b"stderr sentinel", (self.root / "failed-artifacts/invoke-001.stderr").read_bytes())
+
+    def test_frozen_layout_keeps_raw_review_and_validates_hashes_lengths_and_exact_policies(self):
+        source = self.root / "source"
+        source.mkdir()
+        (source / "invoke-001.stdout").write_bytes(b"raw\xff evidence")
+        (source / "substitutions.json").write_text('[{"kind":"fixture-substitution"}]')
+        (source / "coverage").mkdir()
+        (source / "coverage/not-review").write_bytes(b"excluded")
+        normalized = {"invocation-1.stdout": b"normalized"}
+        policies = {"invocation-1.stdout": "N"}
+        golden = self.root / "golden/W01"
+        freeze_case(source, golden, normalized, policies)
+        self.assertEqual(load_golden(golden, policies), normalized)
+        self.assertEqual((golden / "raw/invoke-001.stdout").read_bytes(), b"raw\xff evidence")
+        self.assertFalse((golden / "raw/coverage").exists())
+        ledger = json.loads((golden / "substitutions.json").read_bytes())
+        self.assertEqual(ledger[0], {"kind": "fixture-substitution"})
+        self.assertEqual(ledger[-1]["frozen_evidence"]["raw"]["invoke-001.stdout"]["length"], 13)
+        with self.assertRaisesRegex(AssertionError, "policies differ"):
+            load_golden(golden, {"invocation-1.stdout": "B"})
+        for kind, name in (("raw", "invoke-001.stdout"), ("normalized", "invocation-1.stdout")):
+            path = golden / kind / name
+            original = path.read_bytes()
+            for changed in (b"x" * len(original), original + b"x"):
+                path.write_bytes(changed)
+                with self.assertRaisesRegex(AssertionError, "hashes or lengths"):
+                    load_golden(golden, policies)
+            path.write_bytes(original)
+        extra = golden / "raw/ignored-byte"
+        extra.write_bytes(b"x")
+        with self.assertRaisesRegex(AssertionError, "hashes or lengths"):
+            load_golden(golden, policies)
+
+    def test_synthetic_capture_then_candidate_reads_only_normalized_and_policies(self):
+        suite = self.root / "fixture-repository/parity"
+        suite.mkdir(parents=True)
+        (suite / "manifest.json").write_text(json.dumps({"freeze_status": "ready", "reference_commit": "fixture",
+            "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}))
+        case = Case("W99", "fixture capture", lambda ctx: ctx.invoke(["help"]))
+        with patch("parity.run.__file__", str(suite / "run.py")), patch("parity.run.collect_cases", return_value=[case]), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=observed), patch("parity.observe.compare") as compare:
+            self.assertEqual(main(["--bin", str(self.binary), "--capture", "--artifacts", str(self.root / "capture")]), 0)
+            expected = suite / "golden" / sys.platform / "W99"
+            self.assertTrue((expected / "raw/invoke-001.stdout").is_file())
+            self.assertTrue((expected / "normalized/exact").is_file())
+            self.assertEqual(main(["--bin", str(self.binary), "--artifacts", str(self.root / "candidate-artifacts")]), 0)
+            compare.assert_called_once_with({"exact": b"normalized"}, {"exact": b"normalized"})
+            (expected / "artifact-policies.json").write_text('{"exact":"N"}')
+            self.assertEqual(main(["--bin", str(self.binary), "--artifacts", str(self.root / "bad-policy")]), 1)
+            self.assertEqual(compare.call_count, 1)
+
+    def test_raw_output_overflow_retains_bounded_prefix_and_fails(self):
+        self.binary.write_text("#!%s\nimport sys\nsys.stdout.buffer.write(b'x' * 65536)\n" % sys.executable)
+        context = self.context()
+        with patch("parity.run.RAW_FILE_LIMIT", 1024), self.assertRaisesRegex(HarnessError, "raw output exceeds"):
+            context.invoke(["help"])
+        self.assertEqual((context.artifacts / "invoke-001.stdout").read_bytes(), b"x" * 1024)
+        self.assertEqual(context._processes, [])
+
+    def test_raw_file_and_case_overflow_fail_before_observer_and_retain_bounded_prefixes(self):
+        for file_limit, case_limit in ((1024, 4096), (4096, 1500)):
+            with self.subTest(file_limit=file_limit, case_limit=case_limit):
+                def run(ctx):
+                    (ctx.artifacts / "a.raw").write_bytes(b"a" * 2048)
+                    (ctx.artifacts / "b.raw").write_bytes(b"b" * 2048)
+                case = Case("W01", "oversized artifacts", run)
+                lane = self.root / ("limit-%d" % case_limit)
+                with patch("parity.run.collect_cases", return_value=[case]), patch("parity.run.RAW_FILE_LIMIT", file_limit), patch("parity.run.RAW_CASE_LIMIT", case_limit), patch("parity.observe.finish") as finish:
+                    result = run_case(case.id, str(self.binary), str(lane / "root"), str(lane / "artifacts"))
+                self.assertEqual(result["status"], "failed")
+                self.assertIn("retained prefixes only", result["reason"])
+                retained = [(lane / "artifacts" / name).stat().st_size for name in ("a.raw", "b.raw")]
+                self.assertLessEqual(sum(retained), case_limit)
+                self.assertLessEqual(max(retained), file_limit)
+                self.assertTrue((lane / "artifacts/raw-overflow.json").is_file())
+                finish.assert_not_called()
+
+    def test_observer_missing_artifact_policies_fails_closed(self):
+        case = Case("W01", "fixture", lambda ctx: ctx.invoke(["help"]))
+        with patch("parity.run.collect_cases", return_value=[case]), patch("parity.observe.finish", return_value={"exact": b"raw"}):
+            result = run_case("W01", str(self.binary), str(self.root / "worker"), str(self.root / "worker-artifacts"))
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("artifact_policies", result["reason"])
+
+    def test_request_response_capture_keeps_binary_chunks_and_fixture_secrets(self):
+        context = self.context()
+        context.server.expect("/raw", Response(chunks=[b'\xffsecret=', b'fixture-only'], headers={"Content-Type": "application/octet-stream"}))
+        with urlopen(HTTPRequest(context.server.url + "/raw", data=b"fixture request"), timeout=3) as response:
+            self.assertEqual(response.read(), b'\xffsecret=fixture-only')
+        context.close()
+        request = context.server.requests[0]
+        metadata = json.loads(context.observations["request-001.json"])
+        self.assertEqual(metadata["client_address"], list(request.client_address))
+        captured = request.response
+        self.assertEqual(captured.chunks, [b'\xffsecret=', b'fixture-only'])
+        self.assertTrue(captured.completed)
+        self.assertEqual(context.observations["response-001.body"], captured.body)
+        self.assertTrue(context.observations["response-001.headers"].startswith(b"HTTP/1.1 200"))
+        self.assertEqual(json.loads(context.observations["response-001.json"])["chunk_lengths"], [8, 12])
+        self.assertFalse(any("segment-" in name for name in context.observations))
 
     def test_all_stdout_stderr_bytes_are_retained(self):
         self.binary.write_text("#!%s\nimport sys\nsys.stdout.buffer.write(b'x' * (16 * 1024 * 1024 + 7))\nsys.stderr.buffer.write(bytes(range(256)))\n" % sys.executable)
@@ -307,12 +416,45 @@ while True: time.sleep(1)
     def test_candidate_missing_goldens_still_fails(self):
         case = Case("W99.runner-missing-golden", "no golden", lambda ctx: ctx.invoke(["help"]))
         artifacts = self.root / "missing-golden-report"
-        with patch("parity.run.collect_cases", return_value=[case]), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", return_value={"exact": b"candidate"}):
+        with patch("parity.run.collect_cases", return_value=[case]), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=observed):
             status = main(["--bin", str(self.binary), "--artifacts", str(artifacts)])
         report = json.loads((artifacts / "report.json").read_bytes())
         self.assertEqual(status, 1)
         self.assertEqual(report["counts"]["failed"], 1)
         self.assertIn("missing golden", report["results"][0]["reason"])
+
+    def test_probe_observes_without_golden_comparison_or_gate_success(self):
+        case = Case("W99.runner-probe", "no golden", lambda ctx: ctx.invoke(["help"]))
+        artifacts = self.root / "probe-report"
+        with patch("parity.run.collect_cases", return_value=[case]), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=observed), patch("parity.observe.compare", side_effect=AssertionError("must not compare")) as compare:
+            status = main(["--bin", str(self.binary), "--probe", "--artifacts", str(artifacts)])
+        report = json.loads((artifacts / "report.json").read_bytes())
+        self.assertEqual(status, 0)
+        self.assertFalse(report["gate_success"])
+        self.assertFalse(report["golden_comparison"])
+        self.assertFalse(report["capture_written"])
+        self.assertEqual(report["mode"], "probe")
+        self.assertEqual(report["counts"]["passed"], 0)
+        self.assertEqual(report["counts"]["observed"], 1)
+        self.assertEqual(report["results"][0]["artifact_policies"], {"exact": "B"})
+        self.assertEqual(report["case_ledger"][0]["artifact_policies"], {"exact": "B"})
+        self.assertEqual(report["case_ledger"][0]["status"], "observed")
+        self.assertTrue((artifacts / case.id / "normalized/exact").is_file())
+        compare.assert_not_called()
+
+    def test_probe_does_not_bypass_observer_and_platform_unavailability(self):
+        other = "linux" if sys.platform == "darwin" else "darwin"
+        cases = [Case("W98", "unavailable", lambda _: self.fail("must not execute"), platforms=(other,)),
+                 Case("W99", "observer failure", lambda ctx: ctx.invoke(["help"]))]
+        artifacts = self.root / "probe-failure-report"
+        with patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=AssertionError("observer sentinel")):
+            status = main(["--bin", str(self.binary), "--probe", "--artifacts", str(artifacts)])
+        report = json.loads((artifacts / "report.json").read_bytes())
+        self.assertEqual(status, 1)
+        self.assertEqual(report["counts"]["unavailable"], 1)
+        self.assertEqual(report["counts"]["failed"], 1)
+        self.assertIn("platform", report["results"][0]["reason"])
+        self.assertIn("observer sentinel", report["results"][1]["reason"])
 
     def test_pending_report_counts_are_explicit_and_never_pass(self):
         cases = [Case("W98", "pending", lambda _: None, pending="requires later area"),
@@ -322,9 +464,14 @@ while True: time.sleep(1)
             status = main(["--bin", str(self.binary), "--case", "W98", "--artifacts", str(artifacts)])
         report = json.loads((artifacts / "report.json").read_bytes())
         self.assertEqual(status, 1)
-        self.assertEqual(report["counts"], {"total": 2, "selected": 1, "omitted": 1, "passed": 0, "failed": 0, "pending": 1, "not_executed": 0})
+        self.assertEqual(report["counts"], {"total": 2, "selected": 1, "omitted": 1, "passed": 0, "observed": 0, "failed": 0, "pending": 1, "unavailable": 0, "not_executed": 0})
         self.assertEqual(report["pending"], [{"id": "W98", "reason": "requires later area", "selected": True}])
         self.assertEqual(report["results"][0]["reason"], "requires later area")
+        self.assertFalse(report["gate_success"])
+        self.assertEqual(report["case_ledger"][1]["status"], "omitted")
+        other = "linux" if sys.platform == "darwin" else "darwin"
+        self.assertEqual(report["unexecuted_platforms"], [other])
+        self.assertEqual(report["coverage_counts"]["pending"]["true"]["pending"], 1)
 
     def test_make_exported_candidate_and_controls_do_not_leak_into_self_tests(self):
         environment = {**os.environ, "BIN": str(self.binary), "JOBS": "8", "CASE": "W23.final-null",
@@ -418,6 +565,42 @@ class ProviderTest(unittest.TestCase):
             server.close()
             with self.assertRaises(Exception):
                 future.result(timeout=2)
+
+    def test_abortive_reset_is_exactly_reset_25_times_native_and_proxy_and_eof_is_separate(self):
+        for path in ("/openai/v1/responses", "/proxy/responses"):
+            with self.subTest(path=path), Provider() as server:
+                for _ in range(25):
+                    server.expect(path, Response(b"", reset=True, headers={"Content-Length": "100"}))
+                for attempt in range(25):
+                    with self.subTest(attempt=attempt), socket.create_connection(("127.0.0.1", server._server.server_port), timeout=3) as connection:
+                        connection.sendall(("POST %s HTTP/1.1\r\nHost: fixture\r\nContent-Length: 0\r\n\r\n" % path).encode())
+                        with self.assertRaises(ConnectionResetError):
+                            while True:
+                                chunk = connection.recv(4096)
+                                self.assertNotEqual(chunk, b"", "reset must never become graceful EOF")
+                server.expect(path, Response(b"partial", headers={"Content-Length": "100"}))
+                with socket.create_connection(("127.0.0.1", server._server.server_port), timeout=3) as connection:
+                    connection.sendall(("POST %s HTTP/1.1\r\nHost: fixture\r\nContent-Length: 0\r\n\r\n" % path).encode())
+                    chunks = []
+                    while chunk := connection.recv(4096):
+                        chunks.append(chunk)
+                self.assertTrue(b"".join(chunks).endswith(b"partial"))
+                server.assert_complete()
+
+    def test_request_peer_is_actual_client_socket_not_host_header(self):
+        with Provider() as server:
+            server.expect("/peer", Response(b"ok"))
+            with socket.create_connection(("127.0.0.1", server._server.server_port), timeout=3) as connection:
+                peer = connection.getsockname()
+                connection.sendall(b"GET /peer HTTP/1.1\r\nHost: forged.invalid:12345\r\n\r\n")
+                request = server.wait(timeout=2)
+                self.assertEqual(request.client_address, peer)
+                self.assertEqual(request.authority, "forged.invalid:12345")
+                self.assertEqual(request["client_address"], peer)
+                self.assertIsInstance(peer[1], int)
+                while connection.recv(4096):
+                    pass
+            server.assert_complete()
 
     def test_unconsumed_script_is_failure(self):
         with Provider() as server:

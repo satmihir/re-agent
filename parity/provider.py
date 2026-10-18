@@ -34,6 +34,25 @@ class Response:
 
 
 @dataclass
+class RecordedResponse:
+    """Raw successful writes linked directly to their originating request."""
+
+    status: int
+    headers: dict = field(default_factory=dict)
+    segments: list = field(default_factory=list)
+    chunks: list = field(default_factory=list)
+    reset: bool = False
+    close: bool = True
+    completed: bool = False
+    ended: float | None = None
+
+    @property
+    def body(self):
+        """Return compressed or uncompressed wire bytes without decoding."""
+        return b"".join(self.chunks)
+
+
+@dataclass
 class Request:
     """A received request retained before any response barrier is released."""
 
@@ -43,7 +62,9 @@ class Request:
     headers: dict
     body: bytes
     received: float
+    client_address: tuple
     selector: tuple | None = None
+    response: RecordedResponse | None = None
 
     def json(self):
         """Decode the original request body for semantic fixture assertions."""
@@ -70,7 +91,20 @@ class Provider:
         self._chunks = {}
         self._stopped = threading.Event()
         self._sockets = set()
+        self._abortive = set()
         owner = self
+
+        class Server(ThreadingHTTPServer):
+            def shutdown_request(self, connection):
+                with owner._condition:
+                    abortive = connection in owner._abortive
+                    owner._abortive.discard(connection)
+                if abortive:
+                    # socketserver's normal shutdown(SHUT_WR) sends FIN before close.
+                    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                    self.close_request(connection)
+                    return
+                super().shutdown_request(connection)
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -86,7 +120,7 @@ class Provider:
             do_DELETE = do_POST
             do_PATCH = do_POST
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = Server(("127.0.0.1", 0), Handler)
         self._server.daemon_threads = True
         self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": .05}, daemon=True)
         self._thread.start()
@@ -135,6 +169,7 @@ class Provider:
         handler.connection.settimeout(10)
         with self._condition:
             self._sockets.add(handler.connection)
+        capture = None
         try:
             length = int(handler.headers.get("Content-Length", "0"))
             if not 0 <= length <= 16 * 1024 * 1024:
@@ -145,7 +180,7 @@ class Provider:
             if len(body) != length:
                 raise ValueError("incomplete request body")
             request = Request(handler.command, handler.path, handler.headers.get("Host", ""),
-                              dict(handler.headers.items()), body, time.monotonic())
+                              dict(handler.headers.items()), body, time.monotonic(), handler.client_address)
             try:
                 model = json.loads(body).get("model")
             except (ValueError, AttributeError):
@@ -168,6 +203,10 @@ class Provider:
                     index, key, response = matching[0]
                     self._scripts.pop(index)
                     request.selector = key
+                capture = RecordedResponse(response.status, reset=response.reset, close=response.close or response.reset)
+                request.response = capture
+                if response.reset:
+                    self._abortive.add(handler.connection)
                 self._condition.notify_all()
             if response.barrier is not None:
                 event = self.barrier(response.barrier) if isinstance(response.barrier, str) else response.barrier
@@ -189,7 +228,10 @@ class Provider:
                 headers["Connection"] = "close"
             for key, value in headers.items():
                 handler.send_header(key, str(value))
+            capture.headers = {key: str(value) for key, value in headers.items()}
+            header_bytes = b"".join(handler._headers_buffer) + b"\r\n"
             handler.end_headers()
+            capture.segments.append(header_bytes)
             for index, chunk in enumerate(chunks):
                 name = response.chunk_barriers[index] if index < len(response.chunk_barriers) else None
                 if name is not None:
@@ -204,8 +246,9 @@ class Provider:
                     return
                 handler.wfile.write(chunk)
                 handler.wfile.flush()
-            if response.reset:
-                handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                capture.chunks.append(chunk)
+                capture.segments.append(chunk)
+            capture.completed = True
             handler.close_connection = response.close or response.reset
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass  # Fault scripts deliberately outlive cancelled clients.
@@ -214,8 +257,11 @@ class Provider:
                 self.errors.append("provider error: %s" % exc)
                 self._condition.notify_all()
         finally:
+            if capture is not None:
+                capture.ended = time.monotonic()
             with self._condition:
                 self._sockets.discard(handler.connection)
+                self._condition.notify_all()
 
     def assert_complete(self):
         """Fail closed for unexpected requests and unconsumed attempts."""
@@ -230,6 +276,8 @@ class Provider:
             for event in self._barriers.values():
                 event.set()
             for connection in tuple(self._sockets):
+                if connection in self._abortive:
+                    continue
                 try:
                     connection.shutdown(socket.SHUT_RDWR)
                 except OSError:
@@ -237,6 +285,13 @@ class Provider:
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=2)
+        deadline = time.monotonic() + 2
+        with self._condition:
+            while self._sockets:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AssertionError("provider handlers did not finish during cleanup")
+                self._condition.wait(remaining)
 
     def __enter__(self):
         return self

@@ -23,6 +23,10 @@ if __package__ in (None, ""):
 from parity.provider import Provider
 
 
+RAW_FILE_LIMIT = 32 * 1024 * 1024
+RAW_CASE_LIMIT = 128 * 1024 * 1024
+
+
 class HarnessError(Exception):
     """An invocation or prerequisite error, rather than a candidate failure."""
 
@@ -103,8 +107,11 @@ class Context:
         self.coverage = Path(coverage) if coverage else self.artifacts / "coverage"
         guard_artifacts(self.coverage)
         self.observations = {}
+        self._raw_sizes = {}
+        self.artifact_policies = {}
         self.invocations = []
         self._server = None
+        self._closed = False
         self._processes = []
         self._private = private_roots()
         if self.artifacts == self.workspace or self.workspace in self.artifacts.parents:
@@ -145,6 +152,9 @@ class Context:
         return paths
 
     def _record(self, name, data):
+        if len(data) > RAW_FILE_LIMIT or sum(self._raw_sizes.values()) - self._raw_sizes.get(name, 0) + len(data) > RAW_CASE_LIMIT:
+            raise HarnessError("raw artifact budget exceeded: " + name)
+        self._raw_sizes[name] = len(data)
         destination = self.artifacts / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
@@ -203,10 +213,44 @@ class Context:
         timed_out = False
         controller = None
         controller_errors = []
+        capture_errors = []
         with out.open("wb") as stdout, err.open("wb") as stderr:
             process = subprocess.Popen(command, cwd=self.workspace, env=environment, stdin=subprocess.PIPE,
-                                       stdout=stdout, stderr=stderr, start_new_session=True, umask=0o022)
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, umask=0o022)
             self._processes.append(process)
+
+            def drain(source, target):
+                retained = 0
+                try:
+                    with source:
+                        while chunk := source.read1(65536):
+                            target.write(chunk[:max(0, RAW_FILE_LIMIT - retained)])
+                            target.flush()
+                            retained += len(chunk)
+                            if retained > RAW_FILE_LIMIT:
+                                capture_errors.append("raw output exceeds %d bytes; retained prefix only" % RAW_FILE_LIMIT)
+                                os.killpg(process.pid, signal.SIGKILL)
+                                return
+                except (OSError, ValueError) as exc:
+                    capture_errors.append(str(exc))
+
+            def feed():
+                try:
+                    process.stdin.write(stdin)
+                    process.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
+                finally:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+
+            readers = [threading.Thread(target=drain, args=(source, target), daemon=True)
+                       for source, target in ((process.stdout, stdout), (process.stderr, stderr))]
+            feeder = threading.Thread(target=feed, daemon=True)
+            for thread in [*readers, feeder]:
+                thread.start()
             if on_start is not None:
                 def control():
                     try:
@@ -221,12 +265,16 @@ class Context:
                 controller = threading.Thread(target=control, name="parity-controller", daemon=True)
                 controller.start()
             try:
-                process.communicate(stdin, timeout=timeout)
+                process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 timed_out = True
             finally:
                 # A successful leader must not leave executing descendants in its group.
                 self._terminate(process)
+                for thread in [*readers, feeder]:
+                    thread.join(timeout=2)
+                    if thread.is_alive():
+                        capture_errors.append("candidate pipe did not close after process-group cleanup")
                 self._processes.remove(process)
         ended = time.time()
         record.update(stdout=out.read_bytes(), stderr=err.read_bytes(), status=process.returncode, returncode=process.returncode,
@@ -241,6 +289,8 @@ class Context:
                 raise AssertionError("on_start controller did not finish after candidate exit")
             if controller_errors:
                 raise controller_errors[0]
+        if capture_errors:
+            raise HarnessError("; ".join(capture_errors))
         if timed_out:
             raise AssertionError("candidate timed out after %ss; raw output retained" % timeout)
         return subprocess.CompletedProcess(command, process.returncode, record["stdout"], record["stderr"])
@@ -269,16 +319,42 @@ class Context:
         return interrupted
 
     def collect(self):
-        """Collect raw trace and request bytes without rewriting their JSON."""
+        """Retain bounded raw evidence; exceeding a bound fails, never compares a prefix."""
+        total = 0
+        overflow = []
+        self._raw_sizes = {}
         for path in sorted(self.artifacts.rglob("*")):
             if path.is_file() and not path.is_symlink() and "coverage" not in path.relative_to(self.artifacts).parts:
-                self.observations[str(path.relative_to(self.artifacts))] = path.read_bytes()
+                name = str(path.relative_to(self.artifacts))
+                size = path.stat().st_size
+                retained = min(size, RAW_FILE_LIMIT, max(0, RAW_CASE_LIMIT - total))
+                if retained < size:
+                    with path.open("r+b") as stream:
+                        stream.truncate(retained)
+                    overflow.append({"artifact": name, "original_bytes": size, "retained_prefix_bytes": retained})
+                total += retained
+                self._raw_sizes[name] = retained
+                self.observations[name] = path.read_bytes()
+        if overflow:
+            (self.artifacts / "raw-overflow.json").write_text(json.dumps(overflow, indent=2) + "\n")
+            raise HarnessError("raw artifact budget exceeded; retained prefixes only: " + ", ".join(item["artifact"] for item in overflow))
         if self._server is not None:
             for index, request in enumerate(self._server.requests, 1):
                 prefix = "request-%03d" % index
                 self._record(prefix + ".body", request.body)
                 self._record(prefix + ".json", json.dumps({"method": request.method, "authority": request.authority,
-                             "path": request.path, "headers": request.headers}, separators=(",", ":")).encode())
+                             "path": request.path, "headers": request.headers,
+                             "client_address": request.client_address}, separators=(",", ":")).encode())
+                response = request.response
+                if response is not None:
+                    prefix = "response-%03d" % index
+                    self._record(prefix + ".body", response.body)
+                    if response.segments:
+                        self._record(prefix + ".headers", response.segments[0])
+                    self._record(prefix + ".json", json.dumps({"request": index, "status": response.status,
+                                 "headers": response.headers, "reset": response.reset, "close": response.close,
+                                 "completed": response.completed, "chunk_lengths": [len(chunk) for chunk in response.chunks]},
+                                 separators=(",", ":")).encode())
 
     @staticmethod
     def _terminate(process):
@@ -287,7 +363,7 @@ class Context:
         except ProcessLookupError:
             pass
         try:
-            process.communicate(timeout=1)
+            process.wait(timeout=1)
         except subprocess.TimeoutExpired:
             pass
         try:
@@ -298,10 +374,14 @@ class Context:
 
     def close(self):
         """Release provider barriers and reap owned candidate process groups."""
+        if self._closed:
+            return
+        self._closed = True
         if self._server is not None:
             self._server.close()
         for process in self._processes:
             self._terminate(process)
+        self._processes.clear()
         self.collect()
 
 
@@ -339,7 +419,9 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
     from parity import observe
     case = next(case for case in collect_cases() if case.id == case_id)
     if case.pending or sys.platform not in case.platforms:
-        return {"id": case.id, "status": "pending", "reason": case.pending or "unsupported platform", "artifacts": {}}
+        return {"id": case.id, "status": "pending" if case.pending else "unavailable",
+                "reason": case.pending or ("platform %s unavailable; requires %s" % (sys.platform, ", ".join(case.platforms))),
+                "artifacts": {}, "artifact_policies": {}}
     context = None
     try:
         os.umask(0o022)
@@ -347,25 +429,99 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
         case.run(context)
         if context._server is not None:
             context._server.assert_complete()
-        context.collect()
+        context.close()
+        if context._server is not None:
+            context._server.assert_complete()
         normalized = observe.finish(context)
-        if not isinstance(normalized, dict) or any(not isinstance(value, bytes) for value in normalized.values()):
-            raise HarnessError("observe.finish must return dict[str, bytes]")
+        if not isinstance(normalized, dict) or not normalized or any(not isinstance(name, str) or not isinstance(value, bytes) for name, value in normalized.items()):
+            raise HarnessError("observe.finish must return a nonempty dict[str, bytes]")
+        policies = context.artifact_policies
+        if not isinstance(policies, dict) or policies.keys() != normalized.keys() or any(policy not in ("B", "N", "S") for policy in policies.values()):
+            raise HarnessError("observe.finish must declare B/N/S in context.artifact_policies for every artifact")
+        (context.artifacts / "artifact-policies.json").write_text(json.dumps(policies, indent=2) + "\n")
         for name, data in normalized.items():
             target = Path(artifacts) / "normalized" / name
             if target.is_absolute() and not target.resolve().is_relative_to((Path(artifacts) / "normalized").resolve()):
                 raise HarnessError("invalid normalized artifact name")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-        return {"id": case.id, "status": "passed", "artifacts": normalized}
+        result = {"id": case.id, "status": "passed", "artifacts": normalized, "artifact_policies": policies}
     except Exception:
-        failure = traceback.format_exc()[-16384:]
-        if context is not None:
-            (context.artifacts / "failure.txt").write_text(failure)
-        return {"id": case.id, "status": "failed", "reason": failure, "artifacts": {}}
+        result = {"id": case.id, "status": "failed", "reason": traceback.format_exc()[-16384:], "artifacts": {},
+                  "artifact_policies": context.artifact_policies if context else {}}
     finally:
         if context is not None:
-            context.close()
+            try:
+                context.close()
+            except Exception:
+                result = {"id": case.id, "status": "failed", "reason": (result.get("reason", "") + "\ncleanup failed:\n" + traceback.format_exc())[-16384:],
+                          "artifacts": {}, "artifact_policies": context.artifact_policies}
+    if context is not None and result["status"] == "failed":
+        (context.artifacts / "failure.txt").write_text(result["reason"])
+    return result
+
+
+def freeze_case(source, destination, normalized, policies):
+    """Freeze oracle bytes beside review-only raw evidence and its hash ledger."""
+    source, destination = Path(source), Path(destination)
+    ledger = json.loads((source / "substitutions.json").read_bytes())
+    if not isinstance(ledger, list):
+        raise HarnessError("substitutions.json must contain a ledger list")
+    evidence = {"raw": {}, "normalized": {}}
+    for path in sorted(source.rglob("*")):
+        name = path.relative_to(source)
+        if name.parts[0] in ("normalized", "coverage") or str(name) in ("substitutions.json", "artifact-policies.json"):
+            continue
+        if path.is_symlink():
+            raise HarnessError("capture refuses symlink evidence: " + str(name))
+        if path.is_file():
+            data = path.read_bytes()
+            target = destination / "raw" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as stream:
+                stream.write(data)
+            evidence["raw"][str(name)] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
+    for name, data in normalized.items():
+        target = destination / "normalized" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("xb") as stream:
+            stream.write(data)
+        evidence["normalized"][name] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
+    ledger.append({"frozen_evidence": evidence})
+    for name, data in (("substitutions.json", ledger), ("artifact-policies.json", policies)):
+        with (destination / name).open("x") as stream:
+            stream.write(json.dumps(data, indent=2) + "\n")
+
+
+def load_golden(expected, policies):
+    """Verify retained evidence integrity and return only normalized oracle bytes."""
+    expected = Path(expected)
+    if not expected.is_dir():
+        raise AssertionError("missing golden for " + expected.name)
+    stored_policies = json.loads((expected / "artifact-policies.json").read_bytes())
+    if stored_policies != policies:
+        raise AssertionError("golden artifact policies differ")
+    ledger = json.loads((expected / "substitutions.json").read_bytes())
+    if not isinstance(ledger, list) or not ledger or "frozen_evidence" not in ledger[-1]:
+        raise AssertionError("golden lacks frozen evidence ledger")
+    evidence = ledger[-1]["frozen_evidence"]
+    stored = {}
+    for kind in ("raw", "normalized"):
+        files = {}
+        for path in (expected / kind).rglob("*"):
+            if path.is_symlink():
+                raise AssertionError("golden contains symlink evidence")
+            if path.is_file():
+                name = str(path.relative_to(expected / kind))
+                data = path.read_bytes()
+                files[name] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
+                if kind == "normalized":
+                    stored[name] = data
+        if files != evidence[kind]:
+            raise AssertionError("golden " + kind + " evidence hashes or lengths differ")
+    if stored.keys() != stored_policies.keys():
+        raise AssertionError("golden artifact policies do not cover normalized artifacts")
+    return stored
 
 
 def suite_digest(suite):
@@ -404,7 +560,7 @@ def report_counts(cases, results):
         selected = [case for case in members if case.id in statuses]
         return {"total": len(members), "selected": len(selected), "omitted": len(members) - len(selected),
                 **{status: sum(statuses[case.id] == status for case in selected)
-                   for status in ("passed", "failed", "pending", "not_executed")}}
+                   for status in ("passed", "observed", "failed", "pending", "unavailable", "not_executed")}}
 
     dimensions = {}
     for name, groups in (
@@ -412,25 +568,27 @@ def report_counts(cases, results):
         ("platform", {platform for case in cases for platform in case.platforms}),
         ("slow", {str(case.slow).lower() for case in cases}),
         ("class", {case.comparison for case in cases}),
+        ("pending", {str(bool(case.pending)).lower() for case in cases}),
     ):
         dimensions[name] = {}
         for group in sorted(groups):
             members = [case for case in cases if (group in case.platforms if name == "platform" else
-                       {"area": case.area, "slow": str(case.slow).lower(), "class": case.comparison}[name] == group)]
+                       {"area": case.area, "slow": str(case.slow).lower(), "class": case.comparison,
+                        "pending": str(bool(case.pending)).lower()}[name] == group)]
             statuses = outcomes if name != "platform" or group == sys.platform else {id: "not_executed" for id in outcomes}
             dimensions[name][group] = count(members, statuses)
     return count(cases, outcomes), dimensions
 
 
 def validate_capture(binary, manifest, golden):
-    """Require the manifest's protected reference digest and an empty golden lane."""
+    """Require the protected reference digest and a never-created golden lane."""
     if manifest.get("freeze_status") != "ready":
         raise HarnessError("capture blocked: manifest freeze_status must be ready")
     digest = hashlib.sha256(Path(binary).read_bytes()).hexdigest()
     if not manifest.get("reference_commit") or manifest.get("reference_binary_sha256") != digest:
         raise HarnessError("capture requires the protected reference manifest and matching binary SHA-256")
-    if golden.exists() and any(golden.iterdir()):
-        raise HarnessError("capture refuses nonempty goldens")
+    if golden.exists() or golden.is_symlink():
+        raise HarnessError("capture refuses an existing golden lane, even when empty")
 
 
 def main(argv=None):
@@ -442,7 +600,9 @@ def main(argv=None):
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--list", action="store_true")
-    parser.add_argument("--capture", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--capture", action="store_true")
+    mode.add_argument("--probe", action="store_true", help="run assertions and normalization only; never a golden comparison or parity gate")
     args = parser.parse_args(argv)
     try:
         cases = collect_cases()
@@ -481,9 +641,12 @@ def main(argv=None):
                     try:
                         result = future.result()
                     except Exception as exc:
-                        result = {"id": case.id, "status": "failed", "reason": "worker failed: %s" % exc, "artifacts": {}}
+                        result = {"id": case.id, "status": "failed", "reason": "worker failed: %s" % exc, "artifacts": {}, "artifact_policies": {}}
                     results.append(result)
-        capture_allowed = args.capture and not any(item["status"] == "failed" for item in results)
+        capture_allowed = args.capture and all(item["status"] == "passed" for item in results)
+        if capture_allowed:
+            validate_capture(args.bin, manifest, golden)
+            golden.mkdir(parents=True, exist_ok=False)
         if args.capture and not capture_allowed:
             print("capture withheld: selected cases failed; no goldens written", file=sys.stderr)
         for result in results:
@@ -491,25 +654,31 @@ def main(argv=None):
                 expected = golden / result["id"]
                 actual = result["artifacts"]
                 if args.capture:
-                    for name, data in actual.items() if capture_allowed else ():
-                        destination = expected / name
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        destination.write_bytes(data)
+                    if capture_allowed:
+                        freeze_case(artifacts / result["id"], expected, actual, result["artifact_policies"])
+                elif args.probe:
+                    result.update(status="observed", comparison="not_run")
                 else:
-                    stored = {str(path.relative_to(expected)): path.read_bytes() for path in expected.rglob("*") if path.is_file()}
                     from parity.observe import compare
                     try:
-                        if not expected.exists():
-                            raise AssertionError("missing golden for " + result["id"])
+                        stored = load_golden(expected, result["artifact_policies"])
                         compare(stored, actual)
-                    except AssertionError as exc:
+                    except (AssertionError, OSError, ValueError, KeyError, TypeError) as exc:
                         result.update(status="failed", reason=str(exc))
             result.pop("artifacts", None)
             print("%s %s%s" % (result["status"].upper(), result["id"], ": " + result["reason"] if result.get("reason") else ""))
         counts, coverage_counts = report_counts(cases, results)
         selected_ids = {case.id for case in selected}
         pending_reasons = {result["id"]: result.get("reason", "") for result in results if result["status"] == "pending"}
-        report = {"platform": sys.platform, "selected": [case.id for case in selected],
+        report = {"mode": "probe" if args.probe else "capture" if args.capture else "compare",
+                  "golden_comparison": not (args.probe or args.capture),
+                  "gate_success": not (args.probe or args.capture) and len(selected) == len(cases) and all(result["status"] == "passed" for result in results),
+                  "scope": "full-platform" if len(selected) == len(cases) else "selection",
+                  "unexecuted_platforms": sorted({platform for case in cases for platform in case.platforms} - {sys.platform}),
+                  "raw_artifact_policy": {"file_bytes": RAW_FILE_LIMIT, "case_bytes": RAW_CASE_LIMIT,
+                                          "overflow": "fail; retain bounded prefixes only, never compare them",
+                                          "coverage": "separate instrumented-binary output; not raw observations"},
+                  "platform": sys.platform, "selected": [case.id for case in selected],
                   "omitted": [case.id for case in cases if case not in selected],
                   "reference_commit": manifest.get("reference_commit"),
                   "reference_binary_sha256": manifest.get("reference_binary_sha256"),
@@ -519,10 +688,18 @@ def main(argv=None):
                                "selected": case.id in selected_ids}
                               for case in cases if case.pending or case.id in pending_reasons],
                   "capture_written": capture_allowed, "suite_digest": suite_digest(suite)}
+        result_by_id = {result["id"]: result for result in results}
+        report["case_ledger"] = [{"id": case.id, "area": case.area, "platforms": list(case.platforms),
+                                 "slow": case.slow, "pending": case.pending,
+                                 "status": result_by_id.get(case.id, {}).get("status", "omitted"),
+                                 "artifact_policies": result_by_id.get(case.id, {}).get("artifact_policies", {})}
+                                for case in cases]
         (artifacts / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         print("summary: " + ", ".join("%s=%s" % item for item in report["counts"].items()))
         print("artifacts: " + str(artifacts))
-        return int(any(result["status"] != "passed" for result in results))
+        if args.probe:
+            print("PROBE ONLY: assertions/normalization observed; no golden comparison or gate success")
+        return int(any(result["status"] != ("observed" if args.probe else "passed") for result in results))
     except (HarnessError, OSError, ValueError, ImportError) as exc:
         print("parity: " + str(exc), file=sys.stderr)
         return 2

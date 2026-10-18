@@ -4,7 +4,9 @@ All provider replies are inputs. Assertions inspect the actual destination
 request and trace, rather than trusting the router's declared selection.
 """
 
+import copy
 import hashlib
+import math
 import json
 from urllib.parse import urlsplit
 
@@ -267,7 +269,7 @@ def _accepted(ctx):
     assert set(criteria) == set(LADDER)
     for route, description in criteria.items():
         destination, effort = (SOL, "medium") if route == "capable" else route.split("/")
-        assert description.startswith(f'Model: {destination}; reasoning effort: "{effort}". ')
+        assert description == _criterion(destination, effort)
     raw = _requests(ctx, "jev")[0].body
     assert b"\\\\u003c\\\\u003e\\\\u0026" in raw and b"\\\\u2028\\\\u2029" in raw
     assert b"\\\\u003c" in raw  # escaped JSON inside the state string
@@ -348,21 +350,26 @@ def result_bytes(ctx):
                        if p.is_file() and p.suffix in (".jsonl", ".stdout", ".stderr"))
 
 
-def _distribution(ctx, probabilities, expected, confidence=0.01, choice=None):
+def _distribution(ctx, probabilities, expected, confidence=0.01, choice=None,
+                  ladder=LADDER, flags=(), configured=(SOL, "medium")):
     marker = "W42 W43 distribution sentinel"
     _router(ctx, marker, _choice(probabilities, confidence, choice))
-    destination, effort = (SOL, "medium") if expected == "capable" else expected.split("/")
-    _expect(ctx, _openai(), marker, destination)
-    _ok(ctx.run(marker, flags=("--auto",), env=_env(ctx)))
-    _pair(_requests(ctx, "openai")[0], destination, effort)
+    destination, effort = configured if expected == "capable" else expected.split("/")
+    _expect(ctx, _reply(destination), marker, destination)
+    _ok(ctx.run(marker, flags=("--auto",) + tuple(flags), env=_env(ctx)))
+    _pair(_requests(ctx, "anthropic" if destination.startswith("claude-") else "openai")[0], destination, effort)
     route = _routes(ctx)[0]
     assert route["selected_route"]["id"] == expected
-    assert route["ladder"] == LADDER and route["threshold"] == 0.8
+    assert route["ladder"] == ladder and route["threshold"] == 0.8
     running = 0
-    for index, route_id in enumerate(LADDER):
+    for index, route_id in enumerate(ladder):
         running += probabilities[route_id]
         assert route["cumulative"][index] == running
-    _packet(ctx, _requests(ctx, "jev")[0])
+    _, criteria = _packet(ctx, _requests(ctx, "jev")[0])
+    assert set(criteria) == set(ladder)
+    for route_id in ladder:
+        pair = configured if route_id == "capable" else route_id.split("/")
+        assert criteria[route_id] == _criterion(*pair)
 
 
 def _dwell(ctx, failure=False, permission=False, cap=False, router_failure=False):
@@ -625,7 +632,7 @@ def _gojson(value):
     return text.encode()
 
 
-def _packet_boundary(ctx):
+def _packet_boundary(ctx, escaping=False):
     marker = "W40 exact-boundary "
     _router(ctx, marker)
     _expect(ctx, _openai(), marker, LUNA)
@@ -635,7 +642,10 @@ def _packet_boundary(ctx):
     state = json.loads(packet["state"])
     assert _gojson(packet) == original.body
     for delta in (-1, 0, 1):
-        text = marker + "x" * (32768 + delta - len(original.body) + len("baseline"))
+        stem = marker + ('<> &\\"\u2028\u2029é😀' * 250 if escaping else '')
+        state["user_requests_and_summaries"][0]["user"]["text"] = stem
+        packet["state"] = _gojson(state).decode()
+        text = stem + "x" * (32768 + delta - len(_gojson(packet)))
         state["user_requests_and_summaries"][0]["user"]["text"] = text
         packet["state"] = _gojson(state).decode()
         expected = _gojson(packet)
@@ -791,6 +801,238 @@ def _summary_projection(ctx):
     assert records[0]["summary"]["replaced_entries"] == 2
 
 
+def _criterion(destination, effort):
+    models = {
+        LUNA: "Designated faster model; do not assume high effort equals the stronger model.",
+        SOL: "Stronger model for work that needs more capability than the faster model provides.",
+    }
+    efforts = {
+        "low": "Clear lookups, mechanical changes and interpreting straightforward tool results.",
+        "medium": "A concrete multi-step task needing integration of several findings or a specific debugging path.",
+        "high": "Evidence cheaper effort fell short: repeated failure, competing hypotheses after investigation, or an explicit request for deep analysis.",
+    }
+    return (f'Model: {destination}; reasoning effort: "{effort}". {destination} / {effort}. '
+            + models.get(destination, "Configured model.") + " "
+            + efforts.get(effort, "Use the configured model's explicit effort setting."))
+
+
+def _router_success(ctx, response):
+    marker = "W41 valid-shape"
+    _router(ctx, marker, response)
+    _expect(ctx, _openai(), marker, LUNA)
+    _ok(ctx.run(marker, flags=("--auto",), env=_env(ctx)))
+    _pair(_requests(ctx, "openai")[0], LUNA, "low")
+    assert _routes(ctx)[0]["selected_route"]["id"] == LADDER[0]
+    _packet(ctx, _requests(ctx, "jev")[0])
+
+
+def _router_transport(ctx, kind):
+    marker = "W41 transport-shape"
+    response = {
+        "body-deadline": Response(chunks=(b'{"model":', _json(_choice()).encode()), delays=(0, 2.6)),
+        "progress-deadline": Response(chunks=tuple(_json(_choice()).encode()[i:i + 1] for i in range(20)), delays=.15),
+        "whole-deadline": Response(body=_choice(), header_delay=1.2, delays=1.2),
+        "short-body": Response(body=b'{', headers={"Content-Length": "20"}),
+    }[kind]
+    ctx.server.expect(_path(ctx, "jev"), response, marker=marker, model=JEV)
+    _expect(ctx, _openai(), marker)
+    _ok(ctx.run(marker, flags=("--auto",), env=_env(ctx)))
+    assert len(_requests(ctx, "jev")) == 1
+    route = _routes(ctx)[0]
+    assert route["action"] == "fallback" and not route["router_usage"]["known"]
+    assert route["reason"] == ("read Jev response: unexpected end of input" if kind == "short-body"
+                                 else "read Jev response: operation timed out"), route
+    _pair(_requests(ctx, "openai")[0], SOL, "medium")
+
+
+def _redirect(ctx, status):
+    # An unexpected tripwire request fails provider completion, including GET redirects.
+    target = ctx.server.url + "/jev-credential-tripwire"
+    _bad_router(ctx, b"DO-NOT-LOG-ROUTER-BODY", "Jev returned HTTP " + str(status),
+                status, {"Location": target})
+    assert not any(r.path == "/jev-credential-tripwire" for r in ctx.server.requests)
+
+
+def _shell_packet(ctx, size, plan=False):
+    marker = "W39 shell-preview"
+    text = "é" * (size // 2) + ("x" if size % 2 else "")
+    command = "printf '%s' '" + text + "'"
+    _expect(ctx, _openai("<plan>\nwhole-plan\n</plan>" if plan else "shell source"), marker)
+    probabilities = {r: float(r == LADDER[0]) for r in LADDER if r != SOL + "/low"}
+    probabilities[SOL + "/medium"] = 0
+    _router(ctx, "shell-route-next", _choice(probabilities))
+    _expect(ctx, _openai(), "shell-route-next", LUNA)
+    script = marker + "\n!" + command + "\n/auto on\nshell-route-next\n/exit\n"
+    _ok(ctx.chat(script.encode(), flags=("--model", SOL) + (("--plan",) if plan else ()), env=_env(ctx)))
+    state, _ = _packet(ctx, _requests(ctx, "jev")[0])
+    shell = next(r for r in state["recent_evidence"] if r["kind"] == "shell")
+    assert shell["trust"] == "untrusted_tool_data"
+    assert shell["shell"]["output"] == text.encode()[:512].decode("utf-8", errors="ignore")
+    assert shell["shell"]["command"] == command.encode()[:512].decode("utf-8", errors="ignore")
+    fields = {p["field"]: p["original_bytes"] for p in state.get("previews", []) if p["entry"] == shell["entry"]}
+    assert ("shell.output" in fields) is (size > 512)
+    assert fields.get("shell.command") == len(command.encode())
+    assert state["plan_mode"] is plan
+    if plan:
+        assert state["latest_complete_plan"]["assistant"]["blocks"][0]["text"] == "<plan>\nwhole-plan\n</plan>"
+
+
+def _summary_overflow(ctx, field):
+    marker = "W40 whole-critical"
+    large = '<>&\\"\u2028\u2029' * 2000
+    if field == "project":
+        (ctx.workspace / "AGENTS.md").write_text(large, encoding="utf-8")
+        script = "/auto on\n" + marker + "\n/exit\n"
+    else:
+        _expect(ctx, _openai("<plan>\n" + large + "\n</plan>" if field == "plan" else "source"), destination=SOL)
+        script = "overflow-source\n"
+        if field == "summary":
+            _expect(ctx, _openai(large), destination=SOL)
+            script += "/compact\n"
+        script += "/auto on\n" + marker + "\n/exit\n"
+    _expect(ctx, _openai(), destination=SOL)
+    _ok(ctx.chat(script.encode(), flags=("--model", SOL), env=_env(ctx)))
+    assert not _requests(ctx, "jev")
+    assert "critical routing state" in _routes(ctx)[0]["reason"]
+    assert _json(large.strip() if field == "summary" else large)[1:-1] in _json(_body(_requests(ctx, "openai")[-1]))
+
+
+def _turn_reset(ctx, failed=False):
+    for turn in range(2):
+        marker = lambda raw, t=turn: "W44 turn-" + str(t) in _json(_body_latest(raw))
+        if failed:
+            _router(ctx, marker, b"{", status=500)
+            destination, efforts = SOL, ["medium"] * 5
+        else:
+            probabilities = {r: float(r == LADDER[0]) for r in LADDER}
+            _router(ctx, marker, _choice(probabilities))
+            destination, efforts = LUNA, ["low"] * 3 + ["high"] * 3 + ["low"] * 3 + ["high" if turn else "low"]
+        for index, effort in enumerate(efforts):
+            _expect(ctx, _openai(calls=((f"turn-{turn}-{index}", "list_files", {"path": "."}),)), marker, destination)
+            if not failed and (index in (2, 5) or turn == 1 and index == 8):
+                chosen = "low" if index == 5 else "high"
+                _router(ctx, marker, _choice({LUNA + "/" + e: float(e == chosen) for e in ("low", "medium", "high")}))
+        _expect(ctx, _openai("turn complete"), marker, destination)
+    _ok(ctx.chat(b"W44 turn-0\nW44 turn-1\n/exit\n", flags=("--auto",), env=_env(ctx)))
+    routes = _routes(ctx)
+    starts = [r for r in routes if r["boundary_reason"] == "user_turn"]
+    assert len(starts) == 2
+    if failed:
+        assert len(_requests(ctx, "jev")) == 2 and len(routes) == 2
+    else:
+        assert len(_requests(ctx, "jev")) == 7
+        # The second turn starts already low; it may stay, but its cap is fresh.
+        assert sorted(r["action"] for r in starts) == ["stay", "switch"]
+    finished = [e["data"] for e in _events(ctx, "run.finished")]
+    assert len(finished) == 2
+    assert all(event["router_usage"]["known"] is (not failed) for event in finished)
+    if not failed:
+        assert sorted(event["router_usage"]["input_tokens"] for event in finished) == [39, 52]
+
+
+def _body_latest(raw):
+    body = json.loads(raw)
+    if body.get("model") == JEV:
+        return json.loads(body["state"])["user_requests_and_summaries"][-1]
+    return [m for m in body.get("input", body.get("messages")) if m.get("role") == "user"][-1]
+
+
+def _effect_switch(ctx, unknown):
+    marker = "W51 effect-source"
+    command = "sleep 30 &" if unknown else "printf applied > applied.txt"
+    _expect(ctx, _openai(calls=(("effect-call", "exec", {"argv": ["/bin/sh", "-c", command], "cwd": "."}),)), marker)
+    if not unknown:
+        _expect(ctx, _openai("effect acknowledged"), marker)
+        _expect(ctx, _anthropic(), "effect-next", OPUS)
+    _ok(ctx.chat((marker + "\n/model " + OPUS + "\neffect-next\n/exit\n").encode(),
+                 flags=("--model", SOL), env=_env(ctx)))
+    if unknown:
+        assert len(_events(ctx, "model.switch.failed")) == 1
+        assert "uncertain tool effects" in _events(ctx, "model.switch.failed")[0]["data"]["reason"]
+        assert not _requests(ctx, "anthropic")
+    else:
+        records, _ = _handoff(_requests(ctx, "anthropic")[0])
+        assert next(r for r in records if r["kind"] == "tool")["tool"]["outcome"]["effect"] == "applied"
+        assert (ctx.workspace / "applied.txt").read_text() == "applied"
+
+
+def _anthropic_pin(ctx, operation, switched=True):
+    marker = "W52 anthropic-pin"
+    target = ctx.workspace / "target"
+    target.mkdir()
+    (ctx.workspace / "AGENTS.md").write_text("original-pin-rules", encoding="utf-8")
+    (target / "AGENTS.md").write_text("target-pin-rules", encoding="utf-8")
+    script = ""
+    if switched:
+        _expect(ctx, _openai("source", opaque=True), marker)
+        script = marker + "\n/model " + OPUS + "\n"
+    _expect(ctx, _anthropic(calls=(("pin-move", "switch_workspace", {"path": str(target)}),), opaque=True), destination=OPUS)
+    _expect(ctx, _anthropic("moved", opaque=True), destination=OPUS)
+    script += "pin-move-next\n"
+    command = {"effort": "/effort high", "reset": "/reset", "compact": "/compact",
+               "model": "/model claude-sonnet-5-5", "plan": "/plan"}[operation]
+    if operation == "compact":
+        _expect(ctx, _anthropic("pin-summary"), destination=OPUS)
+    destination = "claude-sonnet-5-5" if operation == "model" else OPUS
+    _expect(ctx, _anthropic(), destination=destination)
+    script += command + "\npin-after\n/exit\n"
+    _ok(ctx.chat(script.encode(), flags=("--model", SOL if switched else OPUS, "--allow-workspace", str(target)), env=_env(ctx)))
+    requests = _requests(ctx, "anthropic")
+    before, moved, after = map(_body, (requests[0], requests[1], requests[-1]))
+    assert before["system"] == moved["system"]
+    assert "original-pin-rules" in _json(before["system"]) and "target-pin-rules" not in _json(before["system"])
+    if operation in ("effort", "plan"):
+        assert after["system"] == before["system"]
+        assert "native-secret-anthropic" in _json(after["messages"])
+    else:
+        assert "target-pin-rules" in _json(after["system"]) and "original-pin-rules" not in _json(after["system"])
+        assert "native-secret-anthropic" not in _json(after)
+    _pair(requests[-1], destination, "high" if operation == "effort" else "low")
+    if operation == "compact":
+        assert "pin-summary" in _json(after) and PREAMBLE not in _json(after)
+    if operation == "reset":
+        assert "pin-move-next" not in _json(after)
+
+
+def _admission_edges(ctx, provider_change=False, opaque=False):
+    marker = "W49 exact-admission"
+    destination = OPUS if provider_change else LUNA
+    first = _openai("source", opaque=opaque)
+    if opaque:
+        first["output"][0]["encrypted_content"] = "opaque-admission-secret" * 12000
+    second = _openai("x" * 70000)
+    second["usage"]["input_tokens"] = 8000
+
+    def run(window, accepted):
+        prior = len(_requests(ctx, "openai"))
+        _expect(ctx, first)
+        _expect(ctx, second)
+        target = destination if accepted else SOL
+        _expect(ctx, _reply(target), destination=target)
+        script = marker + "\nadmission-measure\n/model " + destination + "\nadmission-after\n/exit\n"
+        _ok(ctx.chat(script.encode(), flags=("--model", SOL), env=_env(ctx, REAGENT_CONTEXT_WINDOW_TOKENS=str(window))))
+        return _requests(ctx, "openai")[prior:prior + 2]
+
+    requests = run(1000000, True)
+    switch = _events(ctx, "model.switch.finished")[-1]["data"]
+    measured = len(requests[1].body)
+    if opaque:
+        # The large native item is resent, but cannot dilute measured text admission.
+        item = _body(requests[1])["input"]
+        reasoning = next(i for i in item if i.get("type") == "reasoning")
+        measured -= len(_gojson(reasoning))
+        assert measured < len(requests[1].body) // 2
+    rate = .5 if provider_change else max(.25, 8000 / measured * 1.5)
+    required = math.ceil(switch["request_bytes"] * rate) + 16000
+    for delta in (-1, 0, 1):
+        finished = len(_events(ctx, "model.switch.finished"))
+        failed = len(_events(ctx, "model.switch.failed"))
+        run(required + delta, delta >= 0)
+        assert len(_events(ctx, "model.switch.finished")) == finished + (delta >= 0)
+        assert len(_events(ctx, "model.switch.failed")) == failed + (delta < 0)
+    assert all("opaque-admission-secret" not in _json(_body(r)) for r in _requests(ctx, "anthropic"))
+
+
 def collect():
     cases = []
 
@@ -932,6 +1174,126 @@ def collect():
     for operation in ("effort", "reset", "model", "compact"):
         add("W52.workspace-" + operation, "Workspace AGENTS result, pinned prefix and " + operation,
             _workspace_pin, operation)
+    # Configured pairs add a seventh (and sometimes eighth) joint route.
+    base = [LUNA + "/" + e for e in ("low", "medium", "high")] + [SOL + "/" + e for e in ("low", "medium", "high")]
+    for destination, effort in ((SOL, "none"), (SOL, "max"), ("claude-haiku-4-5", ""),
+                                (OPUS, "low"), (OPUS, "high"), ("gpt-6.1-sol", "medium")):
+        ladder = (base[:3] + ["capable"] + base[3:] if effort == "none" else base + ["capable"])
+        if destination not in (LUNA, SOL, "claude-haiku-4-5") and effort != "high":
+            ladder += [destination + "/high"]
+        for index, selected in enumerate(ladder):
+            probabilities = {r: float(r == selected) for r in ladder}
+            add(f"W38.configured-{destination}-{effort or 'omitted'}-{index + 1}",
+                "Configured seven/eight-route criterion and actual destination", _distribution,
+                probabilities, selected, ladder=ladder,
+                flags=("--model", destination, "--reasoning-effort", effort), configured=(destination, effort))
+    for suffix, flags, settings, destination, effort in [
+        ("explicit-provider", ("--provider", "openai"), {}, LUNA, "low"),
+        ("anthropic-provider", ("--provider", "anthropic"), {}, "claude-haiku-4-5", ""),
+        ("flag-over-env", ("--model", LUNA), {"REAGENT_MODEL": OPUS}, LUNA, "low"),
+        ("empty-env", (), {"REAGENT_MODEL": ""}, SOL, "medium"),
+        ("explicit-empty-effort", ("--reasoning-effort", ""), {}, SOL, ""),
+        ("explicit-none", ("--reasoning-effort", "none"), {}, SOL, "none"),
+        ("explicit-provider-effort", ("--provider", "openai", "--reasoning-effort", "high"), {}, LUNA, "high"),
+    ]:
+        settings["TYPESAFE_API_KEY"] = ""
+        if effort == "":
+            if destination == SOL:
+                add("W35." + suffix, "Effort omission is not a valid Auto fallback", _fallback,
+                    flags, settings, error="Auto fallback needs a catalog model")
+                continue
+        add("W35." + suffix, "Launch precedence/default branches", _fallback, flags, settings, destination, effort)
+    add("W40.escaped-boundary", "Escape-heavy final double-encoded 32KiB threshold triple", _packet_boundary, True)
+    for field in ("summary", "plan", "project"):
+        add("W40.overflow-" + field, "Critical " + field + " stays whole or sends no router request", _summary_overflow, field)
+    for size in (511, 512, 513):
+        for plan in (False, True):
+            add(f"W39.shell-{size}-plan-{int(plan)}", "Shell UTF8 preview boundary with whole plan", _shell_packet, size, plan)
+    for kind in ("body-deadline", "progress-deadline", "whole-deadline", "short-body"):
+        add("W41." + kind, "Whole router deadline covers body and progressing reads", _router_transport, kind)
+    for status in (301, 302, 303, 307, 308):
+        add("W41.redirect-" + str(status), "Real Location credential tripwire is never followed", _redirect, status)
+    valid = _choice()
+    for size in (16383, 16384):
+        raw = _json(valid).encode()
+        add("W41.response-boundary-" + str(size), "Valid JSON whitespace padding at 16KiB", _router_success, raw + b" " * (size - len(raw)))
+    for confidence in (0, 1):
+        add("W42.confidence-" + str(confidence), "Confidence endpoints do not select sufficiency", _router_success, _choice(confidence=confidence))
+    for suffix, path, value, reason, known in [
+        ("root-null", (), None, "invalid or missing Jev usage", False),
+        ("root-array", (), [], "invalid Jev response JSON", False),
+        ("model-null", ("model",), None, "invalid Jev version or Choice answer", True),
+        ("answers-null", ("answers",), None, "invalid Jev version or Choice answer", True),
+        ("answer-null", ("answers", "route"), None, "invalid Jev version or Choice answer", True),
+        ("answer-type", ("answers", "route", "type"), "Choice", "invalid Jev version or Choice answer", True),
+        ("answer-choice-null", ("answers", "route", "choice"), None, "invalid Jev version or Choice answer", True),
+        ("answer-choice-unknown", ("answers", "route", "choice"), "foreign", "invalid Jev version or Choice answer", True),
+        ("confidence-string", ("answers", "route", "confidence"), "0.5", "invalid Jev response JSON", False),
+        ("probabilities-null", ("answers", "route", "probabilities"), None, "invalid Jev version or Choice answer", True),
+        ("nonselected-null", ("answers", "route", "probabilities", LADDER[1]), None, "invalid Jev probability distribution", True),
+        ("probability-string", ("answers", "route", "probabilities", LADDER[0]), "1", "invalid Jev response JSON", False),
+        ("usage-null", ("usage",), None, "invalid or missing Jev usage", False),
+        ("usage-array", ("usage",), [], "invalid Jev response JSON", False),
+        ("usage-input-null", ("usage", "input_tokens"), None, "invalid or missing Jev usage", False),
+        ("usage-output-null", ("usage", "output_tokens"), None, "invalid or missing Jev usage", False),
+        ("usage-output-negative", ("usage", "output_tokens"), -1, "invalid or missing Jev usage", False),
+        ("usage-fraction", ("usage", "input_tokens"), 1.5, "invalid Jev response JSON", False),
+        ("usage-overflow", ("usage", "output_tokens"), 2**63, "invalid Jev response JSON", False),
+    ]:
+        body = copy.deepcopy(valid)
+        if not path:
+            body = _json(value).encode()
+        else:
+            parent = body
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = value
+        add("W41.shape-" + suffix, "Complete Jev answer/usage shapes", _bad_router, body, reason, known=known)
+    for path in (("model",), ("answers",), ("usage",), ("usage", "input_tokens"), ("usage", "output_tokens"),
+                 ("answers", "route", "type"), ("answers", "route", "choice"), ("answers", "route", "confidence"),
+                 ("answers", "route", "probabilities")):
+        body = copy.deepcopy(valid)
+        parent = body
+        for key in path[:-1]:
+            parent = parent[key]
+        del parent[path[-1]]
+        usage = path[0] == "usage"
+        suffix = "usage-object" if path == ("usage",) else "-".join(path)
+        add("W41.missing-" + suffix, "Missing required Jev field", _bad_router, body,
+            "invalid or missing Jev usage" if usage else "invalid Jev version or Choice answer", known=not usage)
+    for suffix, answer_change in (
+        ("extra-answer", lambda b: b["answers"].update(extra=b["answers"]["route"])),
+        ("wrong-answer-key", lambda b: b["answers"].update(other=b["answers"].pop("route"))),
+        ("extra-probability", lambda b: b["answers"]["route"]["probabilities"].update(extra=0)),
+        ("missing-probability", lambda b: b["answers"]["route"]["probabilities"].pop(LADDER[1])),
+        ("foreign-probability", lambda b: b["answers"]["route"]["probabilities"].update(extra=b["answers"]["route"]["probabilities"].pop(LADDER[1]))),
+    ):
+        body = copy.deepcopy(valid)
+        answer_change(body)
+        add("W42." + suffix, "Probability/answer key set is exact", _bad_router, body,
+            "invalid Jev probability distribution" if suffix == "foreign-probability" else "invalid Jev version or Choice answer", known=True)
+    for suffix, raw in (("nan", b"NaN"), ("infinity", b"Infinity"), ("float-overflow", b"1e309")):
+        body = _json(valid).encode().replace(b'"confidence":0.02', b'"confidence":' + raw)
+        add("W42." + suffix, "Nonfinite probabilities/confidence are rejected", _bad_router, body, "invalid Jev response JSON")
+    for side in (-1, 1):
+        for distance, accepted in ((.0300000005, True), (.030000002, False)):
+            probabilities = {r: 0.0 for r in LADDER}
+            probabilities[LADDER[0]], probabilities[LADDER[1]] = .6, .4 + side * distance
+            suffix = ("lower" if side < 0 else "upper") + ("-inside-epsilon" if accepted else "-outside-epsilon")
+            if accepted:
+                add("W42." + suffix, "Exact rounded-sum tolerance plus epsilon", _distribution, probabilities, LADDER[1])
+            else:
+                add("W42." + suffix, "Outside rounded-sum tolerance plus epsilon", _bad_router,
+                    _choice(probabilities), "Jev probabilities do not sum to one", known=True)
+    add("W44.turn-reset", "Dwell/change cap resets across ordinary user turns", _turn_reset)
+    add("W44.failure-reset", "Router failure disables this run only and usage stays unknown", _turn_reset, True)
+    for cross, opaque in ((False, False), (True, False), (False, True)):
+        add(f"W49.edges-cross-{int(cross)}-opaque-{int(opaque)}", "Calibrated admission exact token threshold triple", _admission_edges, cross, opaque)
+    for unknown in (False, True):
+        add("W51.effect-" + ("unknown" if unknown else "applied"), "Real exec effect gates transactional model switch", _effect_switch, unknown)
+    for switched in (False, True):
+        for operation in ("effort", "plan", "reset", "compact", "model"):
+            add(f"W52.anthropic-{int(switched)}-{operation}", "Anthropic signed native tail and pinned system transition", _anthropic_pin, operation, switched)
     for case_id, description, dependency in [
         ("W39.agent", "Router agent-result trust and roster provenance", "agent lifecycle fixtures (A03–A14)"),
         ("W47.agent", "Agent-labelled Entries in model handoff", "agent lifecycle fixtures (A03–A14)"),

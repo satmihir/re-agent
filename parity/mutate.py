@@ -1,13 +1,10 @@
-"""Targeted, offline mutation checks against frozen parity goldens.
+"""Offline mutation checks against frozen parity goldens.
 
 Usage: python3 -m parity.mutate --bin /tmp/reference --reference-tree . \
     --artifacts /tmp/mutations [--mutation 9]
 
-Only committed cmd/, internal/, go.mod and go.sum are archived. Every mutant
-gets a fresh TemporaryDirectory; neither production sources nor goldens are
-edited. The parity runner is always loaded from this suite, not that archive.
-A build failure, missing case/golden, harness error, timeout or panic is not a
-kill. Reports without an identifiable intended assertion fail closed.
+Each mutant uses a fresh git archive of REF_COMMIT, never HEAD or working files.
+Build failures, panics, missing goldens and harness failures are not kills.
 """
 
 import argparse
@@ -17,6 +14,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -27,6 +25,7 @@ import time
 
 SUITE = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).with_name("mutations.json")
+REF_COMMIT = "f37aa5a38815fe159fba87f23ffdd0d5b09cf63b"
 
 
 def sha256(data):
@@ -41,17 +40,31 @@ def outside(path, root):
     return path != root and root not in path.parents
 
 
+def process_env(directory):
+    """Construct process settings without inheriting shell credentials or config."""
+    home = directory / "process-home"
+    home.mkdir(exist_ok=True)
+    go = shutil.which("go")
+    return {"PATH": (str(Path(go).resolve().parent) + os.pathsep if go else "") + os.defpath,
+            "HOME": str(home), "TMPDIR": tempfile.gettempdir(),
+            "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
+            "LANG": "C", "LC_ALL": "C", "TZ": "UTC", "PYTHONDONTWRITEBYTECODE": "1",
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0", "GOPROXY": "off", "GOSUMDB": "off",
+            "GOTOOLCHAIN": "local", "GOWORK": "off", "GOENV": "off", "GOFLAGS": "",
+            "GOMODCACHE": str(Path.home() / "go/pkg/mod"), "GOCACHE": str(home / "go-build")}
+
+
 def command(argv, cwd, artifacts, name, timeout, env=None):
     """Keep exact process channels even for timeouts and nonzero exits."""
     started = time.monotonic()
     result = {"argv": [str(a) for a in argv], "cwd": str(cwd)}
     try:
-        process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, start_new_session=True)
+        process = subprocess.Popen(argv, cwd=cwd, env=process_env(artifacts) if env is None else env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # The runner owns workers and binaries; a timeout must reap the group.
             try:
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -59,7 +72,10 @@ def command(argv, cwd, artifacts, name, timeout, env=None):
             try:
                 stdout, stderr = process.communicate(timeout=3)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 stdout, stderr = process.communicate()
             result["timeout"] = True
         result["exit_code"] = process.returncode
@@ -74,15 +90,17 @@ def command(argv, cwd, artifacts, name, timeout, env=None):
 
 
 def archive_reference(tree, artifacts, timeout):
-    process, revision = command(["git", "-C", str(tree), "rev-parse", "HEAD"],
+    process, revision = command(["git", "-C", str(tree), "rev-parse", REF_COMMIT + "^{commit}"],
                                 SUITE, artifacts, "reference-revision", timeout)
-    if process.get("exit_code") != 0:
-        raise ValueError("cannot resolve reference HEAD; see reference-revision.stderr")
+    if process.get("exit_code") != 0 or process.get("timeout"):
+        raise ValueError("cannot resolve REF_COMMIT; see reference-revision.stderr")
     revision = revision.decode().strip()
+    if revision != REF_COMMIT:
+        raise ValueError("resolved revision differs from REF_COMMIT")
     process, archive = command(["git", "-C", str(tree), "archive", "--format=tar",
                                 revision, "go.mod", "go.sum", "cmd", "internal"],
                                SUITE, artifacts, "reference-archive", timeout)
-    if process.get("exit_code") != 0:
+    if process.get("exit_code") != 0 or process.get("timeout"):
         raise ValueError("git archive failed; see reference-archive.stderr")
     return revision, archive
 
@@ -94,8 +112,7 @@ def extract_reference(archive, target):
             path = PurePosixPath(member.name)
             if path.is_absolute() or ".." in path.parts:
                 raise ValueError("unsafe path in reference archive: " + member.name)
-            if any(part in (".git", ".env") or part.startswith(".env.")
-                   for part in path.parts):
+            if any(part in (".git", ".env") or part.startswith(".env.") for part in path.parts):
                 continue
             if not path.parts or (path.parts[0] not in ("cmd", "internal") and
                                   str(path) not in ("go.mod", "go.sum")):
@@ -109,21 +126,25 @@ def extract_reference(archive, target):
 
 
 def apply_mutation(root, mutation, artifacts):
-    """Apply unique byte replacements exclusively in the fresh archive root."""
-    changed = {}
+    """Validate every unique replacement before publishing within the archive root."""
+    changed, updates = {}, {}
     for patch in mutation["patches"]:
         path = PurePosixPath(patch["path"])
-        if path.is_absolute() or ".." in path.parts or path.parts[0] not in ("cmd", "internal"):
+        if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] not in ("cmd", "internal"):
             raise ValueError("mutation path must be inside archived production sources")
         destination = root.joinpath(*path.parts)
-        original = destination.read_bytes()
+        if any(root.joinpath(*path.parts[:i]).is_symlink() for i in range(1, len(path.parts) + 1)):
+            raise ValueError("mutation refuses symlink path")
+        original = updates[destination] if destination in updates else destination.read_bytes()
         old, new = patch["old"].encode(), patch["new"].encode()
         if not old or old == new or original.count(old) != 1:
             raise ValueError(f"mutation {mutation['id']}: {path} replacement is not unique")
         changed.setdefault(str(path), {"before_sha256": sha256(original)})
         updated = original.replace(old, new, 1)
-        destination.write_bytes(updated)
+        updates[destination] = updated
         changed[str(path)]["after_sha256"] = sha256(updated)
+    for destination, updated in updates.items():
+        destination.write_bytes(updated)
     patch_bytes = json.dumps(mutation["patches"], sort_keys=True,
                              ensure_ascii=False, separators=(",", ":")).encode()
     (artifacts / "patch.json").write_bytes(patch_bytes + b"\n")
@@ -131,7 +152,6 @@ def apply_mutation(root, mutation, artifacts):
 
 
 def load_report(directory):
-    # report.json is the runner contract. summary.json is accepted for older runs.
     for name in ("report.json", "summary.json"):
         path = directory / name
         if path.is_file():
@@ -142,31 +162,36 @@ def load_report(directory):
     raise ValueError("parity runner did not write a case report")
 
 
-def row_status(row):
-    return str(row.get("status", "")).lower()
-
-
 def assertion_failures(row):
-    """Require comparison/assertion evidence, not arbitrary exception wording."""
-    result = []
+    """Use terminal assertion evidence, never filenames or earlier traceback frames."""
+    error = str(row.get("reason", row.get("error", row.get("failure", ""))))
+    if "candidate timed out" in error.lower() or "missing golden" in error.lower():
+        return []
+    if error.startswith("Traceback (most recent call last):"):
+        lines = error.rstrip().splitlines()
+        if not lines or not re.match(r"^AssertionError(?::|$)", lines[-1]):
+            return []
+        # Python includes the failed expression even when the assertion has no message.
+        source = next((line.strip() for line in reversed(lines[:-1])
+                       if line.lstrip().startswith(("assert ", "raise AssertionError("))), "")
+        return [source + "\n" + lines[-1]]
+    failures = []
     for key in ("assertion_failures", "differences"):
         for failure in row.get(key, []):
-            result.append(failure if isinstance(failure, str) else json.dumps(failure))
+            failures.append(failure if isinstance(failure, str) else json.dumps(failure))
     for assertion in row.get("assertions", []):
         if isinstance(assertion, dict) and assertion.get("passed") is False:
-            result.append(json.dumps(assertion))
+            failures.append(json.dumps(assertion))
     kind = row.get("failure_kind", row.get("error_kind", ""))
-    error = str(row.get("error", row.get("failure", row.get("reason", ""))))
-    if "candidate timed out" in error.lower():
-        return []
-    if (kind in ("assertion", "comparison", "AssertionError") or
-            "AssertionError" in error or error.startswith("golden mismatch: ")):
-        result.append(error)
-    return result
+    if kind in ("assertion", "comparison", "AssertionError") or error.startswith("golden mismatch: "):
+        failures.append(error)
+    # observe.compare emits a direct byte mismatch rather than a traceback.
+    if re.match(r"^[^\n]+: byte \d+, expected .+; lengths \d+/\d+$", error):
+        failures.append(error)
+    return failures
 
 
 def has_panic(directory):
-    # Inspect executable channels, not provider fixtures that may contain the word.
     for path in directory.rglob("*"):
         if path.is_file() and (path.name.endswith((".stderr", ".stdout")) or
                                path.name in ("stderr", "stdout", "stderr.bin", "stdout.bin")):
@@ -177,17 +202,11 @@ def has_panic(directory):
 
 def run_cases(binary, cases, directory, timeout):
     directory.mkdir()
-    argv = [sys.executable, "-m", "parity.run", "--bin", str(binary),
-            "--artifacts", str(directory)]
+    argv = [sys.executable, "-m", "parity.run", "--bin", str(binary), "--artifacts", str(directory)]
     for case in cases:
         argv.extend(("--case", case))
-    env = dict(os.environ)
-    # The fixture runner supplies dummy keys in its own isolated process homes.
-    for name in list(env):
-        if name.endswith(("_API_KEY", "_ACCESS_TOKEN")) or name.startswith("REAGENT_"):
-            env.pop(name)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    process, _ = command(argv, SUITE, directory, "runner", timeout, env)
+    # Process HOME must be outside the runner's required-empty artifact directory.
+    process, _ = command(argv, SUITE, directory, "runner", timeout, process_env(directory.parent))
     try:
         report, rows = load_report(directory)
         return process, report, rows
@@ -196,52 +215,75 @@ def run_cases(binary, cases, directory, timeout):
 
 
 def classify(process, report, rows, mutation, directory, baseline=False):
-    if process.get("exit_code") == 2:
-        stderr = directory / "runner.stderr"
-        if stderr.is_file() and b"unknown case:" in stderr.read_bytes():
-            return "unmapped", []
-    if process.get("exit_code") not in (0, 1) or process.get("timeout"):
+    if process.get("exit_code") not in (0, 1) or process.get("timeout") or process.get("launch_error"):
         return "harness_failure", []
     if report.get("report_error") or not rows or any(not isinstance(row, dict) for row in rows):
         return "unmapped", []
-    ids = [str(row.get("id", row.get("case", ""))) for row in rows]
-    if any(not any(case_id.startswith(prefix) for case_id in ids)
-           for prefix in mutation["cases"]):
+    ids = [row.get("id", row.get("case", "")) for row in rows]
+    if len(ids) != len(set(ids)) or set(ids) != set(mutation["cases"]):
         return "unmapped", []
-    if any(not any(case_id.startswith(prefix) for prefix in mutation["cases"])
-           for case_id in ids):
-        return "harness_failure", []
+    if report.get("selected") is not None and set(report["selected"]) != set(ids):
+        return "unmapped", []
     if has_panic(directory):
         return "panic", []
     for path in directory.rglob("invoke-*.status"):
         if int(path.read_text().strip()) < 0:
             return "harness_failure", []
-    statuses = [row_status(row) for row in rows]
+    statuses = [str(row.get("status", "")).lower() for row in rows]
     if any(status not in ("pass", "passed", "fail", "failed") for status in statuses):
         return "unmapped", []
     if baseline:
         okay = process.get("exit_code") == 0 and all(s in ("pass", "passed") for s in statuses)
         return ("passed" if okay else "baseline_failed"), []
-    failed = [row for row in rows if row_status(row) in ("fail", "failed")]
+    failed = [row for row in rows if str(row.get("status", "")).lower() in ("fail", "failed")]
     if not failed:
         return ("survived" if process.get("exit_code") == 0 else "harness_failure"), []
-    failures = [(row, assertion_failures(row)) for row in failed]
-    if any(not assertions for _, assertions in failures):
-        return "harness_failure", []
     if process.get("exit_code") != 1:
         return "harness_failure", []
     matched = []
-    for row, assertions in failures:
-        for assertion in assertions:
-            if re.search(mutation["failure_pattern"], assertion):
-                matched.append({"case": row.get("id", row.get("case")), "assertion": assertion})
-    return ("caught" if matched else "unrelated_assertion"), matched
+    for row in failed:
+        assertions = assertion_failures(row)
+        if not assertions:
+            return "harness_failure", []
+        intended = [assertion for assertion in assertions if re.search(mutation["failure_pattern"], assertion)]
+        if len(intended) != len(assertions):
+            return "unrelated_assertion", []
+        matched.extend({"case": row.get("id", row.get("case")), "assertion": assertion} for assertion in intended)
+    return "caught", matched
+
+
+def resolve_cases(mutation, inventory):
+    """Resolve each selector separately; stale or pending selectors are hard failures."""
+    from parity.run import select_cases
+    resolved = []
+    for selector in mutation["cases"]:
+        selected = select_cases(inventory, [selector], [])
+        if any(case.pending or sys.platform not in case.platforms for case in selected):
+            raise ValueError(f"mutation {mutation['id']}: pending/unsupported selector {selector}")
+        resolved.extend(case.id for case in selected)
+    return dict(mutation, selectors=mutation["cases"], cases=list(dict.fromkeys(resolved)))
+
+
+def validate_manifest(manifest):
+    active, pending = manifest["mutations"], manifest["later_pending"]
+    ids = [item["id"] for item in active + pending]
+    if len(ids) != 36 or set(ids) != set(range(1, 37)):
+        raise ValueError("all 36 design mutations must be classified exactly once")
+    if manifest.get("reference_commit") != REF_COMMIT:
+        raise ValueError("mutation manifest reference differs from REF_COMMIT")
+    for item in active:
+        if not item["cases"] or not item["patches"] or not item["intended_assertion"]:
+            raise ValueError("applicable mutation is missing its catcher or patch")
+        re.compile(item["failure_pattern"])
+    for item in pending:
+        if not item["owner"] or not item["catchers"] or not item["reason"]:
+            raise ValueError("later mutation needs explicit ownership and catchers")
 
 
 def check_mutation(mutation, reference, archive, artifacts, timeout):
     started = time.monotonic()
-    result = {"id": mutation["id"], "description": mutation["description"],
-              "cases": mutation["cases"], "intended_assertion": mutation["intended_assertion"]}
+    result = {key: mutation[key] for key in ("id", "description", "cases", "intended_assertion")}
+    result["selectors"] = mutation.get("selectors", mutation["cases"])
     directory = artifacts / f"mutation-{mutation['id']:02d}"
     directory.mkdir()
     try:
@@ -260,12 +302,10 @@ def check_mutation(mutation, reference, archive, artifacts, timeout):
             extract_reference(archive, root)
             result.update(apply_mutation(root, mutation, directory))
             binary = root / "reagent-mutant"
-            env = dict(os.environ, GOPROXY="off", GOSUMDB="off", GOTOOLCHAIN="local",
-                       GOWORK="off", GOFLAGS="")
             process, _ = command(["go", "build", "-o", str(binary), "./cmd/reagent"],
-                                 root, directory, "build", timeout, env)
+                                 root, directory, "build", timeout)
             result["build"] = process
-            if process.get("exit_code") != 0:
+            if process.get("exit_code") != 0 or process.get("timeout"):
                 result["status"] = "build_failed"
                 return result
             result["binary_sha256"] = sha256(binary.read_bytes())
@@ -273,8 +313,7 @@ def check_mutation(mutation, reference, archive, artifacts, timeout):
             status, assertions = classify(process, report, rows, mutation, directory / "mutant")
             result.update(status=status, assertions=assertions)
             save_json(directory / "assertions.json", {"intended": mutation["intended_assertion"],
-                                                      "status": status, "matched": assertions,
-                                                      "cases": rows})
+                                                      "status": status, "matched": assertions, "cases": rows})
     except (OSError, ValueError, tarfile.TarError) as error:
         result.update(status="harness_failure", error=str(error))
     finally:
@@ -286,34 +325,47 @@ def check_mutation(mutation, reference, archive, artifacts, timeout):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bin", required=True, type=Path, help="unmodified executable that passes frozen goldens")
-    parser.add_argument("--reference-tree", required=True, type=Path, help="Git tree whose committed HEAD is archived")
-    parser.add_argument("--artifacts", required=True, type=Path, help="new directory outside the suite and reference tree")
-    parser.add_argument("--mutation", action="append", type=int, help="manifest mutation ID; repeat to select several")
-    parser.add_argument("--timeout", type=float, default=300, help="seconds per build or selected-case run")
+    parser.add_argument("--reference-tree", required=True, type=Path, help="repository containing REF_COMMIT; HEAD is ignored")
+    parser.add_argument("--artifacts", required=True, type=Path, help="new directory outside suite and reference tree")
+    parser.add_argument("--mutation", action="append", type=int)
+    parser.add_argument("--timeout", type=float, default=300)
     args = parser.parse_args(argv)
     reference, tree, artifacts = args.bin.resolve(), args.reference_tree.resolve(), args.artifacts.resolve()
     if not outside(artifacts, SUITE) or not outside(artifacts, tree):
         parser.error("--artifacts must be outside both suite workspace and reference tree")
     if not reference.is_file() or not os.access(reference, os.X_OK):
         parser.error("--bin must name an executable reference binary")
-    if args.timeout <= 0:
-        parser.error("--timeout must be positive")
+    if not 0 < args.timeout < float("inf"):
+        parser.error("--timeout must be positive and finite")
     manifest_bytes = MANIFEST.read_bytes()
     manifest = json.loads(manifest_bytes)
-    selected = manifest["mutations"]
-    known = {mutation["id"] for mutation in selected}
-    if args.mutation:
-        if set(args.mutation) - known:
-            parser.error("unknown/unmapped mutation IDs: " + str(sorted(set(args.mutation) - known)))
-        selected = [m for m in selected if m["id"] in args.mutation]
+    from parity.run import HarnessError
+    try:
+        validate_manifest(manifest)
+        oracle = json.loads(MANIFEST.with_name("manifest.json").read_bytes())
+        if oracle.get("goldens_frozen") is not True:
+            raise ValueError("mutation execution blocked: goldens are not frozen")
+        if oracle.get("reference_commit") != REF_COMMIT or oracle.get("reference_binary_sha256") != sha256(reference.read_bytes()):
+            raise ValueError("reference binary/commit does not match frozen oracle")
+        selected = manifest["mutations"]
+        known = {mutation["id"] for mutation in selected}
+        if args.mutation:
+            if set(args.mutation) - known:
+                raise ValueError("unknown/later-pending mutation IDs: " + str(sorted(set(args.mutation) - known)))
+            selected = [m for m in selected if m["id"] in args.mutation]
+        from parity.run import collect_cases
+        inventory = collect_cases()
+        selected = [resolve_cases(mutation, inventory) for mutation in selected]
+    except (ValueError, OSError, HarnessError) as error:
+        parser.error(str(error))
     try:
         artifacts.mkdir(parents=True, exist_ok=False)
     except OSError as error:
         parser.error("--artifacts must be a new writable directory: " + str(error))
     started = time.monotonic()
     summary = {"manifest_sha256": sha256(manifest_bytes), "reference_binary": str(reference),
-               "reference_binary_sha256": sha256(reference.read_bytes()),
-               "reference_tree": str(tree), "unmapped": manifest["unmapped"], "mutations": []}
+               "reference_binary_sha256": sha256(reference.read_bytes()), "reference_tree": str(tree),
+               "later_pending": manifest["later_pending"], "mutations": []}
     try:
         revision, archive = archive_reference(tree, artifacts, args.timeout)
         summary.update(reference_revision=revision, archive_sha256=sha256(archive))

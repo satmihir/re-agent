@@ -28,9 +28,14 @@ class Token:
     children: list
 
 
-def lex(raw):
-    """Return tokens with byte offsets, preserving duplicate keys and every lexeme."""
-    raw.decode('utf-8', errors='strict')
+def lex(raw, opaque=False):
+    """Return byte spans; only declared opaque wire/native data may be non-UTF-8."""
+    errors = 'surrogateescape' if opaque else 'strict'
+    raw.decode('utf-8', errors=errors)
+
+    def load(value):
+        return json.loads(value.decode('utf-8', errors=errors),
+                          parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite number')))
     pos = 0
 
     def whitespace():
@@ -56,7 +61,7 @@ def lex(raw):
                     pos += 1
                     break
                 pos += 1
-            value = json.loads(raw[start:pos])
+            value = load(raw[start:pos])
         elif first in (123, 91):
             obj = first == 123
             close = 125 if obj else 93
@@ -82,11 +87,11 @@ def lex(raw):
             if pos >= len(raw) or raw[pos] != close:
                 raise ValueError('unclosed JSON container')
             pos += 1
-            value = json.loads(raw[start:pos])
+            value = load(raw[start:pos])
         else:
             while pos < len(raw) and raw[pos] not in b' \t\r\n,]}':
                 pos += 1
-            value = json.loads(raw[start:pos], parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite number')))
+            value = load(raw[start:pos])
         return Token(start, pos, value, children)
 
     result = parse()
@@ -115,28 +120,80 @@ def replace_spans(raw, changes):
     return b''.join(parts)
 
 
+def encoded_changes(raw, changes):
+    """Lift decoded UTF-8 byte spans through one JSON-string escaping layer."""
+    needed = sorted({point for start, end, _ in changes for point in (start, end)})
+    offsets = {}
+    pos, decoded, index = 1, 0, 0
+    while index < len(needed):
+        if needed[index] == decoded:
+            offsets[needed[index]] = pos
+            index += 1
+            continue
+        if pos >= len(raw)-1:
+            raise AssertionError('decoded substitution outside JSON string')
+        if raw[pos] != 92:
+            stop = raw.find(b'\\', pos, len(raw)-1)
+            if stop < 0:
+                stop = len(raw)-1
+            length = stop-pos
+            while index < len(needed) and needed[index] <= decoded+length:
+                offsets[needed[index]] = pos+needed[index]-decoded
+                index += 1
+            pos, decoded = stop, decoded+length
+            continue
+        stop = pos+(6 if raw[pos+1] == 117 else 2)
+        if raw[pos+1] == 117 and 0xD800 <= int(raw[pos+2:stop], 16) <= 0xDBFF:
+            if raw[stop:stop+2] == b'\\u' and 0xDC00 <= int(raw[stop+2:stop+6], 16) <= 0xDFFF:
+                stop += 6
+        character = json.loads(b'"'+raw[pos:stop]+b'"')
+        decoded += len(character.encode('utf-8', errors='surrogatepass'))
+        pos = stop
+    return replace_spans(raw, [(offsets[start], offsets[end], go_string(value.decode('utf-8'))[1:-1])
+                               for start, end, value in changes])
+
+
 def string_spans(raw, before, after):
-    """Change decoded character spans while retaining all other string lexemes."""
-    boundaries = [1]
-    pos = 1
-    while pos < len(raw)-1:
-        start = pos
-        if raw[pos] == 92:
-            pos += 6 if raw[pos+1] == 117 else 2
-            if raw[start+1:start+2] == b'u' and 0xD800 <= int(raw[start+2:start+6], 16) <= 0xDBFF:
-                if raw[pos:pos+2] == b'\\u' and 0xDC00 <= int(raw[pos+2:pos+6], 16) <= 0xDFFF:
-                    pos += 6
-        else:
-            lead = raw[pos]
-            pos += 1 if lead < 128 else 2 if lead < 224 else 3 if lead < 240 else 4
-        boundaries.append(pos)
-    if len(boundaries) != len(before)+1:
-        raise AssertionError('string byte/character span mismatch')
+    """Preserve untouched lexemes, including inside large embedded JSON bodies."""
+    if before == after:
+        return raw
+    old, new = before.encode('utf-8'), after.encode('utf-8')
+    if before.lstrip().startswith(('{', '[')):
+        try:
+            left, right = lex(old), lex(new)
+        except (ValueError, UnicodeError):
+            left = right = None
+        if left is not None:
+            patches = []
+
+            def walk(a, b):
+                if old[a.start:a.end] == new[b.start:b.end]:
+                    return
+                if a.children or b.children:
+                    if [key for key, _ in a.children] != [key for key, _ in b.children]:
+                        raise AssertionError('normalization changed embedded JSON shape/order')
+                    for (_, x), (_, y) in zip(a.children, b.children):
+                        walk(x, y)
+                    return
+                patches.append((a.start, a.end, new[b.start:b.end]))
+
+            walk(left, right)
+            return encoded_changes(raw, patches)
+    # Small non-JSON instruction/diagnostic strings use character matching;
+    # trim the unchanged prefix/suffix before matching repeated text.
+    start = 0
+    while start < min(len(before), len(after)) and before[start] == after[start]:
+        start += 1
+    end = 0
+    while end < min(len(before), len(after))-start and before[-end-1] == after[-end-1]:
+        end += 1
+    stop_a, stop_b = len(before)-end, len(after)-end
     changes = []
-    for tag, left, right, a, b in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
+    for tag, a, b, c, d in difflib.SequenceMatcher(None, before[start:stop_a], after[start:stop_b], autojunk=False).get_opcodes():
         if tag != 'equal':
-            changes.append((boundaries[left], boundaries[right], go_string(after[a:b])[1:-1]))
-    return replace_spans(raw, changes)
+            changes.append((len(before[:start+a].encode()), len(before[:start+b].encode()),
+                            after[start+c:start+d].encode()))
+    return encoded_changes(raw, changes)
 
 
 def compare(expected, actual):
@@ -180,14 +237,18 @@ def cache_key(request, schemas=None):
     history = child(top, 'history')
     if history.children:
         first = history.children[0][1]
-        entry = first.value.copy()
-        if entry.get('user') is not None:
-            user = entry['user'].copy()
-            user.pop('workspace', None)
-            entry['user'] = user
-        # Struct field order is already retained by the span parser. Removing
-        # Workspace is the sole intentional change to this separate hash input.
-        h.update(go_json(entry))
+        if first.value.get('user') is not None:
+            user = child(first, 'user')
+            # Preserve original JSON string escapes: invalid ordinary-string
+            # bytes have already become one \\ufffd escape per byte here.
+            fields = [go_string(key) + b':' + raw[value.start:value.end]
+                      for key, value in user.children if key != 'workspace']
+            user_bytes = b'{' + b','.join(fields) + b'}'
+            fields = [go_string(key) + b':' + (user_bytes if key == 'user' else raw[value.start:value.end])
+                      for key, value in first.children]
+            h.update(b'{' + b','.join(fields) + b'}')
+        else:
+            h.update(raw[first.start:first.end])
     return h.hexdigest()[:32]
 
 
@@ -238,8 +299,8 @@ class Normalizer:
             self.record(artifact, path, original.encode(), value.encode(), 'allocated-path-or-reference')
         return value
 
-    def json(self, raw, artifact, path=(), event=None):
-        top = lex(raw)
+    def json(self, raw, artifact, path=(), event=None, opaque=False):
+        top = lex(raw, opaque=opaque)
         changes = []
         if isinstance(top.value, dict) and 'type' in top.value and 'seq' in top.value:
             event = top.value['type']
@@ -248,6 +309,66 @@ class Normalizer:
             if key in ('session_id', 'run_id') and event:
                 kind = key.split('_')[0]
                 self.identity(token.value, kind)
+
+        def ancestors(loc):
+            node = top.value
+            result = [node]
+            for key in loc:
+                node = node[key]
+                result.append(node)
+            return result
+
+        def native(loc):
+            nodes = ancestors(loc)
+            parent = nodes[-2] if len(nodes) > 1 else None
+            if (isinstance(parent, dict) and parent.get('name') in ('switch_workspace', 'request_workspace_access')
+                    and loc[-1:] == ('arguments',)):
+                return False
+            for node in nodes[:-1]:
+                if isinstance(node, dict) and node.get('type') == 'tool_use' and node.get('name') in ('switch_workspace', 'request_workspace_access'):
+                    return loc[-1:] != ('path',)
+            if any(loc[i:i+2] == ('native', 'items') for i in range(len(loc)-1)):
+                return True
+            if any(isinstance(node, dict) and node.get('role') == 'assistant' for node in nodes[:-1]):
+                return True
+            return ('blocks' in loc and any(isinstance(node, dict) and node.get('kind') in ('text', 'refusal')
+                                            for node in nodes[:-1]))
+
+        def permitted_text(loc, parent):
+            if not loc:
+                return False
+            key = loc[-1]
+            if key == 'instructions':
+                return isinstance(parent, dict) and ('tools' in parent or event == 'run.started')
+            if key == 'text' and len(loc) >= 3 and loc[0] == 'system':
+                return True
+            if key in ('workspace', 'previous_workspace') and isinstance(parent, dict):
+                return (parent.get('kind') == 'workspace_state' or 'ok' in parent or 'changed' in parent
+                        or (event == 'run.started' and loc == ('data', 'workspace'))
+                        or 'current_model' in parent or 'command' in parent
+                        or (event == 'tool.started' and loc == ('data', 'workspace'))
+                        or 'operation' in parent)
+            if key == 'trace_path':
+                return event == 'run.finished' and loc == ('data', 'trace_path')
+            if key == 'endpoint':
+                return event == 'api.attempt.started' and loc == ('data', 'endpoint')
+            if key == 'error':
+                return event == 'api.attempt.finished' and loc == ('data', 'error')
+            if key == 'text' and isinstance(parent, dict):
+                value = parent.get('text', '')
+                return (isinstance(value, str) and value.startswith(('Workspace state when this message was sent, collected by re:agent:\n',
+                                                                   'Historical conversation supplied by re:agent, encoded as JSON records below.')))
+            if key == 'output' and isinstance(parent, dict):
+                return parent.get('type') == 'function_call_output'
+            if key == 'content' and isinstance(parent, dict):
+                return parent.get('type') == 'tool_result'
+            if key == 'state' and isinstance(parent, dict):
+                return 'criteria' in parent
+            if key == 'arguments' and isinstance(parent, dict):
+                return parent.get('name') in ('switch_workspace', 'request_workspace_access')
+            if key == 'path':
+                return isinstance(parent, dict) and set(parent) == {'path'}
+            return False
 
         def visit(token, loc, parent):
             value = token.value
@@ -264,14 +385,17 @@ class Normalizer:
             elif event and loc in (('session_id',), ('run_id',)):
                 replacement = go_string(self.identity(value, last.split('_')[0]))
                 rule = 'typed-identity'
-            elif last in ('session_id', 'run_id') and isinstance(parent, dict) and ('scope' in loc or event):
+            elif last in ('session_id', 'run_id') and loc in (('data', 'scope', last), ('scope', last)):
                 replacement = go_string(self.identity(value, last.split('_')[0]))
                 rule = 'typed-scope-identity'
             elif event == 'run.started' and len(loc) == 3 and loc[:2] == ('data', 'approved_workspaces'):
                 replacement, rule = go_string(self.text(value, artifact, path+loc)), 'approved-workspace-path'
             elif event == 'run.started' and loc == ('data', 'build'):
                 replacement, rule = go_string('<BUILD>'), 'build-metadata'
-            elif last in ('duration_ms', 'latency_ms', 'elapsed_ms') and isinstance(value, (int, float)):
+            elif ((event == 'api.attempt.finished' and loc == ('data', 'duration_ms'))
+                  or (event == 'model.switch.finished' and loc == ('data', 'latency_ms'))
+                  or (event == 'auto.route' and loc == ('data', 'router_latency_ms'))
+                  or (last == 'duration_ms' and 'shell' in loc)) and isinstance(value, (int, float)):
                 if isinstance(value, bool) or not 0 <= value <= 3600000:
                     raise AssertionError('duration out of bounds')
                 replacement, rule = b'0', 'duration-ms'
@@ -281,7 +405,7 @@ class Normalizer:
                 replacement, rule = b'0', 'retry-delay-policy'
             elif isinstance(value, str):
                 new = value
-                if last == 'date' and isinstance(parent, dict) and parent.get('kind') == 'workspace_state':
+                if last == 'date' and isinstance(parent, dict) and parent.get('kind') == 'workspace_state' and not native(loc):
                     # The per-case time zone and local-date invariant is also
                     # checked by W08; UTC is the runner's default.
                     dt.date.fromisoformat(value)
@@ -289,13 +413,11 @@ class Normalizer:
                 elif last in ('request_body',) and event == 'api.attempt.started':
                     new = self.json(value.encode(), artifact, path+loc+('json',)).decode()
                     rule = 'embedded-request'
-                elif last == 'prompt_cache_key' and value in self.cache_keys:
+                elif last == 'prompt_cache_key' and loc == ('prompt_cache_key',) and value in self.cache_keys:
                     new, rule = self.cache_keys[value], 'independently-validated-cache-key'
-                elif last in ('instructions', 'workspace', 'launch', 'root', 'path', 'trace_path',
-                              'endpoint', 'previous_workspace', 'trace', 'error', 'message',
-                              'text', 'output', 'content', 'state', 'request', 'handoff'):
+                elif not native(loc) and permitted_text(loc, parent):
                     # Explicit embedded layers retain their own token ordering.
-                    if last in ('output', 'state') and value.startswith(('{', '[')):
+                    if last in ('output', 'state', 'content', 'arguments') and value.startswith(('{', '[')):
                         new = self.json(value.encode(), artifact, path+loc+('json',)).decode()
                     else:
                         new = self.text(value, artifact, path+loc)
@@ -343,12 +465,12 @@ def finish(ctx):
             seq += 1
             if event['type'] == 'api.attempt.started':
                 data = event['data']
-                check_digest(data['request_body'].encode(), data['request_sha256'])
                 requests.append(data)
             if event['type'] in ('model.requested', 'compaction.requested'):
                 data = event['data']
                 if all(k in data for k in ('model', 'instructions', 'tools', 'history')):
-                    requestspec = go_json(data)
+                    data_token = child(lex(line), 'data')
+                    requestspec = line[data_token.start:data_token.end]
                     raw_key = cache_key(requestspec)
                     canonical_spec = normal.json(requestspec, 'cache-input')
                     canonical_key = cache_key(canonical_spec)
@@ -361,7 +483,7 @@ def finish(ctx):
     # requests by their recorded logical shape, not a path spelling.
     def is_generation(request):
         try:
-            body = json.loads(request['body'])
+            body = lex(request['body'], opaque=True).value
         except (ValueError, UnicodeError):
             return False
         return isinstance(body, dict) and 'model' in body and ('input' in body or 'messages' in body)
@@ -371,7 +493,7 @@ def finish(ctx):
         raise AssertionError(f'HTTP/trace attempt count differs: {len(generative)}/{len(requests)}')
     for data, captured in zip(requests, generative):
         check_digest(captured['body'], data['request_sha256'])
-        parsed = lex(captured['body']).value
+        parsed = lex(captured['body'], opaque=True).value
         key = parsed.get('prompt_cache_key')
         if key and key not in normal.cache_keys:
             raise AssertionError('wire cache key is not independently derived from logical request')
@@ -422,7 +544,7 @@ def finish(ctx):
         prefix = f'http-{i+1}'
         content_type = next((v for k,v in request['headers'].items() if k.lower() == 'content-type'), '')
         if 'application/json' in content_type and request['body']:
-            results[prefix+'.body'] = normal.json(request['body'], prefix+'.body')
+            results[prefix+'.body'] = normal.json(request['body'], prefix+'.body', opaque=True)
         else:
             results[prefix+'.body'] = request['body']
         results[prefix+'.target'] = (request['method']+' '+request['path']).encode()
@@ -432,7 +554,7 @@ def finish(ctx):
             'x-api-key','session_id','session-id','x-openai-cache-key','chatgpt-account-id','originator')}
         for key, value in meaningful.items():
             if key in ('session_id', 'session-id'):
-                wire_key = json.loads(request['body'])['prompt_cache_key']
+                wire_key = lex(request['body'], opaque=True).value['prompt_cache_key']
                 canonical_key = normal.cache_keys[wire_key]
                 if key == 'session_id':
                     if value != str(uuid.uuid5(uuid.NAMESPACE_URL, wire_key)):
@@ -450,6 +572,8 @@ def finish(ctx):
     for name, raw in results.items():
         normal.ledger.append(dict(artifact=name, raw_normalized_sha256=sha256(raw), normalized_length=len(raw)))
     Path(ctx.artifacts, 'substitutions.json').write_text(json.dumps(normal.ledger, indent=2)+'\n')
+    touched = {item['artifact'] for item in normal.ledger if 'kind' in item}
+    ctx.artifact_policies = {name: 'N' if name in touched else 'B' for name in results}
     return results
 
 

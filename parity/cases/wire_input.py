@@ -7,9 +7,11 @@ binary sent, in addition to the runner's lossless observations.
 
 from datetime import datetime
 from functools import partial
-from itertools import product
+from itertools import combinations, product
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 from urllib.parse import urlsplit, urlunsplit
@@ -71,7 +73,50 @@ def _configured(ctx, run):
     return run(ctx)
 
 
+def _lane(ctx, lane, run):
+    if lane == "proxy":
+        ctx.env.update(_proxy_env(ctx))
+    ctx.env["REAGENT_MODEL"] = ANTHROPIC[0] if lane == "anthropic" else OPENAI[0]
+    return run(ctx)
+
+
+def _reply(ctx, provider):
+    if provider == "anthropic":
+        return Response(body=_anthropic())
+    if ctx.env.get("API_PROXY_URL"):
+        return Response(body=_sse(_openai()), headers={"Content-Type": "text/event-stream"})
+    return Response(body=_openai())
+
+
+def _cache_key(body):
+    schemas = json.loads((Path(__file__).parents[1] / "fixtures/cache_schemas.json").read_text())["schemas"]
+    digest = hashlib.sha256((body["model"] + "\0" + body["instructions"] + "\0").encode())
+    for tool in body["tools"]:
+        candidates = [item for item in schemas[tool["name"]] if json.loads(item["raw"]) == tool["parameters"]]
+        assert len(candidates) == 1, tool["name"]
+        schema = candidates[0]
+        assert hashlib.sha256(schema["raw"].encode()).hexdigest() == schema["sha256"]
+        digest.update((tool["name"] + "\0" + schema["raw"] + "\0").encode())
+    parts = body["input"][0]["content"]
+    user = {"text": parts[0]["text"]}
+    for part in parts[1:]:
+        text = part["text"]
+        if text.startswith("Agent roster when this message was sent, collected by re:agent:\n"):
+            user["roster"] = json.loads(text.split("\n", 1)[1])
+        elif text.startswith("re:agent plan mode is on"):
+            user["plan"] = "on"
+        else:
+            assert text.startswith(WORKSPACE), text
+    raw = _json({"kind": "user", "user": user}).decode()
+    for literal, escape in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        raw = raw.replace(literal, escape)
+    digest.update(raw.encode())
+    assert body["prompt_cache_key"] == digest.hexdigest()[:32]
+
+
 def _path(ctx, provider="openai"):
+    if provider == "openai" and ctx.env.get("API_PROXY_URL"):
+        return urlsplit(ctx.env["API_PROXY_URL"]).path
     name = "REAGENT_OPENAI_BASE_URL" if provider == "openai" else "REAGENT_ANTHROPIC_BASE_URL"
     return urlsplit(ctx.env[name]).path.rstrip("/") + ("/responses" if provider == "openai" else "/messages")
 
@@ -102,7 +147,7 @@ def _preview(ctx, flags=(), prompt="wire sentinel", env=None):
 def _exchange(ctx, model="gpt-6-luna", flags=(), prompt="wire sentinel", env=None):
     provider = "anthropic" if model.startswith("claude-") else "openai"
     start = len(ctx.server.requests)
-    ctx.server.expect(_path(ctx, provider), Response(body=_anthropic() if provider == "anthropic" else _openai()),
+    ctx.server.expect(_path(ctx, provider), _reply(ctx, provider),
                       marker=lambda raw: _parts(json.loads(raw))[0]["text"] == prompt, model=model)
     result = ctx.run(prompt, flags=("--model", model, *flags), env=env)
     _ok(result)
@@ -130,8 +175,14 @@ def _target(ctx, flags, env, model, effort):
         assert field not in body
     else:
         assert body[field] == {"effort": effort}
-    if model not in OPENAI:
-        assert "text" not in body
+    if model.startswith("claude-"):
+        assert "reasoning" not in body and "text" not in body
+    else:
+        assert ("text" in body) == (model in OPENAI)
+        if model in OPENAI:
+            assert body["text"] == {"verbosity": "low"}
+        assert body["stream"] == bool(ctx.env.get("API_PROXY_URL"))
+        assert ("truncation" in body) == (not body["stream"])
 
 
 def _target_error(ctx, flags, message):
@@ -256,6 +307,19 @@ def _declarations(ctx, readonly, plan, friction, gitdo, gc, agents):
         flags += ("--git-do", "recipe")
     _, body = _preview(ctx, flags)
     names = [tool["name"] for tool in body["tools"]]
+    assert names == _tool_names(readonly, friction, gitdo, gc, agents)
+    for tool in body["tools"]:
+        schema = tool.get("parameters", tool.get("input_schema"))
+        assert tool["description"].strip() and isinstance(schema, dict)
+        assert schema["additionalProperties"] is False
+    parts = _parts(body)
+    if plan:
+        assert parts[-1]["text"].startswith("re:agent plan mode is on")
+    else:
+        assert len(parts) == 2 + int(agents)
+
+
+def _tool_names(readonly, friction, gitdo, gc, agents):
     expected = {"read_file", "list_files", "search_text", "git_inspect", "switch_workspace", "request_workspace_access"}
     if not readonly:
         expected |= {"write_file", "edit_file", "delete_file", "exec"}
@@ -267,18 +331,10 @@ def _declarations(ctx, readonly, plan, friction, gitdo, gc, agents):
         expected.add("recall")
     if agents:
         expected |= {"spawn", "send", "wait", "threads", "cancel", "reset", "dismiss"}
-    assert names == sorted(expected), (names, sorted(expected))
-    for tool in body["tools"]:
-        assert tool["description"].strip() and isinstance(tool["parameters"], dict)
-        assert tool["parameters"]["additionalProperties"] is False
-    parts = _parts(body)
-    if plan:
-        assert parts[-1]["text"].startswith("re:agent plan mode is on")
-    else:
-        assert len(parts) == 2 + int(agents)
+    return sorted(expected)
 
 
-def _project(ctx, kind):
+def _project_fixture(ctx, kind):
     path = ctx.workspace / "AGENTS.md"
     text = None
     warning = b""
@@ -320,6 +376,11 @@ def _project(ctx, kind):
         if kind != "symlink-broken":
             target.write_text(text if text is not None else "never leak private rules")
         path.symlink_to(target)
+    return text, warning, flags
+
+
+def _project(ctx, kind):
+    text, warning, flags = _project_fixture(ctx, kind)
     result, body = _preview(ctx, ("--report-friction", *flags))
     instructions = _instructions(body)
     assert instructions.index("# Runtime") < instructions.index("# Friction reports")
@@ -346,6 +407,59 @@ def _prompt(ctx, model, raw):
             assert char not in result.stdout
     assert _parts(body)[1]["text"].startswith(WORKSPACE)
     assert not ctx.server.requests
+    provider = "anthropic" if model.startswith("claude-") else "openai"
+    ctx.server.expect(_path(ctx, provider), _reply(ctx, provider), marker=lambda data: _parts(json.loads(data))[0]["text"] == expected.decode(), model=model)
+    live = ctx.invoke(["run", "--model", model, "--prompt-file", "-"], stdin=raw)
+    _ok(live)
+    assert live.stdout == b"wire reply\n"
+    assert ctx.server.requests[-1].body == result.stdout[:-1]
+
+
+def _secondary(ctx, kind, raw, bits):
+    text, warning, flags = _project_fixture(ctx, kind)
+    optional = (("--read-only",), ("--plan",), ("--report-friction",), ("--git-do", "recipe"), ("--context-gc",), ("--agents",))
+    flags += tuple(flag for group, yes in zip(optional, bits) if yes for flag in group)
+    result = ctx.invoke(["run", "--show-context", "--prompt-file", "-", *flags], stdin=raw)
+    _ok(result)
+    body = json.loads(result.stdout)
+    expected = raw[:-1] if raw.endswith(b"\n") else raw
+    assert _parts(body)[0]["text"] == expected.decode()
+    instructions = _instructions(body)
+    assert instructions.index("# Runtime") < (instructions.index(PROJECT) if text is not None else len(instructions))
+    assert ("# Friction reports" in instructions) == bits[2]
+    if text is not None:
+        assert instructions.endswith(PROJECT + text)
+    else:
+        assert PROJECT not in instructions
+    names = [tool["name"] for tool in body["tools"]]
+    wanted = _tool_names(readonly=bits[0], friction=bits[2], gitdo=bits[3], gc=bits[4], agents=bits[5])
+    assert names == wanted
+    parts = _parts(body)
+    assert len(parts) == 2 + bits[1] + bits[5]
+    assert result.stderr == (b"warning: AGENTS.md skipped: " + warning + b"\n" if warning else b"")
+    assert not ctx.server.requests
+    if "input" in body:
+        _cache_key(body)
+
+
+def _moved_snapshot(ctx, model, readonly, plan):
+    _git(ctx, "init", "--initial-branch=main")
+    destination = ctx.workspace / "destination"
+    destination.mkdir()
+    flags = ("--allow-workspace", str(destination))
+    flags += tuple(flag for yes, flag in ((readonly, "--read-only"), (plan, "--plan")) if yes)
+    provider = "anthropic" if model.startswith("claude-") else "openai"
+    _, _, bodies = _chat_sequence(ctx, provider, [("cache-turn-one", _anthropic() if provider == "anthropic" else _openai()),
+        ("cache-turn-two", _anthropic() if provider == "anthropic" else _openai())],
+        f"cache-turn-one\n/workspace {destination}\ncache-turn-two\n/quit\n", flags)
+    first, second = (json.loads(_parts({**body, "input": body["input"][-1:]} if "input" in body else {**body, "messages": body["messages"][-1:]})[1]["text"][len(WORKSPACE):]) for body in bodies)
+    assert first["workspace"] == str(ctx.workspace) and "counts" not in first
+    assert second["workspace"] == str(destination)
+    assert ("counts" in second) == (readonly or plan)
+    if readonly or plan:
+        assert second["counts"] == "omitted in read-only/plan mode"
+        assert not {"staged", "modified", "untracked"} & second.get("git", {}).keys()
+    assert bodies[0].get("prompt_cache_key") == bodies[1].get("prompt_cache_key")
 
 
 def _prompt_order(ctx, model, roster, plan):
@@ -370,7 +484,7 @@ def _git(ctx, *args):
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
 
 
-def _snapshot(ctx, zone, readonly, plan):
+def _snapshot(ctx, zone, readonly, plan, model=OPENAI[0]):
     _git(ctx, "init", "-b", "main")
     (ctx.workspace / "tracked.txt").write_text("fixed\n")
     _git(ctx, "add", "tracked.txt")
@@ -381,12 +495,12 @@ def _snapshot(ctx, zone, readonly, plan):
     epoch = 1784160000
     os.utime(fetch, (epoch, epoch))
     env = {"TZ": zone}
-    flags = ("--read-only",) if readonly else ()
+    flags = ("--model", model, *(("--read-only",) if readonly else ()))
     if plan:
         flags += ("--plan",)
     before = datetime.now(ZoneInfo(zone)).date()
     preview_result, preview = _preview(ctx, flags, env=env)
-    _, record, live = _exchange(ctx, flags=flags, env=env)
+    _, record, live = _exchange(ctx, model=model, flags=flags, env=env)
     after = datetime.now(ZoneInfo(zone)).date()
     preview_state = json.loads(_parts(preview)[1]["text"][len(WORKSPACE):])
     live_state = json.loads(_parts(live)[1]["text"][len(WORKSPACE):])
@@ -429,7 +543,7 @@ def _boundary(ctx, model, escaping, delta):
     # Exercise the actual send path too, not just --show-context's encoder.
     if delta <= 0:
         ctx.server.expect(_path(ctx, "anthropic" if model.startswith("claude-") else "openai"),
-                          Response(body=_anthropic() if model.startswith("claude-") else _openai()),
+                          _reply(ctx, "anthropic" if model.startswith("claude-") else "openai"),
                           marker=("\\u003c" * 128 if escaping else prompt[:128]), model=model)
     live = ctx.invoke(["run", "--model", model, "--prompt-file", str(prompt_path)])
     if delta <= 0:
@@ -460,10 +574,9 @@ def _cache_inputs(ctx, variant):
     _, record, live = _exchange(ctx, model=body["model"], flags=flags, prompt=prompt)
     assert preview_result.stdout[:-1] == record.body
     assert live["prompt_cache_key"] == body["prompt_cache_key"]
-    assert re.fullmatch("[0-9a-f]{32}", body["prompt_cache_key"])
+    _cache_key(body)
     assert (body["prompt_cache_key"] != original["prompt_cache_key"]) == (variant != "base")
-    # The parent observer recomputes SHA-256 from recorded raw schemas/first Entry.
-    # Equality below also guards independent launches, whose snapshot timestamps differ.
+    # Independent launches have different workspace snapshots, excluded from the hash.
     _, again = _preview(ctx, flags, prompt)
     assert body["prompt_cache_key"] == again["prompt_cache_key"]
     _, changed = _preview(ctx, flags, prompt + " changed")
@@ -474,6 +587,8 @@ def _chat_sequence(ctx, provider, script, stdin, flags=()):
     model = ANTHROPIC[1] if provider == "anthropic" else OPENAI[0]
     start = len(ctx.server.requests)
     for marker, response in script:
+        if provider == "openai" and ctx.env.get("API_PROXY_URL") and not isinstance(response, Response):
+            response = Response(body=_sse(response), headers={"Content-Type": "text/event-stream"})
         ctx.server.expect(_path(ctx, provider), response if isinstance(response, Response) else Response(body=response), marker=marker, model=model)
     result = ctx.chat(stdin.encode(), flags=("--model", model, *flags))
     _ok(result)
@@ -528,6 +643,9 @@ def _cache_changes(ctx, variant):
     flags = ("--allow-workspace", str(ctx.workspace / "destination")) if variant in ("workspace", "workspace-reset") else ()
     _, _, bodies = _chat_sequence(ctx, "openai", script, stdin, flags)
     keys = [body["prompt_cache_key"] for body in bodies]
+    if variant != "compaction":
+        for body in bodies:
+            _cache_key(body)
     if variant in ("reset", "compaction", "workspace-reset"):
         assert keys[0] != keys[-1]
     else:
@@ -541,6 +659,9 @@ def _cache_changes(ctx, variant):
         assert bodies[0]["reasoning"] == {"effort": "low"}
         assert bodies[-1]["reasoning"] == {"effort": "high"}
         assert bodies[0]["instructions"] == bodies[-1]["instructions"]
+    if variant in ("workspace", "workspace-reset"):
+        outcome = json.loads(bodies[1]["input"][-1]["output"])
+        assert "destination-cache-rules" in json.dumps(outcome), outcome
     if variant == "workspace":
         assert all(body["instructions"] == bodies[0]["instructions"] for body in bodies)
         assert "launch-cache-rules" in bodies[-1]["instructions"]
@@ -731,6 +852,10 @@ def collect():
         ("default", (), {}, OPENAI[0], "low"),
         ("provider-openai", ("--provider", "openai"), {}, OPENAI[0], "low"),
         ("provider-anthropic", ("--provider", "anthropic"), {}, ANTHROPIC[0], None),
+        ("empty-model-uses-env", ("--model=",), {"REAGENT_MODEL": ANTHROPIC[1]}, ANTHROPIC[1], "low"),
+        ("explicit-provider-env-model", ("--provider", "anthropic"), {"REAGENT_MODEL": ANTHROPIC[2]}, ANTHROPIC[2], "low"),
+        ("effort-spaces-pass-through", ("--reasoning-effort", " low "), {}, OPENAI[0], " low "),
+        ("effort-auto-case-sensitive", ("--reasoning-effort", "Auto"), {}, OPENAI[0], "Auto"),
         ("env-openai", (), {"REAGENT_MODEL": OPENAI[1]}, OPENAI[1], "low"),
         ("env-anthropic", (), {"REAGENT_MODEL": ANTHROPIC[1]}, ANTHROPIC[1], "low"),
         ("flag-over-env", ("--model", OPENAI[2]), {"REAGENT_MODEL": ANTHROPIC[0]}, OPENAI[2], "low"),
@@ -749,7 +874,7 @@ def collect():
         ("reverse-conflict", ("--provider", "anthropic", "--model", OPENAI[0]), 'model "gpt-6-luna" selects the openai provider, but --provider anthropic was given'),
     ]:
         add("W01." + suffix, "Reject " + suffix, partial(_target_error, flags=flags, message=message))
-    for model in (OPENAI[0], OPENAI[-1], ANTHROPIC[0], ANTHROPIC[1]):
+    for model in (*OPENAI, *ANTHROPIC):
         for command in ("/model", "/effort"):
             add("W01.catalog-" + model + "-" + command[1:], "Public catalog " + command + " for " + model,
                 partial(_catalog, model=model, command=command))
@@ -818,4 +943,51 @@ def collect():
     for variant in ("success", "failure", "adjacent-users", "summary"):
         add("W16." + variant, "Anthropic native thinking/signature/input/merge: " + variant,
             partial(_native_anthropic, variant=variant))
+    # IDs are the committed combination manifest: no random or arrival-order selection.
+    for model in (*OPENAI, "future-openai", *ANTHROPIC, "claude-future"):
+        lanes = ("anthropic",) if model.startswith("claude-") else ("direct", "proxy")
+        for lane, effort, readonly, plan in product(lanes, ("auto", "", "none", "low", "medium", "high", "xhigh", "max", "future-effort"), (False, True), (False, True)):
+            flags = ("--model", model, "--reasoning-effort=" + effort)
+            flags += tuple(flag for yes, flag in ((readonly, "--read-only"), (plan, "--plan")) if yes)
+            expected = (None if model in (ANTHROPIC[0], "claude-future") else "low") if effort == "auto" else (effort or None)
+            add(f"W01.matrix-{lane}-{model}-{effort or 'omit'}-ro{int(readonly)}-plan{int(plan)}",
+                "Exhaustive model/effort/authority preview", partial(_lane, lane=lane,
+                run=partial(_target, flags=flags, env={}, model=model, effort=expected)))
+    for model, effort in product(ANTHROPIC + ("claude-future",), ("none", "low", "medium", "high", "xhigh", "max")):
+        add(f"W04.{model}-live-{effort}", "Messages explicit effort passthrough",
+            partial(_anthropic_contract, model=model, effort=effort, live=True))
+    original = list(cases)
+    for case in original:
+        family = case.id.split(".")[0]
+        if family in ("W05", "W06"):
+            for lane in ("proxy", "anthropic"):
+                add(case.id + "-" + lane, case.description + " via " + lane,
+                    partial(_lane, lane=lane, run=case.run), slow=case.slow)
+        if family in ("W07", "W09", "W10") and not case.pending and (family == "W10" or OPENAI[0] in case.id):
+            add(case.id + "-proxy", case.description + " via proxy",
+                partial(_lane, lane="proxy", run=case.run), comparison=case.comparison, slow=case.slow)
+    for zone, readonly, plan in product(("UTC", "America/Los_Angeles", "Etc/GMT+7"), (False, True), (False, True)):
+        for lane in ("proxy", "anthropic"):
+            add(f"W08.{zone.replace('/', '-')}-ro{int(readonly)}-plan{int(plan)}-{lane}",
+                "Unchanged preview/live body and local snapshot time across adapters",
+                partial(_lane, lane=lane, run=partial(_snapshot, zone=zone, readonly=readonly, plan=plan,
+                    model=ANTHROPIC[0] if lane == "anthropic" else OPENAI[0])))
+    projects = ("absent", "empty", "text", "utf8", "at-limit", "over-limit", "invalid-utf8", "directory", "fifo",
+                "symlink-inside", "symlink-outside", "symlink-withheld", "symlink-broken", "disabled")
+    prompts = (b"no newline", b"one newline\n", b"windows\r\n", b"two\n\n",
+               b'quote " backslash \\ tab\t cr\r nul\x00 end\n', "café 雪 😀\n".encode(),
+               "<>\u0026\u2028\u2029\n".encode(), b"first\nsecond\n")
+    vectors = [(i, j, (i+j) % 3, *(bool((i*13+j*7) % 64 >> k & 1) for k in range(6)))
+               for i, j in product(range(len(projects)), range(len(prompts)))]
+    for a, b in combinations(range(9), 2):
+        assert {(row[a], row[b]) for row in vectors} == set(product({row[a] for row in vectors}, {row[b] for row in vectors}))
+    for i, j, lane_index, *bits in vectors:
+        lane = ("direct", "proxy", "anthropic")[lane_index]
+        add(f"W05.pair-{projects[i]}-prompt{j}-{lane}-" + "".join(str(int(bit)) for bit in bits),
+            "Checked deterministic pairwise project/prompt/adapter/authority/optional-tool vector",
+            partial(_lane, lane=lane, run=partial(_secondary, kind=projects[i], raw=prompts[j], bits=bits)))
+    for lane, readonly, plan in product(("direct", "proxy", "anthropic"), (False, True), (False, True)):
+        add(f"W08.moved-{lane}-ro{int(readonly)}-plan{int(plan)}", "Launch counts versus moved-root refs-only snapshot",
+            partial(_lane, lane=lane, run=partial(_moved_snapshot,
+                model=ANTHROPIC[0] if lane == "anthropic" else OPENAI[0], readonly=readonly, plan=plan)))
     return cases

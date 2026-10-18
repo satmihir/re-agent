@@ -1,10 +1,13 @@
 {
   "schema_version": 1,
-  "freeze_status": "blocked",
-  "reference_commit": "7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f",
-  "reference_binary_sha256": "93180c8c4eadbb69f3e7309657767bbaac6b993134c8f17e04f6fc9cb8ca5e9b",
+  "freeze_status": "auditing",
+  "reference_commit": "f37aa5a38815fe159fba87f23ffdd0d5b09cf63b",
+  "reference_binary_sha256": "ed61b8827b33bffc9bcdf01d75f792e7484f20dc7206808c90d518ada2b7ed89",
   "reference_platform": "darwin/arm64",
-  "reference_build": "go build -o /tmp/reagent-parity-reference ./cmd/reagent",
+  "reference_build": "git archive f37aa5a38815fe159fba87f23ffdd0d5b09cf63b; go build -trimpath -buildvcs=false -o /tmp/reagent-parity-go-f37aa5a ./cmd/reagent",
+  "go_version": "go version go1.23.3 darwin/arm64",
+  "python_version": "Python 3.11.5",
+  "exploratory_only": ["7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f"],
   "goldens_frozen": false,
   "inventory_status": "draft; declared counts are not a claim of matrix completeness or passing cases",
   "counts": {
@@ -46,12 +49,7 @@
     "W53.propagation.git-do": "tools: git_do endpoint propagation",
     "W53.propagation.nested-child": "agents: nested-child endpoint propagation"
   },
-  "reference_blockers": {
-    "W17.invalid-utf8": "provider native RawMessage introduces invalid UTF-8 into JSONL trace",
-    "W23.final-null": "response.completed with response:null panics: assignment to entry in nil map at openai_stream.go:88",
-    "W33.openai-invalid-utf8": "provider native RawMessage introduces invalid UTF-8 into JSONL trace",
-    "W33.proxy-invalid-utf8": "provider native RawMessage introduces invalid UTF-8 into JSONL trace"
-  },
+  "reference_blockers": {},
   "accepted_gaps": [],
   "unverified": [
     "Full wire leaf-matrix exhaustiveness review",

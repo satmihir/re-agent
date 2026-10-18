@@ -7,8 +7,9 @@ approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 **Status:** runner/wire implementation under #139; the remaining three areas
 retain their planned status. Earlier design research/reviews are recorded below.
 
-Reference pinned for the area suite: `7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f`
-(`origin/main`, including #150–#156 and strict parsing #159). The earlier
+Reference pinned for the area suite: `f37aa5a38815fe159fba87f23ffdd0d5b09cf63b`
+(`origin/main`, including #150–#160). Observations from `7e0408f` were
+exploratory only and are not golden output. The earlier
 inventory reference was `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492`.
 `parity/manifest.json` records the protected binary SHA-256 and executable leaf
 inventory; candidate runs never regenerate goldens. See `parity/README.md` for
@@ -26,14 +27,13 @@ capture, pending dependencies and verification evidence. Hardening #154 and the
 | #152 context controls | Window cap, lean GC trace state, 15% shrink, cooldown/failure streak replace earlier assumptions; GC area owns behavioral cases. Wire snapshots retain the new header fields exactly. |
 | #156 terminal rendering | CLI/PTY area owns intermediate Markdown screens. |
 | #159 parsing follow-up | Freezes ASCII digits for all integer environment variables and command positions; booleans accept exactly true/false/1/0. `provider.go:253–272`, `context_gc_experiments.go:13–32`, `cli.go:126–138`. No leading-plus/ParseBool quirks are preserved. |
+| #160 stream/trace repairs | W23 null final response is an owned `protocol_error`, not a panic (`openai_stream.go:69–72`). W33 trace lines repair invalid byte runs without changing native history/continuation/checkpoint opaque bytes (`trace.go:130–135`). The three distinct UTF-8 rules below are separate contracts, not comparison substitutions. |
 
-**Freeze blocked:** the draft has 1,198 declared wire leaves (1,183 runnable,
-15 explicitly cross-area pending; 61 slow), not an assertion of complete matrix
-coverage or green oracle integration. The protected binary reproduces a nil-map
-panic for W23.final-null (`openai_stream.go:69–88`) and invalid-UTF-8 JSONL native
-items for W33. No goldens are frozen. Review/fix the reference and explicitly
-repin before capture; do not normalize away these defects. Draft inventory and
-remaining harness work are recorded in `parity/manifest.json` and `parity/README.md`.
+**Freeze audit in progress:** #160 fixes the two previous reference blockers.
+The draft is rebased onto its merge commit and the protected binary rebuilt
+from that exact source archive. No exploratory `7e0408f` output is reused.
+Leaf audit, oracle integration and fresh capture must finish before approval;
+the manifest records their status and the final inventory.
 
 ## 1. Harness architecture
 
@@ -450,7 +450,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W20 | Valid tool envelope with malformed arguments, unknown/withheld tool | Arguments remain string, correct tool failure rather than provider failure; N |
 | W21 | SSE LF/CRLF/comments/multiline data/DONE/EOF/chunk splits | JSON type wins over event name, assembled response and raw stream trace; N/B stream |
 | W22 | Indexed done items; final empty/absent/nonempty disagreeing output | Index order, final nonempty precedence, ignored deltas; N |
-| W23 | Bad event JSON, negative/gapped/duplicate index, empty/deltas-only stream | Exact failure/overwrite semantics; no fabricated completion or effects; N |
+| W23 | Bad event JSON, negative/gapped/duplicate index, empty/deltas-only stream; null/non-object completed/incomplete response | Exact failure/overwrite semantics; null final is protocol_error without panic, retry or effects (#160); no fabricated completion; N |
 | W24 | error/response.failed/nested error/overflow/incomplete, known failed usage; all `subscription_sharing_*` mappings over HTTP and SSE | Nested precedence, owned plan-admission/usage messages and retained usage; only usage_unavailable/user_unavailable are default bounded stream retries, other subscription errors terminal/resumable; N/S |
 | W25 | Completion followed by malformed/error events; delayed EOF/content-type variants | First terminal assembly wins, no live delta rendering, whole body read before decoding; N/S |
 | W26 | 429/500/529/599 then success/twice; 400/401/403/408/201/204/3xx | Default two attempts only on 429/5xx, same request bytes, ~500ms delay, exactly 200 success; N/S |
@@ -460,7 +460,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W30 | SIGINT at request receipt/partial-read/retry-wait barrier | Cancelled/resumable status, no further attempt/tool, following chat turn; N/S |
 | W31 | HTTP400 overflow codes/type/message/mixed case; non400; HTML; long UTF-8 detail | Exact overflow classification/bounded error wording and trimming; N |
 | W32 | Missing/null/empty/known usage; cached/reasoning/Anthropic creation; failed retries | All counters, lower bounds and known flags; default retries differ from window accounting; B/N |
-| W33 | Request/response bytes, request-ID headers, invalid UTF-8, failed read | Exact body/hash/replacement flag; failed read traces error not partial-body fiction; B/N |
+| W33 | Request/response bytes, request-ID headers, failed read; truncated sequence/adjacent invalid bytes/invalid beside valid non-ASCII across trace, JSON strings, retained native history/next request/checkpoint opaque fields | Exact body/hash/replacement flag; trace invalid-run versus JSON invalid-byte rules and untouched opaque bytes independently asserted (§3); next request retains original native bytes. Failed reads trace error, not partial-body fiction; B/N/S |
 | W34 | Chat after provider/protocol/incomplete/overflow failures then reset/compact | Preserved unanswered history versus blocking, no model request while blocked; N/S |
 | W35 | Auto default/explicit/env fallback, catalog/unknown-window/unsupported effort | Default sol/medium only in applicable launch branch; fallback errors; N |
 | W36 | Missing/blank/CRLF Jev key, multiple steps and next turn | Local validation/fallback, disable for this run not forever, no transmission; N/S |
@@ -791,6 +791,23 @@ are separate artifacts. W27 proves Go-first gzip behavior; W33 compares what the
 adapter reads/traces, not compressed network bytes. Assert meaningful Content-Type,
 Accept-Encoding/auth/provider-version/cache headers; incidental HTTP header order,
 HTTP framing and language-library User-Agent are not body-parity requirements.
+
+### UTF-8 boundaries (W33)
+
+These are **three distinct executable contracts**, not normalization rules. A
+Rust port must not apply one global `String::from_utf8_lossy` conversion.
+
+| Boundary | Exact rule | Examples / independent assertion |
+| --- | --- | --- |
+| Trace `api.attempt.finished.response_body`, and native JSON embedded in any trace line | Go `ToValidUTF8`: replace each contiguous **run of invalid bytes** with one literal U+FFFD. Keep valid non-ASCII sequences unchanged. | `a\xff\xfeb` → `a�b`; `a\xe2\x82` (truncated sequence) → `a�`; `雪\xff\xfeé` → `雪�é`. Strictly decode every emitted JSONL line; assert response-body replacement flag separately. |
+| Ordinary strings serialized by Go's JSON encoder, including checkpoint string fields containing invalid bytes | Each invalid **byte** becomes one JSON `\ufffd` escape. This is not invalid-run replacement. A valid U+FFFD already in a string is a normal Unicode character, not invalid bytes. | `a\xff\xfeb` → JSON `"a\ufffd\ufffdb"`; truncated `a\xe2\x82` → `"a\ufffd\ufffd"`; `雪\xff\xfeé` → `"雪\ufffd\ufffdé"`. Compare serialized bytes, not just decoded strings. |
+| Retained native history, native items resent in follow-up requests, and checkpoint opaque/base64 fields | No replacement. Preserve the original byte sequence. Trace repair changes only the serialized trace copy. | Decode the checkpoint's base64 opaque field and compare B to fixture bytes; compare the native item span in the **next captured HTTP request** to those same bytes, including invalid UTF-8. Do not infer this from the sanitized trace. |
+
+The vectors above include adjacent invalid bytes, a truncated multi-byte
+sequence, and invalid bytes adjacent to valid non-ASCII text. Request digests
+are computed over actual sent bytes, even when those bytes are not valid UTF-8.
+The comparison engine rejects invalid UTF-8 at declared textual JSONL boundaries;
+it must not corrupt or reject declared opaque native-byte spans for that reason.
 
 Prompt/model/script/call IDs, content whitespace, newlines, Unicode normalization,
 JSON number spellings, map/struct order, tool codes/messages/effects, count fields

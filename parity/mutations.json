@@ -1,8 +1,31 @@
 {
-  "version": 1,
-  "scope": "Wire subset of design section 6. Each patch applies independently to git archive HEAD, never the working tree.",
-  "unmapped": [
-    {"ids": [1, 2, 4, 6, 7, 8, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35], "reason": "Outside this wire-only milestone; no mutation-strength claim for these IDs."}
+  "version": 2,
+  "reference_commit": "f37aa5a38815fe159fba87f23ffdd0d5b09cf63b",
+  "scope": "All 36 design section 6 IDs: 13 applicable wire mutations, including cross-area catchers 3, 5 and 36; 23 explicit later-pending mutations. Each applicable patch independently targets git archive REF_COMMIT, never HEAD or the working tree. Later-pending is not a kill, waiver or completed 36/36 gate.",
+  "later_pending": [
+    {"id": 1, "owner": "cli", "catchers": ["C01"], "reason": "Unknown-command output channels need CLI fixtures."},
+    {"id": 2, "owner": "cli", "catchers": ["C03"], "reason": "Post-prompt flag parsing needs CLI fixtures."},
+    {"id": 4, "owner": "cli/tools", "catchers": ["C16", "T55"], "reason": "Plan-mode edit dispatch needs unchanged-file tool fixtures."},
+    {"id": 6, "owner": "cli", "catchers": ["C34"], "reason": "Queued typeahead needs real terminal-height/scrollback fixtures."},
+    {"id": 7, "owner": "checkpoint", "catchers": ["C19"], "reason": "Resume checksum corruption needs protected checkpoint fixtures."},
+    {"id": 8, "owner": "checkpoint/agents", "catchers": ["C19", "A32"], "reason": "Restored GC setting needs checkpoint and next recall/request fixtures; W52.gc/resume remain dependent."},
+    {"id": 19, "owner": "tools", "catchers": ["T03"], "reason": "Allowed .environment path requires tool fixtures."},
+    {"id": 20, "owner": "tools", "catchers": ["T04"], "reason": "Symlink-ancestor write containment requires external sentinel fixtures."},
+    {"id": 21, "owner": "tools", "catchers": ["T13", "T14"], "reason": "Latest-observed digest authorization requires stale-write fixtures."},
+    {"id": 22, "owner": "tools", "catchers": ["T17"], "reason": "Batch-edit atomicity requires unchanged-file failure fixtures."},
+    {"id": 23, "owner": "tools", "catchers": ["T18"], "reason": "Append without implicit LF requires file-byte/digest fixtures."},
+    {"id": 24, "owner": "tools", "catchers": ["T21"], "reason": "Recursive symlink deletion requires outside-survivor fixtures."},
+    {"id": 25, "owner": "tools", "catchers": ["T22"], "reason": "Partial delete ledger needs controlled failure and survivor fixtures."},
+    {"id": 26, "owner": "tools", "catchers": ["T32"], "reason": "Exec then-chain stopping requires skipped-command sentinel fixtures."},
+    {"id": 27, "owner": "tools", "catchers": ["T34"], "reason": "Exec group signaling requires descendant liveness and owned cleanup fixtures."},
+    {"id": 28, "owner": "tools", "catchers": ["T40"], "reason": "Promisor refusal requires no-lazy-fetch/program fixtures."},
+    {"id": 29, "owner": "tools", "catchers": ["T16", "T59"], "reason": "Exact edit_not_found wording is model-visible wire data, but its tool catcher is not implemented in the W-only area; do not omit or waive it."},
+    {"id": 30, "owner": "agents", "catchers": ["A04"], "reason": "Fork complete-batch boundary requires controlled child history fixtures; W13 native fork is dependent."},
+    {"id": 31, "owner": "agents/tools", "catchers": ["A20"], "reason": "Sibling observation authority requires local stale/write authorization fixtures."},
+    {"id": 32, "owner": "agents", "catchers": ["A39"], "reason": "Settled ready-batch delivery order requires controlled publication barriers."},
+    {"id": 33, "owner": "agents", "catchers": ["A15"], "reason": "Parent finish refusal requires held live descendant fixtures."},
+    {"id": 34, "owner": "agents/tools", "catchers": ["A21", "A22"], "reason": "Preserved exec_unknown requires oversized delivery and controlled effect fixtures."},
+    {"id": 35, "owner": "agents", "catchers": ["A29"], "reason": "GC latest-third-step preservation requires deterministic protected-record fixtures; W52.gc is dependent."}
   ],
   "mutations": [
     {
@@ -10,7 +33,7 @@
       "description": "Strip CRLF instead of just one LF from a prompt file",
       "cases": ["W07.gpt-6-luna-crlf", "W07.claude-haiku-4-5-crlf"],
       "intended_assertion": "CR survives prompt-file LF removal and appears in encoded prompt bytes",
-      "failure_pattern": "(?i)(request|body|prompt|escape|byte)",
+      "failure_pattern": "assert _parts\\(body\\)\\[0\\]\\[\"text\"\\] == expected.decode\\(\\)",
       "patches": [{"path": "internal/reagent/cli.go", "old": "prompt := strings.TrimSuffix(string(raw), \"\\n\")", "new": "prompt := strings.TrimSuffix(strings.TrimSuffix(string(raw), \"\\n\"), \"\\r\")"}]
     },
     {
@@ -18,15 +41,15 @@
       "description": "Record shell output as trusted ordinary user text",
       "cases": ["W47.projection"],
       "intended_assertion": "Shell command retains shell Entry kind and untrusted_tool_data provenance in handoff",
-      "failure_pattern": "(?i)(shell|trust|handoff|request|body|entry)",
+      "failure_pattern": "assert \\[r\\[\"kind\"\\] for r in records\\]|assert records\\[2\\]\\[\"trust\"\\]",
       "patches": [{"path": "internal/reagent/session.go", "old": "s.history = append(s.history, Entry{Kind: EntryShell, Shell: &command})", "new": "s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: command.Output}})"}]
     },
     {
       "id": 9,
       "description": "Disable HTML escaping in the OpenAI request encoder",
-      "cases": ["W07"],
+      "cases": ["W07.gpt-6-luna-html"],
       "intended_assertion": "OpenAI request retains Go JSON HTML escaping for < > and &",
-      "failure_pattern": "(?i)(request|body|escape|byte)",
+      "failure_pattern": "assert escape in result.stdout|assert char not in result.stdout",
       "patches": [
         {"path": "internal/reagent/openai.go", "old": "import (\n\t\"crypto/sha256\"", "new": "import (\n\t\"bytes\"\n\t\"crypto/sha256\""},
         {"path": "internal/reagent/openai.go", "old": "body, err := json.Marshal(responsesRequest{", "new": "var buffer bytes.Buffer\n\tencoder := json.NewEncoder(&buffer)\n\tencoder.SetEscapeHTML(false)\n\terr = encoder.Encode(responsesRequest{"},
@@ -38,7 +61,7 @@
       "description": "Reverse two Responses request struct fields",
       "cases": ["W02", "W08"],
       "intended_assertion": "Request JSON token order keeps model before instructions",
-      "failure_pattern": "(?i)(request|body|order|byte)",
+      "failure_pattern": "assert list\\(body\\) ==|(?:request|body|stdout)[^\\n]*: byte ",
       "patches": [{"path": "internal/reagent/openai.go", "old": "\tModel             string              `json:\"model\"`\n\tInstructions      string              `json:\"instructions\"`", "new": "\tInstructions      string              `json:\"instructions\"`\n\tModel             string              `json:\"model\"`"}]
     },
     {
@@ -46,7 +69,7 @@
       "description": "Include the first workspace snapshot in the cache hash",
       "cases": ["W10.base", "W11.turns"],
       "intended_assertion": "Independent cache-key derivation excludes first workspace snapshot",
-      "failure_pattern": "(?i)(cache|hash|key|request|body)",
+      "failure_pattern": "prompt_cache_key|wire cache key is not independently derived|schema does not uniquely match frozen raw hash input",
       "patches": [{"path": "internal/reagent/openai.go", "old": "\t\t\tuser.Workspace = nil\n", "new": ""}]
     },
     {
@@ -54,7 +77,7 @@
       "description": "Omit the last Anthropic tool-result cache breakpoint",
       "cases": ["W12"],
       "intended_assertion": "Last result block carries the ephemeral cache_control marker",
-      "failure_pattern": "(?i)(cache|marker|result|request|body)",
+      "failure_pattern": "cache_control|assert markers ==",
       "patches": [{"path": "internal/reagent/anthropic.go", "old": "\tcase []messagesToolResult:\n\t\tif len(content) > 0 {\n\t\t\tcontent[len(content)-1].CacheControl = ephemeralCache\n\t\t}", "new": "\tcase []messagesToolResult:\n\t\treturn"}]
     },
     {
@@ -62,7 +85,7 @@
       "description": "Retry HTTP 408 in the default policy",
       "cases": ["W26.openai-408", "W26.proxy-408", "W26.anthropic-408"],
       "intended_assertion": "HTTP 408 causes exactly one attempt without default retry",
-      "failure_pattern": "(?i)(attempt|request|count|408|trace)",
+      "failure_pattern": "assert len\\(requests\\) == count|assert len\\(starts\\) == len\\(finishes\\) == count",
       "patches": [{"path": "internal/reagent/transport.go", "old": "return status == http.StatusTooManyRequests || (status >= 500 && status <= 599)", "new": "return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || (status >= 500 && status <= 599)"}]
     },
     {
@@ -70,35 +93,35 @@
       "description": "Treat an incomplete SSE terminal event as transient overload",
       "cases": ["W28.no-retry-incomplete"],
       "intended_assertion": "Incomplete SSE is not retried even with retry-window admission enabled",
-      "failure_pattern": "(?i)(attempt|request|count|incomplete|status|trace)",
+      "failure_pattern": "assert len\\(requests\\) == count|assert len\\(starts\\) == len\\(finishes\\) == count|assert result\\[\"status\"\\] == status",
       "patches": [
-        {"path": "internal/reagent/openai_stream.go", "old": "\t\tcase \"response.completed\", \"response.incomplete\":\n\t\t\treturn \"\", Usage{}", "new": "\t\tcase \"response.incomplete\":\n\t\t\treturn \"server_is_overloaded\", Usage{}\n\t\tcase \"response.completed\":\n\t\t\treturn \"\", Usage{}"},
-        {"path": "internal/reagent/openai_stream.go", "old": "\t}\n\treturn \"\", Usage{}\n}\n\nfunc transientStreamCode", "new": "\t}\n\treturn \"server_is_overloaded\", Usage{}\n}\n\nfunc transientStreamCode"}
+        {"path": "internal/reagent/openai_stream.go", "old": "\t\tcase \"response.completed\", \"response.incomplete\":\n\t\t\treturn \"\", Usage{}", "new": "\t\tcase \"response.incomplete\":\n\t\t\treturn \"server_is_overloaded\", Usage{}\n\t\tcase \"response.completed\":\n\t\t\treturn \"\", Usage{}"}
       ]
     },
     {
       "id": 15,
       "description": "Use the retry-window admission deadline as an in-flight deadline",
       "cases": ["W29.held-success"],
-      "availability_note": "Requires a successful response held past the admission window; unknown/pending leaf is reported unmapped, never counted as a kill.",
+      "availability_note": "Exact current leaf W29.held-success holds a successful response past admission. Selector resolution is validated against live inventory before baseline/build; renamed/pending leaves fail closed.",
       "intended_assertion": "A successful response held past admission deadline still completes",
-      "failure_pattern": "(?i)(success|complete|status|deadline|exit|stdout|trace)",
+      "failure_pattern": "assert not future.done\\(\\)|admission deadline cancelled the in-flight request|assert result\\[\"status\"\\] == status|assert result.get\\(\"reply\", \"\"\\) == output",
       "patches": [{"path": "internal/reagent/transport.go", "old": "\tdeadline := time.Now().Add(policy.window)\n\tprior := Usage{Known: true}", "new": "\tdeadline := time.Now().Add(policy.window)\n\tif overnight {\n\t\tvar cancel context.CancelFunc\n\t\tctx, cancel = context.WithDeadline(ctx, deadline)\n\t\tdefer cancel()\n\t}\n\tprior := Usage{Known: true}"}]
     },
     {
       "id": 16,
       "description": "Add cached input to inclusive OpenAI input totals again",
-      "cases": ["W32"],
+      "cases": ["W32.openai-counters", "W32.proxy-counters"],
       "intended_assertion": "Input-token totals already include cached tokens and are not double counted",
-      "failure_pattern": "(?i)(usage|input|token|counter|trace)",
+      "failure_pattern": "assert result\\[\"usage\"\\] == usage",
       "patches": [{"path": "internal/reagent/openai_response.go", "old": "\t\tInputTokens:       u.InputTokens,", "new": "\t\tInputTokens:       u.InputTokens + u.InputTokensDetails.CachedTokens,"}]
     },
     {
       "id": 17,
       "description": "Choose maximum probability instead of cheapest sufficient cumulative route",
-      "cases": ["W43"],
+      "cases": ["W43.threshold-below"],
       "intended_assertion": "Route follows the cheapest cumulative .80 threshold, not classifier argmax",
-      "failure_pattern": "(?i)(route|model|effort|cumulative|trace|request)",
+      "failure_pattern": "assert body.get\\(\"reasoning\", \\{\\}\\).get\\(\"effort\", \"\"\\) == effort|assert route\\[\"selected_route\"\\]", 
+      "availability_note": "threshold-below chooses between efforts on the same model, so an argmax mutant reaches the intended effort assertion instead of causing an unrelated unexpected-model provider failure.",
       "patches": [{"path": "internal/reagent/auto.go", "old": "\t\tif selected == \"\" && sum >= autoSufficiency {\n\t\t\tselected = route.ID\n\t\t}", "new": "\t\tif selected == \"\" || probabilities[route.ID] > probabilities[selected] {\n\t\t\tselected = route.ID\n\t\t}"}]
     },
     {
@@ -106,7 +129,7 @@
       "description": "Leak provider-native reasoning items into model-switch visible text",
       "cases": ["W47.projection", "W48.roundtrip"],
       "intended_assertion": "Handoff bytes omit opaque encrypted native reasoning while preserving visible blocks",
-      "failure_pattern": "(?i)(native|reason|handoff|request|body|opaque|secret)",
+      "failure_pattern": "assert[^\\n]*native-secret[^\\n]*not in|assert[^\\n]*not in[^\\n]*native-secret|assert.*omitted_native_items",
       "patches": [
         {"path": "internal/reagent/model_switch.go", "old": "\tOmittedNativeItems int           `json:\"omitted_native_items\"`", "new": "\tOmittedNativeItems int           `json:\"omitted_native_items\"`\n\tNativeItems []json.RawMessage `json:\"native_items,omitempty\"`"},
         {"path": "internal/reagent/model_switch.go", "old": "\t\t\t\tBlocks: response.Blocks, OmittedNativeItems: len(response.Native.Items),", "new": "\t\t\t\tBlocks: response.Blocks, OmittedNativeItems: len(response.Native.Items), NativeItems: response.Native.Items,"}
@@ -117,7 +140,7 @@
       "description": "Byte-slice routing previews through a multibyte codepoint",
       "cases": ["W39.history"],
       "intended_assertion": "Routing preview trims to a valid UTF-8 prefix without a replacement rune",
-      "failure_pattern": "(?i)(utf|preview|trim|replacement|state|body|request|recent)",
+      "failure_pattern": "assert recent\\[2\\]\\[\"assistant\"\\]\\[\"blocks\"\\]\\[0\\]\\[\"text\"\\] ==|assert.*(?:preview|replacement|valid.*UTF)",
       "patches": [{"path": "internal/reagent/routing_packet.go", "old": "return truncateUTF8(text, routingPreviewBytes)", "new": "return text[:routingPreviewBytes]"}]
     }
   ]

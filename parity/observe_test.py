@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from parity.observe import (Normalizer, cache_key, check_digest, compare, go_json,
-                            lex, sha256)
+                            lex, sha256, string_spans, go_string)
 
 
 class OracleTests(unittest.TestCase):
@@ -37,7 +37,9 @@ class OracleTests(unittest.TestCase):
     def test_typed_substitution_leaves_other_lexemes_alone(self):
         raw = b'{"duration_ms":23,"n":1e+09,"text":"\\u003c"}'
         normal = Normalizer('/allocated/root', '')
-        self.assertEqual(normal.json(raw, 'test'), b'{"duration_ms":0,"n":1e+09,"text":"\\u003c"}')
+        self.assertEqual(normal.json(raw, 'test'), raw)
+        event = b'{"type":"api.attempt.finished","seq":1,"data":'+raw+b'}'
+        self.assertEqual(normal.json(event, 'test'), event.replace(b'"duration_ms":23', b'"duration_ms":0'))
         entry = normal.ledger[0]
         self.assertEqual(entry['before_sha256'], sha256(b'23'))
         self.assertEqual(entry['before_length'], 2)
@@ -64,6 +66,33 @@ class OracleTests(unittest.TestCase):
         for raw in (b'{"a":1}true', b'{"a":NaN}', b'{"a":1,}', b'[1,]'):
             with self.subTest(raw=raw), self.assertRaises((ValueError, json.JSONDecodeError)):
                 lex(raw)
+
+
+class LosslessSpanTests(unittest.TestCase):
+    def test_native_fields_are_not_generic_substitution_sites(self):
+        raw = b'{"type":"model.accepted","seq":1,"data":{"native":{"items":[{"type":"reasoning","duration_ms":99,"session_id":"not-a-harness-id","text":"/allocated/root"}]}}}'
+        self.assertEqual(Normalizer('/allocated/root', '').json(raw, 'trace'), raw)
+
+    def test_large_embedded_json_preserves_escapes_and_numbers(self):
+        before = '{"instructions":"/allocated/root","text":"'+'x'*1000000+'","raw":"\\u0061","n":1e+09}'
+        after = before.replace('/allocated/root', '<ROOT>')
+        encoded = go_string(before)
+        normalized = string_spans(encoded, before, after)
+        self.assertEqual(json.loads(normalized), after)
+        self.assertIn(b'\\\\u0061', normalized)
+        self.assertIn(b'1e+09', normalized)
+
+    def test_replacements_map_through_json_escape_layers(self):
+        raw = b'"\\u003c /allocated/root \\ud83e\\udd80"'
+        before = json.loads(raw)
+        after = before.replace('/allocated/root', '<ROOT>')
+        self.assertEqual(string_spans(raw, before, after), b'"\\u003c \\u003cROOT\\u003e \\ud83e\\udd80"')
+
+    def test_opaque_wire_spans_are_lossless_but_text_json_stays_strict(self):
+        raw = b'{"native":"a\xff\xfeb"}'
+        with self.assertRaises(UnicodeDecodeError):
+            lex(raw)
+        self.assertEqual(lex(raw, opaque=True).value['native'].encode('utf-8', 'surrogateescape'), b'a\xff\xfeb')
 
 
 if __name__ == '__main__':
