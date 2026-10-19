@@ -489,7 +489,7 @@ func TestAgents_TokenAndStepCapsAndTreeCost(t *testing.T) {
 			if len(all) != 1 || all[0].Result.Status != StatusLimitExceeded || result.TreeCost == nil {
 				t.Fatalf("caps %+v %+v", all, result)
 			}
-			if tokens && all[0].Result.Steps != 1 || !tokens && all[0].Result.Steps != maxAgentSteps {
+			if tokens && all[0].Result.Steps != 1 || !tokens && all[0].Result.Steps != maxAgentSteps+1 {
 				t.Fatal("cap not enforced")
 			}
 			if result.TreeCost.InputTokens != s.agentRoster()[0].Cost.InputTokens+result.Usage.InputTokens {
@@ -870,7 +870,7 @@ func TestAgents_CachedGrowingContextReachesStepCap(t *testing.T) {
 	s.model = NewScriptedModel(turn(spawnBlock("s", "growing context", "cached"), callBlock("w", "wait", `{"ids":["cached"]}`)), turn(textBlock("done")))
 	result := agentTurn(t, s, "cached reads")
 	child := agentResults(s.history)[0].Result
-	if child.Steps != maxAgentSteps || child.Status != StatusLimitExceeded || child.Usage.InputTokens <= maxAgentTokens || child.Usage.CachedInputTokens == 0 || result.TreeCost.InputTokens != child.Usage.InputTokens+result.Usage.InputTokens {
+	if child.Steps != maxAgentSteps+1 || child.Status != StatusLimitExceeded || child.Usage.InputTokens <= maxAgentTokens || child.Usage.CachedInputTokens == 0 || result.TreeCost.InputTokens != child.Usage.InputTokens+result.Usage.InputTokens {
 		t.Fatalf("cached usage/cap: %+v %+v", child, result)
 	}
 	if agentTokenLimit(Usage{InputTokens: 1, CachedInputTokens: 9, OutputTokens: maxAgentTokens}) == false {

@@ -203,7 +203,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	var tools []Tool
 	for _, spec := range s.cfg.Registry.Specs() {
 		switch spec.Name {
-		case "read_file", "list_files", "search_text", "git_inspect", "recall":
+		case "read_file", "list_files", "search_text", "git_inspect", "recall", "report_friction":
 			tool, _ := s.cfg.Registry.Lookup(spec.Name)
 			tools = append(tools, tool)
 		case "edit_file", "write_file", "delete_file", "exec":
@@ -222,7 +222,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	cfg.Registry, cfg.Workspace, cfg.WorkspacePath = registry, ws, ws.Root()
 	cfg.approvedWorkspaces = nil
 	cfg.MaxSteps, cfg.MaxToolCalls = maxAgentSteps, maxAgentCalls
-	cfg.InRunCompact, cfg.ReportFriction, cfg.agent = false, false, true
+	cfg.InRunCompact, cfg.agent = false, true
 	cfg.PlanMode = s.planMode
 	history, prompt, contextMode, err := s.prepareAgentContext(ctx, &cfg, a)
 	if err != nil {
@@ -720,4 +720,57 @@ func agentDelivery(result agentResult) (*UserTurn, agentResult) {
 		result.Result.Reply = truncateUTF8(result.Result.Reply, len(result.Result.Reply)/2)
 		result.Result.Reason = truncateUTF8(result.Result.Reason, len(result.Result.Reason)/2)
 	}
+}
+
+func (r *Run) agentCapSummary(ctx context.Context, reason string) RunResult {
+	s := r.session
+	var reply string
+	for i := len(s.history) - 1; i >= 0; i-- {
+		if resp := s.history[i].Assistant; resp != nil {
+			if reply = blockText(*resp, BlockText); reply != "" {
+				break
+			}
+		}
+	}
+	s.stopAgents()
+	r.deliverAgents()
+	// Reserve one summary request outside the ordinary step/call budgets.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	// A zero retry window admits the first HTTP attempt but no retry.
+	ctx = context.WithValue(ctx, modelRetryKey{}, modelRetry{})
+	r.steps++
+	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: "The agent step or call cap was reached. Make no tool calls. Briefly summarize what was done, its applied effects, the tests run (or not run), and what remains. Keep the summary under 1024 words."}})
+	req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
+	// Keep declarations for native history and the cached prefix, not execution.
+	req.MaxOutputTokens = 8192
+	r.trace.Write("agent.cap_summary.requested", r.steps, req)
+	resp, err := r.model.Generate(ctx, req)
+	usage := resp.Usage
+	if err != nil {
+		_, usage = classifyModelError(err)
+	}
+	s.lastRequest = usage
+	r.usage.Add(usage)
+	r.meterAgent(usage)
+	if resp.retryUsage != (Usage{}) {
+		r.usage.Add(resp.retryUsage)
+		r.meterAgent(resp.retryUsage)
+	}
+	failure := ""
+	if err != nil {
+		failure = err.Error()
+	} else if failure = r.validateResponse(resp); failure == "" && len(toolCalls(resp)) != 0 {
+		failure = "cap summary must not call tools"
+	}
+	if failure == "" && strings.TrimSpace(blockText(resp, BlockText)) == "" {
+		failure = "cap summary contains no text"
+	}
+	if failure != "" {
+		r.trace.Write("agent.cap_summary.failed", r.steps, map[string]any{"error": failure})
+		return r.finish(StatusLimitExceeded, reason, reply)
+	}
+	r.trace.Write("agent.cap_summary.accepted", r.steps, resp)
+	s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &resp})
+	return r.finish(StatusLimitExceeded, reason, blockText(resp, BlockText))
 }

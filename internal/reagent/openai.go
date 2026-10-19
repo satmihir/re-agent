@@ -42,6 +42,7 @@ type responsesRequest struct {
 	PromptCacheKey    string              `json:"prompt_cache_key,omitempty"`
 	Truncation        string              `json:"truncation,omitempty"`
 	Stream            bool                `json:"stream"`
+	MaxOutputTokens   int                 `json:"max_output_tokens,omitempty"`
 }
 
 // responsesReasoning is encoded once, and only when an effort is configured.
@@ -143,6 +144,7 @@ func encodeOpenAIRequest(req ModelRequest, proxied bool) ([]byte, error) {
 		PromptCacheKey:    openAICacheKey(req),
 		Truncation:        truncation,
 		Stream:            proxied,
+		MaxOutputTokens:   req.MaxOutputTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode OpenAI request: invalid JSON data")
