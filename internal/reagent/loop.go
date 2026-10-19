@@ -170,7 +170,10 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 			return r.persistenceFailure(err)
 		}
 		if s.agentID != "" && r.steps >= r.cfg.MaxSteps {
-			return r.finish(StatusLimitExceeded, "agent model step budget exhausted", "")
+			return r.agentCapSummary(ctx, "agent model step budget exhausted")
+		}
+		if s.agentID != "" && r.cfg.MaxToolCalls > 0 && r.calls >= r.cfg.MaxToolCalls {
+			return r.agentCapSummary(ctx, fmt.Sprintf("call budget of %d exhausted", r.cfg.MaxToolCalls))
 		}
 		if s.agentID != "" && agentTokenLimit(r.usage) {
 			return r.finish(StatusLimitExceeded, "agent reported token cap reached", "")
@@ -275,6 +278,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 
 		if reason, reserved := r.reserve(len(calls)); !reserved {
 			r.recordNotExecuted(calls, reason)
+			if s.agentID != "" {
+				return r.agentCapSummary(ctx, reason)
+			}
 			return r.finish(StatusLimitExceeded, reason, "")
 		}
 		if status, reason := r.dispatch(ctx, calls); status != "" {
@@ -371,6 +377,10 @@ func (r *Run) dispatch(ctx context.Context, calls []*ToolCall) (RunStatus, strin
 		}
 		tool, found := r.cfg.Registry.Lookup(call.Name)
 		if !found {
+			if r.cfg.agent && call.Name == "report_friction" {
+				r.recordResult(call, failOutcome("permission_denied", "report_friction is not available to agents"))
+				continue
+			}
 			// A tool this build has but this mode withholds is refused for that
 			// reason; only an unknown name is reported as missing (v1 §10.3).
 			if r.cfg.Registry.known(call.Name) || r.cfg.agentPrefix.declares(call.Name) {

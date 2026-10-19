@@ -96,6 +96,7 @@ type ModelRequest struct {
 	Scope           RequestScope `json:"scope"`
 	Model           string       `json:"model"`
 	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	MaxOutputTokens int          `json:"max_output_tokens,omitempty"`
 	Instructions    string       `json:"instructions"`
 	History         []Entry      `json:"history"`
 	Tools           []ToolSpec   `json:"tools"`

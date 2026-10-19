@@ -8,9 +8,7 @@ import (
 // DefaultAnthropicModel is the Anthropic model used when nothing says otherwise.
 const DefaultAnthropicModel = "claude-haiku-4-5"
 
-// anthropicMaxTokens is the output ceiling every Messages request must carry.
-// The Messages API requires one; v0 configures no output limit for OpenAI, so
-// this is an adapter constant rather than a run setting.
+// anthropicMaxTokens is the default output ceiling required by Messages.
 const anthropicMaxTokens = 16000
 
 // messagesRequest is the Messages body this adapter sends. The system prompt
@@ -108,10 +106,14 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 		markCachePoint(messages)
 	}
 
+	maxTokens := anthropicMaxTokens
+	if req.MaxOutputTokens > 0 {
+		maxTokens = req.MaxOutputTokens
+	}
 	// Permit several tool_use blocks per response; dispatch remains sequential.
 	body, err := json.Marshal(messagesRequest{
 		Model:        req.Model,
-		MaxTokens:    anthropicMaxTokens,
+		MaxTokens:    maxTokens,
 		System:       system,
 		Messages:     messages,
 		Tools:        tools,

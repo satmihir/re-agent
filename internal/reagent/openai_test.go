@@ -250,3 +250,41 @@ func TestEncodeOpenAI_SummaryAndNextTurnAreTwoUserItems(t *testing.T) {
 		t.Fatalf("items: %+v %+v", first, second)
 	}
 }
+
+func TestEncodeRequest_ReservedOutputBudget(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		encode func(ModelRequest) ([]byte, error)
+		field  string
+		zero   float64
+	}{
+		{"openai", EncodeOpenAIRequest, "max_output_tokens", 0},
+		{"openai-proxy", func(req ModelRequest) ([]byte, error) { return encodeOpenAIRequest(req, true) }, "max_output_tokens", 0},
+		{"anthropic", EncodeAnthropicRequest, "max_tokens", anthropicMaxTokens},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, limit := range []int{0, 4096} {
+				var req ModelRequest
+				if err := json.Unmarshal([]byte(`{"model":"m","max_output_tokens":`+strconv.Itoa(limit)+`}`), &req); err != nil {
+					t.Fatal(err)
+				}
+				body, err := test.encode(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var fields map[string]any
+				if err := json.Unmarshal(body, &fields); err != nil {
+					t.Fatal(err)
+				}
+				want := float64(limit)
+				if limit == 0 {
+					want = test.zero
+				}
+				got, exists := fields[test.field]
+				if want == 0 && exists || want != 0 && got != want {
+					t.Errorf("limit=%d: %s = %v; want %v", limit, test.field, got, want)
+				}
+			}
+		})
+	}
+}
