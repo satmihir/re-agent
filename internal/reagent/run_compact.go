@@ -13,7 +13,7 @@ const (
 	inRunCompactFailures  = 3
 )
 
-const inRunCompactFocus = "Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls. Keep the summary within 32768 bytes (UTF-8); drop transcript detail already captured in files or checkpoints first."
+var inRunCompactFocus = fmt.Sprintf("Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls. Keep the summary within %d bytes (UTF-8); drop transcript detail already captured in files or checkpoints first.", MaxResultBytes)
 
 // compactWithinRun acts only at a settled pre-request boundary (v0 §10.4).
 func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
