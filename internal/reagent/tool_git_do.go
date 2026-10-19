@@ -269,6 +269,8 @@ type gitDoRun struct {
 	prefix string // recognized model prefix, removed from both Jev questions
 	steps  []gitDoStep
 	result *gitDoResult
+
+	observedTip string
 }
 
 type gitDoState struct {
@@ -580,6 +582,9 @@ func (r *gitDoRun) snapshot() {
 			}
 		}
 	}
+	if s.PullRequest != nil || r.pr > 0 {
+		r.observedTip, _ = r.remoteTip(s.Branch)
+	}
 }
 
 // v0 §10.9: Jev and the result share this small view; recipes keep the full list.
@@ -631,6 +636,7 @@ func (r *gitDoRun) feasible() map[string]bool {
 		allowed["amend"] = unpushed
 		allowed["split_commits"] = len(s.Changed) > 1
 	}
+	allowed["commit"] = changed || len(r.args.Paths) > 0
 	allowed["commit_push"] = !onDefault && s.Branch != "" && (changed || unpushed)
 	allowed["rebase_push"] = !onDefault && s.Branch != ""
 	allowed["ship_pr"] = s.PullRequest == nil && (changed || s.AheadDefault > 0)
@@ -868,6 +874,15 @@ func (r *gitDoRun) commitChanges(message string) (string, error) {
 	if err := r.stageChanges(); err != nil {
 		return "", err
 	}
+	if len(r.args.Paths) > 0 {
+		_, code, err := r.exec([]string{"git", "diff", "--cached", "--quiet"})
+		if err != nil || code > 1 || code < 0 {
+			return "", gitDoDecline{"cannot inspect staged changes; no commit made"}
+		}
+		if code == 0 {
+			return "", nil
+		}
+	}
 	if strings.TrimSpace(message) == "" {
 		files := r.state.Changed
 		if len(r.args.Paths) > 0 {
@@ -899,6 +914,15 @@ func (r *gitDoRun) cleanCheck() gitDoCheck {
 		evidence = "clean"
 	}
 	return gitDoCheck{"working tree clean", status == "", evidence}
+}
+
+func (r *gitDoRun) remoteTip(branch string) (string, bool) {
+	out, ok := r.quiet("git", "ls-remote", "origin", "refs/heads/"+branch)
+	fields := strings.Fields(out)
+	if !ok || len(fields) != 2 || fields[1] != "refs/heads/"+branch {
+		return "", false
+	}
+	return fields[0], true
 }
 
 func (r *gitDoRun) pushedCheck(branch string) gitDoCheck {
@@ -963,8 +987,12 @@ func (r *gitDoRun) prStatus() (string, []gitDoCheck, error) {
 
 func (r *gitDoRun) commit() (string, []gitDoCheck, error) {
 	before, _ := r.quiet("git", "rev-parse", "HEAD")
-	if _, err := r.commitChanges(r.args.Message); err != nil {
+	sha, err := r.commitChanges(r.args.Message)
+	if err != nil {
 		return "", nil, err
+	}
+	if sha == "" && len(r.args.Paths) > 0 {
+		return "nothing to commit for the named paths", []gitDoCheck{r.cleanCheck()}, nil
 	}
 	count, _ := r.quiet("git", "rev-list", "--count", before+"..HEAD")
 	last, _ := r.quiet("git", "log", "-1", "--format=%h %s")
@@ -1115,6 +1143,14 @@ func (r *gitDoRun) followUpPR() (string, []gitDoCheck, error) {
 	if json.Unmarshal([]byte(view), &pr) != nil || pr.Head != r.state.Branch {
 		return "", nil, gitDoDecline{fmt.Sprintf("pull request #%d is not from the current branch %s", number, r.state.Branch)}
 	}
+	tip, ok := r.remoteTip(r.state.Branch)
+	if !ok || r.observedTip == "" || tip != r.observedTip {
+		return "", nil, gitDoDecline{"the remote branch moved; fetch and reconcile first"}
+	}
+	_, ancestor, err := r.exec([]string{"git", "merge-base", "--is-ancestor", tip, "HEAD"})
+	if err != nil || ancestor < 0 || ancestor > 1 {
+		return "", nil, gitDoDecline{"cannot compare the remote branch with HEAD; fetch and reconcile first"}
+	}
 	message := r.args.Message
 	if strings.TrimSpace(message) == "" {
 		message = "Address review comments"
@@ -1123,8 +1159,16 @@ func (r *gitDoRun) followUpPR() (string, []gitDoCheck, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if err := r.push(r.state.Branch); err != nil {
+	if ancestor == 0 {
+		err = r.push(r.state.Branch)
+	} else {
+		_, err = r.step("git", "push", "-q", "-u", "--force-with-lease="+r.state.Branch+":"+tip, "origin", r.state.Branch)
+	}
+	if err != nil {
 		return "", nil, err
+	}
+	if sha == "" {
+		sha, _ = r.quiet("git", "rev-parse", "--short", "HEAD")
 	}
 	body := strings.TrimSpace(r.args.Body)
 	if body == "" && sha != "" {
@@ -1135,7 +1179,11 @@ func (r *gitDoRun) followUpPR() (string, []gitDoCheck, error) {
 	if _, err := r.step("gh", "pr", "comment", strconv.Itoa(number), "--body", body); err != nil {
 		return "", nil, err
 	}
-	return fmt.Sprintf("pushed %s and replied on #%d", r.state.Branch, number), []gitDoCheck{r.pushedCheck(r.state.Branch), r.cleanCheck()}, nil
+	checks := []gitDoCheck{r.pushedCheck(r.state.Branch), r.cleanCheck()}
+	if ancestor == 1 {
+		checks = append(checks, gitDoCheck{"rewrote branch; lease " + tip, true, "remote tip observed in preflight"})
+	}
+	return fmt.Sprintf("pushed %s and replied on #%d", r.state.Branch, number), checks, nil
 }
 
 func (r *gitDoRun) newBranch() (string, []gitDoCheck, error) {
