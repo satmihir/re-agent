@@ -13,7 +13,7 @@ const (
 	inRunCompactFailures  = 3
 )
 
-const inRunCompactFocus = "Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls."
+var inRunCompactFocus = fmt.Sprintf("Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls. Keep the summary within %d bytes (UTF-8); drop transcript detail already captured in files or checkpoints first.", MaxResultBytes)
 
 // compactWithinRun acts only at a settled pre-request boundary (v0 §10.4).
 func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
@@ -66,40 +66,53 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 	if err != nil || math.Ceil(float64(summarySize)*rate)+16_000 > float64(r.window) {
 		return skip("the summary request cannot fit with 16,000 tokens reserved for a handoff and output", false)
 	}
-	r.steps++
-	if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
-		r.persistenceErr = err
-		return StatusPersistenceError, err.Error()
-	}
-	r.trace.Write("compaction.requested", r.steps, req)
-	resp, err := r.model.Generate(withModelRetry(ctx, r.cfg.ModelRetryWindow, s.display), req)
-	if err != nil {
-		status, usage := classifyModelError(err)
-		r.usage.Add(usage)
-		s.lastRequest = usage
-		r.recordRouteUsage(usage)
-		reason := fmt.Sprintf("within-run compaction failed: %v", err)
-		r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
-		if status == StatusProviderError || status == StatusCancelled {
-			r.resumable = true
-			return status, reason
+	var text string
+	for attempt := 0; attempt < 2; attempt++ {
+		r.steps++
+		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
+			r.persistenceErr = err
+			return StatusPersistenceError, err.Error()
 		}
-		return skip(reason, true)
-	}
-	r.usage.Add(resp.Usage)
-	if resp.retryUsage != (Usage{}) {
-		r.usage.Add(resp.retryUsage)
-	}
-	s.lastRequest = resp.Usage
-	r.recordRouteUsage(resp.Usage)
-	text, err := compactText(resp)
-	if err != nil {
-		reason := fmt.Sprintf("within-run compaction failed: %v", err)
-		r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
-		return skip(reason, true)
-	}
-	if len(text) > MaxResultBytes {
-		reason := "within-run summary exceeds the 32 KiB handoff limit"
+		r.trace.Write("compaction.requested", r.steps, req)
+		resp, err := r.model.Generate(withModelRetry(ctx, r.cfg.ModelRetryWindow, s.display), req)
+		if err != nil {
+			status, usage := classifyModelError(err)
+			r.usage.Add(usage)
+			s.lastRequest = usage
+			r.recordRouteUsage(usage)
+			reason := fmt.Sprintf("within-run compaction failed: %v", err)
+			r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
+			if status == StatusProviderError || status == StatusCancelled {
+				r.resumable = true
+				return status, reason
+			}
+			return skip(reason, true)
+		}
+		r.usage.Add(resp.Usage)
+		if resp.retryUsage != (Usage{}) {
+			r.usage.Add(resp.retryUsage)
+		}
+		s.lastRequest = resp.Usage
+		r.recordRouteUsage(resp.Usage)
+		text, err = compactText(resp)
+		if err != nil {
+			reason := fmt.Sprintf("within-run compaction failed: %v", err)
+			r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
+			return skip(reason, true)
+		}
+		if len(text) <= MaxResultBytes {
+			break
+		}
+		reason := fmt.Sprintf("within-run summary exceeds the %d byte handoff limit", MaxResultBytes)
+		if attempt == 0 && (r.cfg.MaxSteps == 0 || r.steps+2 <= r.cfg.MaxSteps) {
+			focus := fmt.Sprintf("Shorten the existing %d byte summary to at most %d bytes (UTF-8). %s", len(text), MaxResultBytes, inRunCompactFocus)
+			scope.Step = r.steps + 1
+			req = summaryRequest(r.cfg, scope, []Entry{{Kind: EntrySummary, Summary: &Summary{Text: text}}}, focus)
+			shortenSize, err := admissionRequestBytes(r.cfg, req)
+			if err == nil && math.Ceil(float64(shortenSize)*rate)+16_000 <= float64(r.window) {
+				continue
+			}
+		}
 		r.trace.Write("compaction.failed", r.steps, map[string]any{"reason": reason})
 		return skip(reason, true)
 	}
@@ -128,6 +141,9 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 	s.handoff = nil
 	s.tokensPerByte = 0
 	s.lastRequest = Usage{}
+	if s.statusChanged != nil {
+		s.statusChanged()
+	}
 	if s.workspace != nil {
 		for _, ws := range s.workspace.handles {
 			ws.forgetSeen()

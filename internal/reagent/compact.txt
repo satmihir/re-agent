@@ -8,3 +8,4 @@ files changed, and what was verified and how. Preserve exact workspace roots and
 Open items: what remains, in order, and anything the user is waiting on.
 Facts to keep: exact paths, commands, identifiers, and numbers the work needs.
 Be complete and concrete; leave out narration of how you got here.
+When a byte budget is given, stay within it. Drop transcript detail already captured in files or checkpoints before task constraints, uncertain effects, verification evidence, and remaining work.

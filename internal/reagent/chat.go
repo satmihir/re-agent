@@ -944,6 +944,13 @@ func (c *conversation) runTurn(ctx context.Context, text string, input lineReade
 		terminal.setRegionStatus(c.regionStatus())
 		terminal.startTurnInput(turnCtx, cancel)
 		defer terminal.finishTurnInput()
+		c.session.statusChanged = func() {
+			terminal.region.mu.Lock()
+			defer terminal.region.mu.Unlock()
+			terminal.setRegionStatus(c.regionStatus())
+			terminal.redrawRegionLocked()
+		}
+		defer func() { c.session.statusChanged = nil }()
 	}
 
 	if c.shouldAutoCompact() {
