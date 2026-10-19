@@ -484,7 +484,7 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
     return result
 
 
-def execute_case(case_id, binary, root, artifacts, coverage=None, golden=None, inventory_error=None):
+def execute_case(case_id, binary, root, artifacts, coverage=None, golden=None, inventory_error=None, keep_artifacts=False):
     """Compare ordinary candidates inside workers, returning no artifact byte payloads."""
     result = run_case(case_id, binary, root, artifacts, coverage)
     if golden is None:
@@ -500,6 +500,8 @@ def execute_case(case_id, binary, root, artifacts, coverage=None, golden=None, i
             result.update(status="failed", reason=str(exc))
             (Path(artifacts) / "comparisonfailure.txt").write_text(str(exc))
     result.pop("artifacts", None)
+    if result["status"] == "passed" and not keep_artifacts and Path(artifacts).exists():
+        shutil.rmtree(artifacts)
     return result
 
 
@@ -1120,6 +1122,7 @@ def main(argv=None):
     parser.add_argument("--area", action="append", default=[])
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--artifacts", type=Path)
+    parser.add_argument("--keep-artifacts", action="store_true", help="retain passing cases too; failures and the report are always kept")
     parser.add_argument("--list", action="store_true")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--golden-update", action="store_true", help="explicitly update normalized locks and samples from the pinned reference")
@@ -1129,7 +1132,7 @@ def main(argv=None):
         if args.golden_update:
             if args.jobs < 1:
                 raise HarnessError("--jobs must be positive")
-            if args.bin or args.case or args.area or args.artifacts or args.list:
+            if args.bin or args.case or args.area or args.artifacts or args.keep_artifacts or args.list:
                 raise HarnessError("--golden-update cannot be combined with candidate or selection arguments")
             from parity import golden as reference
             return reference.main(["--update", "--jobs", str(args.jobs)])
@@ -1169,7 +1172,7 @@ def main(argv=None):
             with ProcessPoolExecutor(max_workers=args.jobs) as pool:
                 futures = [pool.submit(execute_case, case.id, args.bin, str(Path(temporary) / case.id),
                                        str(artifacts / case.id), str(Path(coverage) / case.id) if coverage else None,
-                                       None if args.probe else str(golden), inventory_error)
+                                       None if args.probe else str(golden), inventory_error, args.keep_artifacts)
                            for case in selected]
                 results = []
                 for case, future in zip(selected, futures):
@@ -1198,7 +1201,8 @@ def main(argv=None):
                   "unexecuted_platforms": sorted({platform for case in cases for platform in case.platforms} - {sys.platform}),
                   "raw_artifact_policy": {"file_bytes": RAW_FILE_LIMIT, "case_bytes": RAW_CASE_LIMIT,
                                           "overflow": "fail; retain bounded prefixes only, never compare them",
-                                          "coverage": "separate instrumented-binary output; not raw observations"},
+                                          "coverage": "separate instrumented-binary output; not raw observations",
+                                          "retention": "all cases" if args.keep_artifacts or args.probe else "failures only; passing case artifacts deleted after comparison"},
                   "platform": sys.platform, "selected": [case.id for case in selected],
                   "omitted": [case.id for case in cases if case not in selected],
                   "reference_commit": manifest.get("reference_commit"),
@@ -1219,7 +1223,8 @@ def main(argv=None):
                                 for case in cases]
         (artifacts / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         print("summary: " + ", ".join("%s=%s" % item for item in report["counts"].items()))
-        print("artifacts: " + str(artifacts))
+        retained_bytes = sum(path.lstat().st_size for path in artifacts.rglob("*") if path.is_symlink() or not path.is_dir())
+        print("artifacts: %s (%d bytes retained)" % (artifacts, retained_bytes))
         if args.probe:
             print("PROBE ONLY: assertions/normalization observed; no golden comparison or gate success")
         return int(bool(inventory_error) or not accepted_outcomes(selected, results, "observed" if args.probe else "passed"))
@@ -1229,4 +1234,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Cache and runner errors must use the same importable exception class.
+    from parity import run
+    sys.exit(run.main())

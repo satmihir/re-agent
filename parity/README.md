@@ -16,7 +16,10 @@ This is the first of four areas, not overall-suite approval or an 85% claim.
 
 Regeneration requires the exact Go/Python identities above and locally available
 Go module dependencies: the build uses `GOPROXY=off`, never a provider API.
-A verified cache can be compared without rebuilding Go.
+A verified cache can be compared without rebuilding Go. **For #141, exact Python
+3.11.5 is a hard host prerequisite**, including the patch version: a cold/stale
+cache must regenerate under the pinned interpreter. Do not edit the manifest to
+accept a host Python upgrade during translation.
 
 `7e0408f` and `f37aa5a` observations were exploratory, never golden inputs.
 #160's null-final and trace UTF-8 repairs and #161's digits-only Retry-After
@@ -29,6 +32,7 @@ still imposes the two-second floor. No production Go changes are included.
 make parity-golden                    # exact pinned build, clean capture and lock check
 make parity BIN=/absolute/reagent      # reuse or regenerate missing/stale reference cache
 make parity BIN=/absolute/reagent CASE=W33 JOBS=4
+make parity BIN=/absolute/reagent KEEP_ARTIFACTS=1  # retain passing cases for debugging
 python3 -m parity.run --list
 python3 -m unittest discover -s parity -p '*test.py'
 ```
@@ -47,6 +51,13 @@ for a malicious executable. Raw stdout/stderr whitespace and opaque bytes are
 preserved; budget overflow fails instead of comparing a truncated prefix.
 Provider barriers order cancellation without sleep-based races.
 
+After successful comparison, each passing case's artifacts are deleted immediately.
+Failures and `report.json` are always retained outside the checkout. Use
+`--keep-artifacts` (or `make parity KEEP_ARTIFACTS=1`) to keep passing evidence too;
+`--probe` also retains evidence because it performs no comparison. The summary
+prints total retained file bytes, including the report. An external `GOCOVERDIR`
+is not deleted. Reference-cache and mutation runs retain their full evidence.
+
 `--probe` runs assertions and normalization but explicitly does **not** compare
 expected outputs or claim a passing gate. `make parity-golden` builds from
 `git archive` of the pinned commit with the recorded flags, checks the toolchain
@@ -55,7 +66,7 @@ and verifies normalized locks before atomically publishing the external cache.
 A wrong binary, missing/extra case or changed digest fails closed with case IDs.
 Neither a candidate comparison nor an ordinary regeneration can refresh locks.
 Raw evidence, detailed ledgers and complete expected bytes are regenerable cache
-data, not Git content. The committed `parity/` tree is about **4.30 MB across 94 files**,
+data, not Git content. The committed `parity/` tree is about **4.32 MB across 94 files**,
 below the roughly 5 MB budget. The former `parity/golden/darwin/` observation tree
 is absent from every commit reachable on this branch; this is not a claim that
 unreachable objects or historical GitHub caches have been purged.
@@ -83,7 +94,11 @@ are not. This changes storage/integrity checking, not normalization or compariso
 The cache lane is `$XDG_CACHE_HOME/reagent-parity/<commit>/<platform>/` (default
 `~/.cache/reagent-parity/...`). Only this dedicated namespace is authorized;
 ordinary case evidence still cannot use real private caches/configuration or the
-repository. An absent lane or stale identity rebuilds automatically. A cache claiming
+repository. An absent lane rebuilds automatically. An existing cache with a stale
+suite/reference identity rebuilds only when its recorded temp-root width matches
+the host. A missing or different width instead stops before any case with exit 2
+and asks for `make parity-golden`; an old cache without this field also needs
+explicit regeneration. A cache claiming
 the current identity but missing/corrupt evidence fails rather than hiding damage.
 `make parity-golden` always rebuilds and captures fresh observations. Do not
 regenerate/re-pin a shared lane while comparisons are reading it; concurrent
@@ -91,8 +106,15 @@ comparisons against an unchanged cache are supported. It verifies all
 locks and all selected sample bytes before publication; full raw evidence, ledgers
 and the verified `reference` binary stay there. A clean-cache invocation can set
 `XDG_CACHE_HOME` to a new empty external directory. Regeneration and candidate
-execution use the same temporary-workspace layout: fixture-input framing remains
-byte-exact, so changing the host `TMPDIR` layout is not a comparison exemption.
+execution retain their original `TemporaryDirectory(prefix="reagent-parity-cases-")`
+allocation under the host temp directory. `cache.json` records `temp_root_width`,
+the length of the resolved case-parent path. Before replay or execution, a candidate
+checks its current width against that identity; a mismatch is a prerequisite error,
+not a parity failure and not an automatic regeneration. Restore the original
+`TMPDIR` layout or explicitly regenerate the cache. Regeneration still checks the
+unchanged locks: a layout that shifts W09 boundary bytes cannot be blessed this way.
+No expected digest or normalization mask changes; temporary workspaces are removed
+on exit.
 
 The 56 complete samples cover all 53 implemented W families (W13 is all pending),
 including the full 10 MiB W09 boundary and W33 opaque bytes. `samples/index.json`
@@ -118,6 +140,14 @@ before running it. Committed normalized locks and the suite digest detect cache
 or local changes; changing a manifest to attest to itself is not authorization.
 A translation candidate cannot enter update mode through `make parity`.
 
+The planned Go stream-fix re-pin must add `W28.window-service_unavailable` and
+`W28.default-service_unavailable` using the actual pair
+`type: service_unavailable_error, code: service_unavailable`. The current pin
+intentionally remains unchanged here. The truncated-stream fix will also require
+reviewing `W28.no-retry-incomplete` (called `W28.incomplete` in the review) and the
+four `incomplete_response` “stream ended…” vectors at `cases/wire_decode.py:472–475`;
+keep the explicit `W28.no-retry-incomplete-event` case unchanged.
+
 ## Inventory and dependencies
 
 **2,752 leaves: 2,737 implemented, 15 pending, 89 slow.** The W01–W54 audit and
@@ -138,7 +168,8 @@ but not verified and has no golden lane.
 | `W53.propagation.child`, `W53.propagation.nested-child` | Explicit child and nested-child HTTP exchanges |
 | `W53.propagation.git-do` | Tools-area git_do client exchange |
 
-There are currently no additional pending Go defects. New smaller Go defects
+The stream overload/truncation findings above are deferred to the planned Go-fix
+re-pin, not silently added to this unchanged inventory. New smaller Go defects
 must be listed with source, reproduction, impact and affected IDs in the PR;
 those IDs stay pending, never blessed as expected behavior. Crashes, corruption,
 security exposure and whole-family blockers stop the area.
@@ -214,10 +245,90 @@ presented as a compared artifact.
 
 ## Verification evidence
 
+### PR #164 operational review follow-up
+
+Final suite seal: `db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a`.
+Normalized/ledger locks, all samples, policy, case inventory, normalizer and comparison
+masks are byte-identical to the storage rework. Reference commit and binary SHA
+are unchanged. The seal changes only for operational source/tests.
+
+A fresh empty-cache `make parity BIN=/tmp/reagent-parity-go-38da0d6 JOBS=4`
+passed in **1537.370s**, including 202 Python tests (**14.665s**), pinned reference
+regeneration, all locks/samples, and full candidate comparison:
+
+```text
+total=2752, selected=2752, omitted=0, passed=2737, observed=0,
+failed=0, pending=15, unavailable=0, not_executed=0
+artifacts: <external artifacts> (2928570 bytes retained)
+```
+
+`gate_success: true`, `complete_suite: false`; all passing case directories were
+deleted, leaving only `report.json`. Cache identity records `temp_root_width: 86`.
+The actual CLI against that cache with a longer host temp path exited **2** in
+**0.541s**, before any case/replay, leaving the cache identity unchanged and its
+artifact directory empty:
+
+```text
+parity: reference cache temp-root width differs or is unknown: cached=86, current=207; regenerate the cache with make parity-golden (check TMPDIR)
+```
+
+An actual W09 boundary comparison with `--keep-artifacts` passed in **285.536s**
+and retained raw/normalized/replay evidence (**154,805,821 bytes**, report included).
+An intentionally failing `/usr/bin/false` candidate on `W01.case-sensitive-prefix`
+exited **1** as expected (**255.550s**, including cache verification), retaining its
+assertion and raw process status (**814,116 bytes**, report included).
+Targeted runner/cache/mutation tests passed: **101 / 13.274s**, including subprocess
+checks for differing/missing cache widths. Serial/parallel synthetic boundary tests
+also verify failure retention, byte summaries and external coverage preservation.
+
+Fresh offline gates:
+
+```text
+$ go build ./... && go vet ./... && go test ./...
+?   github.com/satmihir/re-agent/cmd/reagent [no test files]
+ok  github.com/satmihir/re-agent/internal/reagent (cached)
+$ make check
+go vet ./...
+go test ./...
+?   github.com/satmihir/re-agent/cmd/reagent [no test files]
+ok  github.com/satmihir/re-agent/internal/reagent (cached)
+$ go test -race ./...
+?   github.com/satmihir/re-agent/cmd/reagent [no test files]
+ok  github.com/satmihir/re-agent/internal/reagent (cached)
+$ python3 -m unittest discover -s bench -p '*test.py'
+Ran 64 tests in 16.693s
+OK
+$ make tty-check
+all 26 scenarios passed
+```
+
+TTY gate: **64.907s**. A captured real screen excerpt (full output retained):
+
+```text
+10│❯ !sleep 5
+12│interrupted after 0.9s · added to the conversation
+15│❯
+```
+
+Evidence: `/tmp/parity-review-164-final/proof.json` and logs; TTY screens:
+`/tmp/parity-review-164-width-identity/tty.out`. An earlier fixed-width approach was
+superseded at the user's request; its proof is not attributed to this seal. A
+superseded width-identity CLI check exposed duplicate `__main__`/`parity.run`
+exception classes (exit 1); the final entry point delegates to importable `run.main`
+and the real CLI regression now requires exit 2 without a traceback. Interrupted
+and superseded attempts are recorded in `acceptance.json`.
+
+The historical four-pass, 13-mutation and coverage campaigns below were **not
+rerun** for this operational follow-up. Their original seal/provenance is preserved.
+No live provider/model calls were made; Linux remains unverified. Overload and
+truncated-stream cases remain deferred to the planned Go-fix re-pin above.
+
+### Historical storage-rework verification
+
 `acceptance.json` records completed proofs separately from interrupted or failed
 attempts. No partial run is counted as a pass.
 
-The final clean-cache `make parity-golden JOBS=4` took **580.261 seconds**
+The storage-rework suite `24b68c62…` clean-cache `make parity-golden JOBS=4` took **580.261 seconds**
 (9m40s including the exact pinned build). All **2,737 executable cases** passed
 raw replay, normalized locks and selected-sample checks; **15 declared dependencies**
 remain pending. The old committed tree was not used as cache evidence. Final
@@ -225,12 +336,12 @@ parallel/serial comparison evidence is recorded separately in `acceptance.json`.
 The parallel runs took **682.351s, 665.680s and 671.335s**; the instrumented serial
 run took **2446.429s**, yielding fresh **36.8% internal coverage** (3,841/10,437
 statements), with the same covered-statement set as the original proof.
-All **three full parallel passes and one serial pass** passed, with identical
+For that sealed storage-rework suite, **three full parallel passes and one serial pass** passed, with identical
 2,752-entry case ledgers and **24,595 normalized artifacts** (1,045,441,036 bytes).
 The independently hashed normalized tree is
 `e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484`.
 
-Actual offline gate output on Darwin:
+Historical storage-rework offline gate output on Darwin (suite `24b68c62…`):
 
 ```text
 $ go build ./...
@@ -294,14 +405,15 @@ python3 -m parity.mutate --bin /tmp/reagent-parity-go-38da0d6 \
 ```
 
 The runner archives the pinned commit and patches only temporary copies. A
-baseline must pass first. The mutation orchestrator shares only the reference
-cache setting with the caller; each executable case retains isolated HOME/XDG
+baseline must pass first. The mutation orchestrator requests `--keep-artifacts` for both baseline and mutant
+runs so panic/status inspection and subsequent audits retain passing evidence too.
+It shares only the reference cache setting with the caller; each executable case retains isolated HOME/XDG
 configuration and fake credentials. Build failures, crashes and unrelated failures do not
 count as catches. Thirteen wire-area mutations are applicable (3, 5, 9–18, 36);
 the manifest gives explicit later-area reasons for the other 23. **13/13 were
 caught by their intended assertions**, after 89 baseline case executions and
 13 temporary builds passed. Exact patch digests and every catcher are in
-`mutation-results.json`. The fresh rework run exited 0 in **10,540.990s**;
+`mutation-results.json`. The storage-rework run (suite `24b68c62…`, not the review follow-up seal) exited 0 in **10,540.990s**;
 independent reclassification of the retained process/report evidence confirmed
 all baselines and catches, with the **same patch hashes and exact catcher IDs**.
 The reference cache and production sources were unchanged throughout.

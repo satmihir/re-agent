@@ -6,9 +6,59 @@
   "reference_binary_sha256": "925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a",
   "go_version": "go version go1.23.3 darwin/arm64",
   "python_version": "Python 3.11.5",
-  "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
+  "suite_digest": "db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a",
+  "proof_provenance": "The storage, integrity, repeatability, mutations, coverage, negative_controls and gates sections describe the historical storage-rework seal recorded in each section. Review follow-up verification is recorded separately; historical campaigns are not claimed rerun.",
   "counts": {"total": 2752, "implemented": 2737, "pending": 15, "slow": 89},
+  "review_followup": {
+    "review": "https://github.com/satmihir/re-agent/pull/164#issuecomment-6255927077",
+    "suite_digest": "db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a",
+    "oracle_inputs_unchanged": "Normalized/ledger locks, samples, case inventory, policy, normalizer, comparison masks, reference commit and binary SHA are unchanged. Only the operational source/test suite seal changed.",
+    "temp_root_width": "Case-root allocation is unchanged. cache.json records the resolved case-parent width from regeneration. A candidate with a different or unknown width exits 2 before replay, regeneration or worker startup and asks to regenerate the cache with make parity-golden. A wholly absent cache still regenerates automatically.",
+    "artifact_retention": "Delete passing artifacts only after comparison. Keep failures and report.json; --keep-artifacts or make parity KEEP_ARTIFACTS=1 retains passing evidence. Print retained bytes. Probe/reference capture retain evidence; mutation orchestration explicitly opts in. External GOCOVERDIR is preserved.",
+    "python_prerequisite": "Document exact Python 3.11.5 as a hard #141 host prerequisite; no toolchain-check relaxation.",
+    "gates": {
+      "targeted_python": "101 runner/cache/mutation tests passed in 13.274s, including real -m CLI width-mismatch/unknown-width exit-2 checks",
+      "go_build_vet_test": "passed; Go tests cached",
+      "make_check": "passed; Go tests cached",
+      "go_test_race": "passed; cached",
+      "bench_python": "64 tests passed in 16.693s",
+      "tty_check": "all 26 scenarios passed in 64.907s; /tmp/parity-review-164-width-identity/tty.out"
+    },
+    "full_cold_cache": {
+      "command": "XDG_CACHE_HOME=/tmp/parity-review-164-final/cache make parity BIN=/tmp/reagent-parity-go-38da0d6 JOBS=4",
+      "exit_code": 0,
+      "seconds": 1537.370,
+      "parity_python": "202 tests passed in 14.665s",
+      "counts": {"total": 2752, "selected": 2752, "omitted": 0, "passed": 2737, "observed": 0, "failed": 0, "pending": 15, "unavailable": 0, "not_executed": 0},
+      "gate_success": true,
+      "complete_suite": false,
+      "all_reference_locks_and_samples_verified": true,
+      "cache_temp_root_width": 86,
+      "retained_entries": ["report.json"],
+      "retained_bytes": 2928570,
+      "proof": "/tmp/parity-review-164-final/proof.json"
+    },
+    "width_mismatch": {
+      "exit_code": 2,
+      "seconds": 0.541,
+      "cached_width": 86,
+      "current_width": 207,
+      "diagnostic": "parity: reference cache temp-root width differs or is unknown: cached=86, current=207; regenerate the cache with make parity-golden (check TMPDIR)",
+      "artifacts_empty": true,
+      "cache_identity_unchanged": true
+    },
+    "keep_artifacts": {"case": "W09.claude-haiku-4-5-ascii-at", "exit_code": 0, "seconds": 285.536, "passed": 1, "retained_bytes": 154805821, "raw_normalized_and_replay_retained": true},
+    "failure_retention": {"case": "W01.case-sensitive-prefix", "binary": "/usr/bin/false", "exit_code": 1, "seconds": 255.550, "failed": 1, "retained_bytes": 814116, "assertion_and_raw_process_status_retained": true},
+    "proof_audit_passed": true,
+    "not_rerun": ["historical three-parallel/one-serial campaign", "13-mutation campaign", "statement coverage campaign"],
+    "superseded_attempts": [
+      "The fixed-width allocation approach was superseded at the user's request. Its full cold-cache run passed in 1033.342s under seal 2b4c330ffe5d7fc2a10c9f082aa69e69f42e67addb57ef03929ae5bd57d86b61, but is not evidence for the final approach. Its first post-run audit selected a unit-test summary path; corrected without rerunning cases. /tmp/parity-review-164-ops/full-proof.json",
+      "An interrupted short-TMPDIR reproduction produced no report; later retention checks did not execute. Inspected its empty artifact directory, logs and process state: no surviving parity descendants. Not counted. /tmp/parity-review-164-ops/short-targets.out",
+      "The first width-identity full comparison passed in 1067.913s under seal 34b255a11eb17b53fed16e06e5b74d29b820404c3ce826af7abf94d4cf4b14fb. Its subsequent real CLI mismatch check exposed duplicate __main__/parity.run HarnessError classes: traceback and exit 1, not required exit 2. Fixed by delegating the module entry point to importable run.main, added real subprocess regression coverage, and sealed again. Its retention checks did not execute. /tmp/parity-review-164-width-identity/proof.json"
+    ]
+  },
   "storage": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
     "committed": "Inventory, normalized artifact hashes/lengths, ledger contracts, policy, reference identity and 56 complete normalized sample cases across 53 implemented families",
     "external": "Pinned reference binary, complete raw evidence, full substitution rows, normalized bytes and replay metadata",
     "raw_observation_digests_committed": false,
@@ -17,6 +67,7 @@
     "cache": "/tmp/parity-rework-approved-cache/reagent-parity/38da0d664abae80cbd1cc1793b10b11204bc8031/darwin"
   },
   "integrity": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
     "passed": true,
     "report": "/tmp/parity-rework-approved-golden.out",
     "replayed_cases": 2737,
@@ -28,6 +79,7 @@
     "all_samples_verified": true
   },
   "repeatability": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
     "complete": true,
     "parallel_passes": 3,
     "parallel_seconds": [682.351, 665.680, 671.335],
@@ -44,6 +96,7 @@
     "independent_cross_pass_check": "/tmp/parity-rework-approved-parent-proof.json"
   },
   "mutations": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
     "complete": true,
     "required_applicable": 13,
     "caught": 13,
@@ -60,6 +113,7 @@
     "details": "mutation-results.json"
   },
   "coverage": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
     "complete": true,
     "fresh_instrumented_invocations": 2910,
     "internal_reagent_covered_statements": 3841,
@@ -71,6 +125,7 @@
     "profile": "/tmp/parity-rework-approved-coverage.profile"
   },
   "negative_controls": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
     "passed": 9,
     "report": "/tmp/parity-rework-approved-negative-controls.json",
     "controls": ["tampered normalized digest", "missing cached case", "extra cached case", "tampered committed digest", "missing committed case", "extra committed case", "wrong binary SHA", "wrong rebuilt SHA", "wrong rebuilt SHA in update mode"],
@@ -78,6 +133,7 @@
     "refresh_deadline_control": "An additional temporary Go 30s-to-120s refresh-deadline mutation fails W54.auth-refresh.overall's elapsed assertion at 38.904s, not a build failure, panic or runner timeout; /tmp/parity-refresh-deadline-negative/report.json"
   },
   "gates": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
     "go_build_vet_test": "passed; final Go tests cached",
     "make_check": "passed; final Go tests cached",
     "go_test_race": "passed; initial 87.753s, final cached",
@@ -99,9 +155,13 @@
     "15 later-area dependencies remain pending; see inventory.json.",
     "W33 checks checkpoint byte planes and checksum, not full checkpoint canonical-order/format parity.",
     "Do not regenerate/re-pin a shared cache lane while comparisons read it; concurrent comparisons against an unchanged cache are supported.",
-    "Scripted input framing remains byte-exact; changing the host TMPDIR layout is not a comparison exemption."
+    "Scripted input framing remains byte-exact. Cache identity now records resolved temp-root width; a different or unknown width stops candidate execution with exit 2 and an explicit regeneration instruction. Regeneration under an incompatible layout can still fail the unchanged W09 locks.",
+    "Exact Python 3.11.5, including its patch version, is a hard host prerequisite for #141 cache regeneration."
   ],
-  "go_defects_found_at_current_pin": [],
+  "go_defects_found_at_current_pin": [
+    "Review #164 found the real stream overload pair type=service_unavailable_error, code=service_unavailable absent from W28. internal/reagent/openai_stream.go:190-205 reads code and does not classify service_unavailable as transient. Add W28.window-service_unavailable and W28.default-service_unavailable only with the planned Go-fix re-pin; no inventory or Go change here.",
+    "The planned truncated-stream fix must review W28.no-retry-incomplete (review shorthand W28.incomplete) and the four incomplete_response vectors at parity/cases/wire_decode.py:472-475. Preserve W28.no-retry-incomplete-event."
+  ],
   "not_run": ["Linux execution and platform locks", "live provider APIs"],
   "merged": false
 }

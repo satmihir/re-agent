@@ -204,7 +204,7 @@ def has_panic(directory):
 
 def run_cases(binary, cases, directory, timeout):
     directory.mkdir()
-    argv = [sys.executable, "-m", "parity.run", "--bin", str(binary), "--artifacts", str(directory)]
+    argv = [sys.executable, "-m", "parity.run", "--bin", str(binary), "--artifacts", str(directory), "--keep-artifacts"]
     for case in cases:
         argv.extend(("--case", case))
     # Process HOME must be outside the runner's required-empty artifact directory.

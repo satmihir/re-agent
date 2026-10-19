@@ -21,7 +21,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request as HTTPRequest, urlopen
 
-from parity import golden
+from parity import golden, run
 from parity.model import Case
 from parity.provider import Provider, Response
 from parity.run import Context, HarnessError, execute_case, extend_capture, freeze_case, guard_artifacts, guard_private, load_capture, load_golden, leaf_inventory, main, read_frozen_case, read_metadata, repack_lane, revise_normalization, storage_row_span, replay_case, report_counts, run_case, select_cases, suite_digest, validate_capture
@@ -260,7 +260,7 @@ while True: time.sleep(1)
         self.assertIn(b"stderr sentinel", (self.root / "failed-artifacts/invoke-001.stderr").read_bytes())
 
     def test_candidate_worker_compares_before_dropping_bytes_and_preserves_other_modes(self):
-        for mode in ("candidate", "difference", "missing", "unexpected", "inventory", "pending", "failed", "retain"):
+        for mode in ("candidate", "keep", "difference", "missing", "unexpected", "inventory", "pending", "failed", "retain"):
             with self.subTest(mode=mode):
                 status = mode if mode in ("pending", "failed") else "passed"
                 result = {"id": "W99", "status": status, "artifacts": {"exact": b"candidate"}, "artifact_policies": {"exact": "B"}}
@@ -272,19 +272,97 @@ while True: time.sleep(1)
                         load.side_effect = RuntimeError("decoder sentinel")
                     artifacts = self.root / ("comparison-" + mode)
                     artifacts.mkdir()
+                    (artifacts / "raw-sentinel").write_bytes(b"debug evidence")
                     actual = execute_case("W99", str(self.binary), "root", str(artifacts), golden=None if mode == "retain" else "golden",
-                                          inventory_error="inventory sentinel" if mode == "inventory" else None)
+                                          inventory_error="inventory sentinel" if mode == "inventory" else None, keep_artifacts=mode == "keep")
                 if mode == "retain":
                     self.assertEqual(actual["artifacts"], {"exact": b"candidate"})
                 else:
                     self.assertNotIn("artifacts", actual)
                 self.assertEqual(actual["artifact_policies"], {"exact": "B"})
                 self.assertEqual(actual["status"], "failed" if mode in ("difference", "missing", "unexpected", "inventory") else status)
-                self.assertEqual(load.call_count, int(mode in ("candidate", "difference", "missing", "unexpected")))
+                self.assertEqual(load.call_count, int(mode in ("candidate", "keep", "difference", "missing", "unexpected")))
+                self.assertEqual(artifacts.exists(), mode != "candidate")
+                if artifacts.exists():
+                    self.assertEqual((artifacts / "raw-sentinel").read_bytes(), b"debug evidence")
                 marker = artifacts / "comparisonfailure.txt"
                 self.assertEqual(marker.exists(), mode in ("difference", "missing", "unexpected", "inventory"))
                 if marker.exists():
                     self.assertEqual(marker.read_text(), actual["reason"])
+
+    def test_cache_temp_root_width_mismatch_stops_before_any_case(self):
+        suite = Path(run.__file__).resolve().parent
+        manifest = json.loads((suite / "manifest.json").read_bytes())
+        cases = [Case("W99", "must not execute", lambda _: self.fail("case ran"))]
+        short = self.root / "short"
+        long = self.root / ("long-" * 20)
+        short.mkdir()
+        long.mkdir()
+        with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")):
+            lane = golden.cache_path(manifest)
+            lane.mkdir(parents=True)
+            with patch.dict(os.environ, TMPDIR=str(short)), patch("tempfile.tempdir", str(short)):
+                cached = golden.identity(suite, manifest)
+                with tempfile.TemporaryDirectory(prefix="reagent-parity-cases-") as parent:
+                    self.assertEqual(cached["temp_root_width"], len(str(Path(parent).resolve())))
+            for mode in ("different", "missing-width", "missing-marker"):
+                with self.subTest(mode=mode):
+                    marker = lane / "cache.json"
+                    value = dict(cached)
+                    if mode == "missing-width":
+                        value.pop("temp_root_width")
+                    marker.write_text(json.dumps(value))
+                    if mode == "missing-marker":
+                        marker.unlink()
+                    before = marker.read_bytes() if marker.exists() else None
+                    artifacts = self.root / ("width-" + mode)
+                    with patch.dict(os.environ, TMPDIR=str(long)), patch("tempfile.tempdir", str(long)), patch("parity.run.collect_cases", return_value=cases), patch("parity.golden.read_lock", return_value={"cases": {}}), patch("parity.golden.regenerate") as regenerate, patch("parity.golden.verify_cache") as verify, patch("parity.run.ProcessPoolExecutor") as pool, patch("parity.run.run_case") as worker, patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                        self.assertNotEqual(golden.identity(suite, manifest)["temp_root_width"], cached["temp_root_width"])
+                        self.assertEqual(main(["--bin", str(self.binary), "--artifacts", str(artifacts)]), 2)
+                    self.assertIn("temp-root width", stderr.getvalue())
+                    self.assertIn("regenerate the cache", stderr.getvalue())
+                    self.assertIn("make parity-golden", stderr.getvalue())
+                    pool.assert_not_called()
+                    worker.assert_not_called()
+                    regenerate.assert_not_called()
+                    verify.assert_not_called()
+                    self.assertFalse((artifacts / "report.json").exists())
+                    self.assertEqual(marker.read_bytes() if marker.exists() else None, before)
+                    process = subprocess.run([sys.executable, "-m", "parity.run", "--bin", str(self.binary),
+                                              "--case", "W01.case-sensitive-prefix", "--artifacts", str(artifacts)],
+                                             cwd=suite.parent, env=dict(os.environ, TMPDIR=str(long)),
+                                             capture_output=True, text=True, timeout=20)
+                    self.assertEqual(process.returncode, 2, process.stderr)
+                    self.assertIn("regenerate the cache", process.stderr)
+                    self.assertNotIn("Traceback", process.stderr)
+                    self.assertEqual(list(artifacts.iterdir()), [])
+                    self.assertEqual(marker.read_bytes() if marker.exists() else None, before)
+
+    def test_main_retains_only_failures_unless_requested_and_reports_total_size(self):
+        def fail(ctx):
+            ctx.run()
+            raise AssertionError("retained failure")
+
+        cases = [Case("W99.pass", "passing", lambda ctx: ctx.run()), Case("W99.fail", "failing", fail)]
+        coverage = self.root / "external-coverage"
+        for jobs in (1, 2):
+            for keep in (False, True):
+                with self.subTest(jobs=jobs, keep=keep):
+                    artifacts = self.root / ("retention-%s-%s" % (jobs, keep))
+                    output = io.StringIO()
+                    with patch.dict(os.environ, GOCOVERDIR=str(coverage)), patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=observed), patch("parity.run.load_golden", return_value={"exact": b"normalized"}), patch("parity.run.verify_inventory"), patch("parity.golden.ensure_cache", return_value=self.root / "cache"), patch("sys.stdout", output):
+                        args = ["--bin", str(self.binary), "--jobs", str(jobs), "--artifacts", str(artifacts)]
+                        self.assertEqual(main(args + (["--keep-artifacts"] if keep else [])), 1)
+                    self.assertEqual((artifacts / "W99.pass").exists(), keep)
+                    self.assertTrue((artifacts / "W99.fail/invoke-001.stderr").is_file())
+                    self.assertIn("retained failure", (artifacts / "W99.fail/failure.txt").read_text())
+                    report = json.loads((artifacts / "report.json").read_bytes())
+                    self.assertEqual(report["counts"]["passed"], 1)
+                    self.assertEqual(report["counts"]["failed"], 1)
+                    self.assertEqual(report["raw_artifact_policy"]["retention"], "all cases" if keep else "failures only; passing case artifacts deleted after comparison")
+                    total = sum(path.stat().st_size for path in artifacts.rglob("*") if path.is_file())
+                    self.assertIn("(%d bytes retained)" % total, output.getvalue())
+                    self.assertTrue((coverage / artifacts.name / "W99.pass/invoke-001").is_dir())
 
     def test_candidate_worker_still_performs_real_golden_raw_replay(self):
         _, golden, normalized, policies = self.frozen_fixture()

@@ -62,7 +62,7 @@
   "reference_blockers": {},
   "accepted_gaps": [],
   "known_limitations": [],
-  "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
+  "suite_digest": "db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a",
   "verification_evidence": "acceptance.json",
   "unverified": ["Linux execution and platform goldens"]
 }

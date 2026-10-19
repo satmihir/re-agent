@@ -99,6 +99,12 @@ class MutationTests(unittest.TestCase):
         (self.root / "invoke-001.status").write_text("-9")
         self.assertEqual(self.classify(rows)[0], "harness_failure")
 
+    def test_case_runs_keep_baseline_and_mutant_evidence_for_classification(self):
+        with patch.object(mutate, "command", return_value=({"exit_code": 0}, b"")) as command, patch.object(mutate, "load_report", return_value=({}, [])):
+            mutate.run_cases(Path(sys.executable), ["W99.exact"], self.root / "cases", 10)
+        self.assertIn("--keep-artifacts", command.call_args.args[0])
+        self.assertEqual(command.call_args.args[0][-2:], ["--case", "W99.exact"])
+
     def test_baseline_must_pass_before_any_mutation_or_build(self):
         baseline = ({"exit_code": 1}, {}, [{"id": "W99.exact", "status": "failed", "reason": "missing golden"}])
         with patch.object(mutate, "run_cases", return_value=baseline), patch.object(mutate, "apply_mutation") as apply:

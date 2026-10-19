@@ -145,10 +145,13 @@ def verify_case(case_id, directory, expected):
         raise run.HarnessError("reference case %s: %s" % (case_id, exc)) from exc
 
 
-def identity(suite, manifest):
-    """Invalidate cache data when any protected suite or reference input changes."""
+def identity(suite, manifest, temp_root_width=None):
+    """Include resolved case-parent width because W09 sizes prompts against that path."""
+    if temp_root_width is None:
+        with tempfile.TemporaryDirectory(prefix="reagent-parity-cases-") as temporary:
+            temp_root_width = len(str(Path(temporary).resolve()))
     return {"suite_digest": run.suite_digest(suite), "reference_commit": manifest["reference_commit"],
-            "reference_binary_sha256": manifest["reference_binary_sha256"]}
+            "reference_binary_sha256": manifest["reference_binary_sha256"], "temp_root_width": temp_root_width}
 
 
 def verify_cache(lane, suite, manifest, cases, lock, jobs=4):
@@ -230,6 +233,7 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
         # Match candidate workspace widths: scripted responses retain exact framing lengths.
         with tempfile.TemporaryDirectory(prefix="reagent-parity-cases-") as working:
             working = Path(working)
+            temp_root_width = len(str(working.resolve()))
             try:
                 with ProcessPoolExecutor(max_workers=jobs) as pool:
                     futures = [pool.submit(capture_case, case.id, str(binary), str(working / case.id),
@@ -254,7 +258,7 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
             shutil.copytree(staging, failed, symlinks=True)
             (failed / "failure.txt").write_text(str(exc))
             raise run.HarnessError("reference verification failed; evidence %s: %s" % (failed, exc)) from exc
-        (staging / "cache.json").write_text(json.dumps(identity(suite, manifest), sort_keys=True) + "\n")
+        (staging / "cache.json").write_text(json.dumps(identity(suite, manifest, temp_root_width), sort_keys=True) + "\n")
         old = Path(temporary) / "previous"
         if lane.exists():
             # Keep the old cache until every new case has passed replay and locks.
@@ -279,7 +283,14 @@ def ensure_cache(suite, manifest, cases, jobs=4):
         raise run.HarnessError("invalid reference cache: " + str(lane))
     if marker.is_symlink():
         raise run.HarnessError("linked reference cache identity")
-    if not marker.exists() or json.loads(marker.read_bytes()) != identity(suite, manifest):
+    cached = json.loads(marker.read_bytes()) if marker.exists() else {}
+    current = identity(suite, manifest)
+    cached_width = cached.get("temp_root_width") if isinstance(cached, dict) else None
+    if type(cached_width) is not int or cached_width != current["temp_root_width"]:
+        raise run.HarnessError("reference cache temp-root width differs or is unknown: cached=%s, current=%s; "
+                               "regenerate the cache with make parity-golden (check TMPDIR)" %
+                               (cached_width, current["temp_root_width"]))
+    if cached != current:
         return regenerate(suite, manifest, cases, lock, jobs)
     return verify_cache(lane, suite, manifest, cases, lock, jobs)
 

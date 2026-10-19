@@ -64,4 +64,4 @@ parity-golden:
 
 parity:
 	python3 -m unittest discover -s parity -p '*test.py'
-	python3 -m parity.run --bin "$(BIN)" --jobs "$(JOBS)" $(if $(AREA),--area "$(AREA)") $(if $(CASE),--case "$(CASE)")
+	python3 -m parity.run --bin "$(BIN)" --jobs "$(JOBS)" $(if $(AREA),--area "$(AREA)") $(if $(CASE),--case "$(CASE)") $(if $(filter 1,$(KEEP_ARTIFACTS)),--keep-artifacts)

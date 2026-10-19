@@ -117,13 +117,13 @@ class GoldenTest(unittest.TestCase):
 
     def test_absent_or_stale_cache_regenerates_but_current_corruption_is_not_retried(self):
         lane = golden.cache_path(self.manifest)
-        expected_identity = {"suite_digest": "same"}
+        expected_identity = {"suite_digest": "same", "temp_root_width": 86}
         with patch("parity.golden.read_lock", return_value={"cases": {}}), patch("parity.golden.identity", return_value=expected_identity), patch("parity.golden.regenerate", return_value=lane) as regenerate, patch("parity.golden.verify_cache", side_effect=run.HarnessError("W01 corrupt")) as verify:
             self.assertEqual(golden.ensure_cache(self.suite, self.manifest, []), lane)
             regenerate.assert_called_once()
             lane.mkdir(parents=True)
             regenerate.reset_mock()
-            (lane / "cache.json").write_text('{"suite_digest":"old"}')
+            (lane / "cache.json").write_text(json.dumps({**expected_identity, "suite_digest": "old"}))
             self.assertEqual(golden.ensure_cache(self.suite, self.manifest, []), lane)
             regenerate.assert_called_once()
             regenerate.reset_mock()
@@ -150,6 +150,7 @@ class GoldenTest(unittest.TestCase):
 
         def observe(ctx):
             self.assertTrue(ctx.root.parent.name.startswith("reagent-parity-cases-"))
+            self.assertEqual(len(str(ctx.root.parent)), golden.identity(self.suite, self.manifest)["temp_root_width"])
             self.assertEqual(ctx.root.name, "W99")
             ctx.artifact_policies = {"exact": "B"}
             (ctx.artifacts / "substitutions.json").write_text("[]\n")
