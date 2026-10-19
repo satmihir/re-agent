@@ -113,3 +113,71 @@ exec '%s' "$@"
 		t.Fatal("committed or staged despite moved remote")
 	}
 }
+
+func TestGitDo_FollowUpPreservesFetchedCollaboratorCommit(t *testing.T) {
+	ws := gitDoRepo(t)
+	gitDoOpenPR(t, ws)
+	before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+	base := filepath.Dir(ws.Root())
+	collaborator := filepath.Join(base, "collaborator")
+	gitDoGit(t, base, "clone", "-q", "--template=", "-b", "feature", filepath.Join(base, "origin.git"), collaborator)
+	gitDoWrite(t, collaborator, "collaborator.txt")
+	gitDoGit(t, collaborator, "add", "collaborator.txt")
+	gitDoGit(t, collaborator, "commit", "-q", "-m", "Collaborator review")
+	gitDoGit(t, collaborator, "push", "-q", "origin", "feature")
+	remote := gitDoGit(t, collaborator, "rev-parse", "HEAD")
+	gitDoGit(t, ws.Root(), "fetch", "-q", "origin")
+	gitDoGit(t, ws.Root(), "cat-file", "-e", remote+"^{commit}")
+	gitDoWrite(t, ws.Root(), "review.txt")
+	outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"follow_up_pr"}`)
+	if outcome.Code != "declined" || outcome.Message != "the remote branch has commits that HEAD does not contain; merge or rebase onto it first" || len(gitDoData(t, outcome).Steps) != 0 {
+		t.Errorf("%s: %s; steps=%+v", outcome.Code, outcome.Message, gitDoData(t, outcome).Steps)
+	}
+	if gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "diff", "--cached", "--name-only") != "" || gitDoGit(t, ws.Root(), "status", "--porcelain") != "?? review.txt" {
+		t.Error("changed local HEAD, index or review edit")
+	}
+	if tip := gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature"); tip != remote+"\trefs/heads/feature" {
+		t.Errorf("overwrote collaborator commit %s: remote=%s", remote, tip)
+	}
+}
+
+func TestGitDo_FollowUpDeclinesWithoutOwnBranchReflogProof(t *testing.T) {
+	for _, proof := range []string{"other-branch-only", "unavailable"} {
+		t.Run(proof, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			gitDoOpenPR(t, ws)
+			remote := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+			gitDoGit(t, ws.Root(), "branch", "preserved")
+			gitDoGit(t, ws.Root(), "commit", "-q", "--amend", "-m", "Amended")
+			before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+			gitDoWrite(t, ws.Root(), "review.txt")
+			if proof == "other-branch-only" {
+				gitDoGit(t, ws.Root(), "reflog", "expire", "--expire=all", "refs/heads/feature")
+				if gitDoGit(t, ws.Root(), "reflog", "show", "--format=%H", "refs/heads/preserved") != remote {
+					t.Fatal("missing other branch's reflog proof")
+				}
+			} else {
+				realGit, err := exec.LookPath("git")
+				if err != nil {
+					t.Fatal(err)
+				}
+				bin := t.TempDir()
+				wrapper := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = reflog ] && exit 128\nexec '%s' \"$@\"\n", realGit)
+				if err := os.WriteFile(filepath.Join(bin, "git"), []byte(wrapper), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			}
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"follow_up_pr"}`)
+			if outcome.Code != "declined" || outcome.Message != "the remote branch has commits that HEAD does not contain; merge or rebase onto it first" || len(gitDoData(t, outcome).Steps) != 0 {
+				t.Errorf("%s: %s; steps=%+v", outcome.Code, outcome.Message, gitDoData(t, outcome).Steps)
+			}
+			if gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "diff", "--cached", "--name-only") != "" || gitDoGit(t, ws.Root(), "status", "--porcelain") != "?? review.txt" {
+				t.Error("changed local HEAD, index or review edit")
+			}
+			if tip := gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature"); tip != remote+"\trefs/heads/feature" {
+				t.Errorf("rewrote branch without proof: remote=%s", tip)
+			}
+		})
+	}
+}

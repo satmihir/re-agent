@@ -1151,6 +1151,19 @@ func (r *gitDoRun) followUpPR() (string, []gitDoCheck, error) {
 	if err != nil || ancestor < 0 || ancestor > 1 {
 		return "", nil, gitDoDecline{"cannot compare the remote branch with HEAD; fetch and reconcile first"}
 	}
+	if ancestor == 1 {
+		history, ok := r.quiet("git", "reflog", "show", "--format=%H", "refs/heads/"+r.state.Branch)
+		ownTip := false
+		for _, sha := range strings.Fields(history) {
+			if sha == tip {
+				ownTip = true
+				break
+			}
+		}
+		if !ok || !ownTip {
+			return "", nil, gitDoDecline{"the remote branch has commits that HEAD does not contain; merge or rebase onto it first"}
+		}
+	}
 	message := r.args.Message
 	if strings.TrimSpace(message) == "" {
 		message = "Address review comments"
