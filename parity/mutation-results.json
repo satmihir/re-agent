@@ -1,0 +1,45 @@
+{
+  "reference_commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
+  "reference_binary_sha256": "925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a",
+  "archive_sha256": "44d2753d2544e572ddb74b5a312b52da41af32bdb282e267410614367e7cffa0",
+  "caught": 13,
+  "selected": 13,
+  "baseline_case_executions": 89,
+  "all_baselines_passed": true,
+  "all_temporary_builds_passed": true,
+  "real_go_tree_modified": false,
+  "fresh_rework_proof": {
+    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
+    "report": "/tmp/parity-rework-approved-mutations/report.json",
+    "independent_check": "/tmp/parity-rework-approved-mutations-parent-proof.json",
+    "seconds": 10540.990,
+    "exit_code": 0,
+    "all_patch_hashes_and_exact_catcher_ids_unchanged": true,
+    "independently_reclassified_from_retained_evidence": true,
+    "cache_and_production_sources_unchanged": true
+  },
+  "initial_finding": "Mutation 14 initially survived because incomplete EOF did not exercise an explicit response.incomplete terminal. Added W28.no-retry-incomplete-event; the unchanged mutation now fails the intended one-attempt assertion.",
+  "mutations": [
+    {"id": 3, "status": "caught", "patch_sha256": "4336e12432c8f7423c3925ff06f81bfa11fd1c86e1ed731696d34fda8a486da3", "cases_caught": ["W07.claude-haiku-4-5-crlf", "W07.gpt-6-luna-crlf", "W07.gpt-6-luna-crlf-proxy"]},
+    {"id": 5, "status": "caught", "patch_sha256": "0df2df01a02db3d91f5690c8e9ef29f5139d5fd4ab0235d69efb9faec8c196e7", "cases_caught": ["W47.projection"]},
+    {"id": 9, "status": "caught", "patch_sha256": "9934d9d5c6571b470ab21801747022dfaf7c6ab7c83ce411721899f4aba0f164", "cases_caught": ["W07.gpt-6-luna-html", "W07.gpt-6-luna-html-proxy"]},
+    {"id": 10, "status": "caught", "patch_sha256": "5ddcd7de15144b73161b35203c55999ecb42991128e5d321a25aac0cf3aaeea6", "cases_caught": [
+      "W02.chatgpt-auto", "W02.chatgpt-explicit", "W02.chatgpt-request-id.empty-preferred", "W02.chatgpt-request-id.fallback-only", "W02.chatgpt-request-id.neither", "W02.chatgpt-request-id.preferred-only",
+      "W02.gpt-5.6-luna-live", "W02.gpt-5.6-luna-preview", "W02.gpt-5.6-terra-live", "W02.gpt-5.6-terra-preview", "W02.gpt-6-luna-live", "W02.gpt-6-luna-preview", "W02.gpt-6-sol-live", "W02.gpt-6-sol-preview", "W02.gpt-6.1-sol-live", "W02.gpt-6.1-sol-preview",
+      "W08.America-Los_Angeles-ro0-plan0", "W08.America-Los_Angeles-ro0-plan0-proxy", "W08.America-Los_Angeles-ro0-plan1", "W08.America-Los_Angeles-ro0-plan1-proxy", "W08.America-Los_Angeles-ro1-plan0", "W08.America-Los_Angeles-ro1-plan0-proxy", "W08.America-Los_Angeles-ro1-plan1", "W08.America-Los_Angeles-ro1-plan1-proxy",
+      "W08.Etc-GMT+7-ro0-plan0", "W08.Etc-GMT+7-ro0-plan0-proxy", "W08.Etc-GMT+7-ro0-plan1", "W08.Etc-GMT+7-ro0-plan1-proxy", "W08.Etc-GMT+7-ro1-plan0", "W08.Etc-GMT+7-ro1-plan0-proxy", "W08.Etc-GMT+7-ro1-plan1", "W08.Etc-GMT+7-ro1-plan1-proxy",
+      "W08.UTC-ro0-plan0", "W08.UTC-ro0-plan0-proxy", "W08.UTC-ro0-plan1", "W08.UTC-ro0-plan1-proxy", "W08.UTC-ro1-plan0", "W08.UTC-ro1-plan0-proxy", "W08.UTC-ro1-plan1", "W08.UTC-ro1-plan1-proxy",
+      "W08.moved-direct-ro0-plan0", "W08.moved-direct-ro0-plan1", "W08.moved-direct-ro1-plan0", "W08.moved-direct-ro1-plan1", "W08.moved-proxy-ro0-plan0", "W08.moved-proxy-ro0-plan1", "W08.moved-proxy-ro1-plan0", "W08.moved-proxy-ro1-plan1"
+    ]},
+    {"id": 11, "status": "caught", "patch_sha256": "82b749cf710136acfc76408e5892203a7be68d8959b5860b5a1a5a8ab31f35c5", "cases_caught": ["W10.base", "W10.base-proxy", "W11.turns", "W11.turns-proxy"]},
+    {"id": 12, "status": "caught", "patch_sha256": "8453bc1ee317dcd99c03753c9bc60837c5238eac7ccd66754f36035deeca517b", "cases_caught": ["W12.batch-and-next", "W12.results-then-text", "W12.results-then-two-texts"]},
+    {"id": 13, "status": "caught", "patch_sha256": "cb8ed8540032909075103efb6d7614e9f516fb2cc0e03542726a49b725087c6e", "cases_caught": ["W26.anthropic-408", "W26.openai-408", "W26.proxy-408"]},
+    {"id": 14, "status": "caught", "patch_sha256": "9c7b3bdeebf881b70ab01c8cf1a3e56942810633a845f16bf17afeb02f6d4dd9", "cases_caught": ["W28.no-retry-incomplete-event"]},
+    {"id": 15, "status": "caught", "patch_sha256": "3777a14a1554e30204d10613591ef5048257215bd2d9631854539aa78fbadfbc", "cases_caught": ["W29.held-success"]},
+    {"id": 16, "status": "caught", "patch_sha256": "d8410363b0d5a5e7965b71c3e2d976a57fe4b73d05269b6ed2fa8e7be742eb9a", "cases_caught": ["W32.openai-counters", "W32.proxy-counters"]},
+    {"id": 17, "status": "caught", "patch_sha256": "cf380b2f970bdfd2f089f36a89af1f5639d3bb1d61fcefd2a410d612a485f6a4", "cases_caught": ["W43.threshold-below"]},
+    {"id": 18, "status": "caught", "patch_sha256": "b1ef608e9bd3914758ee2b2f5af10c39f27ca7df192ac00f4c19a4e1c1f41543", "cases_caught": ["W47.projection", "W48.roundtrip"]},
+    {"id": 36, "status": "caught", "patch_sha256": "b9881f91bb30b34ec85c33a7fcdf75bbfec8741e8145a497fb72909378c20816", "cases_caught": ["W39.history"]}
+  ],
+  "later_pending": "The other 23 mutations and their area dependencies are explicitly listed in mutations.json."
+}

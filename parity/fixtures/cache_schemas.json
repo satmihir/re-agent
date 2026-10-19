@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "reference_commit": "7e0408fa8ef5b62cc7d1c466393707b49a3a8b3f",
+  "schemas": {
+    "cancel": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_agents.go:43-43",
+        "source_sha256": "d4414fca3e38dbbf3007c3643b1ba9ee7973d6c475c4b39240348a68e86a7eaf",
+        "raw": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+        "sha256": "433f45fe38e14aa42438030f994d4e1c01af3e22832629e686cba3f3e92c1d5e"
+      }
+    ],
+    "delete_file": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_write_file.go:98-107",
+        "source_sha256": "180490cbddfde3e459f78c079731d6966e11e1f169383dcb161f6029d5b8525b",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"path\": {\"type\": \"string\", \"description\": \"Workspace-relative regular file, or directory/symlink with recursive:true.\"},\n    \"expected_sha256\": {\"type\": \"string\", \"description\": \"Optional regular-file SHA-256; omit to use the last observed version. Not accepted for directories or symlinks.\"},\n    \"recursive\": {\"type\": \"boolean\", \"description\": \"Explicitly authorize a directory tree or symlink deletion; default false.\"}\n  },\n  \"required\": [\"path\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "f4c275179383d68c5cb6d4102d4123eaf862824822d9562bef8bf64819d8363d"
+      }
+    ],
+    "dismiss": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_agents.go:43-43",
+        "source_sha256": "d4414fca3e38dbbf3007c3643b1ba9ee7973d6c475c4b39240348a68e86a7eaf",
+        "raw": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+        "sha256": "433f45fe38e14aa42438030f994d4e1c01af3e22832629e686cba3f3e92c1d5e"
+      }
+    ],
+    "echo": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_echo.go:24-31",
+        "source_sha256": "7bb89993bac0783b4630bbf1ae9437fa2331024ec64848568100ce864d93a690",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"text\": {\"type\": \"string\", \"description\": \"Text to return unchanged.\"}\n  },\n  \"required\": [\"text\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "73f1d0157f3f625dc88fcb613b2369196a2890ebb114b280086ee4dee3d37690"
+      }
+    ],
+    "edit_file": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_edit_file.go:62-78",
+        "source_sha256": "519ad2b11c567997b0903159df76eb222e488d63e763d29a9e20f9016dc9e788",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"path\": {\"type\": \"string\", \"description\": \"Workspace-relative UTF-8 text file to change.\"},\n    \"expected_sha256\": {\"type\": \"string\", \"description\": \"Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version.\"},\n    \"old_text\": {\"type\": \"string\", \"description\": \"Single edit: exact text occurring once in the file.\"},\n    \"new_text\": {\"type\": \"string\", \"description\": \"Single edit: replacement text; empty deletes.\"},\n    \"edits\": {\"type\": \"array\", \"description\": \"Several non-overlapping replacements in one call.\", \"minItems\": 1, \"items\": {\n      \"type\": \"object\", \"properties\": {\n        \"old_text\": {\"type\": \"string\"}, \"new_text\": {\"type\": \"string\"}, \"replace_all\": {\"type\": \"boolean\", \"description\": \"Replace every non-overlapping occurrence of old_text.\"}\n      }, \"required\": [\"old_text\", \"new_text\"], \"additionalProperties\": false\n    }},\n    \"append_text\": {\"type\": \"string\", \"description\": \"Text added after all replacements; no automatic newline.\"}\n  },\n  \"required\": [\"path\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "ff12f71e26f5d3caa3da8c6236076895a31b83e9eb70a0dd5a0cb71febb75f42"
+      }
+    ],
+    "exec": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_exec.go:95-108",
+        "source_sha256": "a40a74b45d81e21c634ea44ed4b3dfdd23e3abf116955481f5839312f3a6069f",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"argv\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"minItems\": 1,\n             \"description\": \"The first or only command: its executable followed by its literal arguments, such as [\\\"git\\\",\\\"status\\\"]. Always an array, also when then is given.\"},\n    \"then\": {\"type\": \"array\", \"maxItems\": 7,\n             \"items\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"minItems\": 1},\n             \"description\": \"Commands to run after argv, each an argument vector like argv, in order and in the same cwd, each only if the previous command exited successfully.\"},\n    \"cwd\": {\"type\": \"string\", \"description\": \"Existing workspace-relative directory, or . for the root.\"},\n    \"timeout_ms\": {\"type\": \"integer\", \"minimum\": 1, \"description\": \"Milliseconds each command may run. Defaults to 120000; values below 10000 are raised to 10000.\"}\n  },\n  \"required\": [\"argv\", \"cwd\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "52f7c68bedab2f07043d7ae9464cfd81d66d778ab03a29085e7c296dcbcfb1c7"
+      }
+    ],
+    "git_do": [
+      {
+        "variant": "jev",
+        "source": "internal/reagent/tool_git_do.go:164-173",
+        "source_sha256": "ee0401d2e0e8b15a4b1c2a937ebeca7e73cf5b163007d96bf7772baf46d83d55",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"intent\": {\"type\": \"string\", \"description\": \"The git outcome, in plain English, such as \\\"commit these changes on a new branch, push, and open a pull request\\\".\"},\n    \"recipe\": {\"type\": \"string\", \"enum\": [\"status\",\"explain_branch\",\"pr_status\",\"commit\",\"split_commits\",\"amend\",\"commit_push\",\"ship_pr\",\"follow_up_pr\",\"new_branch\",\"rebase_push\",\"revert_pr\"], \"description\": \"Optional model-named recipe, used only when Jev agrees and this state allows it.\"},\n    \"message\": {\"type\": \"string\", \"description\": \"Commit message to use; recipes derive one from the changed files when omitted.\"},\n    \"title\": {\"type\": \"string\", \"description\": \"Pull request title; the commit subject when omitted.\"},\n    \"body\": {\"type\": \"string\", \"description\": \"Pull request body, or the reply posted on a pull request.\"},\n    \"branch\": {\"type\": \"string\", \"description\": \"Branch name to create, when the outcome creates one.\"},\n    \"pr\": {\"type\": \"integer\", \"minimum\": 1, \"description\": \"Pull request number, when the outcome names one.\"},\n    \"commit\": {\"type\": \"string\", \"description\": \"Commit to revert, as a hash or ref.\"},\n    \"paths\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"For commit, commit_push, ship_pr, follow_up_pr and amend: name exactly what to commit when the tree has unrelated changes; workspace-relative files or directories.\"}\n  },\n  \"required\": [\"intent\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "0c20c1b522709599ca9b4094da9a740cab30bdc65eba84aa5188e989e495e74c",
+        "assembly": "Raw literals joined with common (lines 144-150) and compact ordered recipe names (lines 44-57)."
+      },
+      {
+        "variant": "recipe",
+        "source": "internal/reagent/tool_git_do.go:176-184",
+        "source_sha256": "ee0401d2e0e8b15a4b1c2a937ebeca7e73cf5b163007d96bf7772baf46d83d55",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"recipe\": {\"type\": \"string\", \"enum\": [\"status\",\"explain_branch\",\"pr_status\",\"commit\",\"split_commits\",\"amend\",\"commit_push\",\"ship_pr\",\"follow_up_pr\",\"new_branch\",\"rebase_push\",\"revert_pr\"]},\n    \"message\": {\"type\": \"string\", \"description\": \"Commit message to use; recipes derive one from the changed files when omitted.\"},\n    \"title\": {\"type\": \"string\", \"description\": \"Pull request title; the commit subject when omitted.\"},\n    \"body\": {\"type\": \"string\", \"description\": \"Pull request body, or the reply posted on a pull request.\"},\n    \"branch\": {\"type\": \"string\", \"description\": \"Branch name to create, when the outcome creates one.\"},\n    \"pr\": {\"type\": \"integer\", \"minimum\": 1, \"description\": \"Pull request number, when the outcome names one.\"},\n    \"commit\": {\"type\": \"string\", \"description\": \"Commit to revert, as a hash or ref.\"},\n    \"paths\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"For commit, commit_push, ship_pr, follow_up_pr and amend: name exactly what to commit when the tree has unrelated changes; workspace-relative files or directories.\"}\n  },\n  \"required\": [\"recipe\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "c4afc75382a80c40b854826d441686f6868feda50958b8a768af1856e2501fe8",
+        "assembly": "Raw literals joined with common (lines 144-150) and compact ordered recipe names (lines 44-57)."
+      }
+    ],
+    "git_inspect": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_git_inspect.go:58-58",
+        "source_sha256": "afb921905c84df38ed29c633aa5a9a67c809503b8be4a6746dd87d08ba399a50",
+        "raw": "{\"type\":\"object\",\"properties\":{\"operation\":{\"type\":\"string\",\"enum\":[\"status\",\"worktree_diff\",\"diff\",\"show\",\"log\"]},\"from\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"},\"rev\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":32},\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},\"stat\":{\"type\":\"boolean\"},\"staged\":{\"type\":\"boolean\"}},\"required\":[\"operation\"],\"additionalProperties\":false}",
+        "sha256": "2b79b726bac6c2acce0ddbb0ee35f3e7b5c63d76e41a708e3c420708eaa65289"
+      }
+    ],
+    "list_files": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_list_files.go:49-58",
+        "source_sha256": "e8093d001f50d667a9a65e16a851d11bc14facdb0a321026b873d18bfa7e2ea0",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"path\": {\"type\": \"string\", \"description\": \"Workspace-relative directory, or . for the root.\"},\n    \"offset\": {\"type\": \"integer\", \"minimum\": 0, \"description\": \"Zero-based offset into the sorted listing. Defaults to 0.\"},\n    \"limit\": {\"type\": \"integer\", \"minimum\": 1, \"description\": \"Maximum entries to return. Defaults to as many as fit.\"}\n  },\n  \"required\": [\"path\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "bd7684920e93432cf6894018d2e029e30ac18c267f6a0c67f47ee617a39006c7"
+      }
+    ],
+    "read_file": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_read_file.go:52-61",
+        "source_sha256": "86d4b36245e96e4ce68a5323e838cdcf8d81ffb8a539b9d81834f233bdb04635",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"path\": {\"type\": \"string\", \"description\": \"Workspace-relative UTF-8 text file.\"},\n    \"start_line\": {\"type\": \"integer\", \"minimum\": 1, \"description\": \"One-based first line to read. Defaults to 1.\"},\n    \"max_lines\": {\"type\": \"integer\", \"minimum\": 1, \"description\": \"Maximum lines to return. Defaults to 250.\"}\n  },\n  \"required\": [\"path\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "b469f5de64ccfdd1b75223379f916152e030a9f43e20593d2a657745b6ac1260"
+      }
+    ],
+    "recall": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_recall.go:12-12",
+        "source_sha256": "4611668fc299f1e2e78659a4706e1a916aff886d9dceca5fb229c556adc674f0",
+        "raw": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"],\"additionalProperties\":false}",
+        "sha256": "46aff69fa663f84c51fae749ab7c630355df96ce5d98ef429db42e0600b7bfeb"
+      }
+    ],
+    "report_friction": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_report_friction.go:33-43",
+        "source_sha256": "a31789309920415bc6ed0ff3ed857896714f139b22288ecde0f2ed6189564d99",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"category\": {\"type\": \"string\", \"enum\": [\"misleading_error\", \"missing_capability\", \"unclear_description\", \"harness_bug\", \"other\"], \"description\": \"Kind of rough edge in the harness.\"},\n    \"summary\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 300, \"description\": \"One nonblank line describing what happened, at most 300 Unicode characters.\"},\n    \"details\": {\"type\": \"string\", \"maxLength\": 4000, \"description\": \"Optional explanation, at most 4000 Unicode characters.\"},\n    \"related_call_ids\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"maxItems\": 20, \"description\": \"Optional IDs of up to 20 calls involved; their existence is not checked.\"}\n  },\n  \"required\": [\"category\", \"summary\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "2eb19057b987953d593c47b54300cc3545d56cc48184e6fd66ea24b7326d0626"
+      }
+    ],
+    "request_workspace_access": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_request_workspace_access.go:28-28",
+        "source_sha256": "7007f86bd6a969cb7959a2e1188dc229cc6ebfe36801a3efd3f4ad6dfd489154",
+        "raw": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Exact absolute workspace directory; no parent traversal or withheld names.\"}},\"required\":[\"path\"],\"additionalProperties\":false}",
+        "sha256": "edfbaff154e4240c1470c016fba32856f137d1d32d45c56d1867914d0c577b6d"
+      }
+    ],
+    "reset": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_agents.go:43-43",
+        "source_sha256": "d4414fca3e38dbbf3007c3643b1ba9ee7973d6c475c4b39240348a68e86a7eaf",
+        "raw": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+        "sha256": "433f45fe38e14aa42438030f994d4e1c01af3e22832629e686cba3f3e92c1d5e"
+      }
+    ],
+    "search_text": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_search_text.go:67-78",
+        "source_sha256": "2436a229a1e26b3d692c6fc9a85681e315d053e4f2172561d3818b31081565e9",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"path\": {\"type\": \"string\", \"description\": \"One workspace-relative file or directory, or . for the root; use exactly one of path or paths.\"},\n    \"paths\": {\"type\": \"array\", \"minItems\": 1, \"maxItems\": 20, \"items\": {\"type\": \"string\"}, \"description\": \"Up to 20 workspace-relative files or directories, searched in order; use exactly one of path or paths.\"},\n    \"query\": {\"type\": \"string\", \"description\": \"Single-line query: a literal string, or a pattern when regex is true.\"},\n    \"regex\": {\"type\": \"boolean\", \"description\": \"Treat query as a regular expression. Defaults to false.\"},\n    \"max_results\": {\"type\": \"integer\", \"minimum\": 1, \"description\": \"Maximum matching lines. Defaults to as many as fit.\"}\n  },\n  \"required\": [\"query\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "27d113f936c24cb2b1840591797a0162aaadd04c63f5759a903aa36ee9a9e0bd"
+      }
+    ],
+    "send": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_agents.go:34-34",
+        "source_sha256": "d4414fca3e38dbbf3007c3643b1ba9ee7973d6c475c4b39240348a68e86a7eaf",
+        "raw": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}},\"required\":[\"message\"],\"additionalProperties\":false}",
+        "sha256": "40a6e481562e19f1a33092f5e5e5964bc88494cc0176ca3084cd509feff4a2b4"
+      }
+    ],
+    "spawn": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_agents.go:31-31",
+        "source_sha256": "d4414fca3e38dbbf3007c3643b1ba9ee7973d6c475c4b39240348a68e86a7eaf",
+        "raw": "{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\"},\"context\":{\"type\":\"object\",\"properties\":{\"brief\":{\"type\":\"string\"},\"files\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"fork\":{\"type\":\"boolean\"},\"entries\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":1}}},\"additionalProperties\":false},\"name\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"authority\":{\"type\":\"string\",\"enum\":[\"read\",\"write\"]}},\"required\":[\"task\",\"context\"],\"additionalProperties\":false}",
+        "sha256": "919bc312e8b3680e65b2129ee0fab907baa5872c6750e27496c05343ee23c4a7"
+      }
+    ],
+    "switch_workspace": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_request_workspace_access.go:28-28",
+        "source_sha256": "7007f86bd6a969cb7959a2e1188dc229cc6ebfe36801a3efd3f4ad6dfd489154",
+        "raw": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Exact absolute workspace directory; no parent traversal or withheld names.\"}},\"required\":[\"path\"],\"additionalProperties\":false}",
+        "sha256": "edfbaff154e4240c1470c016fba32856f137d1d32d45c56d1867914d0c577b6d"
+      }
+    ],
+    "threads": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_agents.go:39-39",
+        "source_sha256": "d4414fca3e38dbbf3007c3643b1ba9ee7973d6c475c4b39240348a68e86a7eaf",
+        "raw": "{\"type\":\"object\",\"properties\":{\"subtree\":{\"type\":\"boolean\"},\"offset\":{\"type\":\"integer\",\"minimum\":0}},\"additionalProperties\":false}",
+        "sha256": "a2248b60caea95c0fc492ac1fb19352884d1995a6e0b61781941879ff30f605e"
+      }
+    ],
+    "wait": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_agents.go:37-37",
+        "source_sha256": "d4414fca3e38dbbf3007c3643b1ba9ee7973d6c475c4b39240348a68e86a7eaf",
+        "raw": "{\"type\":\"object\",\"properties\":{\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"timeout\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":600}},\"required\":[\"ids\"],\"additionalProperties\":false}",
+        "sha256": "582663e37d0d7dab434eaa18f978a336092a74a61dd64bf3b8c1490cd5e0c537"
+      }
+    ],
+    "write_file": [
+      {
+        "variant": "default",
+        "source": "internal/reagent/tool_write_file.go:80-89",
+        "source_sha256": "180490cbddfde3e459f78c079731d6966e11e1f169383dcb161f6029d5b8525b",
+        "raw": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"path\": {\"type\": \"string\", \"description\": \"Workspace-relative UTF-8 text file to create or replace.\"},\n    \"content\": {\"type\": \"string\", \"description\": \"Complete new UTF-8 text for the file.\"},\n    \"expected_sha256\": {\"type\": \"string\", \"description\": \"Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version.\"}\n  },\n  \"required\": [\"path\", \"content\"],\n  \"additionalProperties\": false\n}",
+        "sha256": "a91d290cd0992144ba2f6a32fe4ad7b3185d264963b1404efb744933d2d9ca3c"
+      }
+    ]
+  }
+}

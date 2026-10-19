@@ -1,0 +1,313 @@
+"""Compact locks for normalized bytes and replay-validated substitution sites."""
+
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+import hashlib
+import json
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+
+
+SUBSTITUTION_KINDS = (
+    "allocated-fixture-authority", "allocated-path-or-reference", "allocated-retry-date",
+    "approved-workspace-path", "auth-status-catalog-display-name", "build-metadata",
+    "cache-header", "cache-prefix", "captured-transport-socket",
+    "case-specific-closed-endpoint", "case-specific-closed-port-invocation-env",
+    "case-specific-closed-port-legacy-trace", "duration-ms", "effect-record-workspace",
+    "embedded-request", "embedded-response", "footer-elapsed",
+    "independently-validated-cache-key", "independently-validated-derived-value",
+    "model-switch-latency-ms", "owned-run-reason-authority", "registered-text-span",
+    "registered-fixture-cancel-delivery-projection", "retry-delay-policy",
+    "retry-display-delay", "snapshot-date", "trace-time", "typed-identity",
+    "typed-scope-identity", "validated-auth-refresh-expiry", "validated-derived-digest",
+    "validated-derived-length",
+)
+
+COMPARISON_POLICY = {
+    "version": 1,
+    "artifacts": {"B": "byte-exact", "N": "lossless typed substitutions then byte-exact",
+                  "S": "owned semantic projection then byte-exact"},
+    "substitution_kinds": list(SUBSTITUTION_KINDS),
+    "ledger_contract": {
+        "rows": "sorted multiset of artifact, typed path, substitution kind and multiplicity",
+        "timing_sites": "include eligible top-level trace timing slots even when already zero",
+        "certificates": "typed ownership and witness metadata; never raw values or raw digests",
+        "closed_endpoint": "legacy trace and independent invocation certificates share one site kind",
+        "validation": "complete raw replay must reproduce every original ledger row before locking",
+        "excluded": ["before", "after", "offsets", "raw hashes", "raw lengths", "raw identities"],
+    },
+}
+
+
+def canonical(value):
+    """Encode lock data with one deterministic JSON spelling."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+
+
+def digest(value):
+    """Hash canonical JSON, never a raw observation."""
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def timing_sites(artifacts):
+    """Register eligible zero-valued timing slots omitted by the observer's no-op fast path."""
+    sites = Counter()
+    for artifact, raw in artifacts.items():
+        if not re.fullmatch(r"trace-[1-9][0-9]*\.jsonl", artifact):
+            continue
+        for line in raw.splitlines():
+            event = json.loads(line)
+            kind, key = None, None
+            if event.get("type") == "api.attempt.finished":
+                kind, key = "duration-ms", "duration_ms"
+            if event.get("type") == "auto.route":
+                kind, key = "duration-ms", "router_latency_ms"
+            if event.get("type") in ("model.switch.finished", "model.switch.failed"):
+                kind, key = "model-switch-latency-ms", "latency_ms"
+            data = event.get("data", {})
+            if key is not None and key in data:
+                if type(data[key]) not in (int, float) or data[key] != 0:
+                    raise AssertionError("noncanonical trace timing slot: " + artifact)
+                sites[(artifact, ("data", key), kind)] += 1
+    return sites
+
+
+def ledger_contract(ledger, artifacts):
+    """Project replay-verified rows to typed sites, excluding every raw value and raw digest."""
+    if not isinstance(ledger, list):
+        raise AssertionError("invalid substitution ledger")
+    sites, certificates, observed_timing = Counter(), [], Counter()
+    eligible_timing = timing_sites(artifacts)
+    for index, row in enumerate(ledger):
+        if not isinstance(row, dict):
+            raise AssertionError("invalid substitution ledger row")
+        if row.keys() == {"frozen_evidence"} and index == len(ledger) - 1:
+            continue
+        if row.keys() == {"artifact", "raw_normalized_sha256", "normalized_length"}:
+            name = row["artifact"]
+            if name not in artifacts or hashlib.sha256(artifacts[name]).hexdigest() != row["raw_normalized_sha256"] or len(artifacts[name]) != row["normalized_length"]:
+                raise AssertionError("normalized ledger artifact differs: " + str(name))
+            continue
+        artifact, kind = row.get("artifact"), row.get("kind")
+        if not isinstance(artifact, str):
+            raise AssertionError("substitution row lacks artifact")
+        if kind == "registered-fixture-cancel-delivery":
+            fields = ("artifact", "kind", "classification", "case", "phase", "witness")
+            if row.get("classification") != "S" or not all(isinstance(row.get(key), str) for key in fields):
+                raise AssertionError("invalid cancellation certificate")
+            certificate = {key: row[key] for key in fields}
+            request = row.get("request", {})
+            if not all(isinstance(request.get(key), str) for key in ("method", "path")):
+                raise AssertionError("invalid cancellation request certificate")
+            certificate["request"] = {key: request[key] for key in ("method", "path")}
+            certificates.append(certificate)
+            continue
+        if kind == "independently-validated-failed-admission-guard":
+            if row.get("classification") != "S" or not isinstance(row.get("guard"), dict) or not isinstance(row.get("reason"), str):
+                raise AssertionError("invalid failed-admission certificate")
+            certificates.append({key: row[key] for key in ("artifact", "kind", "classification", "guard", "reason")})
+            continue
+        if kind not in SUBSTITUTION_KINDS:
+            raise AssertionError("unregistered substitution kind: " + str(kind))
+        path = row.get("path")
+        required = {"artifact", "kind", "path", "start", "end", "before", "after",
+                    "before_sha256", "after_sha256", "before_length", "after_length"}
+        if not required <= row.keys() or row.keys() - required - {"case", "classification"}:
+            raise AssertionError("invalid substitution row fields")
+        if not isinstance(path, list) or any(type(item) not in (str, int) for item in path):
+            raise AssertionError("invalid substitution path")
+        if kind.startswith("case-specific-closed-port-"):
+            kind = "case-specific-closed-port"
+        site = (artifact, tuple(path), kind)
+        top_timing = (re.fullmatch(r"trace-[1-9][0-9]*\.jsonl", artifact)
+                      and ((kind == "duration-ms" and path in (["data", "duration_ms"], ["data", "router_latency_ms"]))
+                           or (kind == "model-switch-latency-ms" and path == ["data", "latency_ms"])))
+        if top_timing:
+            if site not in eligible_timing:
+                raise AssertionError("substitution timing row lacks a registered site")
+            observed_timing[site] += 1
+        else:
+            sites[site] += 1
+    if observed_timing - eligible_timing:
+        raise AssertionError("substitution timing rows exceed registered sites")
+    sites.update(eligible_timing)
+    rows = [[artifact, list(path), kind, count] for (artifact, path, kind), count in sites.items()]
+    return {"version": 1, "sites": sorted(rows, key=canonical),
+            "certificates": sorted(certificates, key=canonical)}
+
+
+def case_lock(artifacts, policies, ledger):
+    """Lock normalized artifact names, bytes, lengths, policies and the typed ledger contract."""
+    if not artifacts or policies.keys() != artifacts.keys() or any(value not in ("B", "N", "S") for value in policies.values()):
+        raise AssertionError("incomplete normalized artifacts or comparison policies")
+    rows = [[name, len(raw), hashlib.sha256(raw).hexdigest(), policies[name]]
+            for name, raw in sorted(artifacts.items())]
+    return {"artifacts": rows, "normalized_sha256": digest(rows),
+            "ledger_sha256": digest(ledger_contract(ledger, artifacts))}
+
+
+def frozen_lock(expected):
+    """Replay all raw evidence before deriving a committed normalized-only case lock."""
+    from parity.run import read_frozen_case, validate_replay
+    documents, ledger, captured = read_frozen_case(expected)
+    policies = json.loads(documents["artifact-policies.json"])
+    validate_replay(captured["raw"], json.loads(documents["replay.json"]),
+                    captured["normalized"], policies, ledger[:-1])
+    return case_lock(captured["normalized"], policies, ledger)
+
+
+def tree_digest(cases):
+    """Hash the ordered logical normalized tree using the original independent audit algorithm."""
+    tree = hashlib.sha256()
+    for case_id, lock in sorted(cases.items()):
+        for name, length, sha256, _ in sorted(lock["artifacts"]):
+            tree.update((case_id + "/" + name).encode() + b"\0" + str(length).encode() + b"\0" + bytes.fromhex(sha256))
+    return tree.hexdigest()
+
+
+def pack(cases):
+    """Intern repeated normalized artifact descriptors without compressing reviewable JSON."""
+    descriptors = sorted({tuple(row[1:]) for lock in cases.values() for row in lock["artifacts"]})
+    indexes = {value: index for index, value in enumerate(descriptors)}
+    return {"version": 1, "artifact_values": [list(value) for value in descriptors],
+            "cases": {case_id: {**lock, "artifacts": [[row[0], indexes[tuple(row[1:])]] for row in lock["artifacts"]]}
+                      for case_id, lock in sorted(cases.items())}, "normalized_tree_sha256": tree_digest(cases)}
+
+
+def unpack(document):
+    """Expand compact locks, rejecting corrupt descriptors and inconsistent tree digests."""
+    if document.get("version") != 1:
+        raise AssertionError("unsupported normalized lock version")
+    values, cases = document["artifact_values"], {}
+    for case_id, lock in document["cases"].items():
+        try:
+            artifacts = [[name, *values[index]] for name, index in lock["artifacts"]
+                         if type(index) is int and 0 <= index < len(values)]
+            if len(artifacts) != len(lock["artifacts"]) or digest(artifacts) != lock["normalized_sha256"]:
+                raise AssertionError("artifact descriptors or normalized digest differ")
+            cases[case_id] = {**lock, "artifacts": artifacts}
+        except (AssertionError, IndexError, TypeError, ValueError) as exc:
+            raise AssertionError("invalid normalized lock for " + case_id + ": " + str(exc)) from exc
+    if tree_digest(cases) != document["normalized_tree_sha256"]:
+        raise AssertionError("normalized lock tree digest differs")
+    return cases
+
+
+def verify_case(case_id, expected, artifacts, policies, ledger):
+    """Name the case whose normalized artifacts, policies or typed substitution sites differ."""
+    actual = case_lock(artifacts, policies, ledger)
+    if actual != expected:
+        fields = sorted(key for key in expected.keys() | actual.keys() if expected.get(key) != actual.get(key))
+        raise AssertionError("normalized lock mismatch for " + case_id + ": " + ", ".join(fields))
+
+
+def verify_inventory(expected, actual):
+    """Fail with complete missing and extra case IDs, never silently narrow an oracle."""
+    missing, extra = sorted(set(expected) - set(actual)), sorted(set(actual) - set(expected))
+    if missing or extra:
+        raise AssertionError("normalized case inventory differs; missing: %s; extra: %s" %
+                             (", ".join(missing) or "none", ", ".join(extra) or "none"))
+
+
+def validate_policy(policy):
+    """Bind the detailed reviewable allowlist to every supported substitution and certificate kind."""
+    expected = set(SUBSTITUTION_KINDS) | {"registered-fixture-cancel-delivery",
+                                        "independently-validated-failed-admission-guard"}
+    if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+        raise AssertionError("unsupported comparison policy version")
+    rows = policy.get("typed_allowlist")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get("kind"), str) for row in rows):
+        raise AssertionError("invalid typed substitution allowlist")
+    kinds = [row["kind"] for row in rows]
+    missing, extra = sorted(expected - set(kinds)), sorted(set(kinds) - expected)
+    if missing or extra or len(kinds) != len(set(kinds)):
+        raise AssertionError("comparison policy kinds differ; missing=%s extra=%s duplicate=%s" %
+                             (missing, extra, len(kinds) != len(set(kinds))))
+    if "ledger_contract" in policy and policy["ledger_contract"] != COMPARISON_POLICY["ledger_contract"]:
+        raise AssertionError("comparison policy ledger contract differs")
+
+
+REFERENCE_FIELDS = ("reference_commit", "reference_binary_sha256", "reference_platform",
+                    "reference_build_flags", "go_version", "python_version")
+
+
+def read_lock(suite, manifest):
+    """Load committed normalized locks and bind their inventory, policy and pinned identity."""
+    from parity.run import HarnessError
+    suite = Path(suite)
+    relative = "expected/" + sys.platform + ".json"
+    if manifest.get("normalized_lock", relative) != relative:
+        raise HarnessError("normalized lock must name " + relative)
+    try:
+        document = json.loads((suite / relative).read_bytes())
+        inventory = json.loads((suite / "inventory.json").read_bytes())
+        expected = [case["id"] for case in inventory["cases"]
+                    if case["status"] == "implemented" and sys.platform in case["platforms"]]
+        if len(expected) != len(set(expected)):
+            raise AssertionError("duplicate executable case in committed inventory")
+        verify_inventory(expected, document["cases"])
+        cases = unpack(document)
+        validate_policy(json.loads((suite / "policy.json").read_bytes()))
+        identity = {key: manifest.get(key) for key in REFERENCE_FIELDS}
+        if document.get("reference_identity") != identity:
+            raise AssertionError("normalized lock pinned reference identity differs from manifest")
+        if inventory.get("reference_commit") != identity["reference_commit"] or inventory.get("reference_binary_sha256") != identity["reference_binary_sha256"]:
+            raise AssertionError("normalized lock inventory reference identity differs from manifest")
+        if manifest.get("normalized_tree_sha256", document["normalized_tree_sha256"]) != document["normalized_tree_sha256"]:
+            raise AssertionError("normalized lock tree differs from manifest")
+        return {**document, "cases": cases}
+    except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
+        raise HarnessError("normalized oracle lock: " + str(exc)) from exc
+
+
+def update_lock(suite, manifest, staging, cases, jobs=4):
+    """Explicitly update locks, inventory and selected samples only after complete raw replay."""
+    from parity import run, samples
+    suite, staging = Path(suite), Path(staging)
+    run.verify_inventory(staging, cases, manifest)
+    executable = sorted(case.id for case in cases if not case.pending and sys.platform in case.platforms)
+    actual = {path.name for path in staging.iterdir()} - {"inventory.json", "cache.json", "reference"}
+    verify_inventory(executable, actual)
+    relative = "expected/" + sys.platform + ".json"
+    path = suite / relative
+    old_cases = unpack(json.loads(path.read_bytes())) if path.exists() else {}
+    policy = json.loads((suite / "policy.json").read_bytes())
+    validate_policy(policy)
+    policy["ledger_contract"] = COMPARISON_POLICY["ledger_contract"]
+    if jobs == 1:
+        new_cases = {case_id: frozen_lock(staging / case_id) for case_id in executable}
+    else:
+        with ProcessPoolExecutor(max_workers=jobs) as pool:
+            futures = {case_id: pool.submit(frozen_lock, staging / case_id) for case_id in executable}
+            new_cases = {case_id: future.result() for case_id, future in futures.items()}
+    document = {**pack(new_cases), "reference_identity": {key: manifest.get(key) for key in REFERENCE_FIELDS}}
+    changed = sorted(case_id for case_id in old_cases.keys() & new_cases.keys() if old_cases[case_id] != new_cases[case_id])
+    report = {"changed_case_digests": [{"id": case_id,
+               "before": {key: old_cases[case_id][key] for key in ("normalized_sha256", "ledger_sha256")},
+               "after": {key: new_cases[case_id][key] for key in ("normalized_sha256", "ledger_sha256")}}
+              for case_id in changed], "missing_case_digests": sorted(old_cases.keys() - new_cases.keys()),
+              "extra_case_digests": sorted(new_cases.keys() - old_cases.keys())}
+    # A caller seals the suite only after every generated file has been published.
+    with tempfile.TemporaryDirectory(prefix="parity-lock-update-") as temporary:
+        prepared = Path(temporary)
+        (prepared / "expected").mkdir()
+        if (suite / "samples").exists():
+            shutil.copytree(suite / "samples", prepared / "samples")
+        shutil.copyfile(staging / "inventory.json", prepared / "inventory.json")
+        sample_changes = samples.refresh_samples(staging, prepared)
+        (prepared / relative).write_bytes(canonical(document) + b"\n")
+        (prepared / "policy.json").write_text(json.dumps(policy, ensure_ascii=False, indent=2) + "\n")
+        generated = ["inventory.json", "policy.json",
+                     *["samples/" + entry.name for entry in (prepared / "samples").iterdir()], relative]
+        for name in generated:
+            destination = suite / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(prepared / name, destination)
+    manifest["normalized_lock"] = relative
+    manifest["normalized_tree_sha256"] = document["normalized_tree_sha256"]
+    print(json.dumps({**report, "changed_sample_cases": sample_changes,
+                      "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))
+    return {**document, "cases": new_cases}
