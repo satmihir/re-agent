@@ -212,10 +212,11 @@ func TestOpenAIStream_Failures(t *testing.T) {
 		},
 		"cut off": {
 			sse(`{"type":"response.created","response":{"status":"in_progress"}}`, itemDone(0, streamText)),
-			StatusIncompleteResp, "stream ended before the response completed",
+			StatusProviderError, "stream ended before the response completed",
 		},
-		"empty body": {"", StatusIncompleteResp, "stream ended"},
-		"not json":   {"data: {nope\n\n", StatusProtocolError, "not valid JSON"},
+		"empty body":   {"", StatusProviderError, "stream ended"},
+		"not a stream": {`{"id":"resp_1","status":"completed","output":[]}`, StatusIncompleteResp, "stream ended"},
+		"not json":     {"data: {nope\n\n", StatusProtocolError, "not valid JSON"},
 		"gap in items": {
 			sse(itemDone(0, streamText), itemDone(2, streamCall), completed(`[]`)),
 			StatusProtocolError, "missing output items",

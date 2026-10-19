@@ -662,3 +662,73 @@ func TestOpenAI_OvernightRetryStreamOverloadAccountsUsage(t *testing.T) {
 		t.Fatalf("run %+v; last request %+v; tokens/byte %f; attempts %d", result, session.lastRequest, session.tokensPerByte, len(requests))
 	}
 }
+
+// A proxied stream can fail with a transient error type whose code is not in
+// the overload list, and can end before any terminal event. Both are retried
+// inside the window. Explicit incomplete responses and non-stream bodies are not.
+func TestOpenAI_OvernightRetryTransientStreams(t *testing.T) {
+	reply := sse(completed(`[{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]`))
+	for _, tc := range []struct {
+		name     string
+		first    string
+		want     RunStatus
+		attempts int
+		reason   string
+	}{
+		{"service unavailable type", sse(`{"type":"error","error":{"type":"service_unavailable_error","code":"service_unavailable","message":"busy"},"sequence_number":2}`),
+			StatusCompleted, 2, "provider stream overload"},
+		{"service unavailable code", sse(`{"type":"error","code":"service_unavailable","message":"busy"}`), StatusCompleted, 2, "provider stream overload"},
+		{"cut off after items", sse(`{"type":"response.created","response":{"status":"in_progress"}}`, itemDone(0, streamText)), StatusCompleted, 2, "stream ended early"},
+		{"empty body", "", StatusCompleted, 2, "stream ended early"},
+		{"done only", "data: [DONE]\n\n", StatusCompleted, 2, "stream ended early"},
+		{"explicit incomplete", sse(`{"type":"response.incomplete","response":{"id":"r","status":"incomplete","output":[],"incomplete_details":{"reason":"max_output_tokens"}}}`),
+			StatusIncompleteResp, 1, ""},
+		{"not a stream", `{"id":"resp_1","status":"completed","output":[]}`, StatusIncompleteResp, 1, ""},
+		{"unknown error code", sse(`{"type":"error","error":{"type":"invalid_request_error","code":"unknown","message":"fault"}}`), StatusProviderError, 1, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeAPI(t, okReply(tc.first), okReply(reply))
+			cfg := testConfig(t)
+			cfg.Provider, cfg.Model, cfg.Proxied, cfg.ModelRetryWindow = openaiName, "test-model", true, 3*time.Second
+			trace := NewTrace(io.Discard)
+			model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+			var delays []time.Duration
+			if tc.attempts == 2 {
+				delays = []time.Duration{time.Second}
+			}
+			model.(*OpenAIModel).transport.waitRetry = recordRetryWait(t, true, delays...)
+			_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "test")
+			if result.Status != tc.want || len(api.received()) != tc.attempts {
+				t.Fatalf("got %s after %d attempts: %s", result.Status, len(api.received()), result.Reason)
+			}
+			var reasons []any
+			for _, e := range readEvents(t, result.TracePath) {
+				if e.Type == "api.retry.scheduled" {
+					reasons = append(reasons, e.Data.(map[string]any)["reason"])
+				}
+			}
+			if (tc.reason == "") != (len(reasons) == 0) || tc.reason != "" && (len(reasons) != 1 || reasons[0] != tc.reason) {
+				t.Fatalf("retry reasons %v, want %q", reasons, tc.reason)
+			}
+		})
+	}
+}
+
+// Without a retry window, a stream that ends early is not retried, but nothing
+// was accepted: the session stays usable and the next message continues.
+func TestOpenAI_TruncatedStreamLeavesTheSessionUsable(t *testing.T) {
+	cut := sse(`{"type":"response.created","response":{"status":"in_progress"}}`, itemDone(0, streamText))
+	api := newFakeAPI(t, okReply(cut), okReply(streamedTextReply()))
+	cfg := testConfig(t)
+	cfg.Provider, cfg.Model, cfg.Proxied = openaiName, "test-model", true
+	trace := NewTrace(io.Discard)
+	model := newLiveModel(openaiName, "", apiProxy{provider: openaiName, endpoint: api.server.URL}, NewHTTPClient(), trace)
+	session, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "trace.jsonl"), "first")
+	if result.Status != StatusProviderError || !result.Resumable || result.Reason != "stream ended before the response completed" || session.blocked != "" {
+		t.Fatalf("run %+v, blocked %q", result, session.blocked)
+	}
+	next, err := session.Turn(context.Background(), "second", "run", filepath.Join(t.TempDir(), "trace2.jsonl"))
+	if err != nil || next.Status != StatusCompleted || len(api.received()) != 2 {
+		t.Fatalf("next %+v, err %v, attempts %d", next, err, len(api.received()))
+	}
+}

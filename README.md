@@ -164,8 +164,9 @@ without retrying and leaves the chat resumable; wait for capacity or restart
 with `--openai-auth key`. A disconnected or expired connection asks you to
 run `reagent login` again. No browser approval is requested during inference.
 Only the two documented subscription availability stream errors get default
-bounded retries; generic in-stream overloads/rate limits still require
-`--model-retry-window`. That opt-in window also retries proven pre-send auth
+bounded retries; generic in-stream overloads/rate limits and streams cut off
+before their final event still require `--model-retry-window`. A cut-off
+stream that is not retried leaves the chat resumable. That opt-in window also retries proven pre-send auth
 connection failures (including TLS negotiation and proxy CONNECT failures)
 and explicit temporary auth-server responses. An ambiguous
 refresh failure after sending is not replayed, even on a later turn: its

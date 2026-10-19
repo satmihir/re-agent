@@ -328,7 +328,7 @@ func TestTransport_RetryWaitCancellationRetainsUsage(t *testing.T) {
 				cancel()
 				return ctx.Err()
 			}}
-			_, _, usage, err := tr.callModel(ctx, 1, []byte(`{}`), nil, func([]byte) (bool, Usage) { return true, wantUsage })
+			_, _, usage, err := tr.callModel(ctx, 1, []byte(`{}`), nil, func([]byte) (string, Usage) { return "provider stream overload", wantUsage })
 			me, ok := err.(*ModelError)
 			if !ok || me.Status != StatusCancelled || me.Message != "cancelled before a retry" || me.Usage != wantErrorUsage || usage != wantUsage || len(api.received()) != 1 {
 				t.Fatalf("usage %+v attempts %d error %+v", usage, len(api.received()), err)

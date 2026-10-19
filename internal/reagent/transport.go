@@ -183,7 +183,7 @@ func (t *transport) call(ctx context.Context, step int, body []byte, headers map
 
 // callModel owns retry admission. A provider-specific classifier may identify an
 // explicit transient error in a complete 200 stream, without moving decoding into transport.
-func (t *transport) callModel(ctx context.Context, step int, body []byte, headers map[string]string, transient func([]byte) (bool, Usage)) (int, []byte, Usage, error) {
+func (t *transport) callModel(ctx context.Context, step int, body []byte, headers map[string]string, transient func([]byte) (string, Usage)) (int, []byte, Usage, error) {
 	wait := t.waitRetry
 	if wait == nil {
 		wait = waitBeforeRetry
@@ -200,15 +200,16 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 		if modelErr, ok := err.(*ModelError); ok {
 			return 0, nil, prior, modelErr
 		}
-		streamRetry := false
+		var streamReason string
 		var streamUsage Usage
 		if err == nil && status == http.StatusOK && transient != nil {
 			if overnight {
-				streamRetry, streamUsage = transient(raw)
+				streamReason, streamUsage = transient(raw)
 			} else if t.tokenSource != nil {
-				streamRetry, streamUsage = transientChatGPTStream(raw)
+				streamReason, streamUsage = transientChatGPTStream(raw)
 			}
 		}
+		streamRetry := streamReason != ""
 		retryHTTP := retryable(status) && !terminalChatGPTCode(providerErrorCode(raw))
 		if !streamRetry && err == nil && !retryHTTP {
 			return status, raw, prior, nil
@@ -234,7 +235,7 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 			prior.UnreportedAttempts++ // The provider may have billed an attempt without reporting usage.
 		}
 		if time.Until(deadline) <= 0 {
-			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
+			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamReason, prior)
 		}
 		delay := retryBackoff(attempt, retryAfter)
 		if remaining := time.Until(deadline); delay > remaining {
@@ -244,7 +245,7 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 		if err == nil {
 			reason = fmt.Sprintf("HTTP %d", status)
 			if streamRetry {
-				reason = "provider stream overload"
+				reason = streamReason
 			}
 		}
 		t.trace.Write("api.retry.scheduled", step, map[string]any{"attempt": attempt, "reason": reason, "delay_ms": delay.Milliseconds()})
@@ -255,7 +256,7 @@ func (t *transport) callModel(ctx context.Context, step int, body []byte, header
 			return 0, nil, prior, &ModelError{Status: StatusCancelled, Message: "cancelled before a retry", Usage: prior}
 		}
 		if time.Until(deadline) <= 0 {
-			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamRetry, prior)
+			return 0, nil, prior, t.retryExhausted(step, attempt, status, raw, err, streamReason, prior)
 		}
 		if policy.display != nil {
 			policy.display.modelRetryStarted(attempt + 1)
@@ -274,11 +275,11 @@ func addRetryUsage(err error, prior Usage) error {
 	return err
 }
 
-func (t *transport) retryExhausted(step, attempt, status int, raw []byte, err error, stream bool, usage Usage) error {
+func (t *transport) retryExhausted(step, attempt, status int, raw []byte, err error, stream string, usage Usage) error {
 	t.trace.Write("api.retry.exhausted", step, map[string]any{"attempt": attempt, "http_status": status})
 	reason := fmt.Sprintf("HTTP %d", status)
-	if stream {
-		reason = "provider stream overload"
+	if stream != "" {
+		reason = stream
 	} else if err != nil {
 		reason = modelRequestFailure(err)
 	} else if retryable(status) && len(raw) > 0 {

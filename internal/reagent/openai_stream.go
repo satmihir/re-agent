@@ -22,6 +22,7 @@ type streamEvent struct {
 // streamError is the error an error event may nest instead of carrying its
 // code and message at the top level.
 type streamError struct {
+	Type    string `json:"type"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Param   string `json:"param"`
@@ -63,7 +64,14 @@ func assembleOpenAIStream(raw []byte) ([]byte, error) {
 		}
 	}
 	if final == nil {
-		return nil, &ModelError{Status: StatusIncompleteResp, Message: "stream ended before the response completed"}
+		// A stream cut off before its terminal event produced nothing to accept,
+		// so it is a provider failure the session can continue from; a body
+		// that is not a stream at all stays an incomplete response.
+		status := StatusIncompleteResp
+		if streamShaped(raw) {
+			status = StatusProviderError
+		}
+		return nil, &ModelError{Status: status, Message: "stream ended before the response completed"}
 	}
 
 	var body map[string]json.RawMessage
@@ -162,45 +170,96 @@ func streamFailure(response json.RawMessage) error {
 	return &ModelError{Status: StatusProviderError, Usage: body.Usage.normalized(), Message: message}
 }
 
-// transientOpenAIStream recognizes only explicit provider overload/rate-limit codes.
-// A truncated or malformed stream remains a terminal incomplete/protocol response.
-func transientOpenAIStream(raw []byte) (bool, Usage) {
-	code, usage := openAIStreamError(raw)
-	return transientStreamCode(code), usage
+// transientOpenAIStream names why a complete 200 stream may be retried, or
+// returns "" when it may not: an explicit overload or rate-limit error, matched
+// by code or by the service_unavailable_error type, or a stream that ended
+// before any terminal event. A malformed stream, an explicit incomplete
+// response and a body that is not a stream are never retried.
+func transientOpenAIStream(raw []byte) (string, Usage) {
+	code, kind, usage := openAIStreamError(raw)
+	if transientStreamCode(code) || kind == "service_unavailable_error" {
+		return "provider stream overload", usage
+	}
+	if streamEndedEarly(raw) {
+		return "stream ended early", Usage{}
+	}
+	return "", Usage{}
 }
 
-func transientChatGPTStream(raw []byte) (bool, Usage) {
-	code, usage := openAIStreamError(raw)
-	return code == "subscription_sharing_usage_unavailable" || code == "subscription_sharing_user_unavailable", usage
+func transientChatGPTStream(raw []byte) (string, Usage) {
+	code, _, usage := openAIStreamError(raw)
+	if code == "subscription_sharing_usage_unavailable" || code == "subscription_sharing_user_unavailable" {
+		return "provider stream overload", usage
+	}
+	return "", Usage{}
 }
 
-func openAIStreamError(raw []byte) (string, Usage) {
+// openAIStreamError returns the code and type of a stream's error event or
+// failed response, with any usage the failure reported.
+func openAIStreamError(raw []byte) (string, string, Usage) {
 	for _, data := range streamData(raw) {
 		var event streamEvent
 		if json.Unmarshal([]byte(data), &event) != nil {
-			return "", Usage{}
+			return "", "", Usage{}
 		}
 		switch event.Type {
 		case "response.failed":
 			var body responsesBody
 			if json.Unmarshal(event.Response, &body) != nil || body.Error == nil {
-				return "", Usage{}
+				return "", "", Usage{}
 			}
-			return body.Error.Code, body.Usage.normalized()
+			return body.Error.Code, body.Error.Type, body.Usage.normalized()
 		case "error":
-			code := event.Code
 			if event.Error != nil {
-				code = event.Error.Code
+				return event.Error.Code, event.Error.Type, Usage{}
 			}
-			return code, Usage{}
+			return event.Code, "", Usage{}
 		case "response.completed", "response.incomplete":
-			return "", Usage{}
+			return "", "", Usage{}
 		}
 	}
-	return "", Usage{}
+	return "", "", Usage{}
+}
+
+// streamEndedEarly reports a well-formed stream with no terminal event: a
+// connection the provider closed mid-response, with nothing accepted.
+func streamEndedEarly(raw []byte) bool {
+	if !streamShaped(raw) {
+		return false
+	}
+	for _, data := range streamData(raw) {
+		var event streamEvent
+		if json.Unmarshal([]byte(data), &event) != nil {
+			return false
+		}
+		switch event.Type {
+		case "response.output_item.done":
+			if event.OutputIndex == nil || len(event.Item) == 0 {
+				return false
+			}
+		case "response.completed", "response.incomplete", "response.failed", "error":
+			return false
+		}
+	}
+	return true
+}
+
+// streamShaped is true for an empty body or one with server-sent event lines;
+// a JSON body sent to a streaming request is not a stream that was cut off.
+func streamShaped(raw []byte) bool {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return true
+	}
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("data:")) || bytes.HasPrefix(line, []byte("event:")) {
+			return true
+		}
+	}
+	return false
 }
 
 func transientStreamCode(code string) bool {
 	return code == "server_is_overloaded" || code == "rate_limit_exceeded" || code == "rate_limit_error" || code == "service_unavailable_error" ||
+		code == "service_unavailable" ||
 		code == "subscription_sharing_usage_unavailable" || code == "subscription_sharing_user_unavailable"
 }

@@ -64,7 +64,7 @@ func (m *OpenAIModel) Generate(ctx context.Context, req ModelRequest) (ModelResp
 	} else if m.proxied {
 		headers = map[string]string{"session-id": openAICacheKey(req)}
 	}
-	var classify func([]byte) (bool, Usage)
+	var classify func([]byte) (string, Usage)
 	if m.proxied || m.chatgpt {
 		classify = transientOpenAIStream
 	}
