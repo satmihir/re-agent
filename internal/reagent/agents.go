@@ -734,7 +734,7 @@ func (r *Run) agentCapSummary(ctx context.Context, reason string) RunResult {
 	}
 	s.stopAgents()
 	r.deliverAgents()
-	// Reserve one tool-less request outside the ordinary step/call budgets.
+	// Reserve one summary request outside the ordinary step/call budgets.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	// A zero retry window admits the first HTTP attempt but no retry.
@@ -742,8 +742,8 @@ func (r *Run) agentCapSummary(ctx context.Context, reason string) RunResult {
 	r.steps++
 	s.history = append(s.history, Entry{Kind: EntryUser, User: &UserTurn{Text: "The agent step or call cap was reached. Make no tool calls. Briefly summarize what was done, its applied effects, the tests run (or not run), and what remains. Keep the summary under 1024 words."}})
 	req := BuildContext(r.cfg, RequestScope{SessionID: s.ID, RunID: r.runID, Step: r.steps}, s.requestHistory())
-	req.Tools = nil
-	req.MaxOutputTokens = 4096
+	// Keep declarations for native history and the cached prefix, not execution.
+	req.MaxOutputTokens = 8192
 	r.trace.Write("agent.cap_summary.requested", r.steps, req)
 	resp, err := r.model.Generate(ctx, req)
 	usage := resp.Usage

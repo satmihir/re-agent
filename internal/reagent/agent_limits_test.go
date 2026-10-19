@@ -102,14 +102,14 @@ func TestAgents_CapSummary(t *testing.T) {
 				s.agentModel = func(Config, *Trace) (Model, error) {
 					return agentTestModel{generate: func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
 						requests++
-						if len(req.Tools) == 0 {
+						if req.MaxOutputTokens != 0 {
 							summaries++
 							encoded, _ := json.Marshal(req)
 							var fields map[string]any
 							if err := json.Unmarshal(encoded, &fields); err != nil {
 								t.Fatal(err)
 							}
-							if fields["max_output_tokens"] != float64(4096) {
+							if fields["max_output_tokens"] != float64(8192) {
 								t.Errorf("summary output budget = %v", fields["max_output_tokens"])
 							}
 							if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 2*time.Minute {
@@ -167,11 +167,8 @@ func TestAgents_CapSummary(t *testing.T) {
 					want = "last progress"
 				}
 				wantRequests := maxAgentSteps + 1
-				if cap == "calls" {
+				if strings.HasPrefix(cap, "calls") {
 					wantRequests = 3
-				}
-				if cap == "calls-exact" {
-					wantRequests = 2
 				}
 				if requests != wantRequests || summaries != 1 || result.Steps != requests || result.Status != StatusLimitExceeded || result.Reply != want {
 					t.Errorf("requests=%d summaries=%d result=%+v", requests, summaries, result)
@@ -195,5 +192,126 @@ func TestAgents_CapSummary(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAgents_ExactlyCallCapCanComplete(t *testing.T) {
+	s := agentFixture(t)
+	var calls []OutputBlock
+	for i := 0; i < maxAgentCalls; i++ {
+		calls = append(calls, callBlock(fmt.Sprint(i), "list_files", `{"path":"."}`))
+	}
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return NewScriptedModel(turn(calls...), turn(textBlock("final answer"))), nil
+	}
+	s.model = NewScriptedModel(turn(spawnBlock("spawn", "work", "worker")), turn(callBlock("wait", "wait", `{"ids":["worker"]}`)), turn(textBlock("done")))
+	agentTurn(t, s, "exact call cap")
+	result := agentResults(s.history)[0].Result
+	if result.Status != StatusCompleted || result.Reply != "final answer" || result.ToolCalls != maxAgentCalls || result.Steps != 2 {
+		t.Fatalf("normal completion at call cap: %+v", result)
+	}
+	data, err := os.ReadFile(result.TracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "agent.cap_summary") {
+		t.Fatal("normal completion requested a cap summary")
+	}
+}
+
+func TestAgents_CapSummaryKeepsEncodedDeclarations(t *testing.T) {
+	for _, provider := range []string{openaiName, anthropicName} {
+		for _, fork := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/fork=%t", provider, fork), func(t *testing.T) {
+				s := agentFixture(t)
+				s.cfg.Provider = provider
+				if provider == anthropicName {
+					s.cfg.Model = DefaultAnthropicModel
+				}
+				encode := EncodeOpenAIRequest
+				if provider == anthropicName {
+					encode = EncodeAnthropicRequest
+				}
+				var previous map[string]json.RawMessage
+				summaries := 0
+				s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
+					if fork && cfg.agentPrefix == nil {
+						t.Error("native fork prefix missing")
+					}
+					if _, found := cfg.Registry.Lookup("write_file"); found {
+						t.Error("read agent unexpectedly has writer authority")
+					}
+					return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+						body, err := encode(req)
+						if err != nil {
+							t.Errorf("encode cap history: %v", err)
+							return ModelResponse{}, err
+						}
+						var fields map[string]json.RawMessage
+						if err := json.Unmarshal(body, &fields); err != nil {
+							t.Fatal(err)
+						}
+						if req.MaxOutputTokens != 0 {
+							summaries++
+							if len(fields["tools"]) == 0 || string(fields["tools"]) != string(previous["tools"]) {
+								t.Errorf("cap summary changed encoded declarations: got %d bytes; want %d", len(fields["tools"]), len(previous["tools"]))
+							}
+							if strings.Contains(string(fields["tools"]), `"name":"write_file"`) != fork {
+								t.Error("fork writer declarations not retained")
+							}
+							for _, kind := range []string{"function_call", "function_call_output"} {
+								if provider == anthropicName {
+									if kind == "function_call" {
+										kind = "tool_use"
+									} else {
+										kind = "tool_result"
+									}
+								}
+								if !strings.Contains(string(body), `"type":"`+kind+`"`) {
+									t.Errorf("encoded summary missing %s history", kind)
+								}
+							}
+							return contextResponse(provider, textBlock("cap summary")), nil
+						}
+						previous = fields
+						return contextResponse(provider, callBlock(fmt.Sprint(req.Scope.Step), "list_files", `{"path":"."}`)), nil
+					}}, nil
+				}
+				s.model = NewScriptedModel(contextResponse(provider, callBlock("spawn", "spawn", fmt.Sprintf(`{"task":"work","name":"worker","context":{"fork":%t}}`, fork))), contextResponse(provider, callBlock("wait", "wait", `{"ids":["worker"]}`)), contextResponse(provider, textBlock("done")))
+				agentTurn(t, s, "summary declarations")
+				result := agentResults(s.history)[0].Result
+				if summaries != 1 || result.Status != StatusLimitExceeded || result.Reply != "cap summary" {
+					t.Fatalf("summary delivery: summaries=%d result=%+v", summaries, result)
+				}
+			})
+		}
+	}
+}
+
+func TestAgents_CapSummaryDoesNotDispatchCalls(t *testing.T) {
+	s := agentFixture(t)
+	s.agentModel = func(Config, *Trace) (Model, error) {
+		return agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+			if req.MaxOutputTokens != 0 {
+				return turn(callBlock("summary-write", "write_file", `{"path":"unexpected.txt","content":"must not run"}`)), nil
+			}
+			return turn(textBlock("last progress"), callBlock(fmt.Sprint(req.Scope.Step), "list_files", `{"path":"."}`)), nil
+		}}, nil
+	}
+	s.model = NewScriptedModel(turn(callBlock("spawn", "spawn", `{"task":"work","name":"worker","authority":"write","context":{}}`)), turn(callBlock("wait", "wait", `{"ids":["worker"]}`)), turn(textBlock("done")))
+	agentTurn(t, s, "reject summary tools")
+	result := agentResults(s.history)[0]
+	if result.Result.Status != StatusLimitExceeded || result.Result.Reply != "last progress" || len(result.Effects.Files) != 0 {
+		t.Fatalf("summary tool call not rejected: %+v", result)
+	}
+	if _, err := os.Stat(s.cfg.WorkspacePath + "/unexpected.txt"); !os.IsNotExist(err) {
+		t.Fatalf("summary write ran: %v", err)
+	}
+	data, err := os.ReadFile(result.Result.TracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "cap summary must not call tools") || strings.Contains(string(data), `"call_id":"summary-write","name":"write_file","outcome"`) {
+		t.Fatal("summary tool rejection missing or dispatched")
 	}
 }

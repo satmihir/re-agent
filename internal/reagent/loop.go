@@ -172,9 +172,6 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		if s.agentID != "" && r.steps >= r.cfg.MaxSteps {
 			return r.agentCapSummary(ctx, "agent model step budget exhausted")
 		}
-		if s.agentID != "" && r.cfg.MaxToolCalls > 0 && r.calls >= r.cfg.MaxToolCalls {
-			return r.agentCapSummary(ctx, fmt.Sprintf("call budget of %d exhausted", r.cfg.MaxToolCalls))
-		}
 		if s.agentID != "" && agentTokenLimit(r.usage) {
 			return r.finish(StatusLimitExceeded, "agent reported token cap reached", "")
 		}

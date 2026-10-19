@@ -263,7 +263,7 @@ func TestEncodeRequest_ReservedOutputBudget(t *testing.T) {
 		{"anthropic", EncodeAnthropicRequest, "max_tokens", anthropicMaxTokens},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			for _, limit := range []int{0, 4096} {
+			for _, limit := range []int{0, 4096, 8192} {
 				var req ModelRequest
 				if err := json.Unmarshal([]byte(`{"model":"m","max_output_tokens":`+strconv.Itoa(limit)+`}`), &req); err != nil {
 					t.Fatal(err)
