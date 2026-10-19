@@ -133,6 +133,26 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "context-status": {
+        "chatgpt": True,
+        "context_status": True,
+        "context_window": 100000,
+        "size": (24, 120),
+        "steps": [
+            ("idle", 0.5), ("type", "inspect twice"), ("key", "enter"),
+            ("wait_status", "12% of context", 5),
+            ("show", "12% while the second request is in flight"),
+            ("expect", "screen_lacks", "Status turn complete."),
+            ("release", "advance"),
+            ("wait_status", "42% of context", 5),
+            ("show", "42% while the third request is in flight"),
+            ("expect", "screen_lacks", "Status turn complete."),
+            ("release", "finish"),
+            ("wait", "Status turn complete.", 5),
+            ("wait_status", "gpt-6-luna / low", 5),
+            ("expect", "status_row_last"),
+        ],
+    },
     "context-gc": {
         "context_gc": True,
         "steps": [
@@ -790,6 +810,12 @@ def run(binary, name, scenario, workspace):
                             failures.append("ChatGPT request included truncation")
                     if scenario.get("context_gc"):
                         calls = [("read_file", {"path": "gc.txt"})] if number <= 2 else [("list_files", {"path": "."})] if number <= 16 else []
+                    if scenario.get("context_status"):
+                        calls = [("list_files", {"path": "."})] if number <= 2 else []
+                        if number == 2:
+                            gates["advance"].wait(20)
+                        if number == 3:
+                            gates["finish"].wait(20)
                     output = [{"type": "function_call", "call_id": f"c{number}-{index}",
                                "name": name, "arguments": json.dumps(arguments)}
                               for index, (name, arguments) in enumerate(calls)]
@@ -801,10 +827,15 @@ def run(binary, name, scenario, workspace):
                             text = "GC turn complete." if number == 17 else "Next turn works."
                         if scenario.get("chatgpt"):
                             text = "ChatGPT reply." if number == 1 else "Next ChatGPT turn."
+                        if scenario.get("context_status"):
+                            text = "Status turn complete."
                         output = [{"type": "message", "status": "completed", "content": [
                             {"type": "output_text", "text": text}]}]
+                input_tokens = 120000 if scenario.get("context_gc") else 10
+                if scenario.get("context_status"):
+                    input_tokens = 12000 if number == 1 else 42000
                 result = {"id": "r", "model": "test", "status": "completed", "output": output,
-                          "usage": {"input_tokens": 120000 if scenario.get("context_gc") else 10, "output_tokens": 5,
+                          "usage": {"input_tokens": input_tokens, "output_tokens": 5,
                                     "input_tokens_details": {"cached_tokens": 0}}}
                 body = ("event: response.completed\ndata: " + json.dumps(
                     {"type": "response.completed", "response": result}) + "\n\n").encode()

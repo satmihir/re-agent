@@ -23,6 +23,7 @@ type Session struct {
 	trace            *Trace
 	display          *Display
 	progress         io.Writer
+	statusChanged    func()
 	workspace        *workspaceSelection
 	workspaceConsent func(context.Context, workspaceDestination) (bool, error)
 	// v0 §6 amendment (2026-09-27): inject collection before each run.

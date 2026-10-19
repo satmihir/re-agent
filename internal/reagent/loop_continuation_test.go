@@ -178,7 +178,6 @@ func TestLoop_InRunContinuationFailureLeavesHistoryIntact(t *testing.T) {
 		reason  string
 	}{
 		{"blank", turn(textBlock("  ")), nil, StatusCompleted, ""},
-		{"oversized", turn(textBlock(strings.Repeat("s", MaxResultBytes+1))), nil, StatusCompleted, ""},
 		{"refusal", turn(refusalBlock("no")), nil, StatusCompleted, ""},
 		{"tool", turn(callBlock("summary-tool", "echo", `{}`)), nil, StatusCompleted, ""},
 		{"provider", ModelResponse{}, &ModelError{Status: StatusProviderError, Message: "provider down", Usage: Usage{Known: true, InputTokens: 500}}, StatusProviderError, "provider down"},
@@ -446,6 +445,7 @@ func TestLoop_InRunContinuationRecoversWithBoundedFailures(t *testing.T) {
 	}{
 		{"fail then succeed", "tool reject tool tool summary done", []int{2, 5}, []int{5}, []int{1}, false},
 		{"three failures stop", "tool reject tool tool reject tool tool reject tool tool done", []int{2, 5, 8}, nil, []int{1, 2, 3}, true},
+		{"three oversized attempts stop", "tool oversized oversized tool tool oversized oversized tool tool oversized oversized tool tool done", []int{2, 3, 6, 7, 10, 11}, nil, []int{1, 2, 3}, true},
 		{"success resets streak", "tool reject tool tool summary tool reject tool tool summary done", []int{2, 5, 7, 10}, []int{5, 10}, []int{1, 1}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -467,6 +467,8 @@ func TestLoop_InRunContinuationRecoversWithBoundedFailures(t *testing.T) {
 					replies = append(replies, reply)
 				case "reject":
 					replies = append(replies, turn(textBlock("  ")))
+				case "oversized":
+					replies = append(replies, turn(textBlock(strings.Repeat("s", MaxResultBytes+1))))
 				case "summary":
 					replies = append(replies, turn(textBlock("checkpoint retained; next verify")))
 				case "done":

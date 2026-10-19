@@ -238,6 +238,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		}
 
 		r.trace.Write("model.accepted", r.steps, resp)
+		if s.statusChanged != nil {
+			s.statusChanged()
+		}
 		// The whole response is appended before any of its results (I08).
 		s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &resp})
 		for _, call := range toolCalls(resp) {
