@@ -820,3 +820,66 @@ func TestExec_MissingAbsoluteExecutableUsesStableError(t *testing.T) {
 		t.Fatalf("next command: %+v", outcome)
 	}
 }
+
+func TestExec_CancellationAndTimeoutStopDetachedDescendants(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is needed to start a detached process session")
+	}
+	for _, reason := range []string{"cancelled", "timeout"} {
+		t.Run(reason, func(t *testing.T) {
+			ws := testWorkspace(t, nil)
+			sleeper := "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+			descendant := "import pathlib, signal, subprocess, sys, time; " +
+				"signal.signal(signal.SIGTERM, signal.SIG_IGN); " +
+				"p = subprocess.Popen([sys.executable, '-c', " + strconv.Quote(sleeper) + "], start_new_session=True); " +
+				"pathlib.Path('sleeper.pid').write_text(str(p.pid)); time.sleep(30)"
+			script := "import pathlib, subprocess, sys, time\n" +
+				"p = subprocess.Popen([sys.executable, '-c', " + strconv.Quote(descendant) + "], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n" +
+				"pathlib.Path('descendant.pid').write_text(str(p.pid))\n" +
+				"while not pathlib.Path('sleeper.pid').exists(): time.sleep(0.01)\n" +
+				"pathlib.Path('ready').touch()\ntime.sleep(30)\n"
+			t.Cleanup(func() {
+				for _, name := range []string{"descendant.pid", "sleeper.pid"} {
+					contents, _ := os.ReadFile(filepath.Join(ws.Root(), name))
+					if pid, err := strconv.Atoi(strings.TrimSpace(string(contents))); err == nil && pid > 0 {
+						_ = syscall.Kill(-pid, syscall.SIGKILL)
+						_ = syscall.Kill(pid, syscall.SIGKILL)
+					}
+				}
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			var outcome ToolOutcome
+			var runErr error
+			var execution sync.WaitGroup
+			execution.Add(1)
+			defer func() { cancel(); execution.Wait() }()
+			timeout := 130000
+			if reason == "timeout" {
+				timeout = 1000
+			}
+			args, err := json.Marshal(execArgs{Argv: []string{python, "-c", script}, Cwd: ".", TimeoutMS: json.RawMessage(strconv.Itoa(timeout))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() {
+				defer execution.Done()
+				outcome, runErr = (execTool{ws: ws}).Execute(ctx, args)
+			}()
+			pids := waitExecPIDs(t, ws)
+			if reason == "cancelled" {
+				cancel()
+			}
+			execution.Wait()
+			if runErr != nil {
+				t.Fatal(runErr)
+			}
+			if outcome.Code != reason || outcome.Effect != EffectUnknown {
+				t.Fatalf("code=%s effect=%s: %s", outcome.Code, outcome.Effect, outcome.Message)
+			}
+			for _, pid := range pids {
+				waitExecStopped(t, pid)
+			}
+		})
+	}
+}
