@@ -78,6 +78,8 @@ type execResult struct {
 	TimeoutMS             int64       `json:"timeout_ms"`
 	TerminationReason     *string     `json:"termination_reason"`
 	ConcurrentExec        []agentExec `json:"concurrent_exec,omitempty"`
+	SurvivingPIDs         []int       `json:"surviving_pids,omitempty"`
+	CleanupError          string      `json:"cleanup_error,omitempty"`
 }
 
 func (execTool) Spec() ToolSpec {
@@ -238,8 +240,10 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	command.Stderr = stderrWrite
 	// v0 §9: descendants in this process group must not outlive cancellation.
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var survivingPIDs []int
+	var cleanupErr error
 	command.Cancel = func() error {
-		terminateExecGroup(command.Process.Pid)
+		survivingPIDs, cleanupErr = terminateExecTree(command.Process.Pid)
 		return nil
 	}
 	// Bound inherited-pipe waits even if a descendant has left the group.
@@ -299,12 +303,21 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	result := execResult{
 		Argv: a.Argv, ResolvedExecutable: command.Path, Cwd: a.Cwd,
 		DurationMS: time.Since(started).Milliseconds(), TimeoutMS: timeout.Milliseconds(),
-		ConcurrentExec: concurrent,
+		ConcurrentExec: concurrent, SurvivingPIDs: survivingPIDs,
 	}
 	stdoutText := stdout.report(&result.Stdout, &result.StdoutBytesSeen, &result.StdoutTruncated, &result.EncodingReplaced)
 	stderrText := stderr.report(&result.Stderr, &result.StderrBytesSeen, &result.StderrTruncated, &result.EncodingReplaced)
 
 	code, message, effect := classifyRun(parent, deadline, runErr, command.Process != nil, outputIncomplete, command.ProcessState, &result)
+	if cleanupErr != nil {
+		result.CleanupError = stableError(cleanupErr)
+		message += "; descendant cleanup could not be verified: " + result.CleanupError
+		effect = EffectUnknown
+	}
+	if len(survivingPIDs) > 0 {
+		message += fmt.Sprintf("; processes still alive after cleanup: %v", survivingPIDs)
+		effect = EffectUnknown
+	}
 	result.OutputMayBeIncomplete = outputIncomplete
 	result.trimToResultBudget(t.ws.Root(), code, message, effect, &stdoutText, &stderrText, budget)
 
@@ -318,15 +331,6 @@ func (t execTool) run(parent context.Context, a execArgs, dir string, timeout ti
 	outcome.Effect = effect
 	outcome.Truncated = result.StdoutTruncated || result.StderrTruncated
 	return outcome, nil
-}
-
-// terminateExecGroup bounds cleanup even when a child ignores TERM.
-func terminateExecGroup(pid int) {
-	if syscall.Kill(-pid, syscall.SIGTERM) != nil {
-		return
-	}
-	time.Sleep(200 * time.Millisecond)
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
 // classifyRun uses actual start and wait state: a post-start I/O failure
