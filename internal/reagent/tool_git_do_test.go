@@ -988,3 +988,64 @@ func TestGitDo_UnreadableUntrackedDirectoryUsesStableError(t *testing.T) {
 		t.Fatalf("unreadable directory: %+v", result)
 	}
 }
+
+func TestGitDo_ScopedPathsAlreadyCommitted(t *testing.T) {
+	for _, recipe := range []string{"commit", "commit_push", "ship_pr", "follow_up_pr"} {
+		for _, dirty := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dirty=%t", recipe, dirty), func(t *testing.T) {
+				ws := gitDoRepo(t)
+				gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+				if recipe == "follow_up_pr" {
+					gitDoGit(t, ws.Root(), "push", "-q", "-u", "origin", "feature")
+					if err := os.WriteFile(filepath.Join(filepath.Dir(ws.Root()), "pr_head"), []byte("feature\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				gitDoWrite(t, ws.Root(), "intended.txt")
+				gitDoGit(t, ws.Root(), "add", "intended.txt")
+				gitDoGit(t, ws.Root(), "commit", "-q", "-m", "Intended")
+				before := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+				if dirty {
+					gitDoWrite(t, ws.Root(), "notes.txt")
+				}
+				outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"`+recipe+`","paths":["intended.txt"]}`)
+				result := gitDoData(t, outcome)
+				if !outcome.OK {
+					t.Fatalf("%s: %s", result.Status, result.Reason)
+				}
+				if recipe == "commit" && result.Output != "nothing to commit for the named paths" {
+					t.Fatalf("no-op output: %q", result.Output)
+				}
+				if gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "diff", "--cached", "--name-only") != "" {
+					t.Fatal("no-op commit changed HEAD or index")
+				}
+				if recipe != "commit" && gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature") != before+"\trefs/heads/feature" {
+					t.Fatal("existing tip was not pushed")
+				}
+				comment, created := false, false
+				for _, step := range result.Steps {
+					argv := strings.Join(step.Argv, " ")
+					if strings.HasPrefix(argv, "git commit ") {
+						t.Fatalf("attempted empty commit: %s", argv)
+					}
+					if strings.HasPrefix(argv, "gh pr comment 1 --body Addressed in "+short(before)) {
+						comment = true
+					}
+					if strings.HasPrefix(argv, "gh pr create ") {
+						created = true
+					}
+				}
+				if recipe == "follow_up_pr" && !comment || recipe == "ship_pr" && !created {
+					t.Fatalf("missing follow-up: %+v", result.Steps)
+				}
+				want := ""
+				if dirty {
+					want = "?? notes.txt"
+				}
+				if status := gitDoGit(t, ws.Root(), "status", "--porcelain"); status != want {
+					t.Fatalf("unrelated file changed: %q", status)
+				}
+			})
+		}
+	}
+}
