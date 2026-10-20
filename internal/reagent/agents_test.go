@@ -1066,3 +1066,19 @@ func TestAgents_LiveNameWinsOverResumedTombstone(t *testing.T) {
 		t.Fatalf("live name/tombstone targeting: %+v %+v", results(s), s.agentRoster())
 	}
 }
+
+// Forked children resend the parent's whole context on every request, so the
+// spawn description steers narrow tasks and large parents to a fresh brief.
+func TestAgentTools_SpawnDescribesContextCost(t *testing.T) {
+	var spawn string
+	for _, tool := range NewAgentTools() {
+		if spec := tool.Spec(); spec.Name == "spawn" {
+			spawn = spec.Description
+		}
+	}
+	for _, want := range []string{"resends its context", "omit fork and entries and write a complete brief", "batch later amendments into one send"} {
+		if !strings.Contains(spawn, want) {
+			t.Errorf("spawn description lacks %q", want)
+		}
+	}
+}
