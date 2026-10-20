@@ -3,6 +3,12 @@
   "reference_binary_sha256": "82f8427be6e9919479307ccd2e9109c13a7d70cc080844a1e19334d2d52fa467",
   "archive_sha256": "ae09e37e6bd216b30fd5923f26f1ace3693470b0e4d5e2c19ced8dc69b0b3856",
   "suite_digest": "48872e1b6b4f693798b92f34804eee01eb1829c5c8b1963045f51916d7dfb54b",
+  "normalization_follow_up": {
+    "suite_digest": "b0f625ebdc4fcc9b7390eb379280a7dff960c417ec5ab8262dd93a9f015163da",
+    "proof_carried_from_suite_digest": "48872e1b6b4f693798b92f34804eee01eb1829c5c8b1963045f51916d7dfb54b",
+    "rerun": false,
+    "basis": "The approved #176 typed display slot changes only W44.timeout-ack and W51.timeout. All 80 selected fresh-mutation baseline case locks, mutation selectors, patches and intended assertions remain identical. The reviewed eight current-pin catches below are carried from the preceding seal, not claimed freshly rerun for this normalization follow-up."
+  },
   "caught": 8,
   "selected": 8,
   "carryover_caught": 5,

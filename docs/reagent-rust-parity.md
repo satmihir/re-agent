@@ -1043,6 +1043,15 @@ assertion remain unchanged, with no sleep or output normalization. The revocatio
 warning and cleared credentials stay observable
 (`internal/reagent/chatgpt_login.go:414–427`).
 
+For `W44.timeout-ack` and `W51.timeout`, #176's descendant snapshot/liveness
+checks expose elapsed-display rounding near 10.25 seconds. The approved
+`exec-timeout-elapsed` slot replaces only numeric seconds in a complete stderr
+activity line. It requires one matching exec call in the same invocation,
+configured timeout bounds `[timeout_ms, timeout_ms + 2000]`, and equality with
+that call's raw `duration_ms` rounded to one decimal. Command, `s`, and effects
+warning remain literal; unmatched or ambiguous ownership fails closed. This is
+#176 attribution, not a production change or an arbitrary duration mask.
+
 **PTY:** reuse the independent emulator and terminal-query replies, but replace
 existing correctness sleeps/global child counters with barriers, ready status,
 and screen/cursor predicates. Some redraw stabilization needs a bounded quiet

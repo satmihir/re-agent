@@ -163,7 +163,11 @@ and asserts a retry without accepting the tool. Its explicit SSE content type
 preserves the old header bytes. `W28.no-retry-incomplete-event` remains the distinct
 explicit-terminal no-retry case. The other #172 changes are eight W23 cutoff
 statuses; #173 changes the summary-prompt bytes in fifteen existing compaction
-cases. Detailed artifact attribution belongs in `acceptance.json`.
+cases. #176's descendant cleanup adds snapshot/liveness work around the TERM
+grace period, exposing exec elapsed-display rounding near 10.25 seconds. The
+approved typed slot changes only the numeric duration in `W44.timeout-ack` and
+`W51.timeout`; detailed attribution is in `repin-changes.json` and
+`acceptance.json`.
 
 ## Inventory and dependencies
 
@@ -196,6 +200,12 @@ impact and affected case IDs rather than blessing it as expected behavior.
   substitution records artifact/path, kind, offsets, before/after bytes,
   independent SHA-256 and lengths. Native/provider IDs and opaque content are
   not generic substitution sites.
+- Exec-timeout stderr duration is normalized only for a complete activity line
+  owned by one matching exec call and invocation. The displayed duration, converted
+  to milliseconds, must lie in `[timeout_ms, timeout_ms + 2000]` and equal the same
+  traced `duration_ms` rounded to one decimal second. Only the number changes;
+  command, unit and effects warning stay exact. Unsupported or ambiguous ownership
+  fails closed.
 - Actual HTTP bytes independently validate request hashes. Cache prefixes use
   original ToolSpec schema bytes, not their compacted wire form; the fixture
   includes source anchors and hashes. Fresh previews reconstruct their first
@@ -271,12 +281,14 @@ presented as a compared artifact.
 Current proof status for `14944a6b` is recorded in `acceptance.json`; only checks
 explicitly attributed to that reference and its suite seal verify this re-pin.
 The current seal is linked from `manifest.json`, not the historical seals below.
-The re-pin remains **blocked on repeatability**: the two budgeted full candidate
-runs produced one clean pass and one `W44.timeout-ack` mismatch (`10.2s` versus
-`10.3s` in tool-timeout stderr). Three extra W54 runs and the empty-cache golden
-reproduction passed, but do not replace the two-clean-pass requirement. No timing
-allowlist or expected bytes were changed to waive the failed run.
-No capture, candidate comparison or mutation result is implied by this doc update.
+After the approved #176 exec-timeout display normalization, both new full
+candidate runs passed: **2,745 passed, 0 failed, 15 declared pending** each.
+Both prerequisite Python suites passed **215 tests**; `make check` and the
+empty-cache non-update golden reproduction also passed. The earlier `10.2s`
+versus `10.3s` failure remains recorded as a resolved finding, not a waived pass.
+The eight mutation reruns and three W54 stability passes are carried from the
+preceding seal: all 80 selected mutation case locks and all W54 locks are
+unchanged by this narrow follow-up. They were not rerun again.
 Coverage, extra parallel passes and the serial instrumented campaign remain
 reserved for the end of area 4.
 

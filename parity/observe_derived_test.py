@@ -479,5 +479,169 @@ class DerivedSourceTests(unittest.TestCase):
         self.assertEqual(admission_size(raw), len(raw))
 
 
+class ExecTimeoutDisplayTests(unittest.TestCase):
+    def scenario(self, displayed='10.2', duration=10228):
+        argv = ['/bin/sh', '-c', "printf 'timed out after 10.2s'; sleep 30"]
+        command = "/bin/sh -c 'printf '\\''timed out after 10.2s'\\''; sleep 30'"
+        line = f'  ! exec {command} → timed out after {displayed}s; effects unknown\n'
+        invocation = dict(started=100, ended=114, stdout=b'', stderr=line.encode())
+        args = dict(argv=argv, cwd='.', timeout_ms=10000)
+        outcome = dict(ok=False, code='timeout', effect='unknown', data=dict(
+            argv=argv[:], cwd='.', duration_ms=duration, timeout_ms=10000,
+            termination_reason='timeout'))
+        events = [event('tool.started', dict(name='exec', call_id='timeout', arguments=json.dumps(args))),
+                  event('tool.finished', dict(name='exec', call_id='timeout', outcome=outcome), seq=2)]
+        for item, when in zip(events, ('1970-01-01T00:01:41Z', '1970-01-01T00:01:51.3Z')):
+            item.update(session_id='b'*16, time=when)
+        return events, invocation, line
+
+    def display(self, events, invocation, line=None, invocations=None):
+        derived = derive(events, invocations=invocations or [invocation])
+        text = invocation['stderr'].decode() if line is None else line
+        return derived, derived.display(text, 'invocation-1.stderr', invocation)
+
+    def test_exec_timeout_changes_only_numeric_span_and_matches_go_rounding(self):
+        for displayed, duration in (('10.0', 10000), ('10.2', 10228), ('10.3', 10251),
+                                    ('10.2', 10250), ('10.8', 10750), ('12.0', 12000)):
+            events, invocation, line = self.scenario(displayed, duration)
+            derived, actual = self.display(events, invocation)
+            with self.subTest(displayed=displayed, duration=duration):
+                start = line.rindex(displayed+'s;')
+                expected = line[:start]+'0.0'+line[start+len(displayed):]
+                self.assertEqual(actual, expected)
+                row = derived.normal.ledger[-1]
+                self.assertEqual(row['kind'], 'exec-timeout-elapsed')
+                self.assertEqual(row['start'], len(line[:start].encode()))
+                self.assertEqual(row['end'], len(line[:start+len(displayed)].encode()))
+                self.assertEqual(len(derived.normal.ledger), 1)
+
+    def test_exec_timeout_display_bounds_do_not_use_binary_float_milliseconds(self):
+        events, invocation, line = self.scenario('32.3', 32300)
+        args = json.loads(events[0]['data']['arguments'])
+        args['timeout_ms'] = 32300
+        events[0]['data']['arguments'] = json.dumps(args)
+        events[1]['data']['outcome']['data']['timeout_ms'] = 32300
+        events[1]['time'] = '1970-01-01T00:02:13.3Z'
+        invocation['ended'] = 140
+        derived, actual = self.display(events, invocation)
+        self.assertEqual(actual, line.replace('32.3s; effects', '0.0s; effects'))
+        self.assertEqual(len(derived.normal.ledger), 1)
+
+    def test_exec_timeout_rejects_configured_bounds_and_trace_disagreement(self):
+        for displayed, duration in (('9.9', 9900), ('12.1', 12100), ('10.3', 10228),
+                                    ('10.2', 10251), ('10.2', 9999), ('10.2', 12001)):
+            events, invocation, _ = self.scenario(displayed, duration)
+            with self.subTest(displayed=displayed, duration=duration), self.assertRaises(AssertionError):
+                self.display(events, invocation)
+        for key in ('duration_ms', 'timeout_ms'):
+            for value in (True, -1, '10228', None, 10000.0, 10228.0, float('nan'), float('inf')):
+                events, invocation, _ = self.scenario()
+                events[1]['data']['outcome']['data'][key] = value
+                with self.subTest(key=key, value=value), self.assertRaises((AssertionError, ValueError)):
+                    self.display(events, invocation)
+
+    def test_exec_timeout_requires_explicit_integer_configured_timeout(self):
+        for value in (True, -1, '10000', None, 10000.0, float('nan'), float('inf')):
+            events, invocation, _ = self.scenario()
+            args = json.loads(events[0]['data']['arguments'])
+            args['timeout_ms'] = value
+            events[0]['data']['arguments'] = json.dumps(args)
+            with self.subTest(value=value), self.assertRaises(AssertionError):
+                self.display(events, invocation)
+
+    def test_exec_timeout_requires_same_owned_non_chain_timeout_call(self):
+        for mutation in ('missing-start', 'missing-finish', 'wrong-call', 'wrong-session', 'wrong-run',
+                         'wrong-step', 'wrong-name', 'wrong-argv', 'wrong-cwd', 'wrong-timeout',
+                         'cancelled', 'ok', 'effect', 'termination', 'then', 'duplicate-start',
+                         'duplicate-finish', 'reversed-time', 'other-invocation', 'ambiguous-invocation'):
+            events, invocation, _ = self.scenario()
+            finish = events[1]
+            result = finish['data']['outcome']
+            if mutation == 'missing-start':
+                events.pop(0)
+            elif mutation == 'missing-finish':
+                events.pop()
+            elif mutation.startswith('wrong-'):
+                field = mutation[6:]
+                if field in ('session', 'run', 'step'):
+                    finish[field+'_id' if field != 'step' else field] = 'c'*16 if field != 'step' else 2
+                elif field in ('call', 'name'):
+                    finish['data']['call_id' if field == 'call' else field] = 'other'
+                else:
+                    result['data'][dict(argv='argv', cwd='cwd', timeout='timeout_ms')[field]] = (
+                        ['other'] if field == 'argv' else 'other' if field == 'cwd' else 11000)
+            elif mutation in ('cancelled', 'ok', 'effect', 'termination'):
+                if mutation == 'termination':
+                    result['data']['termination_reason'] = 'cancelled'
+                else:
+                    result[dict(cancelled='code', ok='ok', effect='effect')[mutation]] = (
+                        True if mutation == 'ok' else 'cancelled' if mutation == 'cancelled' else 'none')
+            elif mutation == 'then':
+                args = json.loads(events[0]['data']['arguments'])
+                args['then'] = [['echo', 'later']]
+                events[0]['data']['arguments'] = json.dumps(args)
+            elif mutation.startswith('duplicate-'):
+                events.append(copy.deepcopy(events[0 if mutation.endswith('start') else 1]))
+            elif mutation == 'reversed-time':
+                events[0]['time'], finish['time'] = finish['time'], events[0]['time']
+            invocations = [invocation]
+            if mutation == 'other-invocation':
+                invocations = [dict(invocation), dict(invocation, started=120, ended=134)]
+                invocation = invocations[1]
+            if mutation == 'ambiguous-invocation':
+                invocations.append(dict(invocation))
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                self.display(events, invocation, invocations=invocations)
+
+    def test_exec_timeout_leaves_prose_stdout_native_and_incomplete_grammar_exact(self):
+        events, invocation, line = self.scenario()
+        derived = derive(events, invocations=[invocation])
+        for raw in ('timed out after 10.2s', 'prose '+line, line.replace('  ! exec ', ' ! exec '),
+                    line.replace('; effects unknown', '; effects known'), line.rstrip()+' trailing\n'):
+            with self.subTest(raw=raw):
+                self.assertEqual(derived.display(raw, 'stderr', invocation), raw)
+        self.assertEqual(derived.display(line, 'invocation-1.stdout', invocation), line)
+        raw = go_json(dict(native=dict(provider='openai', items=[dict(text=line)]), text=line))
+        self.assertEqual(derived.normal.json(raw, 'opaque', opaque=True), raw)
+
+    def test_exec_timeout_rejects_repeated_lines_or_ambiguous_same_command_calls(self):
+        for repeated_line in (True, False):
+            events, invocation, line = self.scenario()
+            if repeated_line:
+                invocation['stderr'] = (line+line).encode()
+            else:
+                other = copy.deepcopy(events)
+                for item in other:
+                    item['seq'] += 2
+                    item['data']['call_id'] = 'other-timeout'
+                events.extend(other)
+            with self.subTest(repeated_line=repeated_line), self.assertRaises(AssertionError):
+                self.display(events, invocation)
+
+    def test_exec_timeout_same_command_from_other_invocation_is_not_a_witness(self):
+        events, invocation, line = self.scenario()
+        other = copy.deepcopy(events)
+        for item in other:
+            item['run_id'] = 'c'*16
+            item['time'] = item['time'].replace('00:01:', '00:02:')
+        later = dict(invocation, started=160, ended=174)
+        derived, actual = self.display(events+other, invocation, invocations=[invocation, later])
+        self.assertEqual(actual, line.replace('10.2s; effects', '0.0s; effects'))
+        self.assertEqual(len(derived.normal.ledger), 1)
+
+    def test_exec_timeout_uses_raw_owned_command_before_allocation_normalization(self):
+        events, invocation, line = self.scenario()
+        args = json.loads(events[0]['data']['arguments'])
+        args['argv'][2] = args['argv'][2].replace('printf', 'printf /allocated/root/workspace')
+        events[0]['data']['arguments'] = json.dumps(args)
+        events[1]['data']['outcome']['data']['argv'] = args['argv'][:]
+        line = line.replace('printf', 'printf /allocated/root/workspace')
+        invocation['stderr'] = line.encode()
+        derived = derive(events, invocations=[invocation])
+        normalized = derived.normal.text(line, 'invocation-1.stderr', ())
+        actual = derived.display(normalized, 'invocation-1.stderr', invocation)
+        self.assertEqual(actual, normalized.replace('10.2s; effects', '0.0s; effects'))
+
+
 if __name__ == '__main__':
     unittest.main()

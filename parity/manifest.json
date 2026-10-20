@@ -17,7 +17,7 @@
   ],
   "goldens_frozen": true,
   "normalized_lock": "expected/darwin.json",
-  "normalized_tree_sha256": "054cf57aa3f9452891c8203900f656af85030b209e2b8cd36a61ffceff132516",
+  "normalized_tree_sha256": "2d504c681d7272a83ce8d74172593ab47ae89a3adceac256a14f56d4cc69cf14",
   "inventory_status": "audited",
   "inventory_scope": "Named W01-W54 clauses audited against the pinned source; deterministic declared leaves, not unrestricted Cartesian exhaustion or acceptance evidence",
   "leaf_inventory": {
@@ -130,7 +130,7 @@
   "reference_blockers": {},
   "accepted_gaps": [],
   "known_limitations": [],
-  "suite_digest": "48872e1b6b4f693798b92f34804eee01eb1829c5c8b1963045f51916d7dfb54b",
+  "suite_digest": "b0f625ebdc4fcc9b7390eb379280a7dff960c417ec5ab8262dd93a9f015163da",
   "verification_evidence": "acceptance.json",
   "unverified": [
     "Linux execution and platform goldens"
