@@ -254,9 +254,14 @@ class Derived:
         switch_ordinal = 0
         self.derived = {}
         self.failed_fields = {}
+        compaction_requests = {}
         for index, event in enumerate(self.events):
             data = event.get('data', {})
             fields = {}
+            if event['type'] == 'model.requested':
+                compaction_requests.pop(event['run_id'], None)
+            if event['type'] == 'compaction.requested':
+                compaction_requests.setdefault(event['run_id'], (index, event))
             if event['type'] == 'model.switch.finished':
                 switch_ordinal += 1
             if event['type'] == 'auto.route' and 'packet_sha256' in data:
@@ -335,23 +340,25 @@ class Derived:
                         fields['handoff_sha256'] = sha256(canonical)
                 self.failed_fields[(event['run_id'], event['seq'])] = {key:data[key] for key in fields}
             if event['type'] == 'compaction.finished' and 'request_bytes_before' in data:
-                previous = next((e for e in reversed(self.events[:index])
-                                 if e['run_id'] == event['run_id'] and e['type'] == 'api.attempt.started'), None)
+                start, logical = compaction_requests.get(event['run_id'], (index, None))
+                if logical is None:
+                    raise AssertionError('compaction byte counts lack independent logical summary request')
+                # A shortening request no longer carries the original history.
+                previous = next((e for e in self.events[start:index]
+                                 if e['run_id'] == event['run_id'] and e.get('step') == logical.get('step')
+                                 and e['type'] == 'api.attempt.started'), None)
                 following = next((e for e in self.events[index+1:]
                                   if e['run_id'] == event['run_id'] and e['type'] == 'api.attempt.started'), None)
                 if previous is None or following is None:
                     raise AssertionError('compaction byte counts lack captured before/after requests')
-                logical = next((e for e in reversed(self.events[:index])
-                                if e['run_id'] == previous['run_id'] and e.get('step') == previous.get('step')
-                                and e['type'] in ('model.requested', 'compaction.requested')), None)
-                if logical is None:
-                    raise AssertionError('compaction byte counts lack independent logical summary request')
                 before = before_latest_user(self.request(previous)['body'], logical['data'])
                 after = self.request(following)['body']
                 for key, source in (('request_bytes_before', before), ('request_bytes_after', after)):
                     self.length(data, key, admission_size(source))
                     canonical = normal.json(source, 'compaction-source', opaque=True)
                     fields[key] = admission_size(canonical)
+            if event['type'] in ('compaction.failed', 'compaction.skipped', 'compaction.finished'):
+                compaction_requests.pop(event['run_id'], None)
             self.derived[(event['run_id'], event['seq'])] = fields
         if previews:
             raise AssertionError('tagged switch preview lacks a matching no-I/O switch')

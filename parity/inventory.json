@@ -1,7 +1,7 @@
 {
   "platform": "darwin",
-  "reference_commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
-  "reference_binary_sha256": "925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a",
+  "reference_commit": "14944a6bd8e35815effb74270218483804c29615",
+  "reference_binary_sha256": "82f8427be6e9919479307ccd2e9109c13a7d70cc080844a1e19334d2d52fa467",
   "metadata_fields": [
     "id",
     "description",
@@ -10,7 +10,7 @@
     "pending",
     "platforms"
   ],
-  "metadata_sha256": "97ffefd3b933f4920c495d5f7d6dc94ce0023702ff1c59c122bd07d839b9484c",
+  "metadata_sha256": "b59f81972628006683e2c7f8dcf3e9f5ff607cb06b23b295a27fa35ac885d273",
   "cases": [
     {
       "id": "W01.case-sensitive-prefix",
@@ -14017,6 +14017,30 @@
       "status": "implemented"
     },
     {
+      "id": "W11.in-run-oversized-shortened",
+      "description": "In-run summary shortening preserves cache identity and counts one attempt",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
+      "id": "W11.in-run-oversized-twice",
+      "description": "In-run summary shortening preserves cache identity and counts one attempt",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
       "id": "W11.model",
       "description": "Cache prefix identity across model",
       "comparison": "N",
@@ -18793,6 +18817,30 @@
       "status": "implemented"
     },
     {
+      "id": "W28.default-service_unavailable",
+      "description": "Default policy does not retry service-unavailable stream events",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
+      "id": "W28.default-service_unavailable-bare-code",
+      "description": "Default policy does not retry service-unavailable stream events",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
       "id": "W28.default-service_unavailable_error",
       "description": "Default policy does not retry transient stream errors",
       "comparison": "N",
@@ -18805,8 +18853,8 @@
       "status": "implemented"
     },
     {
-      "id": "W28.no-retry-bad-json",
-      "description": "Window does not retry malformed/incomplete/nontransient streams",
+      "id": "W28.default-stream-ended-early",
+      "description": "Cutoff stream is resumable without blocking the following chat turn",
       "comparison": "N",
       "slow": false,
       "pending": null,
@@ -18817,7 +18865,7 @@
       "status": "implemented"
     },
     {
-      "id": "W28.no-retry-incomplete",
+      "id": "W28.no-retry-bad-json",
       "description": "Window does not retry malformed/incomplete/nontransient streams",
       "comparison": "N",
       "slow": false,
@@ -18997,6 +19045,18 @@
       "status": "implemented"
     },
     {
+      "id": "W28.window-cutoff-items",
+      "description": "Window retries cutoff item-only stream without accepting its tool",
+      "comparison": "N",
+      "slow": true,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
       "id": "W28.window-rate_limit_error",
       "description": "Explicit transient stream retries despite NO_MORE_RETRY metadata",
       "comparison": "N",
@@ -19033,8 +19093,44 @@
       "status": "implemented"
     },
     {
+      "id": "W28.window-service_unavailable",
+      "description": "Window retries service-unavailable stream events",
+      "comparison": "N",
+      "slow": true,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
+      "id": "W28.window-service_unavailable-bare-code",
+      "description": "Window retries service-unavailable stream events",
+      "comparison": "N",
+      "slow": true,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
       "id": "W28.window-service_unavailable_error",
       "description": "Explicit transient stream retries despite NO_MORE_RETRY metadata",
+      "comparison": "N",
+      "slow": true,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "status": "implemented"
+    },
+    {
+      "id": "W28.window-stream-ended-early",
+      "description": "Cutoff stream retries once with exact reason and no accepted tool",
       "comparison": "N",
       "slow": true,
       "pending": null,

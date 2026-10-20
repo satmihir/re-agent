@@ -7,8 +7,8 @@ approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 **Status:** runner/wire implementation under #139; the remaining three areas
 retain their planned status. Earlier design research/reviews are recorded below.
 
-Reference pinned for the area suite: `38da0d664abae80cbd1cc1793b10b11204bc8031`
-(`origin/main`, including #150–#161). Observations from `7e0408f` and `f37aa5a`
+Reference pinned for the area suite: `14944a6bd8e35815effb74270218483804c29615`
+(#177 merge, including #150–#177). Observations from `7e0408f` and `f37aa5a`
 were exploratory only and are not golden output. The earlier
 inventory reference was `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492`.
 `parity/manifest.json` records the protected binary SHA-256 and executable leaf
@@ -32,19 +32,23 @@ regeneration, re-pinning, pending dependencies and verification evidence. Harden
 | #159 parsing follow-up | Freezes ASCII digits for all integer environment variables and command positions; booleans accept exactly true/false/1/0. `provider.go:253–272`, `context_gc_experiments.go:13–32`, `cli.go:126–138`. No leading-plus/ParseBool quirks are preserved. |
 | #160 stream/trace repairs | W23 null final response is an owned `protocol_error`, not a panic (`openai_stream.go:69–72`). W33 trace lines repair invalid byte runs without changing native history/continuation/checkpoint opaque bytes (`trace.go:130–135`). The three distinct UTF-8 rules below are separate contracts, not comparison substitutions. |
 | #161 Retry-After grammar | W29 uses ordinary assertions: `+2` is invalid and retains jittered backoff; ASCII digits with surrounding HTTP whitespace (` 2 `) still impose the two-second floor (`transport.go:291–313`). |
+| #172 stream retry/cutoff | W28 adds nested and bare-code `service_unavailable` window/default pairs and explicit cutoff retry/recovery cases. Eight existing W23 cutoff cases become resumable `provider_error`; the renamed `W28.window-cutoff-items` retries its unchanged item-only stream without accepting its tool (`openai_stream.go:173–244`, `parity/cases/wire_decode.py:617–657,1259–1288`). Explicit `response.incomplete` still does not retry. |
+| #173 compaction budget | Fifteen existing compaction cases change summary-prompt bytes; two W11 in-run oversized-summary leaves check one shortening request per attempt and one failure for two oversized replies (`parity/cases/wire_input.py:1111–1114`). |
+| #177 spawn guidance | Only the model-visible `spawn` description changes (`tool_agents.go:30`), changing request bytes where `--agents` declares that tool; pending agent leaves and exact reasons remain unchanged. |
 
-**Leaf inventory audited; Darwin lane captured:** #160 fixes the stream/trace
-blockers and #161 rejects signed Retry-After delay-seconds. The branch is rebased
-onto #161's merge commit and the protected binary rebuilt from that exact source
-archive. No exploratory output is reused. The W01–W54 named-clause/source audit
-is complete: **2,752 declared leaves, 2,737 runnable, 15 explicitly pending**.
+**Leaf inventory audited:** #172's stream retries, #173's compaction changes and
+#177's spawn-description bytes are reconciled at the #177 merge pin; the protected
+binary is built independently from that exact source archive with
+`go build -trimpath -buildvcs=false` (Go 1.23.3 darwin/arm64, Python 3.11.5).
+Its SHA-256 is `82f8427be6e9919479307ccd2e9109c13a7d70cc080844a1e19334d2d52fa467`.
+No exploratory output is reused. The W01–W54 named-clause source audit has
+**2,760 declared leaves, 2,745 runnable, 15 explicitly pending**.
 These are implementation counts, not unrestricted Cartesian-exhaustion or
-acceptance claims. The manifest retains the captured Darwin lane's
-`freeze_status: ready` and `goldens_frozen: true`; the mutation-14 leaf extension
-uses the same reference pin and does not replace existing captured leaves.
-`parity/acceptance.json` records the completed Darwin evidence: three parallel
-passes and one serial pass with identical normalized trees, 13/13 applicable
-mutations caught, and this area's 36.8% internal/reagent statement contribution.
+acceptance claims. `parity/acceptance.json` distinguishes current re-pin proofs
+from the historical `38da0d6` campaigns: three parallel passes, one serial pass,
+13/13 applicable mutation catches and 36.8% internal/reagent statement coverage.
+Those historical campaigns are not rerun wholesale for this re-pin; coverage,
+extra parallel passes and the serial instrumented run wait until area 4.
 Linux remains unverified; these are not final whole-suite approval claims.
 
 ## 1. Harness architecture
@@ -453,7 +457,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W08 | Preview/live unchanged fixture; UTC and America/Los_Angeles plus fixed-offset non-UTC zone, fixed FETCH_HEAD mtime | Body equality/no preview I/O; local date/zone and last_fetch independently validated before substitution, including DST offset from fixture epoch; N/S |
 | W09 | Encoded body 10 MiB boundary, escaping-heavy content | Exact bytes/limit comparison, no HTTP on overflow; N/S, both encoders |
 | W10 | Independently compute cache key from actual instructions/schemas/first Entry | Exact SHA-256 prefix algorithm and 32 lowercase hex; B per execution, §3 dependency rules |
-| W11 | Steps/turns/snapshot/effort/root/model/reset/compaction/roster/plan changes | Instructions pinned across effort/workspace changes (#151); cache identity stable only for unchanged hashed prefix, new project instructions arrive in switch result; reset/compaction/model transitions re-render. Do not erase roster/plan/source; B/S |
+| W11 | Steps/turns/snapshot/effort/root/model/reset/compaction/roster/plan changes | Instructions pinned across effort/workspace changes (#151); cache identity stable only for unchanged hashed prefix, new project instructions arrive in switch result; reset/compaction/model transitions re-render. In-run summaries state the 32 KiB budget and get one shortening request per oversized attempt; two oversized replies count as one failure (#173). Do not erase roster/plan/source; B/S |
 | W12 | L Anthropic first history, result batch and subsequent user text | System plus final eligible block's cache marker; results-first user merging; N |
 | W13 | L native/nested Anthropic forks and subsequent child request | Inherited cache boundaries/four-point ceiling and first-request-only prefix; N |
 | W14 | Reasoning/native tool/text response then continuation | Resent native fields/order/opaque strings; invisible reasoning; re-marshaled Go bytes, not original JSON whitespace; N |
@@ -470,7 +474,7 @@ Evidence: `openai.go:97–157,173–245`, `anthropic.go:75–131,146–264`,
 | W25 | Completion followed by malformed/error events; delayed EOF/content-type variants | First terminal assembly wins, no live delta rendering, whole body read before decoding; N/S |
 | W26 | 429/500/529/599 then success/twice; 400/401/403/408/201/204/3xx | Default two attempts only on 429/5xx, same request bytes, ~500ms delay, exactly 200 success; N/S |
 | W27 | Connection/reset/partial-body/redirect; valid/corrupt/truncated gzip JSON/SSE/error bodies on direct and proxy forms | Owned transport failure categories/retry behavior, no redirect/key forwarding; decoded adapter/trace body versus raw compressed server artifact, Accept-Encoding and status classification; N/S |
-| W28 | Retry window transport/429/5xx/complete overload versus bad/incomplete stream | Four transient stream codes admitted only in window mode; metadata cannot disable retry; attempt identity N/S |
+| W28 | Retry window transport/429/5xx/complete overload versus bad/incomplete stream | Explicit overload/rate-limit codes, including `service_unavailable` (nested or bare) and `service_unavailable_error` type, retry only in window mode. A well-formed stream without a terminal event retries there with reason `stream ended early`; by default it is resumable `provider_error` and the next turn can complete. Malformed streams, explicit `response.incomplete` and non-stream JSON bodies are not retried; the latter two remain `incomplete_response`. Metadata cannot disable retry; attempt identity N/S |
 | W29 | Short window; Retry-After ASCII digits/date/invalid (including signed `+2`), surrounding HTTP whitespace; long successful first attempt | Admission deadline not in-flight deadline, scheduled/exhausted sequence N; only actual delay values/derived countdown wording S with policy bounds (§3/4) |
 | W30 | SIGINT at request receipt/partial-read/retry-wait barrier | Cancelled/resumable status, no further attempt/tool, following chat turn; N/S |
 | W31 | HTTP400 overflow codes/type/message/mixed case; non400; HTML; long UTF-8 detail | Exact overflow classification/bounded error wording and trimming; N |
@@ -516,7 +520,7 @@ Counts below come from `parity.cases.wire.collect()` at the pinned reference.
 “Implemented” means a runnable assertion fixture exists, not that its golden
 comparison, repeatability or Linux run has passed. “Mixed” names every pending
 leaf; W13 is wholly pending. No wire family is silently omitted. The case-module
-runnable totals are input 1,189, decode 538, routing 315 and endpoints 695.
+runnable totals are input 1,191, decode 544, routing 315 and endpoints 695.
 All named clauses above were audited against source; the finite stable-ID
 inventory is not unrestricted Cartesian exhaustion.
 
@@ -528,8 +532,8 @@ python3 -m unittest parity.manifest_test
 
 `--list` prints every stable leaf ID and its pending reason without a binary or
 network request. `parity/manifest.json` points to the complete committed inventory
-at `parity/inventory.json`; inventory presence is not a claim that capture is complete. Its independently reproducible metadata SHA-256 is
-`97ffefd3b933f4920c495d5f7d6dc94ce0023702ff1c59c122bd07d839b9484c`.
+at `parity/inventory.json`; inventory presence is not a claim that capture is complete.
+Its independently reproducible metadata SHA-256 is recorded in the manifest.
 The digest covers the ID-sorted array of `id`, `description`, `comparison`, `slow`,
 `pending` and `platforms` (in their declared order), serialized as UTF-8
 `json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(',', ':'))`
@@ -548,7 +552,7 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W08 | 48 | 48 | Implemented |
 | W09 | 18 | 18 | Implemented |
 | W10 | 13 | 12 | Mixed: `W10.source` |
-| W11 | 21 | 20 | Mixed: `W11.roster-change` |
+| W11 | 23 | 22 | Mixed: `W11.roster-change` |
 | W12 | 4 | 4 | Implemented |
 | W13 | 4 | 0 | Pending: `W13.four-point-ceiling`, `W13.native-fork`, `W13.nested-fork`, `W13.subsequent-child` |
 | W14 | 3 | 3 | Implemented |
@@ -565,7 +569,7 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W25 | 15 | 15 | Implemented |
 | W26 | 58 | 58 | Implemented |
 | W27 | 39 | 39 | Implemented |
-| W28 | 24 | 24 | Implemented |
+| W28 | 30 | 30 | Implemented |
 | W29 | 29 | 29 | Implemented |
 | W30 | 3 | 3 | Implemented |
 | W31 | 30 | 30 | Implemented |
@@ -1028,6 +1032,17 @@ repeatability gate. Default-duration diagnostics are checked independently of
 short-duration behavior; an optional long default-timer smoke is supplementary,
 not a required ~40min lane or a claim of exact timer nanoseconds.
 
+Only `W54.auth-revoke.cancel-body` changes to a held non-2xx (HTTP 400) body read
+before SIGINT (`parity/cases/wire_endpoints.py:582–604`). A flushed chunk cannot
+prove client receipt of 200 headers, which logout accepts without reading a body
+(`internal/reagent/chatgpt_auth.go:229–249`); a settle could let the process exit
+before SIGINT. HTTP 400 instead holds a cancellable error-body read. This is an
+explicitly authorized fixture adjustment for a pre-existing race, not an
+attribution to a Go PR or a production defect. W54 counts and the live-process
+assertion remain unchanged, with no sleep or output normalization. The revocation
+warning and cleared credentials stay observable
+(`internal/reagent/chatgpt_login.go:414–427`).
+
 **PTY:** reuse the independent emulator and terminal-query replies, but replace
 existing correctness sleeps/global child counters with barriers, ready status,
 and screen/cursor predicates. Some redraw stabilization needs a bounded quiet
@@ -1182,14 +1197,17 @@ requires explanation/replacement, not a waived green check.
 | 35 | Drop latest-third-step outcome in GC off-by-one | A29 protected request record |
 | 36 | Byte-slice bounded preview through a multibyte codepoint | T11/W39/T59 valid UTF-8/exact trim |
 
-The initial mutation-14 run exposed a coverage gap: existing incomplete-stream
-vectors did not include an explicit `response.incomplete` terminal event under
-the retry window. `W28.no-retry-incomplete-event` adds that standalone vector while retaining the
-existing `W28.no-retry-incomplete` fixture unchanged. Its shared Case description
-is "Window does not retry malformed/incomplete/nontransient streams"; the new
-vector specifically checks the explicit terminal event, calls and usage.
-Its capture extends the existing Darwin lane at the same reference pin; adding
-the vector alone does not claim a successful mutation kill or repeated full pass.
+Historically, the initial mutation-14 run at the old `38da0d6` pin exposed a
+coverage gap: existing incomplete-stream vectors lacked an explicit
+`response.incomplete` terminal event under the retry window. Adding
+`W28.no-retry-incomplete-event` covered that terminal event, calls and usage;
+the old item-only cutoff fixture then remained unchanged. At the current pin,
+that cutoff fixture is renamed `W28.window-cutoff-items` and asserts #172's
+retry, exact `stream ended early` reason and no accepted tool, retaining its
+item-only stream and explicit SSE header bytes. It is not an explicit incomplete
+terminal. `W28.no-retry-incomplete-event` remains the separate no-retry vector
+with the description "Window does not retry malformed/incomplete/nontransient
+streams". Historical mutation catches are not current-pin execution proof.
 
 Spread: CLI/chat 8, providers/wire 10, tools/workspace 11, agents/context 7
 (including cross-area catchers). These mutations test strength, not a statistical
@@ -1289,13 +1307,12 @@ approval or 85% coverage independently. Keep stable IDs/shared runner contracts.
 Cross-area leaves may require later fixtures; each earlier PR names those
 unimplemented dependencies, while its implemented cases pass on Go. The final
 PR completes the whole manifest rather than leaving optional green skips.
-Area 1 has **completed mechanical verification on Darwin**: all 54 family
-inventories are reconciled, with 15 named later-area dependencies. Reviewed raw
-reference observations and full typed ledgers live only in the external cache for
-2,737 executable cases; committed normalized locks detect regenerated differences.
-Three parallel passes and one serial pass compare byte-identically; all 13
-applicable mutations are caught. `parity/acceptance.json` records gates, coverage,
-initial findings and remaining limitations.
+Area 1's 54 family inventories are reconciled, with 15 named later-area
+dependencies. Reviewed raw reference observations and full typed ledgers live only
+in the external cache; committed normalized locks detect regenerated differences.
+`parity/acceptance.json` separates current re-pin proofs from the historical
+`38da0d6` three-parallel/one-serial and 13-mutation campaigns. Current coverage,
+extra parallel passes and the serial instrumented run wait until area 4.
 Linux and final whole-suite acceptance remain unverified; no overall 85% claim
 or human approval is implied.
 

@@ -52,9 +52,9 @@
       "why": "Complete logical-to-provider tool declarations with both authority modes enabled.",
       "path": "W05.live-mapping-anthropic-ro1-plan1.tar.gz",
       "artifacts": 14,
-      "normalized_bytes": 91735,
-      "normalized_sha256": "8212c515c2f15daff8c777159e0f9fbac986ce6dd020a191e982aae0c54bb4eb",
-      "bundle_sha256": "4259f37b133fa5d0404df478d22e9ea8929e4b5e93adebee3756f390439736ea"
+      "normalized_bytes": 93770,
+      "normalized_sha256": "73b4e66bb315f156b146c57c51b98a6c20d827b7ee9b75082a359a2f86dcd784",
+      "bundle_sha256": "d7cfa82edef940058382916b5d4c3fa4a76148c7db22d1db035a049af21c630d"
     },
     {
       "id": "W06.at-limit",
@@ -112,9 +112,9 @@
       "why": "Cache prefix identity across history compaction.",
       "path": "W11.compaction.tar.gz",
       "artifacts": 27,
-      "normalized_bytes": 185991,
-      "normalized_sha256": "793f51badbab5f04c16b2546004cea39a66cb8d86fb5a78952393b623be18fed",
-      "bundle_sha256": "13f33996eb1e12500ee6f4c060333b20c498320d4aa340248c551e389bee213b"
+      "normalized_bytes": 186583,
+      "normalized_sha256": "c7a77a558e5ab0c540df2291dbbfa6f2baade1b31ca52eab3e1192d2bb181108",
+      "bundle_sha256": "95d228d38636ad6d47dc3489ecc2b949f5850d4bb4342f2fbcb27c60ad8a82eb"
     },
     {
       "id": "W12.batch-and-next",
@@ -342,9 +342,9 @@
       "why": "Unanswered history recovery through explicit compaction.",
       "path": "W34.incomplete-compact.tar.gz",
       "artifacts": 27,
-      "normalized_bytes": 185091,
-      "normalized_sha256": "63447af2ccb2dbff90191974712fb0abd380f2444a91c383ddb293c404ab5e97",
-      "bundle_sha256": "3cd30ddd1dd31b2e5be3788aaa5d4c81ec1b81866038667e360875bb817dbbdd"
+      "normalized_bytes": 185683,
+      "normalized_sha256": "03d8deb9917af6ec5ff13cde64214aac9f35f8e670043ba146df4d0bd532b929",
+      "bundle_sha256": "1ebd43a4aa5448be9a084b5a5354d985e845715cfa84d206b348b3720319d0c1"
     },
     {
       "id": "W35.default",
@@ -522,9 +522,9 @@
       "why": "Signed native tail and pinned system transition across compaction.",
       "path": "W52.anthropic-1-compact.tar.gz",
       "artifacts": 43,
-      "normalized_bytes": 321230,
-      "normalized_sha256": "42f6ddd80f0ab394263eb125064119d25d99740068449206bb6d8c49c148a2cd",
-      "bundle_sha256": "97feabb55b7c23e40d06f81c942f5f45a0e5f388c7c944aef4598908589731db"
+      "normalized_bytes": 321822,
+      "normalized_sha256": "3cc2b1c75300673432e5c431fd8179ad64a339f9726962895edac10dbf6eb96d",
+      "bundle_sha256": "eb4a15c174d3a8c45e0490998c369ac63d5de71a1eb0265e425e48c1034c8585"
     },
     {
       "id": "W53.defaults.endpoints",

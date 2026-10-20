@@ -375,6 +375,63 @@ class DerivedSourceTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(AssertionError):
                 derive(bad, captures)
 
+    def test_compaction_shortening_keeps_original_source_across_attempt_boundaries(self):
+        for boundary in ('compaction.failed', 'compaction.skipped', 'compaction.finished', 'model.requested'):
+            with self.subTest(boundary=boundary):
+                events, captures, completed = [], [], []
+
+                def request(kind, raw, step, text='summarize'):
+                    history = [dict(kind='user', user=dict(text='history')),
+                               dict(kind='user', user=dict(text=text))]
+                    events.extend([event(kind, logical(history), step=step),
+                                   event('api.attempt.started', dict(request_sha256=sha256(raw)), step=step)])
+                    captures.append(dict(body=raw))
+
+                def attempt(before, step):
+                    summary = before.replace(b']}', b',{"role":"user","content":"summarize"}]}')
+                    request('compaction.requested', summary, step)
+                    shortened = b'{"input":[{"role":"user","content":"oversized"},{"role":"user","content":"shorten"}]}'
+                    request('compaction.requested', shortened, step+1, text='shorten')
+                    return before_latest_user(shortened, logical([dict(kind='user', user=dict(text='shorten'))]))
+
+                first = b'{"instructions":"/allocated/root/workspace","input":[{"role":"user","content":"first full history"}]}'
+                after = b'{"input":[{"role":"user","content":"accepted summary"}]}'
+                attempt(first, 2)
+                if boundary == 'compaction.finished':
+                    data = dict(request_bytes_before=admission_size(first), request_bytes_after=len(after))
+                    finished = event(boundary, data, step=3)
+                    events.append(finished)
+                    completed.append((finished, first, after))
+                    request('model.requested', after, 4)
+                elif boundary == 'model.requested':
+                    request(boundary, after, 4)
+                else:
+                    events.append(event(boundary, dict(reason='oversized'), step=3))
+                second = b'{"instructions":"/allocated/root/workspace","input":[{"type":"reasoning","opaque":"x"},{"role":"user","content":"second, different full history"}]}'
+                shortened = attempt(second, 5)
+                data = dict(request_bytes_before=admission_size(second), request_bytes_after=len(after))
+                finished = event('compaction.finished', data, step=6)
+                events.append(finished)
+                completed.append((finished, second, after))
+                request('model.requested', after, 7)
+                for seq, item in enumerate(events, 1):
+                    item['seq'] = seq
+                derived = derive(events, captures)
+                for item, before, following in completed:
+                    expected = {key: admission_size(derived.normal.json(raw, 'expected', opaque=True))
+                                for key, raw in (('request_bytes_before', before), ('request_bytes_after', following))}
+                    self.assertEqual(derived.derived[('a'*16, item['seq'])], expected)
+                for key in data:
+                    for wrong in (data[key]-1, data[key]+1, str(data[key]), True):
+                        bad = copy.deepcopy(events)
+                        bad[finished['seq']-1]['data'][key] = wrong
+                        with self.subTest(key=key, wrong=wrong), self.assertRaises(AssertionError):
+                            derive(bad, captures)
+                bad = copy.deepcopy(events)
+                bad[finished['seq']-1]['data']['request_bytes_before'] = admission_size(shortened)
+                with self.assertRaises(AssertionError):
+                    derive(bad, captures)
+
     def test_retry_display_accepts_only_exact_optional_activity_prefix(self):
         derived = derive([event('api.retry.scheduled', dict(attempt=1, reason='HTTP 429', delay_ms=1023))])
         line = 'model attempt 1 failed (HTTP 429); retrying in 1.023s'

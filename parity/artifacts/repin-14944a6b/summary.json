@@ -1,0 +1,21 @@
+{
+  "reference_commit": "14944a6bd8e35815effb74270218483804c29615",
+  "suite_digest": "48872e1b6b4f693798b92f34804eee01eb1829c5c8b1963045f51916d7dfb54b",
+  "candidate_sha256": "ba40c838e7408aeba3a637b58f9da12df55b2be816b3a0b3ad7a5afe2c0ff01c",
+  "full_candidate_runs": [
+    {"run": 1, "command": "make parity BIN=<plain archived-source build> JOBS=4", "exit_code": 2, "seconds": 608.025, "total": 2760, "passed": 2744, "failed": 1, "pending": 15, "unavailable": 0, "original_artifact_bytes": 4740499},
+    {"run": 2, "command": "make parity BIN=<plain archived-source build> JOBS=4", "exit_code": 0, "seconds": 592.169, "total": 2760, "passed": 2745, "failed": 0, "pending": 15, "unavailable": 0, "original_artifact_bytes": 2944173}
+  ],
+  "first_run_failure": {
+    "case": "W44.timeout-ack", "artifact": "invocation-1.stderr", "first_differing_byte_zero_based": 332,
+    "expected": "timed out after 10.2s; effects unknown", "actual": "timed out after 10.3s; effects unknown",
+    "artifact_length": 634, "compared_artifacts": 53, "other_52_artifacts_equal": true, "policies_and_ledger_contract_equal": true,
+    "waived": false, "note": "Existing policy does not normalize this display-duration slot; no policy or expected-lock change was made to hide it."
+  },
+  "w54_stability_runs": [
+    {"run": 1, "jobs": 6, "passed": 213, "failed": 0, "pending": 0, "seconds": 123.592, "original_artifact_bytes": 921803},
+    {"run": 2, "jobs": 6, "passed": 213, "failed": 0, "pending": 0, "seconds": 136.222, "original_artifact_bytes": 921803},
+    {"run": 3, "jobs": 6, "passed": 213, "failed": 0, "pending": 0, "seconds": 121.976, "original_artifact_bytes": 921803}
+  ],
+  "retention": "Only this small JSON summary is retained; all complete raw reports and temporary artifact directories were deleted before PR creation."
+}
