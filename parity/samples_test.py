@@ -14,6 +14,14 @@ from parity.samples import SELECTIONS, bundle, normalized_digest
 
 
 class SampleTests(unittest.TestCase):
+    def test_declared_selections_cover_every_runnable_live_family(self):
+        from parity.run import collect_cases
+        cases = {case.id: case for case in collect_cases()}
+        self.assertTrue(set(SELECTIONS) <= cases.keys())
+        self.assertTrue(all(not cases[case_id].pending for case_id in SELECTIONS))
+        self.assertEqual({case_id[:3] for case_id in SELECTIONS},
+                         {case.id[:3] for case in cases.values() if not case.pending})
+
     def test_bundle_preserves_all_bytes_and_is_deterministic(self):
         artifacts = {'native.bin': b'\xff\xfe\x00', 'nested/request.json': b'{ "z":1, "z":1.0 }\r\n', 'empty': b''}
         policies = {'native.bin': 'B', 'nested/request.json': 'N', 'empty': 'B'}
@@ -36,10 +44,15 @@ class SampleTests(unittest.TestCase):
         index = json.loads((suite / 'samples/index.json').read_bytes())
         selected = {row['id'] for row in index['cases']}
         self.assertEqual(len(selected), len(index['cases']))
-        self.assertEqual(selected, set(SELECTIONS))
+        # New selections are checked against live cases below, then frozen by parity-golden.
+        self.assertEqual(selected, set(SELECTIONS) & cases.keys())
         self.assertEqual({case_id[:3] for case_id in selected}, {case_id[:3] for case_id, case in cases.items() if not case['pending']})
         self.assertTrue(all(1 <= count <= 3 for count in Counter(case_id[:3] for case_id in selected).values()))
-        self.assertEqual(set(index['pending_families']), {'W13'})
+        families = {case_id[:3] for case_id in cases}
+        pending_families = {family for family in families
+                            if all(case['pending'] for case_id, case in cases.items()
+                                   if case_id.startswith(family + '.'))}
+        self.assertEqual(set(index['pending_families']), pending_families)
         for row in index['cases']:
             with self.subTest(case=row['id']):
                 raw = (suite / 'samples' / row['path']).read_bytes()

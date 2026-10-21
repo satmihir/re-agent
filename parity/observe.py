@@ -375,6 +375,10 @@ class Normalizer:
         lines = text.split('\n')
         if not lines[0].startswith('re:agent chat · '):
             return
+        if lines[0] == 're:agent chat · scripted':
+            if len(lines) < 2 or not re.match(r'^workspace '+re.escape(self.root)+r'(?=$|[/\s])', lines[1]):
+                raise AssertionError('malformed scripted chat workspace banner')
+            return  # Scripted chat has no resumable session ID.
         workspace_line = 2
         if len(lines) > 2 and lines[2].startswith('requests go to '):
             proxy = re.fullmatch(r'requests go to (https?://([^/\s?#]+)(?:/[^\s]*)?) \(API_PROXY_URL\)', lines[2])
@@ -634,6 +638,11 @@ class Normalizer:
                     # Explicit embedded layers retain their own token ordering.
                     if last in ('output', 'state', 'content', 'arguments') and value.startswith(('{', '[')):
                         layer = 'workspace-arguments' if last == 'arguments' and parent.get('name') in ('switch_workspace', 'request_workspace_access') else 'json'
+                        if layer == 'workspace-arguments':
+                            try:
+                                lex(value.encode())
+                            except (ValueError, UnicodeError):
+                                return  # Rejected call arguments are literal diagnostic evidence.
                         new = self.json(value.encode(), artifact, path+loc+(layer,)).decode()
                     elif value.startswith('Historical conversation supplied by re:agent, encoded as JSON records below.'):
                         prefix, records = value.rsplit('\n', 1)
@@ -858,6 +867,10 @@ def finish(ctx):
             normal.cache_keys[key] = cache_key(canonical)
     from parity.observe_derived import Derived
     derived = Derived(normal, traces, captures, invocations=invocations)
+    from parity.observe_tools import ARTIFACTS, Tools
+    observations = getattr(ctx, 'observations', {})
+    tools = Tools(normal, traces, captures, invocations=invocations,
+                  case_id=Path(ctx.root).name, observations=observations)
     # Validate all identities before processing references in stdout/stderr.
     for _, line in traces:
         ev = json.loads(line)
@@ -910,6 +923,7 @@ def finish(ctx):
                 normal.record(name, ('data','request_sha256'), normalized[digest.start:digest.end], replacement, 'validated-derived-digest', digest.start,digest.end)
                 normalized = replace_spans(normalized, [(digest.start,digest.end,replacement)])
             normalized = derived.trace(line, normalized, name)
+            normalized = tools.trace(line, normalized, name)
             parts.append(normalized)
         results[name] = b''.join(parts)
     for i, request in enumerate(captures):
@@ -999,6 +1013,9 @@ def finish(ctx):
                     pass
                 else:
                     results[response_name+'.decoded-body'] = normal.response(decoded, response_name+'.decoded-body', slot=slot)
+    for name in sorted(ARTIFACTS):
+        if name in observations:
+            results[name] = tools.artifact(observations[name], name)
     for name, raw in results.items():
         normal.ledger.append(dict(artifact=name, raw_normalized_sha256=sha256(raw), normalized_length=len(raw)))
     Path(ctx.artifacts, 'substitutions.json').write_text(json.dumps(normal.ledger, indent=2)+'\n')

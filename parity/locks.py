@@ -23,7 +23,11 @@ SUBSTITUTION_KINDS = (
     "registered-fixture-cancel-delivery-projection", "retry-delay-policy",
     "retry-display-delay", "snapshot-date", "trace-time", "typed-identity",
     "typed-scope-identity", "validated-auth-refresh-expiry", "validated-derived-digest",
-    "validated-derived-length",
+    "validated-derived-length", "exec-effective-timeout-elapsed", "git-do-jev-ms",
+    "git-do-allocated-remote", "exec-allocated-executable", "exec-literal-environment",
+    "exec-fixture-cwd", "exec-fixture-stdout-length", "tool-allocated-path-argument",
+    "git-fixture-workspace", "tool-workspace-refusal", "tool-approved-workspace-path",
+    "git-index-stat-cache", "exec-owned-elapsed",
 )
 
 COMPARISON_POLICY = {
@@ -284,6 +288,7 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {case_id: pool.submit(frozen_lock, staging / case_id) for case_id in executable}
             new_cases = {case_id: future.result() for case_id, future in futures.items()}
+    protect_wire_locks(old_cases, new_cases)
     document = {**pack(new_cases), "reference_identity": {key: manifest.get(key) for key in REFERENCE_FIELDS}}
     changed = sorted(case_id for case_id in old_cases.keys() & new_cases.keys() if old_cases[case_id] != new_cases[case_id])
     report = {"changed_case_digests": [{"id": case_id,
@@ -312,3 +317,13 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     print(json.dumps({**report, "changed_sample_cases": sample_changes,
                       "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))
     return {**document, "cases": new_cases}
+
+
+def protect_wire_locks(old_cases, new_cases):
+    """Stop area expansion before publishing any unapproved area-1 oracle change."""
+    allowed = {'W28.window-cutoff-items'}
+    changed = sorted(case_id for case_id, previous in old_cases.items()
+                     if case_id.startswith('W') and case_id not in allowed
+                     and new_cases.get(case_id) != previous)
+    if changed:
+        raise AssertionError('area-1 lock identity violation: ' + ', '.join(changed))

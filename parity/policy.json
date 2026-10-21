@@ -20,6 +20,84 @@
   ],
   "typed_allowlist": [
     {
+      "kind": "git-index-stat-cache",
+      "owner": "Guarded Git inspection ls-files --stage --debug helper stdout and pre-command binary index snapshot",
+      "validation": "Complete stdout independently reconstructed from checksummed SHA-1/SHA-256 v2/v3 index, exact guarded argv and literal scope; preserve paths, OIDs, modes, flags, size and extension bytes; reject forged stats, malformed snapshots and unrelated commands",
+      "replacement": "Only certified ctime/mtime/dev/ino/uid/gid become zero; snapshot becomes explicit semantic entries/extensions with verified checksum and zero padding derived"
+    },
+    {
+      "kind": "exec-owned-elapsed",
+      "owner": "T-family non-timeout exec activity numeric seconds",
+      "validation": "Unique raw call and invocation ownership, ordered argv/cwd/chain/not_run, status and timeout, bounded independently summed traced durations and exact Go-rounded display; warnings and other prose remain literal; W families excluded",
+      "replacement": "0.0"
+    },
+    {
+      "kind": "git-fixture-workspace",
+      "owner": "Registered independent Git fixture command stdout for guarded rev-parse --show-toplevel",
+      "validation": "Exact guarded command vector, successful recorded query and complete stdout equal to the independently allocated workspace plus newline; arbitrary Git output remains literal",
+      "replacement": "<ROOT>/workspace\\n"
+    },
+    {
+      "kind": "tool-workspace-refusal",
+      "owner": "T03.outside read_file refusal message and owned history echoes",
+      "validation": "Exact independently allocated workspace, unique accepted call/start/finish ownership and complete invalid_path/no-effect/null-data outcome envelope",
+      "replacement": "path must be inside the workspace, <ROOT>/workspace"
+    },
+    {
+      "kind": "tool-approved-workspace-path",
+      "owner": "T23/T24 request_workspace_access approved_path result and owned history echoes",
+      "validation": "Exact accepted call, unique call/start/finish and invocation ownership, recorded run preapproval and complete successful no-effect approval envelope with configured destination/missing status",
+      "replacement": "Only independently preapproved allocated prefix becomes <ROOT>"
+    },
+    {
+      "kind": "tool-allocated-path-argument",
+      "owner": "T-family typed file-tool path/paths arguments and accepted-call/history echoes",
+      "validation": "Known tool and schema fields, exact accepted call ID/Run/Step ownership, matching echoed arguments and later start sequence; allocated root comes from recorded case allocation, with exact slash boundary; native text, content and queries remain literal",
+      "replacement": "Only the independently allocated prefix becomes <ROOT>"
+    },
+    {
+      "kind": "exec-effective-timeout-elapsed",
+      "owner": "T-family timeout activity numeric seconds, including chain steps and clamped requested timeout",
+      "validation": "Unique raw Session/Run/call/step, exact ordered argv/cwd/steps/not_run, effective max(request,10000), timeout and summed durations in [10000,12000], exact Go-rounded display; warnings remain literal",
+      "replacement": "0.0"
+    },
+    {
+      "kind": "git-do-jev-ms",
+      "owner": "T41-T54 and W53.propagation.git-do owned git_do result timing and typed history echoes",
+      "validation": "Unique matching independent Jev HTTP capture with intent, snapshot and question ownership, no reused captures; integer bounded by tool-call and invocation intervals",
+      "replacement": 0
+    },
+    {
+      "kind": "git-do-allocated-remote",
+      "owner": "Registered fixture Git command argv (local remote, clone and hostile helper paths), witnessed remote diagnostics, and exact owned failed-push message echoes",
+      "validation": "Exact allocated root/origin.git, successful independent bare-init plus remote-add witnesses, exact independent command output for diagnostic substitutions; no arbitrary Git prose",
+      "replacement": "<ROOT>/origin.git"
+    },
+    {
+      "kind": "exec-allocated-executable",
+      "owner": "T-family exec result resolved_executable and typed history echoes",
+      "validation": "Matching preceding raw exec call, argv and invocation; exact allocated root/home/.parity-bin/python3 and independently configured PATH; nonmatching programs stay literal",
+      "replacement": "<ROOT>/home/.parity-bin/python3"
+    },
+    {
+      "kind": "exec-literal-environment",
+      "owner": "T29.literal-environment exec stdout",
+      "validation": "Exact fixed source, argv, cwd and complete stdout derived from explicitly allowlisted configured invocation environment; no credential variables are recorded",
+      "replacement": "Only independently derived allocated HOME/PATH/TMPDIR and cwd spans"
+    },
+    {
+      "kind": "exec-fixture-cwd",
+      "owner": "T32 success-chain fixed pwd command stdout",
+      "validation": "Exact fixed command vector, configured cwd and complete expected stdout derived from allocated workspace",
+      "replacement": "<ROOT>/workspace/sub\\n"
+    },
+    {
+      "kind": "exec-fixture-stdout-length",
+      "owner": "stdout_bytes_seen paired with a certified exec stdout allocation projection",
+      "validation": "Original count equals complete raw UTF-8 stdout length, stdout untruncated; replacement independently recomputed from certified projected stdout bytes",
+      "replacement": "Length of certified projected stdout"
+    },
+    {
       "kind": "trace-time",
       "owner": "Trace event root time",
       "validation": "Strict UTC RFC3339Nano string within the invocation interval plus/minus two seconds",

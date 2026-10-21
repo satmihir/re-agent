@@ -1,6 +1,8 @@
 """Raw-source validation and span-only replacement of declared derived fields."""
 import datetime as dt
 import json
+import math
+from pathlib import Path
 import re
 
 from parity.observe import child, check_digest, go_json, go_string, lex, replace_spans, sha256
@@ -447,31 +449,170 @@ class Derived:
             if len(owners) != 1 or owners[0] is not invocation:
                 continue
             argv, cwd = args.get('argv'), args.get('cwd')
-            # Chains and sanitized/truncated commands need a different ownership proof.
-            if (args.get('then') or not isinstance(argv, list) or not argv or not argv[0]
-                    or not isinstance(cwd, str) or not all(isinstance(s, str) and
-                    all(' ' <= c <= '~' for c in s) for s in argv+[cwd])):
+            then = args.get('then', [])
+            if not isinstance(then, list) or len(then) > 7 or not isinstance(cwd, str):
                 continue
-            parts = ["'"+s.replace("'", "'\\''")+"'" if not s or any(c in s for c in " $`\\\"'*?[]{}()<>|&;")
-                     else s for s in argv]
-            target = ' '.join(parts)+(' in '+cwd if cwd not in ('', '.') else '')
+            commands = [argv] + then
+            # Sanitized/truncated targets cannot establish exact command ownership.
+            if (not all(isinstance(vector, list) and vector and vector[0] and
+                        all(isinstance(s, str) and all(' ' <= c <= '~' for c in s)
+                            for s in vector) for vector in commands)
+                    or not all(' ' <= c <= '~' for c in cwd)):
+                continue
+            targets = []
+            for vector in commands:
+                parts = ["'"+s.replace("'", "'\\''")+"'" if not s or any(c in s for c in " $`\\\"'*?[]{}()<>|&;")
+                         else s for s in vector]
+                targets.append(' '.join(parts))
+            target = ' && '.join(targets)+(' in '+cwd if cwd not in ('', '.') else '')
             if command != target or len(target) > 160:
                 continue
             outcome = data.get('outcome', {})
             result = outcome.get('data', {})
             if (outcome.get('ok') is not False or outcome.get('code') != 'timeout'
-                    or outcome.get('effect') != 'unknown' or result.get('termination_reason') != 'timeout'
-                    or result.get('argv') != argv or result.get('cwd') != cwd):
+                    or outcome.get('effect') != 'unknown' or not isinstance(result, dict)):
                 continue
-            timeout, duration = args.get('timeout_ms'), result.get('duration_ms')
-            if (type(timeout) is not int or not 10000 <= timeout < 60000
-                    or type(result.get('timeout_ms')) is not int or result['timeout_ms'] != timeout
-                    or type(duration) is not int or not timeout <= duration <= timeout+2000
-                    or duration >= 60000):
+            requested = args.get('timeout_ms')
+            if type(requested) is not int or not 1 <= requested < 60000:
                 continue
-            candidates.append((timeout, duration))
+            timeout = max(requested, 10000)
+            # The new chain/floor slot is deliberately limited to ten seconds.
+            if then and timeout != 10000:
+                continue
+            steps = result.get('steps') if then else [result]
+            if (not isinstance(steps, list) or not 1 <= len(steps) <= len(commands)
+                    or (then and result.get('not_run', []) != commands[len(steps):])):
+                continue
+            valid = True
+            for index, step in enumerate(steps):
+                if (not isinstance(step, dict) or step.get('argv') != commands[index]
+                        or step.get('cwd') != cwd or type(step.get('timeout_ms')) is not int
+                        or step['timeout_ms'] != timeout or type(step.get('duration_ms')) is not int
+                        or step['duration_ms'] < 0):
+                    valid = False
+                    break
+                if index < len(steps)-1 and (step.get('termination_reason') is not None
+                        or type(step.get('exit_code')) is not int or step['exit_code'] != 0
+                        or step.get('signal') is not None):
+                    valid = False
+                    break
+            if not valid or steps[-1].get('termination_reason') != 'timeout':
+                continue
+            duration = sum(step['duration_ms'] for step in steps)
+            if (not timeout <= steps[-1]['duration_ms'] <= timeout+2000
+                    or not timeout <= duration <= timeout+2000 or duration >= 60000):
+                continue
+            kind = 'exec-effective-timeout-elapsed' if then or requested < 10000 else 'exec-timeout-elapsed'
+            candidates.append((timeout, duration, kind))
         if len(candidates) != 1:
             raise AssertionError('exec timeout display lacks one owned range-checked timeout call')
+        return candidates[0]
+
+    def exec_owned_duration(self, match, invocation):
+        candidates = []
+        for finished in self.events:
+            data = finished.get('data', {})
+            if finished['type'] != 'tool.finished' or data.get('name') != 'exec':
+                continue
+            identity = (finished.get('session_id'), finished.get('run_id'), data.get('call_id'))
+            paired = [e for e in self.events if e['type'] in ('tool.started', 'tool.finished')
+                      and (e.get('session_id'), e.get('run_id'), e.get('data', {}).get('call_id')) == identity]
+            starts = [e for e in paired if e['type'] == 'tool.started']
+            if not all(identity) or len(paired) != 2 or len(starts) != 1:
+                continue
+            started = starts[0]
+            if (started['data'].get('name') != 'exec' or started.get('step') != finished.get('step')
+                    or type(started.get('seq')) is not int or type(finished.get('seq')) is not int
+                    or started['seq'] >= finished['seq']):
+                continue
+            try:
+                begin, end = [dt.datetime.fromisoformat(e['time'].replace('Z', '+00:00')).timestamp()
+                              for e in (started, finished)]
+                args = json.loads(started['data']['arguments'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not isinstance(args, dict):
+                continue
+            owners = [i for i in self.invocations if all(math.isfinite(i[k]) for k in ('started', 'ended'))
+                      and i['started'] <= begin <= end <= i['ended']]
+            if len(owners) != 1 or owners[0] is not invocation:
+                continue
+            argv, cwd, then = args.get('argv'), args.get('cwd'), args.get('then', [])
+            if not isinstance(then, list) or len(then) > 7 or not isinstance(cwd, str):
+                continue
+            commands = [argv] + then
+            if (not all(isinstance(v, list) and v and v[0] and
+                        all(isinstance(s, str) and s.isprintable() or s == '' for s in v)
+                        for v in commands) or not all(' ' <= c <= '~' for c in cwd)):
+                continue
+            targets = []
+            for vector in commands:
+                parts = ["'"+s.replace("'", "'\\''")+"'" if not s or any(c in s for c in " $`\\\"'*?[]{}()<>|&;")
+                         else s for s in vector]
+                targets.append(' '.join(parts))
+            target = ' && '.join(targets)+(' in '+cwd if cwd not in ('', '.') else '')
+            # ASCII through cell 161 proves truncation even when hidden arguments
+            # contain wide Unicode; no Unicode width approximation enters this slot.
+            if not all(' ' <= c <= '~' for c in target[:161]):
+                continue
+            if len(target) > 160:
+                target = target[:159]+'…'
+            if target != match['command']:
+                continue
+            outcome = data.get('outcome', {})
+            code = outcome.get('code')
+            if (code not in ('ok', 'command_failed', 'output_wait_failed', 'command_wait_failed')
+                    or outcome.get('ok') is not (code == 'ok')
+                    or outcome.get('effect') != ('unknown' if code.endswith('wait_failed') else 'applied')
+                    or match['mark'] != ('✓' if code == 'ok' else '✗')):
+                continue
+            requested = args.get('timeout_ms', 120000)
+            if type(requested) is not int or requested <= 0:
+                continue
+            timeout = max(requested, 10000)
+            result = outcome.get('data')
+            if not isinstance(result, dict):
+                continue
+            steps = result.get('steps') if then else [result]
+            if (not isinstance(steps, list) or not 1 <= len(steps) <= len(commands)
+                    or (then and result.get('not_run', []) != commands[len(steps):])
+                    or (not then and ('steps' in result or 'not_run' in result))):
+                continue
+            valid = True
+            for index, step in enumerate(steps):
+                if (not isinstance(step, dict) or step.get('argv') != commands[index] or step.get('cwd') != cwd
+                        or type(step.get('timeout_ms')) is not int or step['timeout_ms'] != timeout
+                        or type(step.get('duration_ms')) is not int or not 0 <= step['duration_ms'] < 60000
+                        or step.get('termination_reason') is not None
+                        or (index < len(steps)-1 and (type(step.get('exit_code')) is not int
+                            or step['exit_code'] != 0 or step.get('signal') is not None))):
+                    valid = False
+                    break
+            if not valid:
+                continue
+            last = steps[-1]
+            exit_code, signal = last.get('exit_code'), last.get('signal')
+            if signal is not None:
+                if exit_code is not None or not isinstance(signal, str) or not re.fullmatch(r'[a-z][a-z ]*', signal):
+                    continue
+                status = 'signal: '+signal
+            elif type(exit_code) is int:
+                status = 'exit '+str(exit_code)
+            else:
+                continue
+            if code == 'ok' and (exit_code != 0 or signal is not None or len(steps) != len(commands)):
+                continue
+            if code == 'command_failed' and exit_code == 0 and signal is None:
+                continue
+            stopped = f' at step {len(steps)} of {len(commands)}' if len(steps) < len(commands) else ''
+            if match['status'] != status or (match['stopped'] or '') != stopped:
+                continue
+            duration = sum(step['duration_ms'] for step in steps)
+            if not 0 <= duration < min(60000, (end-begin)*1000+1):
+                continue
+            candidates.append((identity, duration))
+        if len(candidates) != 1:
+            raise AssertionError('exec elapsed display lacks one owned range-checked non-timeout call')
         return candidates[0]
 
     def display(self, text, name, invocation):
@@ -487,7 +628,7 @@ class Derived:
                 if raw['command'] in commands:
                     raise AssertionError('exec timeout display reuses the same command witness')
                 commands.add(raw['command'])
-                configured, duration = self.exec_timeout_duration(raw['command'], invocation)
+                configured, duration, kind = self.exec_timeout_duration(raw['command'], invocation)
                 # Match time.Duration.Seconds before %.1f's binary64 ties-to-even rounding.
                 seconds = duration//1000 + (duration%1000*1000000)/1e9
                 whole, tenth = match['elapsed'].split('.')
@@ -495,7 +636,24 @@ class Derived:
                 if (match['elapsed'] != raw['elapsed'] or match['elapsed'] != f'{seconds:.1f}'
                         or not configured <= displayed_ms <= configured+2000):
                     raise AssertionError('exec timeout display differs from configured bounds or traced duration')
-                changes.append((match.start('elapsed'), match.end('elapsed'), '0.0', 'exec-timeout-elapsed'))
+                changes.append((match.start('elapsed'), match.end('elapsed'), '0.0', kind))
+        if (name == 'stderr' or name.endswith('.stderr')) and Path(self.normal.root).name.startswith('T'):
+            owned = re.compile(r'(?m)^  (?P<mark>[✓✗]) exec (?P<command>[ -~…]+) → (?P<status>exit -?[0-9]+|signal: [a-z][a-z ]*) in (?P<elapsed>[0-9]+\.[0-9])s(?P<stopped> at step [1-8] of [1-8])?$')
+            matches = list(owned.finditer(text))
+            raw_matches = list(owned.finditer(invocation.get('stderr', b'').decode('utf-8', 'surrogateescape')))
+            if len(matches) != len(raw_matches):
+                raise AssertionError('exec elapsed display differs from raw stderr grammar')
+            used = set()
+            for match, raw in zip(matches, raw_matches):
+                identity, duration = self.exec_owned_duration(raw, invocation)
+                if identity in used:
+                    raise AssertionError('exec elapsed display reuses the same call witness')
+                used.add(identity)
+                seconds = duration//1000 + (duration%1000*1000000)/1e9
+                if (any(match[key] != raw[key] for key in ('mark', 'status', 'stopped', 'elapsed'))
+                        or raw['elapsed'] != f'{seconds:.1f}'):
+                    raise AssertionError('exec elapsed display differs from independently traced duration or status')
+                changes.append((match.start('elapsed'), match.end('elapsed'), '0.0', 'exec-owned-elapsed'))
         # The complete footer grammar distinguishes harness metadata from prose.
         footer = re.compile(r'(?m)^[✓✗!–] [a-z_]+ · \d+ steps? · \d+ tool calls? · [^\n]+ · (?P<elapsed>\d+\.\ds|\d+m[0-5]\ds)$')
         for match in footer.finditer(text):

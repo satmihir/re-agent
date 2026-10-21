@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from parity.observe import (Normalizer, cache_key, check_digest, compare, go_json,
                             lex, sha256, string_spans, go_string, finish)
@@ -574,6 +575,43 @@ class RetryDelayTests(unittest.TestCase):
 
 
 class ResponseSpanTests(unittest.TestCase):
+    def test_malformed_workspace_arguments_are_literal_without_substitutions(self):
+        arguments = ['{', '[', '{"path":}', '{"path":"/case/root/next",}',
+                     '{"path":"/case/root/next"} {}', '["/case/root/next"] trailing',
+                     '{"path":"/case/root/\ud800"}']
+        for name in ('switch_workspace', 'request_workspace_access'):
+            for value in arguments:
+                with self.subTest(name=name, value=repr(value)):
+                    call = dict(call_id='literal-call', name=name, arguments=value)
+                    envelopes = [dict(name=name, arguments=value),
+                                 dict(type='model.accepted', data=dict(blocks=[dict(kind='tool_call', call=call)])),
+                                 dict(type='tool.started', data=call),
+                                 dict(type='model.requested', data=dict(history=[dict(kind='assistant', assistant=dict(
+                                      blocks=[dict(kind='tool_call', call=call)]))]))]
+                    for envelope in envelopes:
+                        normal = Normalizer('/case/root', '')
+                        raw = json.dumps(envelope, ensure_ascii=True).encode()
+                        self.assertEqual(normal.json(raw, 'trace'), raw)
+                        self.assertEqual(normal.ledger, [])
+                    normal = Normalizer('/case/root', '')
+                    raw = json.dumps(dict(type='function_call', name=name, arguments=value), ensure_ascii=True).encode()
+                    self.assertEqual(normal.response(raw, 'wire'), raw)
+                    self.assertEqual(normal.ledger, [])
+
+    def test_workspace_argument_guard_does_not_swallow_normalization_errors(self):
+        raw = go_json(dict(name='switch_workspace', arguments='{"path":"/case/root/next"}'))
+        for error in (AssertionError('owned slot failed'), ValueError('normalization failed'), UnicodeError('normalization failed')):
+            with self.subTest(error=type(error).__name__):
+                normal = Normalizer('/case/root', '')
+                with patch.object(normal, 'text', side_effect=error):
+                    with self.assertRaisesRegex(type(error), str(error)):
+                        normal.json(raw, 'trace')
+        for envelope in [dict(type='function_call_output', output='{"path":"/case/root"} trailing'),
+                         dict(type='tool_result', content='{"path":"/case/root"} trailing'),
+                         dict(model='m', questions={}, state='{"path":"/case/root"} trailing')]:
+            with self.subTest(envelope=envelope), self.assertRaises(ValueError):
+                Normalizer('/case/root', '').json(go_json(envelope), 'trace')
+
     def test_workspace_arguments_repair_only_the_allocated_path(self):
         normal = Normalizer('/case/root', '127.0.0.1:1234')
         raw = (b'data: {"type":"response.completed", "response":{"output":['

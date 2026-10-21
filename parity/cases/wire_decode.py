@@ -614,10 +614,11 @@ def _retry(status, lane, twice=False, window=None, headers=None, stream_code=Non
     return run
 
 
-def _stream_ended_early(window):
+def _stream_ended_early(window, deltas_only=False):
     def run(ctx):
         path, env, model = _setup(ctx, "proxy")
-        cutoff = sse(done(0, call()))
+        cutoff = (sse(event("response.output_text.delta", output_index=0, content_index=0, delta="unaccepted delta"))
+                  if deltas_only else sse(done(0, call())))
         first, following = (PROMPT, PROMPT) if window else ("wire first", "wire following")
         first_marker = lambda body: _last_prompt(body) == first
         following_marker = first_marker if window else lambda body: _last_prompt(body) == following
@@ -1264,12 +1265,15 @@ def collect():
                           _retry(200, "proxy", window="8s", stream_code="service_unavailable", transient_body=sse(fault)), slow=True))
         cases.append(Case("W28.default-" + suffix, "Default policy does not retry service-unavailable stream events",
                           _retry(200, "proxy", stream_code="service_unavailable", transient_body=sse(fault))))
+    cases.append(Case("W28.window-service-unavailable-type-unlisted", "Transient error type controls retry even with an unlisted code",
+                      _retry(200, "proxy", window="8s", stream_code="UNLISTED",
+                             transient_body=sse(event("error", error={"type": "service_unavailable_error", "code": "UNLISTED", "message": "busy"}))), slow=True))
     cases.append(Case("W28.window-stream-ended-early", "Cutoff stream retries once with exact reason and no accepted tool",
                       _stream_ended_early(True), slow=True))
     cases.append(Case("W28.default-stream-ended-early", "Cutoff stream is resumable without blocking the following chat turn",
                       _stream_ended_early(False)))
-    cases.append(Case("W28.window-cutoff-items", "Window retries cutoff item-only stream without accepting its tool",
-                      _stream_ended_early(True), slow=True))
+    cases.append(Case("W28.window-cutoff-items", "Window retries a distinct deltas-only cutoff without accepting partial output",
+                      _stream_ended_early(True, deltas_only=True), slow=True))
     for suffix, body, status, reason in (
         ("incomplete-event", sse(event("response.incomplete", body=reply([call()], status="incomplete", usage=USAGE,
                                                                        incomplete_details={"reason": "max_output_tokens"}))),

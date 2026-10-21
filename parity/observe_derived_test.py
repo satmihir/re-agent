@@ -515,6 +515,111 @@ class ExecTimeoutDisplayTests(unittest.TestCase):
                 self.assertEqual(row['end'], len(line[:start+len(displayed)].encode()))
                 self.assertEqual(len(derived.normal.ledger), 1)
 
+    def effective_scenario(self, requested=1, chain=True, previous=False, duration=10228, displayed='10.2'):
+        events, invocation, _ = self.scenario(displayed, duration)
+        args = dict(argv=['python3', 'tree.py'], cwd='sub', timeout_ms=requested)
+        commands = [args['argv']]
+        if previous:
+            commands.insert(0, ['true'])
+            args['argv'] = commands[0]
+        if chain:
+            commands.append(['echo', 'skipped'])
+            args['then'] = commands[1:]
+        step = dict(argv=commands[-2] if chain else commands[0], cwd='sub', timeout_ms=10000,
+                    duration_ms=duration, termination_reason='timeout')
+        result = step
+        if chain:
+            steps = [step]
+            if previous:
+                steps.insert(0, dict(argv=commands[0], cwd='sub', timeout_ms=10000, duration_ms=100,
+                                     exit_code=0, signal=None, termination_reason=None))
+                step['duration_ms'] -= 100
+            result = dict(steps=steps, not_run=[commands[-1]])
+        events[0]['data']['arguments'] = json.dumps(args)
+        events[1]['data']['outcome']['data'] = result
+        command = ' && '.join(' '.join(vector) for vector in commands)+' in sub'
+        line = f'  ! exec {command} → timed out after {displayed}s; effects unknown\n'
+        invocation['stderr'] = line.encode()
+        return events, invocation, line
+
+    def test_effective_timeout_proves_chain_vectors_cwd_floor_and_numeric_span(self):
+        for chain, previous, requested, duration, displayed in (
+                (True, False, 1, 10000, '10.0'), (True, False, 1, 10250, '10.2'),
+                (True, False, 1, 12000, '12.0'), (True, True, 1, 10228, '10.2'),
+                (True, False, 10000, 10228, '10.2'), (False, False, 1, 10228, '10.2')):
+            events, invocation, line = self.effective_scenario(requested, chain, previous, duration, displayed)
+            derived, actual = self.display(events, invocation)
+            with self.subTest(chain=chain, previous=previous, requested=requested, duration=duration):
+                self.assertEqual(actual, line.replace(displayed+'s; effects', '0.0s; effects'))
+                row, = derived.normal.ledger
+                self.assertEqual(row['kind'], 'exec-effective-timeout-elapsed')
+                start = line.rindex(displayed+'s;')
+                self.assertEqual((row['start'], row['end']),
+                                 (len(line[:start].encode()), len(line[:start+len(displayed)].encode())))
+
+    def test_effective_timeout_rejects_wrong_owner_chain_step_and_forged_duration(self):
+        for mutation in ('wrong-owner', 'wrong-command', 'wrong-cwd', 'wrong-step', 'wrong-not-run',
+                         'wrong-timeout', 'low-duration', 'high-duration', 'forged-display',
+                         'wrong-termination', 'extra-step', 'failed-prior-step', 'negative-prior-duration',
+                         'wrong-prior-vector', 'wrong-prior-timeout'):
+            events, invocation, _ = self.effective_scenario(previous=True)
+            args = json.loads(events[0]['data']['arguments'])
+            result = events[1]['data']['outcome']['data']
+            step = result['steps'][-1]
+            if mutation == 'wrong-owner':
+                events[1]['session_id'] = 'c'*16
+            elif mutation == 'wrong-command':
+                args['then'][-1] = ['echo', 'different']
+            elif mutation == 'wrong-cwd':
+                step['cwd'] = '.'
+            elif mutation == 'wrong-step':
+                step['argv'] = result['steps'][0]['argv']
+            elif mutation == 'wrong-not-run':
+                result['not_run'] = []
+            elif mutation == 'wrong-timeout':
+                step['timeout_ms'] = 1
+            elif mutation in ('low-duration', 'high-duration'):
+                step['duration_ms'] = 9999 if mutation == 'low-duration' else 12001
+            elif mutation == 'forged-display':
+                invocation['stderr'] = invocation['stderr'].replace(b'10.2s;', b'10.3s;')
+            elif mutation == 'wrong-termination':
+                step['termination_reason'] = 'cancelled'
+            elif mutation == 'extra-step':
+                result['steps'].append(copy.deepcopy(step))
+            elif mutation == 'failed-prior-step':
+                result['steps'][0]['exit_code'] = 7
+            elif mutation == 'negative-prior-duration':
+                result['steps'][0]['duration_ms'] = -1
+            elif mutation == 'wrong-prior-vector':
+                result['steps'][0]['argv'] = ['false']
+            elif mutation == 'wrong-prior-timeout':
+                result['steps'][0]['timeout_ms'] = 1
+            events[0]['data']['arguments'] = json.dumps(args)
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                self.display(events, invocation)
+
+    def test_effective_timeout_requires_declared_integer_floor_and_bounded_chain(self):
+        for value in (None, True, 0, -1, '1', 1.0, 10001):
+            events, invocation, _ = self.effective_scenario(requested=value)
+            with self.subTest(requested=value), self.assertRaises(AssertionError):
+                self.display(events, invocation)
+        for key in ('duration_ms', 'timeout_ms'):
+            for value in (None, True, '10000', 10000.0):
+                events, invocation, _ = self.effective_scenario()
+                events[1]['data']['outcome']['data']['steps'][0][key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(AssertionError):
+                    self.display(events, invocation)
+
+    def test_effective_timeout_keeps_changed_warning_and_non_activity_text_exact(self):
+        events, invocation, line = self.effective_scenario()
+        for changed in (line.replace('; effects unknown', '; effects known'),
+                        line.replace('  ! exec', '  ✓ exec'), line.rstrip()+' extra\n', 'prose '+line):
+            invocation['stderr'] = changed.encode()
+            derived, actual = self.display(events, invocation)
+            with self.subTest(changed=changed):
+                self.assertEqual(actual, changed)
+                self.assertEqual(derived.normal.ledger, [])
+
     def test_exec_timeout_display_bounds_do_not_use_binary_float_milliseconds(self):
         events, invocation, line = self.scenario('32.3', 32300)
         args = json.loads(events[0]['data']['arguments'])
@@ -641,6 +746,199 @@ class ExecTimeoutDisplayTests(unittest.TestCase):
         normalized = derived.normal.text(line, 'invocation-1.stderr', ())
         actual = derived.display(normalized, 'invocation-1.stderr', invocation)
         self.assertEqual(actual, normalized.replace('10.2s; effects', '0.0s; effects'))
+
+
+class ExecOwnedDisplayTests(unittest.TestCase):
+    def scenario(self, duration=125, displayed='0.1', chain=False, code='ok', long=False):
+        commands = [['echo', "a'b" if not long else 'x'*200]]
+        if chain:
+            commands += [['true'], ['echo', 'last']]
+        args = dict(argv=commands[0], cwd='sub', timeout_ms=1)
+        if chain:
+            args['then'] = commands[1:]
+        ran = len(commands) if code == 'ok' else 1
+        steps = [dict(argv=v, cwd='sub', timeout_ms=10000, duration_ms=duration if i == 0 else 25,
+                      termination_reason=None, signal=None, exit_code=0 if code != 'command_failed' else 7)
+                 for i, v in enumerate(commands[:ran])]
+        result = dict(steps=steps, not_run=commands[ran:]) if chain else steps[0]
+        outcome = dict(ok=code == 'ok', code=code,
+                       effect='unknown' if code == 'output_wait_failed' else 'applied', data=result)
+        events = [event('tool.started', dict(name='exec', call_id='owned', arguments=json.dumps(args))),
+                  event('tool.finished', dict(name='exec', call_id='owned', outcome=outcome), seq=2)]
+        for item, when in zip(events, ('1970-01-01T00:01:41Z', '1970-01-01T00:01:43Z')):
+            item.update(session_id='b'*16, time=when)
+        command = "echo 'a'\\''b'" if not long else 'echo '+'x'*200
+        if chain:
+            command += ' && true && echo last'
+        command += ' in sub'
+        command = command if len(command) <= 160 else command[:159]+'…'
+        mark = '✓' if code == 'ok' else '✗'
+        status = 'exit 7' if code == 'command_failed' else 'exit 0'
+        stopped = ' at step 1 of 3' if chain and ran == 1 else ''
+        line = f'  {mark} exec {command} → {status} in {displayed}s{stopped}\n'
+        invocation = dict(started=100, ended=104, stdout=b'', stderr=line.encode())
+        return events, invocation, line
+
+    def display(self, events, invocation, root='/allocated/T32.case', text=None, invocations=None):
+        derived = derive(events, root=root, invocations=invocations or [invocation])
+        return derived, derived.display(invocation['stderr'].decode() if text is None else text,
+                                        'invocation-1.stderr', invocation)
+
+    def test_owned_elapsed_changes_only_numeric_span_and_sums_ordered_chain(self):
+        for chain, code, duration, displayed, long in (
+                (False, 'ok', 125, '0.1', False), (False, 'ok', 50, '0.1', True),
+                (True, 'ok', 125, '0.2', True), (True, 'command_failed', 250, '0.2', False),
+                (True, 'output_wait_failed', 1051, '1.1', False), (False, 'ok', 0, '0.0', False)):
+            events, invocation, line = self.scenario(duration, displayed, chain, code, long)
+            derived, actual = self.display(events, invocation)
+            with self.subTest(chain=chain, code=code, duration=duration, long=long):
+                start = line.rindex(displayed+'s')
+                self.assertEqual(actual, line[:start]+'0.0'+line[start+len(displayed):])
+                row, = derived.normal.ledger
+                self.assertEqual(row['kind'], 'exec-owned-elapsed')
+                self.assertEqual((row['start'], row['end']),
+                                 (len(line[:start].encode()), len(line[:start+len(displayed)].encode())))
+
+    def test_owned_elapsed_rejects_wrong_call_pair_shape_status_or_trace_bounds(self):
+        mutations = ('missing-start', 'missing-finish', 'duplicate-start', 'duplicate-finish', 'wrong-call',
+                     'wrong-session', 'wrong-run', 'wrong-step', 'wrong-seq', 'wrong-name', 'wrong-argv',
+                     'wrong-cwd', 'wrong-timeout', 'wrong-not-run', 'wrong-chain-order', 'failed-prior',
+                     'negative-duration', 'bool-duration', 'huge-duration', 'forged-rounding', 'reversed-time',
+                     'other-invocation', 'ambiguous-invocation', 'duplicate-command', 'repeated-line',
+                     'wrong-exit', 'wrong-mark', 'wrong-termination', 'wrong-effect', 'wrong-stopped')
+        for mutation in mutations:
+            events, invocation, line = self.scenario(125, '0.2', chain=True)
+            result = events[1]['data']['outcome']
+            step = result['data']['steps'][0]
+            if mutation == 'missing-start':
+                events.pop(0)
+            elif mutation == 'missing-finish':
+                events.pop()
+            elif mutation.startswith('duplicate-') and mutation != 'duplicate-command':
+                events.append(copy.deepcopy(events[0 if mutation.endswith('start') else 1]))
+            elif mutation in ('wrong-call', 'wrong-name'):
+                events[1]['data']['call_id' if mutation == 'wrong-call' else 'name'] = 'other'
+            elif mutation in ('wrong-session', 'wrong-run', 'wrong-step', 'wrong-seq'):
+                field = mutation[6:]
+                events[1][field+'_id' if field in ('session', 'run') else field] = 0
+            elif mutation in ('wrong-argv', 'wrong-cwd', 'wrong-timeout'):
+                step[{'wrong-argv': 'argv', 'wrong-cwd': 'cwd', 'wrong-timeout': 'timeout_ms'}[mutation]] = None
+            elif mutation == 'wrong-not-run':
+                result['data']['not_run'] = [['extra']]
+            elif mutation == 'wrong-chain-order':
+                result['data']['steps'].reverse()
+            elif mutation == 'failed-prior':
+                step['exit_code'] = 1
+            elif mutation in ('negative-duration', 'bool-duration', 'huge-duration'):
+                step['duration_ms'] = {'negative-duration': -1, 'bool-duration': True, 'huge-duration': 2001}[mutation]
+            elif mutation == 'forged-rounding':
+                invocation['stderr'] = line.replace('0.2s', '0.3s').encode()
+            elif mutation == 'reversed-time':
+                events[0]['time'], events[1]['time'] = events[1]['time'], events[0]['time']
+            elif mutation == 'duplicate-command':
+                other = copy.deepcopy(events)
+                for item in other:
+                    item['seq'] += 2
+                    item['data']['call_id'] = 'other'
+                events += other
+            elif mutation == 'repeated-line':
+                invocation['stderr'] += invocation['stderr']
+            elif mutation == 'wrong-exit':
+                result['data']['steps'][-1]['exit_code'] = 9
+            elif mutation == 'wrong-mark':
+                invocation['stderr'] = line.replace('✓', '✗').encode()
+            elif mutation == 'wrong-termination':
+                step['termination_reason'] = 'timeout'
+            elif mutation == 'wrong-effect':
+                result['effect'] = 'unknown'
+            elif mutation == 'wrong-stopped':
+                invocation['stderr'] = line.rstrip().encode()+b' at step 1 of 3\n'
+            invocations = [invocation]
+            if mutation == 'other-invocation':
+                invocations = [dict(invocation), dict(invocation, started=110, ended=114)]
+                invocation = invocations[-1]
+            elif mutation == 'ambiguous-invocation':
+                invocations.append(dict(invocation))
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                self.display(events, invocation, invocations=invocations)
+
+    def test_owned_elapsed_leaves_w_locks_warning_prose_native_and_refusals_literal(self):
+        events, invocation, line = self.scenario()
+        derived, actual = self.display(events, invocation, root='/allocated/W32.case')
+        self.assertEqual(actual, line)
+        self.assertEqual(derived.normal.ledger, [])
+        warnings = '  exec left uncertain effects: arbitrary warning in 0.1s\n'
+        for changed in (warnings, 'model prose '+line, line.rstrip()+' extra warning\n',
+                        '  ✗ exec echo → not run: refused in 0.1s\n',
+                        line.replace('exec ', 'read_file ')):
+            invocation['stderr'] = changed.encode()
+            derived, actual = self.display(events, invocation)
+            with self.subTest(changed=changed):
+                self.assertEqual(actual, changed)
+                self.assertEqual(derived.normal.ledger, [])
+        invocation['stderr'] = (line+warnings).encode()
+        derived, actual = self.display(events, invocation)
+        self.assertTrue(actual.endswith(warnings))
+        self.assertEqual(derived.display(line, 'invocation-1.stdout', invocation), line)
+        raw = go_json(dict(native=dict(provider='openai', items=[dict(text=line)]), text=line))
+        self.assertEqual(derived.normal.json(raw, 'opaque', opaque=True), raw)
+
+    def test_owned_elapsed_binds_unicode_arguments_hidden_after_ascii_ellipsis(self):
+        events, invocation, line = self.scenario(long=True)
+        args = json.loads(events[0]['data']['arguments'])
+        args['argv'].append('雪')
+        events[0]['data']['arguments'] = json.dumps(args)
+        events[1]['data']['outcome']['data']['argv'] = args['argv'][:]
+        derived, actual = self.display(events, invocation)
+        self.assertEqual(actual, line.replace('0.1s', '0.0s'))
+        self.assertEqual(len(derived.normal.ledger), 1)
+        events[1]['data']['outcome']['data']['argv'][-1] = 'different'
+        with self.assertRaises(AssertionError):
+            self.display(events, invocation)
+
+    def test_owned_elapsed_rejects_nonfinite_or_noninteger_duration_and_invocation_bounds(self):
+        for value in (True, None, '125', 125.0, float('nan'), float('inf')):
+            events, invocation, _ = self.scenario()
+            events[1]['data']['outcome']['data']['duration_ms'] = value
+            with self.subTest(duration=value), self.assertRaises((AssertionError, ValueError)):
+                self.display(events, invocation)
+        for key in ('started', 'ended'):
+            for value in (float('nan'), float('inf'), -float('inf')):
+                events, invocation, _ = self.scenario()
+                invocation[key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(AssertionError):
+                    self.display(events, invocation)
+
+    def test_owned_elapsed_preserves_signal_and_ignores_other_invocation_witness(self):
+        events, invocation, line = self.scenario(code='command_failed')
+        step = events[1]['data']['outcome']['data']
+        step.update(exit_code=None, signal='terminated')
+        line = line.replace('exit 7', 'signal: terminated')
+        invocation['stderr'] = line.encode()
+        other = copy.deepcopy(events)
+        for item in other:
+            item['run_id'] = 'c'*16
+            item['time'] = item['time'].replace('00:01:', '00:02:')
+        later = dict(invocation, started=160, ended=164)
+        derived, actual = self.display(events+other, invocation, invocations=[invocation, later])
+        self.assertEqual(actual, line.replace('0.1s', '0.0s'))
+        self.assertEqual(len(derived.normal.ledger), 1)
+        step['exit_code'] = 7
+        with self.assertRaises(AssertionError):
+            self.display(events, invocation)
+
+    def test_owned_elapsed_uses_raw_command_before_allocation_projection(self):
+        events, invocation, line = self.scenario()
+        args = json.loads(events[0]['data']['arguments'])
+        args['argv'] = ['echo', '/allocated/T32.case/workspace']
+        events[0]['data']['arguments'] = json.dumps(args)
+        events[1]['data']['outcome']['data']['argv'] = args['argv']
+        line = '  ✓ exec echo /allocated/T32.case/workspace in sub → exit 0 in 0.1s\n'
+        invocation['stderr'] = line.encode()
+        derived = derive(events, root='/allocated/T32.case', invocations=[invocation])
+        normalized = derived.normal.text(line, 'invocation-1.stderr', ())
+        self.assertEqual(derived.display(normalized, 'invocation-1.stderr', invocation),
+                         normalized.replace('0.1s', '0.0s'))
 
 
 if __name__ == '__main__':

@@ -687,6 +687,51 @@ def _propagation(ctx, leaf):
         assert all(request.path == "/propagation/openai/v1/responses" for request in ctx.server.requests)
 
 
+def _git_do_propagation(ctx):
+    from parity.cases.tools_git import _setup, _git, _evidence
+    from parity.cases.tools_support import drive
+
+    _setup(ctx)
+    # Keep the offline gh stub and Git recorder; both read settings beside the script,
+    # so childEnvironment's removal of PARITY_* cannot redirect them to live tools.
+    before = _git(ctx, 'rev-parse', 'HEAD')
+    with ctx.server as server:
+        env = _environment(server)
+        env['REAGENT_JEV_BASE_URL'] = server.url + '/gateway/git-classifier/v1///'
+        answer = Response(body={})
+
+        def classify(body):
+            body = json.loads(body)
+            answers = {}
+            assert set(body['questions']) == {'outcome', 'scope'}, body
+            for name, question in body['questions'].items():
+                choice = 'status' if name == 'outcome' else 'git_only'
+                criteria = question['criteria']
+                assert choice in criteria, criteria
+                answers[name] = {'type': 'choice', 'choice': choice, 'confidence': .99,
+                                 'probabilities': {key: .99 if key == choice else .01 / (len(criteria) - 1)
+                                                   for key in criteria}}
+            answer.body = {'model': 'jev-1.13.0', 'answers': answers,
+                           'usage': {'input_tokens': 17, 'output_tokens': 3}}
+            return True
+
+        server.expect('/gateway/git-classifier/v1/systemone', answer, marker=classify)
+        outcomes = drive(ctx, [('git_do', {'intent': 'Show the current repository status'})],
+                         flags=('--git-do', 'jev'), env=env)
+        out = outcomes[0]
+        assert out['ok'] and out['data']['recipe'] == 'status', out
+        assert out['data']['status'] == 'done' and out['effect'] == 'applied', out
+        assert len(server.requests) == 1, server.requests
+        request = server.requests[0]
+        assert request.path == '/gateway/git-classifier/v1/systemone' and request.method == 'POST'
+        assert _headers(request)['authorization'] == 'Bearer parity-jev-key'
+        assert 'Show the current repository status' in request.json()['state']
+        assert _git(ctx, 'rev-parse', 'HEAD') == before
+        assert _git(ctx, 'status', '--porcelain') == ''
+        _evidence(ctx, outcomes)
+        assert not server.errors, server.errors
+
+
 def collect():
     cases = []
 
@@ -803,9 +848,10 @@ def collect():
                       run=bound(_overall_deadline, "auth-refresh", "progress"), slow=True))
     for leaf in ("model-switch", "compaction"):
         add("W53.propagation." + leaf, "Native prefixed endpoint survives " + leaf, bound(_propagation, leaf))
-    for leaf in ("child", "nested-child", "git-do"):
+    add("W53.propagation.git-do", "Git tool uses real Jev client at prefixed loopback endpoint without repository mutation", _git_do_propagation)
+    for leaf in ("child", "nested-child"):
         cases.append(Case(id="W53.propagation." + leaf, description="Endpoint propagation into " + leaf,
-                          run=None, pending=("tools area: git_do client exchange" if leaf == "git-do" else "agents area: explicit " + leaf + " client exchange")))
+                          run=None, pending="agents area: explicit " + leaf + " client exchange"))
     cases.append(Case(id="W24.subscription-checkpoint-resume", description="Usage limit leaves resumable session",
                       run=None, pending="Checkpoint-area fixture must restore usage-limit session and complete next turn"))
     add("W53.defaults.endpoints", "Default endpoint diagnostics without public I/O", _endpoint_defaults)
