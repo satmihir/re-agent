@@ -38,6 +38,11 @@ class HarnessError(Exception):
     """An invocation or prerequisite error, rather than a candidate failure."""
 
 
+def default_jobs():
+    """Leave two cores for the system and the candidate's own threads; barriers hold at six."""
+    return max(1, min(6, (os.cpu_count() or 2) - 2))
+
+
 def private_roots():
     """Identify real user private locations before installing fixture HOME."""
     homes = {Path(pwd.getpwuid(os.getuid()).pw_dir), Path.home()}
@@ -1120,9 +1125,11 @@ def main(argv=None):
     parser.add_argument("--bin", default=os.environ.get("BIN"))
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--area", action="append", default=[])
-    parser.add_argument("--jobs", type=int, default=1)
+    parser.add_argument("--jobs", type=int, default=default_jobs())
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--keep-artifacts", action="store_true", help="retain passing cases too; failures and the report are always kept")
+    parser.add_argument("--skip-slow", action="store_true", help="leave out slow leaves for a faster inner loop; never a gate")
+    parser.add_argument("--verify-cache", action="store_true", help="replay every cached case even when a verification stamp holds")
     parser.add_argument("--list", action="store_true")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--golden-update", action="store_true", help="explicitly update normalized locks and samples from the pinned reference")
@@ -1132,12 +1139,14 @@ def main(argv=None):
         if args.golden_update:
             if args.jobs < 1:
                 raise HarnessError("--jobs must be positive")
-            if args.bin or args.case or args.area or args.artifacts or args.keep_artifacts or args.list:
+            if args.bin or args.case or args.area or args.artifacts or args.keep_artifacts or args.skip_slow or args.list:
                 raise HarnessError("--golden-update cannot be combined with candidate or selection arguments")
             from parity import golden as reference
             return reference.main(["--update", "--jobs", str(args.jobs)])
         cases = collect_cases()
         selected = select_cases(cases, args.case, args.area)
+        if args.skip_slow:
+            selected = [case for case in selected if not case.slow]
         if args.list:
             for case in selected:
                 print("%s\t%s%s" % (case.id, case.description, " [pending: %s]" % case.pending if case.pending else ""))
@@ -1163,7 +1172,8 @@ def main(argv=None):
             guard_artifacts(coverage)
         inventory_error = None
         if not args.probe:
-            golden = reference.ensure_cache(suite, manifest, cases, args.jobs)
+            subset = None if len(selected) == len(cases) else [case.id for case in selected]
+            golden = reference.ensure_cache(suite, manifest, cases, args.jobs, selected=subset, full=args.verify_cache)
             try:
                 verify_inventory(golden, cases, manifest)
             except (HarnessError, OSError, ValueError, TypeError) as exc:
@@ -1190,7 +1200,9 @@ def main(argv=None):
         counts, coverage_counts = report_counts(cases, results)
         selected_ids = {case.id for case in selected}
         selected_areas = sorted({case.area for case in selected})
-        scope = "full-platform" if len(selected) == len(cases) else "area" if args.area and not args.case else "selection"
+        # Leaving out slow leaves is an inner loop, never an area or full gate.
+        scope = ("selection" if args.skip_slow else "full-platform" if len(selected) == len(cases)
+                 else "area" if args.area and not args.case else "selection")
         gate_success = not args.probe and not inventory_error and scope != "selection" and has_executable and accepted_outcomes(selected, results, "passed")
         pending_reasons = {result["id"]: result.get("reason", "") for result in results if result["status"] == "pending"}
         report = {"mode": "probe" if args.probe else "compare",

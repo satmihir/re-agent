@@ -133,6 +133,67 @@ class GoldenTest(unittest.TestCase):
             regenerate.assert_not_called()
             verify.assert_called_once()
 
+    def test_verified_stamp_skips_replay_until_any_cached_file_changes(self):
+        lane = golden.cache_path(self.manifest)
+        (lane / "W01").mkdir(parents=True)
+        (lane / "W01" / "normalized").write_bytes(b"locked")
+        identity = {"suite_digest": "same", "temp_root_width": 86}
+        (lane / "cache.json").write_text(json.dumps(identity))
+        with patch("parity.golden.read_lock", return_value={"cases": {}}), patch("parity.golden.identity", return_value=identity), \
+                patch("parity.golden.verify_cache") as verify, patch("parity.run.verify_inventory") as inventory, \
+                patch("parity.golden.verify_binary") as binary:
+            golden.ensure_cache(self.suite, self.manifest, [])
+            verify.assert_called_once()
+            self.assertTrue(golden.stamp_valid(lane))
+            verify.reset_mock()
+            golden.ensure_cache(self.suite, self.manifest, [])
+            verify.assert_not_called()
+            inventory.assert_called_once()
+            binary.assert_called_once()
+            # A forced replay still runs while the stamp holds.
+            golden.ensure_cache(self.suite, self.manifest, [], full=True)
+            verify.assert_called_once()
+            verify.reset_mock()
+            path = lane / "W01" / "normalized"
+            path.write_bytes(b"lockeD")
+            os.utime(path, ns=(1, 1))
+            self.assertFalse(golden.stamp_valid(lane))
+            golden.ensure_cache(self.suite, self.manifest, [])
+            verify.assert_called_once()
+
+    def test_selection_without_stamp_replays_only_selected_cases_and_writes_no_stamp(self):
+        lane = golden.cache_path(self.manifest)
+        lane.mkdir(parents=True)
+        identity = {"suite_digest": "same", "temp_root_width": 86}
+        (lane / "cache.json").write_text(json.dumps(identity))
+        lock = {"cases": {"W01": {"digest": "a"}, "W02": {"digest": "b"}}}
+        for case_id in lock["cases"]:
+            (lane / case_id).mkdir()
+        with patch("parity.golden.read_lock", return_value=lock), patch("parity.golden.identity", return_value=identity), \
+                patch("parity.run.verify_inventory"), patch("parity.golden.verify_binary"), \
+                patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), \
+                patch("parity.golden.verify_case") as verify_case, patch("parity.samples.verify_samples") as samples:
+            golden.ensure_cache(self.suite, self.manifest, [], selected=["W02"])
+            self.assertEqual([call.args[0] for call in verify_case.call_args_list], ["W02"])
+            samples.assert_not_called()
+            self.assertFalse((lane / golden.STAMP).exists())
+            verify_case.reset_mock()
+            golden.ensure_cache(self.suite, self.manifest, [])
+            self.assertEqual(sorted(call.args[0] for call in verify_case.call_args_list), ["W01", "W02"])
+            samples.assert_called_once()
+            self.assertTrue(golden.stamp_valid(lane))
+
+    def test_fingerprint_ignores_only_the_stamp(self):
+        lane = self.root / "lane"
+        lane.mkdir()
+        (lane / "cache.json").write_text("{}")
+        before = golden.cache_fingerprint(lane)
+        golden.write_stamp(lane)
+        self.assertEqual(golden.cache_fingerprint(lane), before)
+        (lane / "extra").write_text("x")
+        self.assertNotEqual(golden.cache_fingerprint(lane), before)
+        self.assertFalse(golden.stamp_valid(lane))
+
     def test_capture_pending_case_never_freezes_or_deletes_nonexistent_evidence(self):
         result = {"id": "W13.pending", "status": "pending", "reason": "dependency"}
         with patch("parity.run.run_case", return_value=result), patch("parity.run.freeze_case") as freeze:
@@ -158,7 +219,7 @@ class GoldenTest(unittest.TestCase):
 
         with patch("parity.golden.build_reference", side_effect=build), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.locks.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.run.collect_cases", return_value=cases), patch("parity.observe.finish", side_effect=observe), patch("parity.samples.verify_samples") as verify_samples:
             lane = golden.regenerate(self.suite, self.manifest, cases, lock, jobs=2)
-            self.assertEqual(set(path.name for path in lane.iterdir()), {"W99", "inventory.json", "cache.json", "reference"})
+            self.assertEqual(set(path.name for path in lane.iterdir()), {"W99", "inventory.json", "cache.json", "reference", golden.STAMP})
             self.assertEqual(golden.verify_cache(lane, self.suite, self.manifest, cases, lock), lane)
             self.assertGreaterEqual(verify_samples.call_count, 2)
             original = (lane / "cache.json").read_bytes()

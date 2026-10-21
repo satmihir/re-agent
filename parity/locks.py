@@ -269,7 +269,8 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     suite, staging = Path(suite), Path(staging)
     run.verify_inventory(staging, cases, manifest)
     executable = sorted(case.id for case in cases if not case.pending and sys.platform in case.platforms)
-    actual = {path.name for path in staging.iterdir()} - {"inventory.json", "cache.json", "reference"}
+    # The verification stamp is cache metadata, never a case.
+    actual = {path.name for path in staging.iterdir()} - {"inventory.json", "cache.json", "reference", "verified.json"}
     verify_inventory(executable, actual)
     relative = "expected/" + sys.platform + ".json"
     path = suite / relative

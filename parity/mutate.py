@@ -202,9 +202,10 @@ def has_panic(directory):
     return None
 
 
-def run_cases(binary, cases, directory, timeout):
+def run_cases(binary, cases, directory, timeout, jobs=1):
     directory.mkdir()
-    argv = [sys.executable, "-m", "parity.run", "--bin", str(binary), "--artifacts", str(directory), "--keep-artifacts"]
+    argv = [sys.executable, "-m", "parity.run", "--bin", str(binary), "--artifacts", str(directory), "--keep-artifacts",
+            "--jobs", str(jobs)]
     for case in cases:
         argv.extend(("--case", case))
     # Process HOME must be outside the runner's required-empty artifact directory.
@@ -282,7 +283,7 @@ def validate_manifest(manifest):
             raise ValueError("later mutation needs explicit ownership and catchers")
 
 
-def check_mutation(mutation, reference, archive, artifacts, timeout):
+def check_mutation(mutation, reference, archive, artifacts, timeout, jobs=1, all_catchers=True):
     started = time.monotonic()
     result = {key: mutation[key] for key in ("id", "description", "cases", "intended_assertion")}
     result["selectors"] = mutation.get("selectors", mutation["cases"])
@@ -293,7 +294,7 @@ def check_mutation(mutation, reference, archive, artifacts, timeout):
                                  ensure_ascii=False, separators=(",", ":")).encode()
         result["patch_sha256"] = sha256(patch_bytes)
         (directory / "patch.json").write_bytes(patch_bytes + b"\n")
-        process, report, rows = run_cases(reference, mutation["cases"], directory / "baseline", timeout)
+        process, report, rows = run_cases(reference, mutation["cases"], directory / "baseline", timeout, jobs)
         status, _ = classify(process, report, rows, mutation, directory / "baseline", baseline=True)
         result["baseline_status"] = status
         if status != "passed":
@@ -311,11 +312,23 @@ def check_mutation(mutation, reference, archive, artifacts, timeout):
                 result["status"] = "build_failed"
                 return result
             result["binary_sha256"] = sha256(binary.read_bytes())
-            process, report, rows = run_cases(binary, mutation["cases"], directory / "mutant", timeout)
-            status, assertions = classify(process, report, rows, mutation, directory / "mutant")
-            result.update(status=status, assertions=assertions)
+            # Fail fast: one intended catcher is a kill; the rest run only if the first survives.
+            cases = mutation["cases"]
+            rounds = [cases] if all_catchers or len(cases) == 1 else [cases[:1], cases[1:]]
+            ran = []
+            for index, subset in enumerate(rounds):
+                round_mutation = dict(mutation, cases=subset)
+                process, report, rows = run_cases(binary, subset, directory / ("mutant" if index == 0 else "mutant-rest"),
+                                                  timeout, jobs)
+                status, assertions = classify(process, report, rows, round_mutation,
+                                              directory / ("mutant" if index == 0 else "mutant-rest"))
+                ran.extend(subset)
+                if status != "survived":
+                    break
+            result.update(status=status, assertions=assertions, mutant_cases_run=ran)
             save_json(directory / "assertions.json", {"intended": mutation["intended_assertion"],
-                                                      "status": status, "matched": assertions, "cases": rows})
+                                                      "status": status, "matched": assertions, "cases": rows,
+                                                      "cases_run": ran})
     except (OSError, ValueError, tarfile.TarError) as error:
         result.update(status="harness_failure", error=str(error))
     finally:
@@ -331,6 +344,9 @@ def main(argv=None):
     parser.add_argument("--artifacts", required=True, type=Path, help="new directory outside suite and reference tree")
     parser.add_argument("--mutation", action="append", type=int)
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--jobs", type=int, help="parallel cases per runner invocation (default: parity.run's default)")
+    parser.add_argument("--all-catchers", action="store_true",
+                        help="run every catcher leaf instead of stopping at the first intended kill")
     args = parser.parse_args(argv)
     reference, tree, artifacts = args.bin.resolve(), args.reference_tree.resolve(), args.artifacts.resolve()
     if not outside(artifacts, SUITE) or not outside(artifacts, tree):
@@ -371,8 +387,11 @@ def main(argv=None):
     try:
         revision, archive = archive_reference(tree, artifacts, args.timeout)
         summary.update(reference_revision=revision, archive_sha256=sha256(archive))
+        from parity.run import default_jobs
+        jobs = args.jobs or default_jobs()
+        summary.update(jobs=jobs, all_catchers=args.all_catchers)
         for mutation in selected:
-            result = check_mutation(mutation, reference, archive, artifacts, args.timeout)
+            result = check_mutation(mutation, reference, archive, artifacts, args.timeout, jobs, args.all_catchers)
             summary["mutations"].append(result)
             print(f"mutation {mutation['id']:02d}: {result['status']}", flush=True)
     except (ValueError, OSError) as error:

@@ -33,9 +33,28 @@ make parity-golden                    # exact pinned build, clean capture and lo
 make parity BIN=/absolute/reagent      # reuse or regenerate missing/stale reference cache
 make parity BIN=/absolute/reagent CASE=W33 JOBS=4
 make parity BIN=/absolute/reagent KEEP_ARTIFACTS=1  # retain passing cases for debugging
+make parity BIN=/absolute/reagent CASE=W28 SLOW=0   # inner loop: leave out slow leaves
+make parity BIN=/absolute/reagent VERIFY=1          # replay every cached case regardless of the stamp
 python3 -m parity.run --list
 python3 -m unittest discover -s parity -p '*test.py'
 ```
+
+**Speed.** `JOBS` defaults to the core count minus two, at most six; the barriers
+hold at six. A complete cache replay is stamped (`verified.json`) with a fingerprint
+of every cached file's path, size, modification time, inode and mode, so later
+runs skip the replay while nothing in the cache has changed. They still check the
+inventory, identity and reference binary, and each compared case still replays
+its own raw evidence before comparison. A `CASE`/`AREA` selection without a valid
+stamp replays only the selected cases' locks. `SLOW=0` leaves out the slow leaves
+and is always reported as a selection, never a gate. Use `VERIFY=1` for acceptance
+runs that must replay the whole cache. The stamp trusts local file metadata: it
+detects ordinary edits, replacement and removal, not deliberate tampering that
+restores every timestamp and inode.
+
+`python3 -m parity.mutate` runs each mutant's cases with `--jobs` (default as above)
+and stops at the first leaf that fails with the intended assertion; the remaining
+catcher leaves run only if the first survives. Pass `--all-catchers` to record every
+catcher, as the final acceptance does.
 
 Candidate runs cannot update the committed oracle. They may regenerate its cache
 from the pinned reference, never from the candidate. Bad invocation exits 2;
