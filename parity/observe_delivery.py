@@ -132,7 +132,8 @@ def project_delivery(case_id, request, response, invocations, events=()):
     allocated = re.fullmatch(r"127\.0\.0\.1:([1-9][0-9]{0,4})", authority) if isinstance(authority, str) else None
     if request["method"] != method or request["path"] != path or allocated is None or int(allocated[1]) > 65535 or not isinstance(request["body"], bytes):
         raise AssertionError("W54 delivery does not match its allocated fixture request")
-    if (type(response.status) is not int or response.status != 200 or response.reset is not False
+    planned_status = 400 if (kind, phase) == ("auth-revoke", "body") else 200
+    if (type(response.status) is not int or response.status != planned_status or response.reset is not False
             or response.close is not True or type(response.completed) is not bool
             or not isinstance(response.body, bytes) or not isinstance(response.chunks, (list, tuple))
             or any(not isinstance(chunk, bytes) for chunk in response.chunks)
@@ -175,7 +176,7 @@ def project_delivery(case_id, request, response, invocations, events=()):
              "observed": {"body_sha256": hashlib.sha256(response.body).hexdigest(), "body_length": len(response.body),
                           "headers": dict(response.headers), "status": response.status, "transport": observed_transport},
              "canonical": {"body_sha256": hashlib.sha256(body).hexdigest(), "body_length": len(body),
-                           "headers": dict(canonical_headers), "status": 200, "transport": dict(transport)}}
+                           "headers": dict(canonical_headers), "status": planned_status, "transport": dict(transport)}}
     if runs is not None:
         proof["runs"] = runs
-    return {"body": body, "headers": canonical_headers, "transport": transport, "status": 200, "proof": proof}
+    return {"body": body, "headers": canonical_headers, "transport": transport, "status": planned_status, "proof": proof}

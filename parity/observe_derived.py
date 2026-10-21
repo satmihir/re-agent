@@ -1,4 +1,6 @@
 """Raw-source validation and span-only replacement of declared derived fields."""
+import datetime as dt
+import json
 import re
 
 from parity.observe import child, check_digest, go_json, go_string, lex, replace_spans, sha256
@@ -236,6 +238,7 @@ class Derived:
     def __init__(self, normal, traces, captures, invocations=()):
         self.normal = normal
         self.events = [lex(line).value for _, line in traces]
+        self.invocations = invocations
         self.captures = captures
         self.requests = {}
         self.handoffs = {}
@@ -254,9 +257,14 @@ class Derived:
         switch_ordinal = 0
         self.derived = {}
         self.failed_fields = {}
+        compaction_requests = {}
         for index, event in enumerate(self.events):
             data = event.get('data', {})
             fields = {}
+            if event['type'] == 'model.requested':
+                compaction_requests.pop(event['run_id'], None)
+            if event['type'] == 'compaction.requested':
+                compaction_requests.setdefault(event['run_id'], (index, event))
             if event['type'] == 'model.switch.finished':
                 switch_ordinal += 1
             if event['type'] == 'auto.route' and 'packet_sha256' in data:
@@ -335,23 +343,25 @@ class Derived:
                         fields['handoff_sha256'] = sha256(canonical)
                 self.failed_fields[(event['run_id'], event['seq'])] = {key:data[key] for key in fields}
             if event['type'] == 'compaction.finished' and 'request_bytes_before' in data:
-                previous = next((e for e in reversed(self.events[:index])
-                                 if e['run_id'] == event['run_id'] and e['type'] == 'api.attempt.started'), None)
+                start, logical = compaction_requests.get(event['run_id'], (index, None))
+                if logical is None:
+                    raise AssertionError('compaction byte counts lack independent logical summary request')
+                # A shortening request no longer carries the original history.
+                previous = next((e for e in self.events[start:index]
+                                 if e['run_id'] == event['run_id'] and e.get('step') == logical.get('step')
+                                 and e['type'] == 'api.attempt.started'), None)
                 following = next((e for e in self.events[index+1:]
                                   if e['run_id'] == event['run_id'] and e['type'] == 'api.attempt.started'), None)
                 if previous is None or following is None:
                     raise AssertionError('compaction byte counts lack captured before/after requests')
-                logical = next((e for e in reversed(self.events[:index])
-                                if e['run_id'] == previous['run_id'] and e.get('step') == previous.get('step')
-                                and e['type'] in ('model.requested', 'compaction.requested')), None)
-                if logical is None:
-                    raise AssertionError('compaction byte counts lack independent logical summary request')
                 before = before_latest_user(self.request(previous)['body'], logical['data'])
                 after = self.request(following)['body']
                 for key, source in (('request_bytes_before', before), ('request_bytes_after', after)):
                     self.length(data, key, admission_size(source))
                     canonical = normal.json(source, 'compaction-source', opaque=True)
                     fields[key] = admission_size(canonical)
+            if event['type'] in ('compaction.failed', 'compaction.skipped', 'compaction.finished'):
+                compaction_requests.pop(event['run_id'], None)
             self.derived[(event['run_id'], event['seq'])] = fields
         if previews:
             raise AssertionError('tagged switch preview lacks a matching no-I/O switch')
@@ -409,8 +419,83 @@ class Derived:
             changes.append((token.start, token.end, replacement))
         return replace_spans(normalized, changes)
 
+    def exec_timeout_duration(self, command, invocation):
+        candidates = []
+        for finished in self.events:
+            data = finished.get('data', {})
+            if finished['type'] != 'tool.finished' or data.get('name') != 'exec':
+                continue
+            identity = (finished.get('session_id'), finished.get('run_id'), data.get('call_id'))
+            if not all(identity):
+                continue
+            paired = [e for e in self.events if e['type'] in ('tool.started', 'tool.finished')
+                      and (e.get('session_id'), e.get('run_id'), e.get('data', {}).get('call_id')) == identity]
+            starts = [e for e in paired if e['type'] == 'tool.started']
+            if len(paired) != 2 or len(starts) != 1:
+                continue
+            started = starts[0]
+            if (started['data'].get('name') != 'exec' or started.get('step') != finished.get('step')
+                    or started['seq'] >= finished['seq']):
+                continue
+            try:
+                begin, end = [dt.datetime.fromisoformat(e['time'].replace('Z', '+00:00')).timestamp()
+                              for e in (started, finished)]
+                args = json.loads(started['data']['arguments'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            owners = [i for i in self.invocations if i['started'] <= begin <= end <= i['ended']]
+            if len(owners) != 1 or owners[0] is not invocation:
+                continue
+            argv, cwd = args.get('argv'), args.get('cwd')
+            # Chains and sanitized/truncated commands need a different ownership proof.
+            if (args.get('then') or not isinstance(argv, list) or not argv or not argv[0]
+                    or not isinstance(cwd, str) or not all(isinstance(s, str) and
+                    all(' ' <= c <= '~' for c in s) for s in argv+[cwd])):
+                continue
+            parts = ["'"+s.replace("'", "'\\''")+"'" if not s or any(c in s for c in " $`\\\"'*?[]{}()<>|&;")
+                     else s for s in argv]
+            target = ' '.join(parts)+(' in '+cwd if cwd not in ('', '.') else '')
+            if command != target or len(target) > 160:
+                continue
+            outcome = data.get('outcome', {})
+            result = outcome.get('data', {})
+            if (outcome.get('ok') is not False or outcome.get('code') != 'timeout'
+                    or outcome.get('effect') != 'unknown' or result.get('termination_reason') != 'timeout'
+                    or result.get('argv') != argv or result.get('cwd') != cwd):
+                continue
+            timeout, duration = args.get('timeout_ms'), result.get('duration_ms')
+            if (type(timeout) is not int or not 10000 <= timeout < 60000
+                    or type(result.get('timeout_ms')) is not int or result['timeout_ms'] != timeout
+                    or type(duration) is not int or not timeout <= duration <= timeout+2000
+                    or duration >= 60000):
+                continue
+            candidates.append((timeout, duration))
+        if len(candidates) != 1:
+            raise AssertionError('exec timeout display lacks one owned range-checked timeout call')
+        return candidates[0]
+
     def display(self, text, name, invocation):
         changes = []
+        if name == 'stderr' or name.endswith('.stderr'):
+            timeout = re.compile(r'(?m)^  ! exec (?P<command>[^\n]+) → timed out after (?P<elapsed>[0-9]+\.[0-9])s; effects unknown$')
+            matches = list(timeout.finditer(text))
+            raw_matches = list(timeout.finditer(invocation.get('stderr', b'').decode('utf-8', 'surrogateescape')))
+            if matches and len(matches) != len(raw_matches):
+                raise AssertionError('exec timeout display differs from raw stderr grammar')
+            commands = set()
+            for match, raw in zip(matches, raw_matches):
+                if raw['command'] in commands:
+                    raise AssertionError('exec timeout display reuses the same command witness')
+                commands.add(raw['command'])
+                configured, duration = self.exec_timeout_duration(raw['command'], invocation)
+                # Match time.Duration.Seconds before %.1f's binary64 ties-to-even rounding.
+                seconds = duration//1000 + (duration%1000*1000000)/1e9
+                whole, tenth = match['elapsed'].split('.')
+                displayed_ms = int(whole)*1000 + int(tenth)*100
+                if (match['elapsed'] != raw['elapsed'] or match['elapsed'] != f'{seconds:.1f}'
+                        or not configured <= displayed_ms <= configured+2000):
+                    raise AssertionError('exec timeout display differs from configured bounds or traced duration')
+                changes.append((match.start('elapsed'), match.end('elapsed'), '0.0', 'exec-timeout-elapsed'))
         # The complete footer grammar distinguishes harness metadata from prose.
         footer = re.compile(r'(?m)^[✓✗!–] [a-z_]+ · \d+ steps? · \d+ tool calls? · [^\n]+ · (?P<elapsed>\d+\.\ds|\d+m[0-5]\ds)$')
         for match in footer.finditer(text):

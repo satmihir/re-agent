@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "reference_commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
+  "reference_commit": "14944a6bd8e35815effb74270218483804c29615",
   "scope": "All 36 design section 6 IDs: 13 applicable wire mutations, including cross-area catchers 3, 5 and 36; 23 explicit later-pending mutations. Each applicable patch independently targets git archive REF_COMMIT, never HEAD or the working tree. Later-pending is not a kill, waiver or completed 36/36 gate.",
   "later_pending": [
     {"id": 1, "owner": "cli", "catchers": ["C01"], "reason": "Unknown-command output channels need CLI fixtures."},
@@ -53,7 +53,7 @@
       "patches": [
         {"path": "internal/reagent/openai.go", "old": "import (\n\t\"crypto/sha256\"", "new": "import (\n\t\"bytes\"\n\t\"crypto/sha256\""},
         {"path": "internal/reagent/openai.go", "old": "body, err := json.Marshal(responsesRequest{", "new": "var buffer bytes.Buffer\n\tencoder := json.NewEncoder(&buffer)\n\tencoder.SetEscapeHTML(false)\n\terr = encoder.Encode(responsesRequest{"},
-        {"path": "internal/reagent/openai.go", "old": "\t\tStream:            proxied,\n\t})", "new": "\t\tStream:            proxied,\n\t})\n\tbody := bytes.TrimSuffix(buffer.Bytes(), []byte{10})"}
+        {"path": "internal/reagent/openai.go", "old": "\t\tStream:            proxied,\n\t\tMaxOutputTokens:   req.MaxOutputTokens,\n\t})", "new": "\t\tStream:            proxied,\n\t\tMaxOutputTokens:   req.MaxOutputTokens,\n\t})\n\tbody := bytes.TrimSuffix(buffer.Bytes(), []byte{10})"}
       ]
     },
     {
@@ -95,7 +95,7 @@
       "intended_assertion": "Incomplete SSE is not retried even with retry-window admission enabled",
       "failure_pattern": "assert len\\(requests\\) == count|assert len\\(starts\\) == len\\(finishes\\) == count|assert result\\[\"status\"\\] == status",
       "patches": [
-        {"path": "internal/reagent/openai_stream.go", "old": "\t\tcase \"response.completed\", \"response.incomplete\":\n\t\t\treturn \"\", Usage{}", "new": "\t\tcase \"response.incomplete\":\n\t\t\treturn \"server_is_overloaded\", Usage{}\n\t\tcase \"response.completed\":\n\t\t\treturn \"\", Usage{}"}
+        {"path": "internal/reagent/openai_stream.go", "old": "\t\tcase \"response.completed\", \"response.incomplete\":\n\t\t\treturn \"\", \"\", Usage{}", "new": "\t\tcase \"response.incomplete\":\n\t\t\treturn \"server_is_overloaded\", \"\", Usage{}\n\t\tcase \"response.completed\":\n\t\t\treturn \"\", \"\", Usage{}"}
       ]
     },
     {

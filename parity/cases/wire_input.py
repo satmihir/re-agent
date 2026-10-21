@@ -719,6 +719,65 @@ def _cache_changes(ctx, variant):
         assert bodies[-1]["input"][-1]["content"][-1]["text"].startswith("re:agent plan mode is on")
 
 
+def _in_run_oversized(ctx, twice):
+    prompt = "compact-oversized-task"
+    flags = ("--model", OPENAI[0], "--in-run-compact", "--max-steps", "8")
+    ctx.env["REAGENT_CONTEXT_WINDOW_TOKENS"] = "100000"
+    preview, _ = _preview(ctx, flags, prompt)
+    # Grow the native tail relative to the measured prefix, not an assumed token count.
+    first = _openai("prior-transcript:" + "h" * (3 * len(preview.stdout)))
+    first["output"].append(_call("list_files", {"path": "."}, call_id="compaction-call"))
+    first["usage"]["input_tokens"] = 10000
+    oversized = "s" * 32769
+    shortened = "checkpoint retained; tests pending"
+    def last_text(raw):
+        return json.loads(raw)["input"][-1].get("content", [{}])[0].get("text", "")
+
+    script = [(lambda raw: len(json.loads(raw)["input"]) == 1, first),
+              (lambda raw: "32768 bytes (UTF-8)" in last_text(raw) and "Shorten the existing" not in last_text(raw),
+               _openai(oversized)),
+              (lambda raw: "Shorten the existing 32769 byte summary to at most 32768 bytes" in last_text(raw),
+               _openai(oversized if twice else shortened)),
+              ((lambda raw: json.loads(raw)["input"][-1].get("type") == "function_call_output") if twice else
+               (lambda raw: last_text(raw) == SUMMARY + shortened), _openai("compaction complete"))]
+    for marker, response in script:
+        ctx.server.expect(_path(ctx), Response(body=response), marker=marker, model=OPENAI[0])
+    result = ctx.run(prompt, flags=flags)
+    _ok(result)
+    assert result.stdout == b"compaction complete\n"
+    bodies = [_body(record) for record in ctx.server.requests]
+    assert len(bodies) == 4, len(bodies)
+    assert "32768 bytes (UTF-8)" in bodies[1]["input"][-1]["content"][0]["text"]
+    assert bodies[2]["input"][0]["content"][0]["text"] == SUMMARY + oversized
+    assert "32769 byte summary to at most 32768 bytes" in bodies[2]["input"][-1]["content"][0]["text"]
+    assert bodies[0]["prompt_cache_key"] == bodies[1]["prompt_cache_key"] == bodies[3]["prompt_cache_key"]
+    assert bodies[2]["prompt_cache_key"] != bodies[0]["prompt_cache_key"]
+    for index, body in enumerate(bodies):
+        summary = {"text": oversized, "replaced_entries": 0, "model": ""} if index == 2 else None
+        _cache_key(body, summary)
+    events = [json.loads(line) for path in ctx.trace_paths for line in path.read_bytes().splitlines()]
+    requested = [event for event in events if event["type"] == "compaction.requested"]
+    assert [event["step"] for event in requested] == [2, 3], "shortening did not stay in the same attempt"
+    failed = [event for event in events if event["type"] == "compaction.failed"]
+    skipped = [event for event in events if event["type"] == "compaction.skipped"]
+    finished = [event for event in events if event["type"] == "compaction.finished"]
+    if twice:
+        assert len(failed) == len(skipped) == 1 and not finished
+        assert skipped[0]["data"]["consecutive_failures"] == 1
+        assert skipped[0]["data"]["disabled"] is False
+        assert skipped[0]["data"]["retry_after_step"] == 5
+        assert bodies[3]["input"] == bodies[1]["input"][:-1], "failed summary changed retained history"
+    else:
+        assert not failed and not skipped and len(finished) == 1
+        assert finished[0]["data"]["summary"] == shortened
+        assert len(bodies[3]["input"]) == 2
+        assert bodies[3]["input"][0]["content"][0]["text"] == prompt
+        assert bodies[3]["input"][1]["content"][0]["text"] == SUMMARY + shortened
+    completed = [event["data"] for event in events if event["type"] == "run.finished"]
+    assert len(completed) == 1 and completed[0]["status"] == "completed"
+    assert completed[0]["steps"] == 4 and completed[0]["tool_calls"] == 1
+
+
 def _cache_markers(body):
     assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
     markers = [(i, j) for i, message in enumerate(body["messages"])
@@ -1049,4 +1108,8 @@ def collect():
         add(f"W05.live-mapping-{lane}-ro{int(readonly)}-plan{int(plan)}",
             "Exact logical description/schema to provider declaration mapping and unchanged preview",
             partial(_lane, lane=lane, run=partial(_declaration_mapping, readonly=readonly, plan=plan)))
+    for twice in (False, True):
+        add("W11.in-run-oversized-" + ("twice" if twice else "shortened"),
+            "In-run summary shortening preserves cache identity and counts one attempt",
+            partial(_in_run_oversized, twice=twice))
     return cases

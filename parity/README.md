@@ -8,9 +8,9 @@ This is the first of four areas, not overall-suite approval or an 85% claim.
 
 | Item | Value |
 |---|---|
-| Commit | `38da0d664abae80cbd1cc1793b10b11204bc8031` (#161 merge) |
-| SHA-256 | `925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a` |
-| Build | `go build -trimpath -buildvcs=false -o /tmp/reagent-parity-go-38da0d6 ./cmd/reagent` in an archive of that commit |
+| Commit | `14944a6bd8e35815effb74270218483804c29615` (#177 merge; includes #172–#177) |
+| SHA-256 | `82f8427be6e9919479307ccd2e9109c13a7d70cc080844a1e19334d2d52fa467` |
+| Build | `git archive 14944a6bd8e35815effb74270218483804c29615`, then `go build -trimpath -buildvcs=false -o /tmp/reagent-parity-go-14944a6b ./cmd/reagent` in the independently extracted archive |
 | Go | `go version go1.23.3 darwin/arm64` |
 | Python | `Python 3.11.5` |
 
@@ -49,7 +49,8 @@ process groups. Artifacts stay outside the checkout; real-home/cache/config
 aliases are rejected. This is ambient-configuration isolation, not an OS sandbox
 for a malicious executable. Raw stdout/stderr whitespace and opaque bytes are
 preserved; budget overflow fails instead of comparing a truncated prefix.
-Provider barriers order cancellation without sleep-based races.
+Provider barriers order cancellation; auth-revoke body cancellation has the narrow
+fixture-delivery limitation described below.
 
 After successful comparison, each passing case's artifacts are deleted immediately.
 Failures and `report.json` are always retained outside the checkout. Use
@@ -66,8 +67,8 @@ and verifies normalized locks before atomically publishing the external cache.
 A wrong binary, missing/extra case or changed digest fails closed with case IDs.
 Neither a candidate comparison nor an ordinary regeneration can refresh locks.
 Raw evidence, detailed ledgers and complete expected bytes are regenerable cache
-data, not Git content. The committed `parity/` tree is about **4.32 MB across 94 files**,
-below the roughly 5 MB budget. The former `parity/golden/darwin/` observation tree
+data, not Git content. The committed `parity/` tree keeps small locks and samples
+within the roughly 5 MB budget. The former `parity/golden/darwin/` observation tree
 is absent from every commit reachable on this branch; this is not a claim that
 unreachable objects or historical GitHub caches have been purged.
 
@@ -78,7 +79,7 @@ identity and suite seal in `manifest.json`, and `samples/`. The plain JSON lock
 interns repeated `(length, normalized SHA-256, comparison policy)` triples; every
 case still names every artifact, its descriptor, its aggregate normalized digest
 and its substitution-ledger contract digest. No raw observation hashes are locked.
-The complete normalized-tree digest remains `e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484`.
+The current complete normalized-tree digest is recorded in `manifest.json`.
 The suite seal covers executable oracle source, fixtures, inventory, policy, locks
 and samples. Human docs and generated proof summaries are excluded from that seal;
 the #141 approved-tree check below still protects **all** of `parity/`.
@@ -140,17 +141,37 @@ before running it. Committed normalized locks and the suite digest detect cache
 or local changes; changing a manifest to attest to itself is not authorization.
 A translation candidate cannot enter update mode through `make parity`.
 
-The planned Go stream-fix re-pin must add `W28.window-service_unavailable` and
-`W28.default-service_unavailable` using the actual pair
-`type: service_unavailable_error, code: service_unavailable`. The current pin
-intentionally remains unchanged here. The truncated-stream fix will also require
-reviewing `W28.no-retry-incomplete` (called `W28.incomplete` in the review) and the
-four `incomplete_response` “stream ended…” vectors at `cases/wire_decode.py:472–475`;
-keep the explicit `W28.no-retry-incomplete-event` case unchanged.
+The #172 stream rules are part of this pin: window mode retries
+`service_unavailable` (including the nested
+`type: service_unavailable_error, code: service_unavailable` event and bare code)
+and well-formed streams cut off before a terminal event. The latter trace the
+retry reason `stream ended early`; without a window they are resumable
+`provider_error`, allowing a following turn. Explicit `response.incomplete` and
+JSON bodies that are not streams remain `incomplete_response` and are not retried.
+The #173 compaction prompt states its byte budget; an oversized in-run summary
+gets one shortening request in the same attempt, with two oversized replies
+counted as one failure. #177 changes the model-visible `spawn` description only;
+requests declaring it under `--agents` therefore change bytes, not agent behavior
+or any pending agent leaf/reason.
+
+The eight added leaves are the window/default pairs for
+`W28.*-service_unavailable`, `W28.*-service_unavailable-bare-code` and
+`W28.*-stream-ended-early`, plus `W11.in-run-oversized-shortened` and
+`W11.in-run-oversized-twice`. The existing item-only cutoff case is renamed from
+`W28.no-retry-incomplete` to `W28.window-cutoff-items`: it retains its stream input
+and asserts a retry without accepting the tool. Its explicit SSE content type
+preserves the old header bytes. `W28.no-retry-incomplete-event` remains the distinct
+explicit-terminal no-retry case. The other #172 changes are eight W23 cutoff
+statuses; #173 changes the summary-prompt bytes in fifteen existing compaction
+cases. #176's descendant cleanup adds snapshot/liveness work around the TERM
+grace period, exposing exec elapsed-display rounding near 10.25 seconds. The
+approved typed slot changes only the numeric duration in `W44.timeout-ack` and
+`W51.timeout`; detailed attribution is in `repin-changes.json` and
+`acceptance.json`.
 
 ## Inventory and dependencies
 
-**2,752 leaves: 2,737 implemented, 15 pending, 89 slow.** The W01–W54 audit and
+**2,760 leaves: 2,745 implemented, 15 pending, 93 slow.** The W01–W54 audit and
 family counts are in `docs/reagent-rust-parity.md`; `manifest_test.py` checks
 counts, pending reasons and the exact metadata digest. Every leaf is listed in
 `inventory.json`, including its description, class, platform,
@@ -168,11 +189,8 @@ but not verified and has no golden lane.
 | `W53.propagation.child`, `W53.propagation.nested-child` | Explicit child and nested-child HTTP exchanges |
 | `W53.propagation.git-do` | Tools-area git_do client exchange |
 
-The stream overload/truncation findings above are deferred to the planned Go-fix
-re-pin, not silently added to this unchanged inventory. New smaller Go defects
-must be listed with source, reproduction, impact and affected IDs in the PR;
-those IDs stay pending, never blessed as expected behavior. Crashes, corruption,
-security exposure and whole-family blockers stop the area.
+A new Go defect is a re-pin stop condition: report its source, reproduction,
+impact and affected case IDs rather than blessing it as expected behavior.
 
 ## Oracle and review evidence
 
@@ -182,6 +200,12 @@ security exposure and whole-family blockers stop the area.
   substitution records artifact/path, kind, offsets, before/after bytes,
   independent SHA-256 and lengths. Native/provider IDs and opaque content are
   not generic substitution sites.
+- Exec-timeout stderr duration is normalized only for a complete activity line
+  owned by one matching exec call and invocation. The displayed duration, converted
+  to milliseconds, must lie in `[timeout_ms, timeout_ms + 2000]` and equal the same
+  traced `duration_ms` rounded to one decimal second. Only the number changes;
+  command, unit and effects warning stay exact. Unsupported or ambiguous ownership
+  fails closed.
 - Actual HTTP bytes independently validate request hashes. Cache prefixes use
   original ToolSpec schema bytes, not their compacted wire form; the fixture
   includes source anchors and hashes. Fresh previews reconstruct their first
@@ -211,6 +235,15 @@ plan, then compare the prefix held at cancellation. Go statuses, traces, outputs
 and effects are never hidden; rotating-token refresh, W30's completed follow-up,
 and its retry-wait response are excluded. The fixture
 now holds that barrier through teardown. See §3 for the exact ownership rules.
+
+Only `W54.auth-revoke.cancel-body` changes to a held HTTP 400 response body.
+Logout accepts 2xx headers without reading the body, so a server-side chunk flush
+cannot prove client receipt before SIGINT; a settle could instead let logout
+exit. HTTP 400 keeps a cancellable error-body read pending. This is an explicitly
+authorized fixture adjustment for a pre-existing race, not a Go PR change or
+defect. W54 counts and the live-process assertion are unchanged; the revocation
+warning and cleared credentials remain observable, without sleep or output
+normalization.
 
 Fresh `W27.connection-refused` evidence records the independently allocated
 closed-port input. Cache verification requires that input and rejects legacy
@@ -245,9 +278,29 @@ presented as a compared artifact.
 
 ## Verification evidence
 
-### PR #164 operational review follow-up
+Current proof status for `14944a6b` is recorded in `acceptance.json`; only checks
+explicitly attributed to that reference and its suite seal verify this re-pin.
+The current seal is linked from `manifest.json`, not the historical seals below.
+After the approved #176 exec-timeout display normalization, both new full
+candidate runs passed: **2,745 passed, 0 failed, 15 declared pending** each.
+Both prerequisite Python suites passed **215 tests**; `make check` and the
+empty-cache non-update golden reproduction also passed. The earlier `10.2s`
+versus `10.3s` failure remains recorded as a resolved finding, not a waived pass.
+The eight mutation reruns and three W54 stability passes are carried from the
+preceding seal: all 80 selected mutation case locks and all W54 locks are
+unchanged by this narrow follow-up. They were not rerun again.
+Coverage, extra parallel passes and the serial instrumented campaign remain
+reserved for the end of area 4.
 
-Final suite seal: `db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a`.
+The campaigns below are historical evidence for
+`38da0d664abae80cbd1cc1793b10b11204bc8031`, binary SHA-256
+`925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a`,
+not verification of `14944a6b`. Any carried mutation evidence must keep its
+recorded old-pin provenance rather than being reported as a fresh execution.
+
+### Historical PR #164 operational review follow-up
+
+Historical final suite seal: `db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a`.
 Normalized/ledger locks, all samples, policy, case inventory, normalizer and comparison
 masks are byte-identical to the storage rework. Reference commit and binary SHA
 are unchanged. The seal changes only for operational source/tests.
@@ -320,8 +373,7 @@ and superseded attempts are recorded in `acceptance.json`.
 
 The historical four-pass, 13-mutation and coverage campaigns below were **not
 rerun** for this operational follow-up. Their original seal/provenance is preserved.
-No live provider/model calls were made; Linux remains unverified. Overload and
-truncated-stream cases remain deferred to the planned Go-fix re-pin above.
+No live provider/model calls were made; Linux remained unverified in that campaign.
 
 ### Historical storage-rework verification
 
@@ -400,7 +452,7 @@ files reached, for example, 96.7% in `openai_stream.go`, 97.5% in
 ## Mutations
 
 ```sh
-python3 -m parity.mutate --bin /tmp/reagent-parity-go-38da0d6 \
+python3 -m parity.mutate --bin /tmp/reagent-parity-go-14944a6b \
   --reference-tree /path/to/this/repository --artifacts /tmp/new-mutation-evidence
 ```
 
@@ -410,14 +462,17 @@ runs so panic/status inspection and subsequent audits retain passing evidence to
 It shares only the reference cache setting with the caller; each executable case retains isolated HOME/XDG
 configuration and fake credentials. Build failures, crashes and unrelated failures do not
 count as catches. Thirteen wire-area mutations are applicable (3, 5, 9–18, 36);
-the manifest gives explicit later-area reasons for the other 23. **13/13 were
-caught by their intended assertions**, after 89 baseline case executions and
-13 temporary builds passed. Exact patch digests and every catcher are in
+the manifest gives explicit later-area reasons for the other 23. This re-pin
+requires dry-run application of all 13 patches and fresh executions of 5 and
+9–15; 3, 16–18 and 36 are carryover-eligible only if their patches apply unchanged.
+Completed checks are recorded in `acceptance.json`. Historically, **13/13 were caught by
+their intended assertions**, after 89 baseline case executions and 13 temporary
+builds passed. Exact patch digests and every catcher are in
 `mutation-results.json`. The storage-rework run (suite `24b68c62…`, not the review follow-up seal) exited 0 in **10,540.990s**;
 independent reclassification of the retained process/report evidence confirmed
 all baselines and catches, with the **same patch hashes and exact catcher IDs**.
 The reference cache and production sources were unchanged throughout.
-Mutation 14 initially survived because EOF did not
+In that old-pin campaign, mutation 14 initially survived because EOF did not
 exercise the incomplete-terminal branch; the added
-`W28.no-retry-incomplete-event` catches the unchanged mutation. Build failures,
+`W28.no-retry-incomplete-event` caught the unchanged mutation. Build failures,
 unrelated failures and raw definitions were not counted as catches.

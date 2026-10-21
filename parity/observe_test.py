@@ -491,7 +491,8 @@ class DeliveryIntegrationTests(unittest.TestCase):
         if trace:
             raw[trace_name] = trace
         if response.headers or response.body or response.completed:
-            raw['response-001.headers'] = b'HTTP/1.1 200 OK\r\n'+b''.join((key+': '+value+'\r\n').encode() for key,value in response.headers.items())+b'\r\n'
+            status = b'400 Bad Request' if response.status == 400 else b'200 OK'
+            raw['response-001.headers'] = b'HTTP/1.1 '+status+b'\r\n'+b''.join((key+': '+value+'\r\n').encode() for key,value in response.headers.items())+b'\r\n'
         replay = dict(root=str(ctx.root), artifacts=str(directory), server=ctx._server.url,
                       invocations=[dict(started=item['started'], ended=item['ended']) for item in invocations],
                       traces=[trace_name] if trace else [], requests=1)
@@ -514,7 +515,7 @@ class DeliveryIntegrationTests(unittest.TestCase):
                         ledger = json.loads((Path(temporary)/'substitutions.json').read_bytes())
                         self.assertEqual({name for name, policy in policies.items() if policy == 'S'}, semantic)
                         self.assertFalse(any('delivery-certificate' in name for name in output))
-                        self.assertEqual(output['http-1.response.status'], b'200')
+                        self.assertEqual(output['http-1.response.status'], b'400' if (kind, phase) == ('auth-revoke', 'body') else b'200')
                         transport = json.loads(output['http-1.response.transport'])
                         self.assertIs(transport['reset'], False)
                         self.assertIs(transport['close'], True)

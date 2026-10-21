@@ -194,6 +194,12 @@
       "replacement": "No executable output is waived; certificate only"
     },
     {
+      "kind": "exec-timeout-elapsed",
+      "owner": "Numeric seconds only in a complete runner exec timeout activity line in stderr",
+      "validation": "Raw command matches one non-chain, unsanitized and untruncated exec tool.started/tool.finished pair by Session/Run/call/step and unique invocation interval; timeout failure/effect/termination, argv/cwd and explicit timeout_ms agree; integer timeout_ms is at least 10000 and duration_ms below 60000; displayed seconds and traced duration lie in [timeout_ms, timeout_ms+2000], and display equals traced duration rounded to one decimal with binary64 ties-to-even",
+      "replacement": "0.0 (number only; s, command and effects-unknown reason remain exact)"
+    },
+    {
       "kind": "footer-elapsed",
       "owner": "Complete runner status footer in stderr",
       "validation": "Full footer grammar, elapsed within invocation interval",

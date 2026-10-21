@@ -17,7 +17,7 @@ SUBSTITUTION_KINDS = (
     "cache-header", "cache-prefix", "captured-transport-socket",
     "case-specific-closed-endpoint", "case-specific-closed-port-invocation-env",
     "case-specific-closed-port-legacy-trace", "duration-ms", "effect-record-workspace",
-    "embedded-request", "embedded-response", "footer-elapsed",
+    "embedded-request", "embedded-response", "exec-timeout-elapsed", "footer-elapsed",
     "independently-validated-cache-key", "independently-validated-derived-value",
     "model-switch-latency-ms", "owned-run-reason-authority", "registered-text-span",
     "registered-fixture-cancel-delivery-projection", "retry-delay-policy",

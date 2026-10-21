@@ -581,7 +581,10 @@ def _cancel(ctx, kind, phase="header"):
                         "token_type": "Bearer", "expires_in": 3600}
         if phase == "body":
             heartbeat = b": heartbeat\n\n" if kind in ("proxy", "chatgpt") else b" "
-            server.expect(path, Response(chunks=(heartbeat, _json(body) if not isinstance(body, bytes) else body),
+            # Revoke succeeds on 2xx headers without reading the body. A flushed
+            # chunk cannot prove client receipt; non-2xx holds a cancellable read.
+            server.expect(path, Response(status=400 if kind == "auth-revoke" else 200,
+                                         chunks=(heartbeat, _json(body) if not isinstance(body, bytes) else body),
                                          chunk_barriers=(None, "cancel-request")))
         else:
             server.expect(path, Response(body=body, barrier="cancel-request"))

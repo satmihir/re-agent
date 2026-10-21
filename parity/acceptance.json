@@ -1,167 +1,146 @@
 {
   "status": "area_verified",
   "complete_suite": false,
-  "scope": "Area 1 runner and W01-W54 wire, Darwin/arm64",
-  "reference_commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
-  "reference_binary_sha256": "925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a",
+  "scope": "Area 1 runner and W01-W54 wire, Darwin/arm64; 15 declared later-area leaves remain pending, not #139 overall approval",
+  "reference_commit": "14944a6bd8e35815effb74270218483804c29615",
+  "reference_binary_sha256": "82f8427be6e9919479307ccd2e9109c13a7d70cc080844a1e19334d2d52fa467",
   "go_version": "go version go1.23.3 darwin/arm64",
   "python_version": "Python 3.11.5",
-  "suite_digest": "db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a",
-  "proof_provenance": "The storage, integrity, repeatability, mutations, coverage, negative_controls and gates sections describe the historical storage-rework seal recorded in each section. Review follow-up verification is recorded separately; historical campaigns are not claimed rerun.",
-  "counts": {"total": 2752, "implemented": 2737, "pending": 15, "slow": 89},
-  "review_followup": {
-    "review": "https://github.com/satmihir/re-agent/pull/164#issuecomment-6255927077",
+  "suite_digest": "b0f625ebdc4fcc9b7390eb379280a7dff960c417ec5ab8262dd93a9f015163da",
+  "normalized_tree_sha256": "2d504c681d7272a83ce8d74172593ab47ae89a3adceac256a14f56d4cc69cf14",
+  "leaf_metadata_sha256": "b59f81972628006683e2c7f8dcf3e9f5ff607cb06b23b295a27fa35ac885d273",
+  "old_identity": {
+    "commit": "38da0d664abae80cbd1cc1793b10b11204bc8031",
+    "binary_sha256": "925104149879c1dbd33ec36fa2f8f8544b140eca5bf54515398a7971bee40a1a",
     "suite_digest": "db28091a0ed657f231201462e79de297118be1e7cb4ca8464f24c127a974f55a",
-    "oracle_inputs_unchanged": "Normalized/ledger locks, samples, case inventory, policy, normalizer, comparison masks, reference commit and binary SHA are unchanged. Only the operational source/test suite seal changed.",
-    "temp_root_width": "Case-root allocation is unchanged. cache.json records the resolved case-parent width from regeneration. A candidate with a different or unknown width exits 2 before replay, regeneration or worker startup and asks to regenerate the cache with make parity-golden. A wholly absent cache still regenerates automatically.",
-    "artifact_retention": "Delete passing artifacts only after comparison. Keep failures and report.json; --keep-artifacts or make parity KEEP_ARTIFACTS=1 retains passing evidence. Print retained bytes. Probe/reference capture retain evidence; mutation orchestration explicitly opts in. External GOCOVERDIR is preserved.",
-    "python_prerequisite": "Document exact Python 3.11.5 as a hard #141 host prerequisite; no toolchain-check relaxation.",
-    "gates": {
-      "targeted_python": "101 runner/cache/mutation tests passed in 13.274s, including real -m CLI width-mismatch/unknown-width exit-2 checks",
-      "go_build_vet_test": "passed; Go tests cached",
-      "make_check": "passed; Go tests cached",
-      "go_test_race": "passed; cached",
-      "bench_python": "64 tests passed in 16.693s",
-      "tty_check": "all 26 scenarios passed in 64.907s; /tmp/parity-review-164-width-identity/tty.out"
-    },
-    "full_cold_cache": {
-      "command": "XDG_CACHE_HOME=/tmp/parity-review-164-final/cache make parity BIN=/tmp/reagent-parity-go-38da0d6 JOBS=4",
-      "exit_code": 0,
-      "seconds": 1537.370,
-      "parity_python": "202 tests passed in 14.665s",
-      "counts": {"total": 2752, "selected": 2752, "omitted": 0, "passed": 2737, "observed": 0, "failed": 0, "pending": 15, "unavailable": 0, "not_executed": 0},
-      "gate_success": true,
-      "complete_suite": false,
-      "all_reference_locks_and_samples_verified": true,
-      "cache_temp_root_width": 86,
-      "retained_entries": ["report.json"],
-      "retained_bytes": 2928570,
-      "proof": "/tmp/parity-review-164-final/proof.json"
-    },
-    "width_mismatch": {
-      "exit_code": 2,
-      "seconds": 0.541,
-      "cached_width": 86,
-      "current_width": 207,
-      "diagnostic": "parity: reference cache temp-root width differs or is unknown: cached=86, current=207; regenerate the cache with make parity-golden (check TMPDIR)",
-      "artifacts_empty": true,
-      "cache_identity_unchanged": true
-    },
-    "keep_artifacts": {"case": "W09.claude-haiku-4-5-ascii-at", "exit_code": 0, "seconds": 285.536, "passed": 1, "retained_bytes": 154805821, "raw_normalized_and_replay_retained": true},
-    "failure_retention": {"case": "W01.case-sensitive-prefix", "binary": "/usr/bin/false", "exit_code": 1, "seconds": 255.550, "failed": 1, "retained_bytes": 814116, "assertion_and_raw_process_status_retained": true},
-    "proof_audit_passed": true,
-    "not_rerun": ["historical three-parallel/one-serial campaign", "13-mutation campaign", "statement coverage campaign"],
-    "superseded_attempts": [
-      "The fixed-width allocation approach was superseded at the user's request. Its full cold-cache run passed in 1033.342s under seal 2b4c330ffe5d7fc2a10c9f082aa69e69f42e67addb57ef03929ae5bd57d86b61, but is not evidence for the final approach. Its first post-run audit selected a unit-test summary path; corrected without rerunning cases. /tmp/parity-review-164-ops/full-proof.json",
-      "An interrupted short-TMPDIR reproduction produced no report; later retention checks did not execute. Inspected its empty artifact directory, logs and process state: no surviving parity descendants. Not counted. /tmp/parity-review-164-ops/short-targets.out",
-      "The first width-identity full comparison passed in 1067.913s under seal 34b255a11eb17b53fed16e06e5b74d29b820404c3ce826af7abf94d4cf4b14fb. Its subsequent real CLI mismatch check exposed duplicate __main__/parity.run HarnessError classes: traceback and exit 1, not required exit 2. Fixed by delegating the module entry point to importable run.main, added real subprocess regression coverage, and sealed again. Its retention checks did not execute. /tmp/parity-review-164-width-identity/proof.json"
-    ]
+    "normalized_tree_sha256": "e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484"
   },
-  "storage": {
-    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
-    "committed": "Inventory, normalized artifact hashes/lengths, ledger contracts, policy, reference identity and 56 complete normalized sample cases across 53 implemented families",
-    "external": "Pinned reference binary, complete raw evidence, full substitution rows, normalized bytes and replay metadata",
-    "raw_observation_digests_committed": false,
-    "committed_parity_size": "About 4.30 MB across 94 files; complete observation tree removed from every branch-reachable commit",
-    "clean_cache_regeneration_seconds": 580.261,
-    "cache": "/tmp/parity-rework-approved-cache/reagent-parity/38da0d664abae80cbd1cc1793b10b11204bc8031/darwin"
-  },
-  "integrity": {
-    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
-    "passed": true,
-    "report": "/tmp/parity-rework-approved-golden.out",
-    "replayed_cases": 2737,
-    "missing_extra_normalized_ledger_mismatches": [0, 0, 0, 0],
-    "normalized_tree_sha256": "e2091a7336d3dc1f109cd449de836bcb35141c5f3126f6611bc0bccca7c3c484",
-    "normalized_artifacts": 24595,
-    "normalized_logical_bytes": 1045441036,
-    "W27_independent_endpoint_input_verified": true,
-    "all_samples_verified": true
-  },
-  "repeatability": {
-    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
-    "complete": true,
-    "parallel_passes": 3,
-    "parallel_seconds": [682.351, 665.680, 671.335],
-    "serial_passes": 1,
-    "serial_seconds": 2446.429027,
-    "each_pass": {"passed": 2737, "failed": 0, "pending": 15, "slow_passed": 89, "omitted": 0, "unavailable": 0, "not_executed": 0},
-    "actual_captures_independently_replayed_per_pass": 2737,
-    "all_normalized_artifact_and_ledger_contract_records_match_locks": true,
-    "all_2752_entry_case_ledgers_equal": true,
-    "ledger_contracts_sha256": "7abb73560102985c5454df0c5fd32558f4fbf26c756a3f8bda131baa0137bc29",
-    "ledger_aggregate_encoding": "UTF-8 sorted case_id:ledger_sha256 newline",
-    "parallel_report": "/tmp/parity-rework-approved-parallel-summary.json",
-    "serial_report": "/tmp/parity-rework-approved-serial-summary.json",
-    "independent_cross_pass_check": "/tmp/parity-rework-approved-parent-proof.json"
-  },
-  "mutations": {
-    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
-    "complete": true,
-    "required_applicable": 13,
-    "caught": 13,
-    "baseline_case_executions": 89,
-    "temporary_builds_passed": 13,
-    "later_pending": 23,
-    "seconds": 10540.990,
-    "exit_code": 0,
-    "same_patch_hashes_and_exact_catcher_ids": true,
-    "independently_reclassified_from_retained_evidence": true,
-    "cache_and_production_sources_unchanged": true,
-    "report": "/tmp/parity-rework-approved-mutations/report.json",
-    "independent_check": "/tmp/parity-rework-approved-mutations-parent-proof.json",
-    "details": "mutation-results.json"
-  },
-  "coverage": {
-    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
-    "complete": true,
-    "fresh_instrumented_invocations": 2910,
-    "internal_reagent_covered_statements": 3841,
-    "internal_reagent_statements": 10437,
-    "internal_reagent_percent": 36.8,
-    "same_covered_statement_set_as_original": true,
-    "cmd_reagent_statements": "1/1",
-    "report": "/tmp/parity-rework-approved-coverage-summary.json",
-    "profile": "/tmp/parity-rework-approved-coverage.profile"
-  },
-  "negative_controls": {
-    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
-    "passed": 9,
-    "report": "/tmp/parity-rework-approved-negative-controls.json",
-    "controls": ["tampered normalized digest", "missing cached case", "extra cached case", "tampered committed digest", "missing committed case", "extra committed case", "wrong binary SHA", "wrong rebuilt SHA", "wrong rebuilt SHA in update mode"],
-    "physical_missing_extra_controls": "Also verified against a hard-linked clone of the fresh complete cache; live cache untouched.",
-    "refresh_deadline_control": "An additional temporary Go 30s-to-120s refresh-deadline mutation fails W54.auth-refresh.overall's elapsed assertion at 38.904s, not a build failure, panic or runner timeout; /tmp/parity-refresh-deadline-negative/report.json"
+  "proof_provenance": "Build, Go gate, approved normalization tests, supported golden update, empty-cache reproduction and both full candidate passes are fresh at the current seal. Eight reviewed current-pin mutation catches and three selected W54 campaigns are carried from the preceding seal because all selected logical locks are unchanged; they were not rerun for this follow-up. Old-pin coverage, serial instrumented runs, extra parallel campaigns and five old-pin mutation carryovers remain historical, not claimed rerun here.",
+  "counts": {"total": 2760, "implemented": 2745, "pending": 15, "slow": 93},
+  "independent_build": {
+    "source": "git archive 14944a6bd8e35815effb74270218483804c29615 go.mod go.sum cmd internal, independently extracted",
+    "archive_sha256": "ae09e37e6bd216b30fd5923f26f1ace3693470b0e4d5e2c19ced8dc69b0b3856",
+    "reference_recipe": "go build -trimpath -buildvcs=false -o reference ./cmd/reagent",
+    "reference_bytes": 11336914,
+    "candidate_recipe": "go build -o candidate ./cmd/reagent",
+    "candidate_sha256": "53381874e7fcf56deb76b89489b6ed6f18aef672acf68c0286e1a8da2091d1c3",
+    "candidate_bytes": 11369986,
+    "build_seconds": 2.791,
+    "offline": true
   },
   "gates": {
-    "suite_digest": "24b68c62b4a9f0ee8af3b24077e28b7129e9d677f1b6ae93135a0bc856513fc3",
-    "go_build_vet_test": "passed; final Go tests cached",
-    "make_check": "passed; final Go tests cached",
-    "go_test_race": "passed; initial 87.753s, final cached",
-    "bench_python": "passed: 64 tests in 22.094s",
-    "tty_check": "passed: all 26 scenarios in 66.189s without retry; /tmp/parity-rework-final-tty-gate.out",
-    "parity_python": "passed: 199 tests in 17.412s",
-    "make_parity": "passed: 2737 passed, 0 failed, 15 pending, all 89 slow passed"
+    "go_build": {"command": "go build ./...", "exit_code": 0},
+    "make_check": {"command": "make check", "exit_code": 0, "wall_seconds": 93.054, "output": "go vet ./...\ngo test ./...\n?    github.com/satmihir/re-agent/cmd/reagent [no test files]\nok   github.com/satmihir/re-agent/internal/reagent 68.602s"},
+    "python_unittest": {"command": "python3 -m unittest discover -s parity -p '*test.py' (each make parity prerequisite)", "exit_codes": [0, 0], "tests_per_run": 215, "seconds": [17.125, 17.051], "output": ["Ran 215 tests in 17.125s; OK", "Ran 215 tests in 17.051s; OK"], "update_mismatch_refusal_tests": "Wrong toolchain and rebuilt-binary hash in update mode still fail closed; verifier was not relaxed."},
+    "golden_update": {"command": "make parity-golden UPDATE=1 JOBS=4", "empty_dedicated_cache": true, "exit_code": 0, "wall_seconds": 841.692, "reported_seconds": 841.551, "runnable": 2745, "temp_root_width": 86},
+    "golden_reproduce": {"command": "make parity-golden JOBS=4", "empty_dedicated_cache": true, "attempts_at_final_seal": 1, "exit_code": 0, "wall_seconds": 586.636, "reported_seconds": 586.509, "runnable": 2745},
+    "full_candidate": {
+      "command": "make parity BIN=<plain archived-source build> JOBS=4",
+      "required_clean_runs": 2,
+      "actual_clean_runs": 2,
+      "requirement_met": true,
+      "runs": [
+        {"exit_code": 0, "seconds": 577.801, "total": 2760, "selected": 2760, "passed": 2745, "failed": 0, "pending": 15, "unavailable": 0, "omitted": 0, "not_executed": 0, "gate_success": true, "inventory_verified": true, "python_tests": 215, "python_test_seconds": 17.125, "retained_report_bytes_before_cleanup": 2944173},
+        {"exit_code": 0, "seconds": 616.294, "total": 2760, "selected": 2760, "passed": 2745, "failed": 0, "pending": 15, "unavailable": 0, "omitted": 0, "not_executed": 0, "gate_success": true, "inventory_verified": true, "python_tests": 215, "python_test_seconds": 17.051, "retained_report_bytes_before_cleanup": 2944173}
+      ],
+      "pending_ids_and_reasons_exactly_match_manifest": true,
+      "summary": "artifacts/repin-14944a6b/summary.json",
+      "extra_full_passes_run": 0
+    },
+    "w54_stability": {
+      "command": "python3 -m parity.run --bin <plain archived-source build> --case W54 --jobs 6",
+      "proof_suite_digest": "48872e1b6b4f693798b92f34804eee01eb1829c5c8b1963045f51916d7dfb54b",
+      "rerun_for_normalization": false,
+      "basis": "All W54 complete logical locks are unchanged by the two-case normalization.",
+      "runs": [
+        {"exit_code": 0, "passed": 213, "failed": 0, "pending": 0, "seconds": 123.592},
+        {"exit_code": 0, "passed": 213, "failed": 0, "pending": 0, "seconds": 136.222},
+        {"exit_code": 0, "passed": 213, "failed": 0, "pending": 0, "seconds": 121.976}
+      ]
+    }
   },
-  "rework_failures_and_disposition": [
-    "First clean capture failed normalized locks in 70 cases because the cache runner changed temporary workspace width. Restored the candidate runner's layout; no expected digest or normalizer changed.",
-    "Second clean capture differed only in W54.auth-refresh.overall: the fake writer raced the 30-second deadline and recorded 31 rather than 30 chunks. A shutdown-only barrier now holds the boundary chunk; exact comparison and approved bytes remain unchanged.",
-    "The successful intermediate clean cache was superseded after fixing mutation orchestration to share only the reference cache setting. Early partial comparison/coverage runs were cancelled and inspected, not counted.",
-    "One final parallel wrapper reached its 1200-second outer budget under concurrent proof load; no report or case assertion failure was present. Its processes were inspected/terminated. All three separately named full proofs with a 3600-second budget passed; the incomplete run is not counted.",
-    "A completed pre-final parallel pass had 2736 passed, 1 failed, 15 pending: W41.progress-deadline recorded 12 rather than 13 fake-input chunks under load. Its progress is now delivered away from the 2-second boundary and the next chunk is held until shutdown. Four concurrent targeted replays match the unchanged approved digests; all earlier partial/cohort proofs are superseded.",
-    "Intermediate unit tests exposed old committed-tree dependencies and cache integration errors; fixed with synthetic boundary fixtures and cache publication tests.",
-    "The final serial orchestration wrapper exited 1 because its expected counts dictionary omitted observed:0. The actual parity subprocess exited 0; report validation and independent raw replay/lock audit passed without rerunning any cases."
+  "blockers": [],
+  "resolved_findings": [
+    {
+      "case": "W44.timeout-ack",
+      "artifact": "invocation-1.stderr",
+      "prior_suite_digest": "48872e1b6b4f693798b92f34804eee01eb1829c5c8b1963045f51916d7dfb54b",
+      "prior_full_runs": [{"exit_code": 2, "passed": 2744, "failed": 1, "pending": 15, "seconds": 608.025}, {"exit_code": 0, "passed": 2745, "failed": 0, "pending": 15, "seconds": 592.169}],
+      "first_differing_byte_zero_based": 332,
+      "expected": "timed out after 10.2s; effects unknown",
+      "actual": "timed out after 10.3s; effects unknown",
+      "other_52_artifacts_and_ledger_contract_equal": true,
+      "classification_correction": "Caused by #176 descendant snapshot/liveness ps work around the existing 200ms TERM grace, moving elapsed time near the 10.25s rounding boundary. The earlier pre-existing classification was incorrect. This is not evidence of a new Go defect; the failed run remains historical and is not counted as a pass.",
+      "approval": "https://github.com/satmihir/re-agent/pull/178#issuecomment-6295011192",
+      "resolution": "Typed exec-timeout-elapsed slot validates a unique same-call/invocation witness, argv/cwd, timeout outcome and configured/raw/display duration bounds; displayed seconds must match that raw duration rounded to one decimal. Only numeric bytes become 0.0. Command, unit, reason and all surrounding bytes remain exact. Registered policy plus negative bounds/trace/ownership tests. Supported regeneration changes only W44.timeout-ack and W51.timeout stderr and one typed ledger site each; both attributed to #176. Two subsequent full candidate runs pass."
+    }
   ],
-  "known_limitations": [
-    "15 later-area dependencies remain pending; see inventory.json.",
-    "W33 checks checkpoint byte planes and checksum, not full checkpoint canonical-order/format parity.",
-    "Do not regenerate/re-pin a shared cache lane while comparisons read it; concurrent comparisons against an unchanged cache are supported.",
-    "Scripted input framing remains byte-exact. Cache identity now records resolved temp-root width; a different or unknown width stops candidate execution with exit 2 and an explicit regeneration instruction. Regeneration under an incompatible layout can still fail the unchanged W09 locks.",
-    "Exact Python 3.11.5, including its patch version, is a hard host prerequisite for #141 cache regeneration."
+  "case_accounting": {
+    "full_per_case_table": "repin-changes.json",
+    "shared_original_runnable": 2737,
+    "changed_existing": 199,
+    "unchanged_existing": 2538,
+    "true_new": 8,
+    "renamed_existing": 1,
+    "all_changed_normalized": true,
+    "changed_ledger_cases": ["W28.no-retry-incomplete -> W28.window-cutoff-items", "W44.timeout-ack", "W51.timeout"],
+    "by_attribution": {"PR_172": 9, "PR_173": 15, "PR_176": 2, "PR_177": 172, "authorized_W54_fixture": 1},
+    "PR_172": "Eight W23 missing-terminal statuses/resumability and W28 cutoff retry; explicit response.incomplete unchanged.",
+    "PR_173": "Fifteen summary-request budget-prompt cases, including W16/W39/W40; inverse paragraph removal plus derived length/hash restoration reconstructs every old artifact descriptor.",
+    "PR_176": "W44.timeout-ack and W51.timeout: approved numeric-only trace-validated exec-timeout elapsed display slot, one new typed ledger site per case. Other 87 artifact descriptors unchanged; inverse numeric replacement and site removal recover both original locks.",
+    "PR_177": "Exactly 172 --agents cases (W05:164, W07:6, W10:2). Inverse replacement of only spawn description and derived length/hash restoration matches all 688 intermediate descriptors; all ledger contracts unchanged. Ordinary bytes otherwise identical.",
+    "prior_inverse_audits": "All prior 197 changed-case and eight new-case locks remain identical; reviewed inverse audits are carried from preceding seal, not rerun against removed intermediate79 evidence.",
+    "new_leaves": ["W28.window-service_unavailable", "W28.default-service_unavailable", "W28.window-service_unavailable-bare-code", "W28.default-service_unavailable-bare-code", "W28.window-stream-ended-early", "W28.default-stream-ended-early", "W11.in-run-oversized-shortened", "W11.in-run-oversized-twice"],
+    "duplicate_behavior_disclosure": "The renamed W28.window-cutoff-items and new W28.window-stream-ended-early intentionally invoke the same item-only cutoff scenario; eight new leaves are not eight independent behaviors. Optional review coverage additions are outside this follow-up.",
+    "unchanged": ["W28.no-retry-incomplete-event", "all 32 W27 gzip cases", "all 15 pending IDs and exact reasons", "all 23 pending mutation reasons"],
+    "fixture_changes": [
+      "W28 helper explicitly serves both SSE responses as text/event-stream, restoring original first-response header bytes; rename removes the incorrect no-retry claim.",
+      "Only W54.auth-revoke.cancel-body returns 400 with body tail held, preserving live-process SIGINT cancellation and credential clearing. Revoke2xx returns at headers; settling could allow early success. Strict observer/certificate preserves400, not a400-to200 mask. Exactly normalized response.status and stdout change from original; ledger unchanged."
+    ],
+    "independent_final_cache_audit": {"cases": 2745, "artifact_descriptors": 24767, "all_rehash_to_locks": true}
+  },
+  "mutations": {
+    "proof_suite_digest": "48872e1b6b4f693798b92f34804eee01eb1829c5c8b1963045f51916d7dfb54b",
+    "rerun_for_normalization": false,
+    "carry_forward_basis": "All 80 selected baseline complete logical locks, patches, selectors and intended assertions are unchanged; no fresh current-seal mutation execution claim.",
+    "dry_run_applied": [3, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 36],
+    "context_refreshed_only": [9, 14],
+    "mutation_14_target": "explicit response.incomplete, not EOF",
+    "fresh_at_current_pin_before_normalization": [5, 9, 10, 11, 12, 13, 14, 15],
+    "status": "8/8 caught by unchanged intended assertions and exact old catcher IDs",
+    "caught": 8,
+    "verified_baseline_case_executions": 80,
+    "temporary_builds_passed": 8,
+    "seconds_sum_of_completed_mutations": 6076.137338,
+    "cache_files_verified_unchanged": 56390,
+    "interruption_recovery": "Original campaign was human-interrupted after seven completed results; aggregate exit status unknown. One additional mutation15 baseline lacked a process record and is excluded from80 verified executions. After the orphan exited, only mutation15 was explicitly recovered (exit0,876.877s); seven completed mutations were independently reclassified, not rerun.",
+    "additional_interrupted_baseline_case_executions": 1,
+    "old_pin_carryover": [3, 16, 17, 18, 36],
+    "old_pin_carryover_basis": "All five patches apply unchanged and target files are byte-identical since38da0d6; old-pin catchers/provenance retained in mutation-results.json.",
+    "results": "mutation-results.json"
+  },
+  "prior_attempts": [
+    {"pin": "79effe10", "result": "Stopped on incidental W28 response-header drift and W54 header/body cancellation race; user authorized fixture fixes and retarget14944a6b. Previous temporary tree removed:312147054 logical bytes/671612928 allocated file bytes."},
+    {"pin": "14944a6b", "phase": "pre-regeneration unittest", "result": "204 tests:3 failures from stale lock identity and1 runner timeout PID-file setup race. Subsequent206-test suite passed; latest215-test suite passes twice. No runner timing fix or waiver."},
+    {"pin": "14944a6b", "phase": "first update", "exit_code": 2, "seconds": 477.889, "result": "W54 observer still required200 after fixture changed400; updated exact leaf contract and tests before regeneration. No locks published by failed capture. Error-evidence copytree also rejected named pipes, obscuring original failure; recovered underlying failure.txt, did not modify fallback tooling."}
   ],
-  "go_defects_found_at_current_pin": [
-    "Review #164 found the real stream overload pair type=service_unavailable_error, code=service_unavailable absent from W28. internal/reagent/openai_stream.go:190-205 reads code and does not classify service_unavailable as transient. Add W28.window-service_unavailable and W28.default-service_unavailable only with the planned Go-fix re-pin; no inventory or Go change here.",
-    "The planned truncated-stream fix must review W28.no-retry-incomplete (review shorthand W28.incomplete) and the four incomplete_response vectors at parity/cases/wire_decode.py:472-475. Preserve W28.no-retry-incomplete-event."
-  ],
-  "not_run": ["Linux execution and platform locks", "live provider APIs"],
-  "merged": false
+  "source_review": "Independent fresh-context reviews found no blocking source-diff findings, including same-call ownership, bounds, Go-compatible rounding, numeric-only substitution and policy registration for the approved follow-up.",
+  "production_go_changed": false,
+  "live_api_calls": 0,
+  "not_run": ["coverage", "extra full parallel passes", "serial instrumented campaign", "Linux", "live provider/model APIs", "mutation or selected W54 campaigns repeated for normalization"],
+  "historical_campaigns": "Old-pin coverage/serial/extra passes are not current-pin approval. Areas2-4 and overall#139 approval remain outstanding.",
+  "cleanup": {
+    "status": "complete",
+    "dedicated_root": "/tmp/reagent-repin-timeout-a_idh80h",
+    "dedicated_root_absent": true,
+    "temporary_candidate_reports_absent": ["/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-artifacts-m0kwjimi", "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-artifacts-1lcjuogu"],
+    "normalization_follow_up": {"files": 113067, "logical_bytes": 316329668, "allocated_file_bytes": 675786752},
+    "preceding_retarget": {"files": 128757, "logical_bytes": 1230756580, "allocated_file_bytes": 1642242048},
+    "prior_79effe10_attempt": {"files": 113113, "logical_bytes": 312147054, "allocated_file_bytes": 671612928},
+    "cumulative_all_attempts": {"files": 354937, "logical_bytes": 1859233302, "allocated_file_bytes": 2989641728},
+    "owned_temp_paths_retained": 0,
+    "retained_artifacts": "Only small JSON proof summaries: acceptance.json, mutation-results.json, repin-changes.json and artifacts/repin-14944a6b/summary.json. All task-owned reference/candidate binaries, archived source, raw caches/logs and mutation evidence trees removed. Historical temporary paths in proof records are not retained files.",
+    "processes": "No live parity runner/mutation processes remained before removal. All eight temporary mutant build directories were removed earlier; preexisting unrelated reagent-mutant-miw7g8oe preserved. Probe/test TemporaryDirectory scopes self-cleaned."
+  },
+  "pr": {"planned_state": "ready", "merge": false, "reason": "Approved narrow normalization, supported regeneration and two clean full candidate passes complete; ready after proof publication and push."}
 }

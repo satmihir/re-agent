@@ -27,7 +27,8 @@ def fixture(kind="openai", phase="header", delivered="full", completed=True):
     planned = b"".join(planned_chunks)
     headers = {"Content-Type": "application/json", "Content-Length": str(len(planned)), "Connection": "close"}
     chunks = [] if delivered in ("none", "headers") else [heartbeat] if delivered == "heartbeat" else planned_chunks
-    response = SimpleNamespace(status=200, headers={} if delivered == "none" else headers,
+    status = 400 if (kind, phase) == ("auth-revoke", "body") else 200
+    response = SimpleNamespace(status=status, headers={} if delivered == "none" else headers,
                                body=b"".join(chunks), chunks=chunks, reset=False, close=True, completed=completed)
     method = "GET" if kind in ("auth-discovery", "auth-models") else "POST"
     request = {"method": method, "path": paths[kind], "authority": "127.0.0.1:45678", "body": b' {"fixture":"request"} '}
@@ -182,11 +183,40 @@ class DeliveryTests(unittest.TestCase):
                     self.assertEqual(canonical, expected)
                     heartbeat = b": heartbeat\n\n" if kind in ("proxy", "chatgpt") else b" "
                     self.assertEqual(projection["body"], heartbeat)
+                    status = 400 if kind == "auth-revoke" else 200
+                    self.assertEqual(projection["status"], status)
+                    self.assertEqual(projection["proof"]["observed"]["status"], status)
+                    self.assertEqual(projection["proof"]["canonical"]["status"], status)
                     self.assertEqual(projection["transport"]["chunk_lengths"], [len(heartbeat)])
                     self.assertFalse(projection["transport"]["completed"])
                     self.assertEqual(projection["headers"]["content-length"], inputs[2].headers["Content-Length"])
                     self.assertGreater(int(projection["headers"]["content-length"]), len(heartbeat))
                     self.assertEqual(inputs, original)
+
+    def test_only_revoke_body_requires_exactly_status_400(self):
+        for kind in KINDS:
+            for phase in ("header", "body"):
+                expected = 400 if (kind, phase) == ("auth-revoke", "body") else 200
+                for status in (200, 201, 400, 401, 500, True, "400"):
+                    if type(status) is int and status == expected:
+                        continue
+                    with self.subTest(kind=kind, phase=phase, status=status):
+                        inputs = fixture(kind, phase, "heartbeat" if phase == "body" else "none", False)
+                        inputs[2].status = status
+                        with self.assertRaisesRegex(AssertionError, "response status"):
+                            project_delivery(*inputs)
+
+    def test_revoke_body_status_400_still_rejects_corrupt_transport_and_chunks(self):
+        mutations = ({"reset": True}, {"close": False}, {"completed": True},
+                     {"body": b"unrecorded"}, {"body": b"!", "chunks": [b"!"]},
+                     {"body": b' {"', "chunks": [b" ", b'{"']})
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                inputs = fixture("auth-revoke", "body", "heartbeat", False)
+                for key, value in mutation.items():
+                    setattr(inputs[2], key, value)
+                with self.assertRaises(AssertionError):
+                    project_delivery(*inputs)
 
     def test_unregistered_cases_and_refresh_are_not_projected_or_inspected(self):
         for case_id in ("W54.auth-refresh.cancel", "W54.auth-refresh.cancel-body", "W54.openai.header",

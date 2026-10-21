@@ -469,10 +469,10 @@ def _stream_cases():
         ("gap", sse(done(1, call()), event(body=reply([]))), "protocol_error", "stream is missing output items before index 1"),
         ("missing-index", sse(event("response.output_item.done", item=call()), event(body=reply([]))), "protocol_error", "output_item.done carries no indexed item"),
         ("missing-item", sse(event("response.output_item.done", output_index=0), event(body=reply([]))), "protocol_error", "output_item.done carries no indexed item"),
-        ("empty", b"", "incomplete_response", "stream ended before the response completed"),
-        ("done-only", b"data: [DONE]\n\n", "incomplete_response", "stream ended before the response completed"),
-        ("deltas-only", sse(event("response.output_text.delta", delta="not final")), "incomplete_response", "stream ended before the response completed"),
-        ("items-only", sse(done(0, call())), "incomplete_response", "stream ended before the response completed"),
+        ("empty", b"", "provider_error", "stream ended before the response completed"),
+        ("done-only", b"data: [DONE]\n\n", "provider_error", "stream ended before the response completed"),
+        ("deltas-only", sse(event("response.output_text.delta", delta="not final")), "provider_error", "stream ended before the response completed"),
+        ("items-only", sse(done(0, call())), "provider_error", "stream ended before the response completed"),
         ("final-scalar", sse(event(body=17)), "protocol_error", "final stream event carries no response object"),
         ("final-null", sse({"type": "response.completed", "response": None}), "protocol_error", "final stream event carries no response object"),
         ("final-empty", sse(event(body=reply([]))), "protocol_error", "response contains no visible text, refusal, or tool call")):
@@ -505,7 +505,7 @@ def _stream_boundaries():
     complete = sse(event(body=reply()))
     incomplete = "stream ended before the response completed"
     for suffix, body, status, reason in (
-        ("event-null", b"data: null\n\n", "incomplete_response", incomplete),
+        ("event-null", b"data: null\n\n", "provider_error", incomplete),
         ("empty-data", b"data:\n\n" + complete, "protocol_error", "stream event is not valid JSON"),
         ("event-array", b"data: []\n\n", "protocol_error", "stream event is not valid JSON"),
         ("event-type-number", b'data: {"type":17}\n\n', "protocol_error", "stream event is not valid JSON"),
@@ -516,8 +516,8 @@ def _stream_boundaries():
         ("item-scalar", sse(done(0, 17), event(body=reply([]))), "protocol_error", "output item is not valid JSON"),
         ("final-array", sse(event(body=[])), "protocol_error", "final stream event carries no response object"),
         ("final-bool", sse(event(body=True)), "protocol_error", "final stream event carries no response object"),
-        ("final-absent", sse({"type": "response.completed"}), "incomplete_response", incomplete),
-        ("event-field-is-not-type", b"event: response.completed\ndata: {}\n\n", "incomplete_response", incomplete),
+        ("final-absent", sse({"type": "response.completed"}), "provider_error", incomplete),
+        ("event-field-is-not-type", b"event: response.completed\ndata: {}\n\n", "provider_error", incomplete),
         ("bad-item-even-final", sse({"type": "response.output_item.done"}, event(body=reply())), "protocol_error", "output_item.done carries no indexed item")):
         cases.append(_leaf("W23", suffix, "Strict event/index/final shape with no dispatch", body, lane="proxy", status=status, reason=reason))
     for suffix, body in (
@@ -552,7 +552,7 @@ def _stream_boundaries():
                            sse({"type": "response.incomplete", "response": value}), lane="proxy",
                            status="protocol_error", reason="final stream event carries no response object"))
     cases.append(_leaf("W23", "incomplete-final-absent", "Absent incomplete response cannot fabricate a final object",
-                       sse({"type": "response.incomplete"}), lane="proxy", status="incomplete_response", reason=incomplete))
+                       sse({"type": "response.incomplete"}), lane="proxy", status="provider_error", reason=incomplete))
     for suffix, terminal, status, reason in (
         ("failed", event("response.failed", body={"error": {"message": "first failure"}}),
          "provider_error", "provider reported a failed response: first failure"),
@@ -567,7 +567,7 @@ def _retry(status, lane, twice=False, window=None, headers=None, stream_code=Non
     def run(ctx):
         path, env, model = _setup(ctx, lane)
         fault = transient_body if transient_body is not None else {"error": {"message": "wire transient"}}
-        if stream_code:
+        if stream_code and transient_body is None:
             fault = sse(event("error", error={"code": stream_code, "message": "busy",
                                              "headers": {"x-retry-metadata": "NO_MORE_RETRY"}}))
         success = sse(event(body=reply())) if lane == "proxy" else anthropic() if lane == "anthropic" else reply()
@@ -594,6 +594,8 @@ def _retry(status, lane, twice=False, window=None, headers=None, stream_code=Non
         if window:
             schedules = _data(events, "api.retry.scheduled")
             assert len(schedules) == 1 and schedules[0]["attempt"] == 1
+            if stream_code:
+                assert schedules[0]["reason"] == "provider stream overload", schedules
             delay = schedules[0]["delay_ms"]
             if headers and headers.get("Retry-After", "").strip() == "2":
                 assert 2000 <= delay <= 2100, schedules
@@ -609,6 +611,50 @@ def _retry(status, lane, twice=False, window=None, headers=None, stream_code=Non
                       f"provider returned HTTP {status}: " + ("" if status == 204 else "wire transient"))
             _result(events, "provider_error", reason=reason)
             assert process.returncode == 1
+    return run
+
+
+def _stream_ended_early(window):
+    def run(ctx):
+        path, env, model = _setup(ctx, "proxy")
+        cutoff = sse(done(0, call()))
+        first, following = (PROMPT, PROMPT) if window else ("wire first", "wire following")
+        first_marker = lambda body: _last_prompt(body) == first
+        following_marker = first_marker if window else lambda body: _last_prompt(body) == following
+        ctx.server.expect(path, Response(body=cutoff, headers={"Content-Type": "text/event-stream"}), marker=first_marker, model=model)
+        ctx.server.expect(path, Response(body=sse(event(body=reply())), headers={"Content-Type": "text/event-stream"}), marker=following_marker, model=model)
+        if window:
+            process = ctx.run(flags=("--model", model, "--model-retry-window", "8s"), env=env)
+        else:
+            process = ctx.chat(b"wire first\nwire following\n/exit\n", flags=("--model", model), env=env)
+        events = _events(ctx)
+        finishes = _request_checks(ctx, events, 2, "proxy")
+        starts = _data(events, "api.attempt.started")
+        assert finishes[0]["response_body"].encode() == cutoff
+        assert len(_data(events, "model.accepted")) == 1
+        assert not _data(events, "tool.started") and not _data(events, "tool.finished")
+        assert not (ctx.workspace / "must-not-exist").exists(), "cutoff stream dispatched a tool"
+        assert not _data(events, "api.retry.exhausted")
+        if window:
+            assert [item["attempt"] for item in starts] == [1, 2]
+            assert len({item["request_sha256"] for item in starts}) == 1
+            assert len({_request_field(item, "body") for item in ctx.server.requests}) == 1
+            schedules = _data(events, "api.retry.scheduled")
+            assert len(schedules) == 1 and schedules[0]["attempt"] == 1
+            assert schedules[0]["reason"] == "stream ended early", schedules
+            assert 790 <= schedules[0]["delay_ms"] <= 1210
+            _result(events, "completed", output=REPLY, usage=dict(UNKNOWN, unreported_attempts=1))
+        else:
+            assert [item["attempt"] for item in starts] == [1, 1]
+            assert not _data(events, "api.retry.scheduled")
+            results = _data(events, "run.finished")
+            assert [item["status"] for item in results] == ["provider_error", "completed"], results
+            assert results[0]["reason"] == "stream ended before the response completed"
+            assert results[0].get("resumable") is True and results[0]["tool_calls"] == 0
+            assert results[1]["reply"] == REPLY and results[1]["tool_calls"] == 0
+            assert b"session blocked" not in process.stderr
+            assert b"wire_call" not in _request_field(ctx.server.requests[1], "body")
+        assert process.returncode == 0 and REPLY.encode() in process.stdout
     return run
 
 
@@ -1210,8 +1256,21 @@ def collect():
                           _retry(200, "proxy", window="8s", stream_code=code), slow=True))
         cases.append(Case("W28.default-" + code, "Default policy does not retry transient stream errors",
                           _retry(200, "proxy", stream_code=code)))
+    for suffix, fault in (
+        ("service_unavailable", event("error", error={"type": "service_unavailable_error",
+                                                     "code": "service_unavailable", "message": "busy"})),
+        ("service_unavailable-bare-code", event("error", code="service_unavailable", message="busy"))):
+        cases.append(Case("W28.window-" + suffix, "Window retries service-unavailable stream events",
+                          _retry(200, "proxy", window="8s", stream_code="service_unavailable", transient_body=sse(fault)), slow=True))
+        cases.append(Case("W28.default-" + suffix, "Default policy does not retry service-unavailable stream events",
+                          _retry(200, "proxy", stream_code="service_unavailable", transient_body=sse(fault))))
+    cases.append(Case("W28.window-stream-ended-early", "Cutoff stream retries once with exact reason and no accepted tool",
+                      _stream_ended_early(True), slow=True))
+    cases.append(Case("W28.default-stream-ended-early", "Cutoff stream is resumable without blocking the following chat turn",
+                      _stream_ended_early(False)))
+    cases.append(Case("W28.window-cutoff-items", "Window retries cutoff item-only stream without accepting its tool",
+                      _stream_ended_early(True), slow=True))
     for suffix, body, status, reason in (
-        ("incomplete", sse(done(0, call())), "incomplete_response", "stream ended before the response completed"),
         ("incomplete-event", sse(event("response.incomplete", body=reply([call()], status="incomplete", usage=USAGE,
                                                                        incomplete_details={"reason": "max_output_tokens"}))),
          "incomplete_response", "provider returned an incomplete response: max_output_tokens"),
