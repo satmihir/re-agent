@@ -66,6 +66,65 @@ SELECTIONS = {
     'W53.issuer.models.password': 'Issuer catalog handling, credential redaction and allocated display-name URL normalization.',
     'W54.anthropic.cancel-body': 'Narrow fixture-input delivery projection, preserving every Go output.',
     'W54.anthropic.progress': 'Shared transport read progress rather than timeout-only behavior.',
+    'T01.list_files.array': 'Owned common decoder error envelope and unchanged workspace.',
+    'T02.list_files.offset.omitted': 'Omitted numeric argument defaults.',
+    'T03.environment': 'Withheld-name boundary leaves .environment readable.',
+    'T04.ancestor': 'Outside symlink ancestor write refuses publication and preserves an independent sentinel.',
+    'T05.default': 'Ordered directory listing with withheld-entry accounting.',
+    'T06.empty': 'Empty UTF-8 file and line boundaries.',
+    'T07.nul': 'Binary read refusal at a byte boundary.',
+    'T08.literal': 'Literal search and exact offsets.',
+    'T09.empty': 'Owned search argument errors.',
+    'T10.excluded': 'Search withheld/excluded entries.',
+    'T11.exact-max': 'Search result byte bound.',
+    'T12.empty': 'Create empty file and next read.',
+    'T13.write_file.missing': 'Unread overwrite authorization refusal.',
+    'T14.explicit': 'Stale explicit digest preserves external bytes.',
+    'T15.missing': 'Explicit digest grammar.',
+    'T16.missing': 'Exact edit_not_found wording.',
+    'T17.atomic': 'Batch failure preserves original bytes.',
+    'T18.append-no-lf': 'Append never inserts a newline.',
+    'T19.create': 'Write creates parents and records digest.',
+    'T20.unread': 'Deletion requires digest authority.',
+    'T21.outside-link': 'Symlink deletion preserves outside sentinel.',
+    'T22.partial-permission': 'Partial-delete ledger names only actual removed paths.',
+    'T23.absolute': 'Workspace path grammar and next read.',
+    'T24.create': 'Reserved missing destination rechecks creation.',
+    'T25.same': 'Same-root workspace selection is a no-op.',
+    'T26.mixed-switch_workspace': 'Workspace access tools run alone.',
+    'T27.rebound-write': 'Next tool uses selected workspace binding.',
+    'T28.valid': 'Project instructions discovery.',
+    'T29.literal-environment': 'Literal argv and independently expected sanitized environment.',
+    'T30.string-vector': 'Argument-vector owned error.',
+    'T31.success': 'Successful exec status and byte observations.',
+    'T32.failure-1': 'then failure preserves skipped-command effects.',
+    'T33.large': 'Independent encoded output-budget calculation.',
+    'T34.redirected-escape': 'TERM-resistant group escape and independent descendant liveness.',
+    'T35.retained': 'Exited leader with inherited pipe cleanup.',
+    'T36.started-sigint': 'Post-start cancellation and ordinary subsequent invocation.',
+    'T38.bounds.distance-at': 'Exact Myers work boundary.',
+    'T39.arguments.count101': 'Git inspection count cap.',
+    'T40.promisor.remote': 'Promisor refusal with fully present objects.',
+    'T41.arguments.empty-paths': 'Git recipe owned argument refusal.',
+    'T42.status.normal': 'Read recipe commands and independently checked repository.',
+    'T43.explain_branch.normal': 'Branch comparison recipe manifest.',
+    'T44.pr_status.missing-pr': 'Recorded gh response and proof checks.',
+    'T45.commit.explicit': 'Scoped real commit preserves unrelated changes.',
+    'T46.split_commits.normal': 'Real one-file-per-commit effects.',
+    'T47.amend.normal': 'Amend replaces only unpushed tip.',
+    'T48.commit_push.normal': 'Local bare remote tip proves push.',
+    'T49.ship_pr.closed': 'Closed PR starts a new branch through recorded gh.',
+    'T50.follow_up_pr.noop': 'Scoped no-op commit behavior and follow-up proof.',
+    'T51.latest-default.clean': 'New branch starts from latest local default.',
+    'T52.conflict-lease.conflict': 'Conflicting rebase rolls back refs and worktree.',
+    'T53.described-target.done': 'Loopback Jev chooses a real revert target.',
+    'T54.first-failure.amend': 'Failed command status retains evidence.',
+    'T55.plan-edit_file': 'Plan dispatch cannot change independently read bytes.',
+    'T56.off': 'Recall registration and unavailable outcome.',
+    'T57.cap-across-turns': 'Report limit persists across eleven turns.',
+    'T58.live-declarations': 'Captured live declaration shapes.',
+    'T59.maps-numbers': 'Exact map/struct/numeric wire encoding.',
+    'T60.continuation-long-path': 'Escaping-heavy encoded bound and exact complete-line continuation.',
 }
 
 
@@ -116,7 +175,9 @@ def refresh_samples(lane, suite):
     destination.mkdir(exist_ok=True)
     index = {'schema_version': 1, 'format': 'Deterministic gzip tar: case.json and artifacts/<logical path>; every normalized artifact is complete.',
              'review': 'tar -tzf parity/samples/<case>.tar.gz; tar -xOzf parity/samples/<case>.tar.gz artifacts/<path>. Opaque/binary artifacts are not converted to text.',
-             'pending_families': {'W13': 'All four fork cases depend on the later agents area; no expected output is fabricated.'},
+             'pending_families': {
+                 'W13': 'All four fork cases depend on the later agents area; no expected output is fabricated.',
+                 'T37': 'All six concurrent exec observations require the controlled A20/A21 agent lifecycle fixtures.'},
              'cases': []}
     changed = []
     for case_id, reason in SELECTIONS.items():
@@ -127,6 +188,8 @@ def refresh_samples(lane, suite):
         filename = case_id + '.tar.gz'
         path = destination / filename
         if not path.exists() or path.read_bytes() != raw:
+            if case_id.startswith('W') and path.exists():
+                raise HarnessError('area-1 sample identity violation: ' + case_id)
             changed.append(case_id)
         path.write_bytes(raw)
         index['cases'].append({'id': case_id, 'description': cases[case_id]['description'], 'why': reason,

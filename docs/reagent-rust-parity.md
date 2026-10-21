@@ -4,8 +4,8 @@ Design for [#138](https://github.com/satmihir/re-agent/issues/138), step 1 of
 [#143](https://github.com/satmihir/re-agent/issues/143). Implementation and its
 approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 
-**Status:** runner/wire implementation under #139; the remaining three areas
-retain their planned status. Earlier design research/reviews are recorded below.
+**Status:** runner/wire and tools/workspace implementation under #139; agents/context
+and CLI/checkpoints retain their planned status. Earlier design research/reviews are recorded below.
 
 Reference pinned for the area suite: `14944a6bd8e35815effb74270218483804c29615`
 (#177 merge, including #150–#177). Observations from `7e0408f` and `f37aa5a`
@@ -42,7 +42,8 @@ binary is built independently from that exact source archive with
 `go build -trimpath -buildvcs=false` (Go 1.23.3 darwin/arm64, Python 3.11.5).
 Its SHA-256 is `82f8427be6e9919479307ccd2e9109c13a7d70cc080844a1e19334d2d52fa467`.
 No exploratory output is reused. The W01–W54 named-clause source audit has
-**2,760 declared leaves, 2,745 runnable, 15 explicitly pending**.
+**2,761 declared leaves, 2,747 runnable, 14 explicitly pending** after area 2's
+allowed cutoff/retry additions and git_do propagation completion.
 These are implementation counts, not unrestricted Cartesian-exhaustion or
 acceptance claims. `parity/acceptance.json` distinguishes current re-pin proofs
 from the historical `38da0d6` campaigns: three parallel passes, one serial pass,
@@ -569,7 +570,7 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W25 | 15 | 15 | Implemented |
 | W26 | 58 | 58 | Implemented |
 | W27 | 39 | 39 | Implemented |
-| W28 | 30 | 30 | Implemented |
+| W28 | 31 | 31 | Implemented |
 | W29 | 29 | 29 | Implemented |
 | W30 | 3 | 3 | Implemented |
 | W31 | 30 | 30 | Implemented |
@@ -594,10 +595,10 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W50 | 9 | 8 | Mixed: `W50.picker` |
 | W51 | 7 | 7 | Implemented |
 | W52 | 20 | 18 | Mixed: `W52.gc`, `W52.resume` |
-| W53 | 414 | 411 | Mixed: `W53.propagation.child`, `W53.propagation.git-do`, `W53.propagation.nested-child` |
+| W53 | 414 | 412 | Mixed: `W53.propagation.child`, `W53.propagation.nested-child` |
 | W54 | 213 | 213 | Implemented |
 
-All **15 pending dependencies** are later-area fixtures, not standalone wire
+All **14 pending dependencies** are later-area fixtures, not standalone wire
 clauses left unaudited; their exact executable reasons are in the manifest and
 `--list`. They remain required work, not accepted deviations or green skips.
 
@@ -616,10 +617,19 @@ clauses left unaudited; their exact executable reasons are in the manifest and
 | `W52.gc` | Agents: GC fixtures A29–A32 |
 | `W52.resume` | Checkpoints: fixtures A34–A37 |
 | `W53.propagation.child` | Agents: explicit child client exchange |
-| `W53.propagation.git-do` | Tools: git_do client exchange |
 | `W53.propagation.nested-child` | Agents: explicit nested-child client exchange |
 
 ### Tools and workspace — T01–T60 (60 families)
+
+Area 2 declares **683 leaves: 669 runnable, 14 explicitly pending**, against the
+unchanged `14944a6b` pin. Argument/error tables, file effects, process liveness,
+Myers patches and real local Git postconditions are independently asserted.
+Pending cases name C16, A20/A21, A31/A32 or the later pre-dispatch cancellation
+barrier; none is an unimplemented tools-family waiver. APFS rejects invalid UTF-8
+names before listing: Darwin records that filesystem certificate, while Linux
+exercises the actual skipped-entry branch. The Linux lane remains unverified.
+Counts, exact pending reasons and selected evidence live in `parity/manifest.json`,
+`parity/samples/` and `parity/tools-acceptance.json`.
 
 Evidence: `tools.go:119–192`, `workspace.go:55–144`, file tools and their boundary
 tests, `workspace_selection.go:69–214`, `tool_exec.go:113–209,239–365`,

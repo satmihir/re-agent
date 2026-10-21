@@ -328,7 +328,11 @@ while True: time.sleep(1)
                     verify.assert_not_called()
                     self.assertFalse((artifacts / "report.json").exists())
                     self.assertEqual(marker.read_bytes() if marker.exists() else None, before)
-                    process = subprocess.run([sys.executable, "-m", "parity.run", "--bin", str(self.binary),
+                    # Exercise the real process boundary without depending on a frozen oracle during suite expansion.
+                    script = ('import sys; from unittest.mock import patch; from parity.run import main; '
+                              'p=patch("parity.golden.read_lock", return_value={"cases":{}}); '
+                              'p.start(); sys.exit(main(sys.argv[1:]))')
+                    process = subprocess.run([sys.executable, "-c", script, "--bin", str(self.binary),
                                               "--case", "W01.case-sensitive-prefix", "--artifacts", str(artifacts)],
                                              cwd=suite.parent, env=dict(os.environ, TMPDIR=str(long)),
                                              capture_output=True, text=True, timeout=20)

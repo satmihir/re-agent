@@ -402,7 +402,10 @@ class Context:
 def collect_cases():
     """Load the shared inventory, never implementation-specific cases."""
     from parity.cases.wire import collect
+    from parity.cases import tools_arguments, tools_files, tools_exec, tools_git, tools_workspace
     cases = list(collect())
+    for module in (tools_arguments, tools_files, tools_exec, tools_git, tools_workspace):
+        cases.extend(module.collect())
     ids = [case.id for case in cases]
     if len(set(ids)) != len(ids):
         raise HarnessError("duplicate case IDs")
@@ -452,6 +455,10 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
                   "invocations": [{"started": item["started"], "ended": item["ended"]} for item in context.invocations],
                   "traces": [str(path.relative_to(context.artifacts)) for path in context.trace_paths],
                   "requests": len(context._server.requests) if context._server else 0}
+        if case.area == "tools":
+            from parity.observe_tools_exec import ALLOW_ENV
+            for bounds, item in zip(replay["invocations"], context.invocations):
+                bounds["tool_env"] = {key: item["env"][key] for key in ALLOW_ENV if key in item["env"]}
         if case.id == "W27.connection-refused":
             replay["case_id"] = case.id
             for bounds, item in zip(replay["invocations"], context.invocations):
@@ -586,7 +593,7 @@ def replay_case(raw, replay):
             target.write_bytes(data)
         invocations = []
         for index, bounds in enumerate(replay["invocations"], 1):
-            if bounds.keys() - {"started", "ended", "closed_openai_base"}:
+            if bounds.keys() - {"started", "ended", "closed_openai_base", "tool_env"}:
                 raise HarnessError("unexpected replay invocation fields")
             if any(type(bounds[key]) not in (int, float) or not math.isfinite(bounds[key]) for key in ("started", "ended")) or bounds["started"] > bounds["ended"]:
                 raise HarnessError("invalid replay process bounds")
@@ -596,6 +603,14 @@ def replay_case(raw, replay):
             if status != str(code).encode() + b"\n":
                 raise HarnessError("invalid raw invocation status")
             invocation = dict(bounds, stdout=raw[prefix + ".stdout"], stderr=raw[prefix + ".stderr"], returncode=code)
+            if "tool_env" in bounds:
+                from parity.observe_tools_exec import ALLOW_ENV
+                env = bounds["tool_env"]
+                if (not Path(root).name.startswith("T") or not isinstance(env, dict)
+                        or env.keys() - set(ALLOW_ENV)
+                        or any(not isinstance(value, str) for value in env.values())):
+                    raise HarnessError("invalid tool invocation environment witness")
+                invocation["env"] = env
             if "closed_openai_base" in bounds:
                 base = bounds["closed_openai_base"]
                 match = re.fullmatch(r"http://127\.0\.0\.1:([1-9][0-9]{0,4})/v1/?", base) if isinstance(base, str) else None
@@ -650,6 +665,9 @@ def account_raw(raw, normalized, policies, replay):
             accounted[response + ".json"] = "S"
             if response + ".headers" in raw:
                 accounted[response + ".headers"] = "S"
+    from parity.observe_tools import ARTIFACTS
+    for name in ARTIFACTS & raw.keys() & normalized.keys():
+        accounted[name] = policies[name]
     if not accounted.keys() <= raw.keys():
         raise HarnessError("missing accounted raw artifacts")
     for name in raw.keys() - accounted.keys():

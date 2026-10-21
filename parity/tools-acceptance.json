@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "area": "tools and workspace (T01–T60), #139",
+  "status": "passed",
+  "reference_commit": "14944a6bd8e35815effb74270218483804c29615",
+  "reference_binary_sha256": "82f8427be6e9919479307ccd2e9109c13a7d70cc080844a1e19334d2d52fa467",
+  "reference_build": "git archive of the unchanged pin; go build -trimpath -buildvcs=false",
+  "candidate_build": "plain go build ./cmd/reagent in a separately extracted archive of the same pin",
+  "candidate_binary_sha256": "3f6753c2ce85d8a6d48970cb438f980d31a2bfb47a155f158534013757abeb5f",
+  "platform": "darwin/arm64",
+  "linux_verified": false,
+  "production_go_changes": false,
+  "confirmed_go_defects": [],
+  "suite_digest": "86ecf1f23bd33697cba76ec43443387cd0878f0cb2e655f0fcedad1410e0b3e7",
+  "normalized_tree_sha256": "f5dbaa75d03b19b7c7bf55be05aed21b4df4eba921606ccc3899d8b7e7899943",
+  "inventory": {
+    "total": 3444, "runnable": 3416, "pending": 28, "slow": 101,
+    "wire": {"total": 2761, "runnable": 2747, "pending": 14},
+    "tools": {"total": 683, "runnable": 669, "pending": 14},
+    "new_sample_bundles": 59,
+    "sample_rule": "One full replay-verifiable bundle per runnable T family; T37 is entirely pending",
+    "family_count_columns": ["total", "runnable", "pending"],
+    "family_counts": {
+      "T01": [140,140,0], "T02": [96,96,0], "T03": [15,15,0], "T04": [6,6,0],
+      "T05": [6,6,0], "T06": [9,9,0], "T07": [9,9,0], "T08": [9,9,0],
+      "T09": [18,18,0], "T10": [5,5,0], "T11": [3,3,0], "T12": [7,7,0],
+      "T13": [21,21,0], "T14": [5,3,2], "T15": [9,9,0], "T16": [5,5,0],
+      "T17": [8,8,0], "T18": [8,8,0], "T19": [9,9,0], "T20": [6,6,0],
+      "T21": [10,10,0], "T22": [3,3,0], "T23": [12,11,1], "T24": [4,4,0],
+      "T25": [5,5,0], "T26": [3,2,1], "T27": [5,4,1], "T28": [4,4,0],
+      "T29": [1,1,0], "T30": [18,18,0], "T31": [5,5,0], "T32": [12,12,0],
+      "T33": [5,5,0], "T34": [4,4,0], "T35": [2,2,0], "T36": [3,1,2],
+      "T37": [6,0,6], "T38": [38,38,0], "T39": [11,11,0], "T40": [11,11,0],
+      "T41": [21,21,0], "T42": [1,1,0], "T43": [1,1,0], "T44": [2,2,0],
+      "T45": [5,5,0], "T46": [1,1,0], "T47": [2,2,0], "T48": [2,2,0],
+      "T49": [4,4,0], "T50": [4,4,0], "T51": [5,5,0], "T52": [4,4,0],
+      "T53": [4,4,0], "T54": [14,14,0], "T55": [12,12,0], "T56": [3,2,1],
+      "T57": [22,22,0], "T58": [9,9,0], "T59": [6,6,0], "T60": [5,5,0]
+    },
+    "pending_dependencies": {
+      "T14.deleted": "A20 authorization driver: missing-file reread/recreation authorization requires agents enabled; --agents cannot be combined with --scripted",
+      "T14.recreate": "A20 authorization driver: missing-file reread/recreation authorization requires agents enabled; --agents cannot be combined with --scripted",
+      "T23.human-consent": "C16 PTY workspace consent driver: terminal approval and denied human selection",
+      "T26.lifetime": "C16 PTY/reset/model/fresh-session grant lifetime driver",
+      "T27.agent-bindings": "A20/A21 concurrent agent workspace bindings driver",
+      "T36.child-cancel-reset": "A20/A21 controlled child block/reset and concurrent-root roster driver",
+      "T36.before-start": "Later CLI/agent barrier after signal.NotifyContext installation and before dispatch ctx.Err(); launch SIGINT races installation, tool.started is after admission",
+      "T37.same-root": "A20/A21 controlled concurrent-agent execution",
+      "T37.overlapping-root": "A20/A21 controlled concurrent-agent execution",
+      "T37.nonoverlapping-root": "A20/A21 controlled concurrent-agent execution",
+      "T37.canonical-alias": "A20/A21 controlled concurrent-agent execution",
+      "T37.per-chain-step": "A20/A21 controlled concurrent-agent execution",
+      "T37.bounds": "A20/A21 controlled concurrent-agent execution",
+      "T56.dropped-inherited-compact-reset": "A31/A32 actual GC drop/inheritance and compaction/reset fixtures"
+    }
+  },
+  "normalization": {
+    "registration": "policy.json typed_allowlist and locks.SUBSTITUTION_KINDS; removal/addition negative controls in tools_lock_test.py",
+    "new_kinds": [
+      "exec-effective-timeout-elapsed", "git-do-jev-ms", "git-do-allocated-remote",
+      "exec-allocated-executable", "exec-literal-environment", "exec-fixture-cwd",
+      "exec-fixture-stdout-length", "tool-allocated-path-argument", "git-fixture-workspace",
+      "tool-workspace-refusal", "tool-approved-workspace-path", "git-index-stat-cache", "exec-owned-elapsed"
+    ],
+    "validation": {
+      "jev": "Independent loopback request/capture, exact snapshot/intent/questions and bounded invocation ownership",
+      "allocated_paths": "Exact typed field and owning call, independently retained allocation/configuration witness; non-native strings remain literal",
+      "workspace": "Exact complete refusal/approval outcome plus preapproval/allocation witness, never generic path replacement",
+      "exec": "Allowlisted recorded environment, exact raw call/command/cwd/chain/status ownership; independently traced bounded durations and exact Go-rounded display; preserve warnings/prose and all W bytes/ledgers",
+      "index": "Pre-command binary snapshot, exact guarded command/scope, checksum and complete emitted-byte validation; preserve paths/OIDs/modes/flags/sizes/extensions and observable omissions; only ctime/mtime/dev/ino/uid/gid project to zero",
+      "compression": "Large index snapshots/projections are lossless, bounded, length/checksum-validated zlib/base64; no raw artifact budget increase",
+      "negative_tests": "Forged/missing/duplicate owners, unrelated commands/text, wrong environment/path/hash/stat/flags/scope, malformed/oversized compressed witnesses, altered rounding/duration/status/invocation bounds, W-scope and hidden Unicode; observe_tools*_test.py and observe_derived_test.py"
+    },
+    "broad_text_masking": false
+  },
+  "empty_cache_capture": {
+    "executions": 1, "runnable_assertions_passed": 3412, "seconds": 756.321, "command_exit": 2,
+    "publication_failure": "Frozen replay ledger order depended on frozenset iteration; normalized bytes and raw accounting were identical",
+    "fix": "Sort registered artifact names before observation; regression tests reverse iteration",
+    "recovery": "Replay-only revision of 128 existing captures; no reference execution repeated for the ordering repair",
+    "revision_seconds": 138.935, "publication_recovery_seconds": 484.460, "audit_rows": 1586,
+    "audit_sha256": "77b0f08f7f896366f36afea8a150552f518c1811d39c557a6c30ff012af0fdd3"
+  },
+  "initial_full_candidate": {
+    "seconds": 562.808, "total": 3440, "passed": 3364, "failed": 48, "pending": 28,
+    "unavailable": 0, "not_executed": 0, "all_existing_w_passed": true,
+    "failure_causes": ["Five exec activity elapsed displays crossed decimal rounding boundaries", "One tree certificate serialized a role map in nondeterministic order", "Forty-two helper-evidence comparisons retained volatile Git index stat-cache fields"],
+    "not_counted_as_a_pass": true
+  },
+  "narrow_repairs": {
+    "elapsed_replay": {"checked_t_captures": 614, "revised_ledgers": 34, "seconds": 77.180, "raw_unchanged": true},
+    "reference_recaptures": "Only guarded-debug-index captures, eight shared-tree cases, T04.ancestor, four newly audited T40 cases, and the three corrected T40 fixtures; unrelated captures preserved",
+    "attempt_failures": [
+      "First 51 recapture attempts could not dispatch because the cached binary copy lacked execute permission; retried against the verified existing executable",
+      "49 of 51 executable recaptures passed; oversized index witness exceeded the unchanged artifact budget and corpus scope certification rejected an omitted Git row; fixed bounded lossless compression and exact emitted-row certification, then recaptured only the two failed cases",
+      "Review fixed PID-reuse cleanup, outside ancestor-write catcher, outside-target mutation assertion and added missing T40 matrix scenarios",
+      "Targeted comparison: 77 passed, 3 failed, 2 pending; new hooks/pager config paths were allocation-dependent and conversion-control Git stat cache was racy-clean; fixed relative config paths and deterministic pre-add mtimes, then recaptured only those three"
+    ],
+    "full_raw_replay_publication_seconds": 242.474,
+    "second_three_case_publication_seconds": 6.105,
+    "w_lock_and_sample_guards_passed": true
+  },
+  "final_full_candidate": {
+    "command": "make parity BIN=<plain archived-pin build>; default JOBS=6, existing verified cache",
+    "seconds": 551.562, "exit": 0, "total": 3444, "selected": 3444, "omitted": 0,
+    "passed": 3416, "failed": 0, "pending": 28, "unavailable": 0, "not_executed": 0,
+    "python_tests": 342, "python_seconds": 36.714, "python_optional_integration_skips": 3,
+    "original_retained_artifact_bytes": 3494523,
+    "actual_complete_run_not_union_of_partial_runs": true
+  },
+  "exec_lifecycle_runs": {
+    "selectors": ["T32", "T33", "T34", "T35", "T36"], "jobs": 6, "jobs_argument_supplied": false,
+    "runs": [
+      {"seconds": 14.177, "selected": 26, "passed": 24, "failed": 0, "pending": 2},
+      {"seconds": 13.711, "selected": 26, "passed": 24, "failed": 0, "pending": 2},
+      {"seconds": 13.713, "selected": 26, "passed": 24, "failed": 0, "pending": 2}
+    ],
+    "safety": "Independent start identity and zombie-aware liveness; cleanup requests self-signaling through per-process FIFOs, not reusable numeric PIDs"
+  },
+  "mutations": {
+    "jobs": 6, "all_catchers": false, "first_intended_catcher": true,
+    "campaign_seconds": 144.574283, "retry_21_seconds": 13.155982, "final_caught": 12,
+    "history": "Initial artifact location inside XDG_CACHE_HOME was rejected before dispatch/build (no kills). Corrected location campaign caught 11/12; 21 survived because its patch targeted implicit authorization while its catcher was explicit. Patched the explicit authorization branch and reran only 21; no fixture/oracle change and no reference recapture for this correction.",
+    "results": [
+      {"id":4,"status":"caught","case":"T55.plan-edit_file","patch_sha256":"ae2370c37c6bf8f16e07716f65b0fc781ccdcd4146e77c2bd4d783926bb4d57b","assertion":"assert path.read_bytes() == b'unchanged\\n', 'plan/read-only dispatch changed guarded file'"},
+      {"id":19,"status":"caught","case":"T03.environment","patch_sha256":"b5da6b83d07cf94701bea886989bcb5060bbf39d37b864c9ef9cbfc91a32ae21","assertion":"assert out == expected, (out, expected)","meaning":".environment remains readable"},
+      {"id":20,"status":"caught","case":"T04.ancestor","patch_sha256":"2ea7f0d082e0b48d4ac6ceb10c0870776665d004cc3bc5661930498f4b0ab0f1","assertion":"assert sorted(path.name for path in target.iterdir()) == ['sentinel'], 'outside ancestor write published'"},
+      {"id":21,"status":"caught","case":"T14.explicit","patch_sha256":"d13014fce174f73b13bded11b8bb86ca9c012b8fe8bd0408dab9b3effff549a7","assertion":"assert out == expected, (out, expected)","meaning":"exact stale_file refusal; external bytes preserved"},
+      {"id":22,"status":"caught","case":"T17.atomic","patch_sha256":"e3a34a185c6950634e803656987b8d6d24c5ad2a8cd8670df0e968a4995c0a39","assertion":"assert (ctx.workspace / 'f').read_bytes() == data"},
+      {"id":23,"status":"caught","case":"T18.append-no-lf","patch_sha256":"0440d5ad27c9c6fc2b074993d7ab5089fd8d4c1f6f5fa5a074f73bed87147ca3","assertion":"assert out == expected, (out, expected)","meaning":"exact alphaTAIL result, no injected newline"},
+      {"id":24,"status":"caught","case":"T21.outside-link","patch_sha256":"4729c3942fec56d1af751b7a5f7ec8cbca0b63a7b271ec1cfb57f56178d71625","assertion":"assert outside.exists(), 'outside symlink target disappeared'"},
+      {"id":25,"status":"caught","case":"T22.partial-permission","patch_sha256":"69ea368e02efac7b37e8c39df6dbf3059025e2ccb2983e8126bbe53ed7c7e950","assertion":"assert out == expected, (out, expected)","meaning":"exact bounded applied removal ledger with blocked survivors"},
+      {"id":26,"status":"caught","case":"T32.failure-1","patch_sha256":"aa655ee512fcee2287a7d09b95b9e50e58a8bacb6036a6e71b6b9f2e95a538a3","assertion":"assert len(steps) == ran, outcome"},
+      {"id":27,"status":"caught","case":"T34.redirected-escape","patch_sha256":"10e915163e12f91ec11998f63bfc2010bf3099d3b90e427c805d3997a212918a","assertion":"assert not any(alive.values()), ('descendants still executing', states)"},
+      {"id":28,"status":"caught","case":"T40.promisor.extension","patch_sha256":"43d7c2ce73d830aa2831fe5b038556352f36cc7983dc556633402254e81c273f","assertion":"assert all(not out['ok'] and out['code'] == 'unsupported_repository' and out['effect'] == 'none' for out in outcomes)"},
+      {"id":29,"status":"caught","case":"T16.missing","patch_sha256":"8c9d9d2df72be3e10a19f0f8c3402fb258ff7d5b2a0489ecfda1a956218d0f07","assertion":"assert out == expected, (out, expected)","meaning":"exact edit_not_found owned wording"}
+    ],
+    "non_kills": "Build failure, panic, timeout/crash, missing oracle and unrelated assertions are rejected by the runner, not counted as kills"
+  },
+  "final_checks": {
+    "python_integration": {"passed":342,"seconds":86.262,"skipped":0},
+    "go_build_seconds":1.245,"go_vet_seconds":0.816,"go_test_seconds":6.174,"make_check_seconds":6.637,
+    "go_output":"?   github.com/satmihir/re-agent/cmd/reagent [no test files]\nok  github.com/satmihir/re-agent/internal/reagent (cached)",
+    "make_check_output":"go vet ./...\ngo test ./...\n?   github.com/satmihir/re-agent/cmd/reagent [no test files]\nok  github.com/satmihir/re-agent/internal/reagent (cached)"
+  },
+  "area1_identity": {
+    "protected_existing_cases":2744,
+    "expanded_lock_aggregate_sha256":"0e367a0f8a057d728a98750c731aca5ceb62feeff21c68fa19cac3aa8cd1283b",
+    "protected_sample_bundles":56,
+    "sample_name_to_sha256_aggregate":"3afa7e3cf00bbc07e8f09b66b49d11986d56b0849df76a0c3edb396248778e02",
+    "verified_against_base_after_final_run":true,
+    "permitted_existing_change":"W28.window-cutoff-items: distinct deltas-only early cutoff",
+    "cutoff_ledger_sha256":"bb1ad2db78368aec4ef8945b7cb601f99b429771e92beff2719449f47d080917",
+    "cutoff_old_normalized_sha256":"5dc7b92c405f56a9c0871a8c6620ee5fe569f1852b9d04caef832902cd33b370",
+    "cutoff_new_normalized_sha256":"88172849fc5638a3f68b062f697548fba6e44c1ac2d4ac7e68fa5edf1845f52a",
+    "added_locks":["W28.window-service-unavailable-type-unlisted","W53.propagation.git-do"]
+  },
+  "limitations": [
+    "Linux is declared but was not executed and has no golden lane",
+    "APFS rejects invalid UTF-8 filenames with EILSEQ; Darwin T05 records that certificate and checks ordinary listing, while Linux exercises invalid-name skipping",
+    "Declared later-agent/PTY/GC dependencies remain pending; no unavailable runtime cases were waived",
+    "A synthetic oversized index test with widely separated edited spans timed out in existing string_spans/difflib; actual inventory ordering passes, but the broader observer performance issue is not addressed",
+    "No live model APIs, real hosting CLI in fixtures, production terminal changes, coverage, VERIFY=1 or serial instrumented runs"
+  ],
+  "agent_accounting": {
+    "agents":13,"all_contexts_fresh_nonforked":true,"parent_excluded":true,"accounting_complete":true,
+    "reported_totals":{"input_tokens":38494889,"cached_input_tokens":35693952,"output_tokens":265855,"reasoning_tokens":65768,"unreported_attempts":3,"fully_known":false},
+    "columns":["id","name","input_tokens","cached_input_tokens","output_tokens","reasoning_tokens"],
+    "agents_used":[
+      ["t1","files",7766584,7245312,41120,8660],
+      ["t2","exec",3113895,2906624,27074,6899],
+      ["t3","git",3666220,3474432,28465,3731],
+      ["t4","workspace",5029083,4739968,26998,4794],
+      ["t5","mutations",2075523,1867520,10294,3115],
+      ["t6","normalization",5339117,4950400,38995,7636],
+      ["t7","norm-final",1668842,1529216,14580,2856],
+      ["t8","index-stat",4496171,4235264,32927,12698],
+      ["t9","elapsed-final",1383172,1285376,10270,1984],
+      ["t10","review",1385582,1163904,5470,2464],
+      ["t11","exec-identity",914138,855424,14196,6172],
+      ["t12","files-catchers",625040,529792,6397,2312],
+      ["t13","git-matrix",1031522,910720,9069,2447]
+    ],
+    "unknown_cost_note":"No dollar costs available; t6 has unknown usage and t6/t11/t13 have unreported provider attempts, so reported totals are incomplete"
+  },
+  "cleanup":{"status":"complete","removed_task_owned_external_roots":19,"already_absent_roots":2,"removed_python_cache_directories":3,"binaries_removed":["parity/artifacts/reference","parity/artifacts/plain-reference"],"matching_live_task_processes":0,"retention":"Only required sample bundles and this small JSON proof; task-owned cache, raw successes/failures, mutation build caches, external probes and binaries removed; baseline tracked summaries and shared user caches left untouched"}
+}

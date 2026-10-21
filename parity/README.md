@@ -1,8 +1,8 @@
-# Executable parity — area 1: runner and wire
+# Executable parity — runner, wire, tools and workspace
 
 Python 3.11+ standard library only; the supplied executable is the boundary. Tests use
 loopback providers and fake credentials, never live APIs or Go internals.
-This is the first of four areas, not overall-suite approval or an 85% claim.
+This covers the first two of four areas, not overall-suite approval or an 85% claim.
 
 ## Reference
 
@@ -54,7 +54,7 @@ restores every timestamp and inode.
 `python3 -m parity.mutate` runs each mutant's cases with `--jobs` (default as above)
 and stops at the first leaf that fails with the intended assertion; the remaining
 catcher leaves run only if the first survives. Pass `--all-catchers` to record every
-catcher, as the final acceptance does.
+catcher, as the historical area-1 acceptance did; area 2 uses the defaults.
 
 Candidate runs cannot update the committed oracle. They may regenerate its cache
 from the pinned reference, never from the candidate. Bad invocation exits 2;
@@ -141,7 +141,15 @@ including the full 10 MiB W09 boundary and W33 opaque bytes. `samples/index.json
 explains the selection and gives `tar -tzf` / `tar -xOzf` review commands; the bundles
 contain **all normalized artifacts**, not excerpts. Binary artifacts remain binary.
 
-## Re-pin (before #139 approval only)
+## Oracle updates (before #139 approval only)
+
+Area 2 extends the existing `14944a6b` pin; it is **not a re-pin**. Publication
+refuses changes to existing W-case artifact/ledger locks except the expressly
+approved `W28.window-cutoff-items` fixture, and refuses changes to existing W
+sample bundles. The completed `W53.propagation.git-do` and new unlisted-code
+window-retry leaf add locks without replacing existing runnable leaves.
+
+For a separately authorized future re-pin:
 
 1. Review the new reference commit; update `reference_commit`, recorded build flags,
    toolchain identity and independently established `reference_binary_sha256` in
@@ -188,7 +196,7 @@ approved typed slot changes only the numeric duration in `W44.timeout-ack` and
 `W51.timeout`; detailed attribution is in `repin-changes.json` and
 `acceptance.json`.
 
-## Inventory and dependencies
+## Area-1 inventory and dependencies (historical)
 
 **2,760 leaves: 2,745 implemented, 15 pending, 93 slow.** The W01–W54 audit and
 family counts are in `docs/reagent-rust-parity.md`; `manifest_test.py` checks
@@ -206,7 +214,6 @@ but not verified and has no golden lane.
 | `W50.picker` | PTY picker driver C20 |
 | `W52.gc`, `W52.resume` | GC A29–A32; checkpoint A34–A37 |
 | `W53.propagation.child`, `W53.propagation.nested-child` | Explicit child and nested-child HTTP exchanges |
-| `W53.propagation.git-do` | Tools-area git_do client exchange |
 
 A new Go defect is a re-pin stop condition: report its source, reproduction,
 impact and affected case IDs rather than blessing it as expected behavior.
@@ -495,3 +502,54 @@ In that old-pin campaign, mutation 14 initially survived because EOF did not
 exercise the incomplete-terminal branch; the added
 `W28.no-retry-incomplete-event` caught the unchanged mutation. Build failures,
 unrelated failures and raw definitions were not counted as catches.
+
+## Area 2 acceptance — tools and workspace (#139)
+
+The unchanged reference is `14944a6bd8e35815effb74270218483804c29615`.
+`tools-acceptance.json` records every family count, exact pending dependency,
+normalization contract, mutation patch/catcher/assertion, failed attempt and repair,
+agent accounting, and cleanup. The earlier sections above retain area-1 history.
+
+- T01–T60: **683 leaves / 669 runnable / 14 pending**, with **59 new sample
+  bundles** (one per runnable family; T37 needs the later concurrent-agent driver).
+  The complete suite is **3,444 / 3,416 / 28**. No Darwin-unavailable cases.
+- One empty-cache capture executed all then-runnable 3,412 assertions. Its
+  publication failed on hash-seed-dependent ledger ordering, repaired by sorting
+  registered artifact names and replaying unchanged raw evidence—not recapturing.
+- The initial full plain archived-pin comparison had **48 failures**: five elapsed
+  displays, one fixture map order, and 42 index-stat helper-evidence comparisons.
+  Narrow witness/fixture repairs and reference recaptures are audited in the proof.
+  A later targeted run exposed three new T40 fixture-only evidence issues; relative
+  helper config paths and fixed pre-add mtimes corrected those, without broader
+  normalization. No unexplained timing failure was hidden by regeneration.
+- The final actual full `make parity BIN=<plain archived-pin build>` passed in
+  **551.562s**: **3,416 passed, 0 failed, 28 declared pending, 0 unavailable**.
+  This is a complete run, not a union of partial results. Default **JOBS=6**.
+- Three real T32–T36 lifecycle comparisons at default JOBS=6 each passed
+  **24 runnable cases + two declared pending**, in **14.177s / 13.711s / 13.713s**.
+  Fixtures use event/FIFO barriers, start-identity checks and zombie-aware liveness;
+  cleanup self-signals through owned FIFOs rather than reusable numeric PIDs.
+- Mutations **19–29 and 4**: **12 intended assertion kills** using the default
+  parallel runner and first intended catcher, not `--all-catchers`. The initial
+  campaign caught 11/12; mutation 21's patch targeted the wrong authorization
+  branch. Correcting that patch and rerunning only 21 produced the final kill.
+  Build failures, crashes and unrelated assertions do not count.
+- Thirteen new typed normalization kinds are registered in `policy.json` and
+  negative-tested. Index cache fields require a pre-command checksummed binary
+  index witness; paths, object IDs, modes, flags, sizes, extensions and observable
+  omissions remain compared. Large witnesses are losslessly compressed, not
+  truncated. Exec elapsed slots require exact raw ownership and independently
+  traced, bounded, correctly rounded durations. Existing W scope stays unchanged.
+- All **2,744 protected existing W locks** and **56 existing W bundle bytes**
+  match the base exactly. Only the permitted W28 deltas-only cutoff changes an
+  existing W lock; the unlisted retry leaf and W53 git-do propagation add locks.
+- Final integration-enabled Python discovery: **342 tests, no skips, 86.262s**.
+  `go build ./...`, `go vet ./...`, `go test ./...`, and `make check` all passed.
+
+No production Go changes or confirmed Go defects. No live model APIs, real `gh`
+inside fixtures, coverage, `VERIFY=1`, serial instrumented runs, or production
+terminal changes. Linux is declared but **not executed**. APFS rejects invalid
+UTF-8 filenames with EILSEQ; Darwin records that limitation instead of claiming
+Linux's invalid-name behavior was exercised. The broader existing `difflib`
+performance issue exposed by a synthetic oversized index layout remains outside
+this change; the real inventory fixture passes.

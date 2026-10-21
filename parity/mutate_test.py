@@ -30,7 +30,7 @@ class MutationTests(unittest.TestCase):
 
     def test_all_36_have_unique_applicable_or_later_pending_classification(self):
         mutate.validate_manifest(self.manifest)
-        self.assertEqual({m["id"] for m in self.manifest["mutations"]}, {3, 5, *range(9, 19), 36})
+        self.assertEqual({m["id"] for m in self.manifest["mutations"]}, {3, 4, 5, *range(9, 30), 36})
         broken = copy.deepcopy(self.manifest)
         broken["later_pending"].pop()
         with self.assertRaisesRegex(ValueError, "all 36"):
@@ -47,7 +47,7 @@ class MutationTests(unittest.TestCase):
             with self.subTest(id=mutation["id"]):
                 resolved = mutate.resolve_cases(mutation, inventory)
                 self.assertTrue(resolved["cases"])
-                self.assertTrue(all(case.startswith("W") for case in resolved["cases"]))
+                self.assertTrue(set(resolved["cases"]).issubset({case.id for case in inventory}))
         with self.assertRaises(Exception):
             mutate.resolve_cases(dict(self.mutation, cases=["W99.stale"]), inventory)
         with self.assertRaisesRegex(ValueError, "pending/unsupported"):
@@ -238,6 +238,7 @@ class MutationTests(unittest.TestCase):
     def test_definition_patterns_target_current_intended_assertion_expressions(self):
         examples = {
             3: 'assert _parts(body)[0]["text"] == expected.decode()',
+            4: "assert outcome['ok'] is False and outcome['code'] == code, outcome",
             5: 'assert [r["kind"] for r in records] == ["user", "assistant", "shell"]',
             9: 'assert escape in result.stdout',
             10: 'assert list(body) == ["model", "instructions", "input"]',
@@ -249,6 +250,17 @@ class MutationTests(unittest.TestCase):
             16: 'assert result["usage"] == usage, result',
             17: 'assert body.get("reasoning", {}).get("effort", "") == effort',
             18: 'assert "native-secret" not in wrapped[0]',
+            19: 'assert out == expected, (out, expected)',
+            20: "assert sorted(path.name for path in target.iterdir()) == ['sentinel'], 'outside ancestor write published'",
+            21: 'assert out == expected, (out, expected)',
+            22: "assert (ctx.workspace / 'f').read_bytes() == data",
+            23: 'assert out == expected, (out, expected)',
+            24: "assert outside.exists(), 'outside symlink target disappeared'",
+            25: "assert data['removed_paths'] == removed",
+            26: 'assert len(steps) == ran, outcome',
+            27: "assert not any(alive.values()), ('descendants still executing', states)",
+            28: "assert outcome['code'] == code, outcome",
+            29: 'assert out == expected, (out, expected)',
             36: 'assert recent[2]["assistant"]["blocks"][0]["text"] == "é" * 255',
         }
         for mutation in self.manifest["mutations"]:
@@ -261,6 +273,32 @@ class MutationTests(unittest.TestCase):
                 reason = reason.replace(examples[mutation["id"]], 'assert unrelated, "worker error"')
                 status, _ = mutate.classify({"exit_code": 1}, {}, [{"id": "W99.exact", "status": "failed", "reason": reason}],
                                            resolved, self.root)
+                self.assertEqual(status, "unrelated_assertion")
+
+    def test_symlink_mutations_require_target_assertions_not_unrelated_failures(self):
+        for identity, case in ((20, 'T04.ancestor'), (24, 'T21.outside-link')):
+            mutation = next(item for item in self.manifest['mutations'] if item['id'] == identity)
+            self.assertEqual(mutation['cases'], [case])
+            for reason, expected in (
+                ('Traceback (most recent call last):\n    outside.read_bytes()\nFileNotFoundError: outside target missing\n',
+                 'harness_failure'),
+                ('Traceback (most recent call last):\n    assert out == expected\nAssertionError: outside tool error\n',
+                 'unrelated_assertion'),
+            ):
+                with self.subTest(id=identity, reason=reason):
+                    rows = [{'id': case, 'status': 'failed', 'reason': reason}]
+                    status, _ = mutate.classify({'exit_code': 1}, {}, rows, mutation, self.root)
+                    self.assertEqual(status, expected)
+
+    def test_leader_only_cancellation_requires_liveness_not_a_barrier_failure(self):
+        mutation = next(item for item in self.manifest["mutations"] if item["id"] == 27)
+        mutation = dict(mutation, cases=["T99.exact"])
+        for assertion in ('assert remaining > 0, "exec helper witness did not close/become ready"',
+                          'assert ready, "exec helper barrier timed out"'):
+            with self.subTest(assertion=assertion):
+                reason = 'Traceback (most recent call last):\n    ' + assertion + '\nAssertionError\n'
+                status, _ = mutate.classify({"exit_code": 1}, {}, [{"id": "T99.exact", "status": "failed", "reason": reason}],
+                                           mutation, self.root)
                 self.assertEqual(status, "unrelated_assertion")
 
     def test_archive_and_all_patches_target_pinned_commit_not_head(self):
@@ -276,6 +314,11 @@ class MutationTests(unittest.TestCase):
                 result = mutate.apply_mutation(root, mutation, self.root)
                 self.assertTrue(result["files"])
                 self.assertTrue(all(v["before_sha256"] != v["after_sha256"] for v in result["files"].values()))
+                if mutation['id'] == 21:
+                    self.assertEqual(mutation['cases'], ['T14.explicit'])
+                    source = (root / 'internal/reagent/tool_write_file.go').read_text()
+                    explicit = source.split('func (w *Workspace) checkFileDigest(', 1)[1]
+                    self.assertIn('if snap.sha256 == expected || w.returned(abs, expected) {', explicit)
 
     def test_archive_does_not_extract_links_or_suite_and_rejects_traversal(self):
         data = io.BytesIO()

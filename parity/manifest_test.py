@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import unittest
 
-from parity.cases.wire import collect
+from parity.run import collect_cases as collect
 
 
 class ManifestTests(unittest.TestCase):
@@ -26,8 +26,11 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(counts['by_area'], {area: areas[area] for area in counts['by_area']})
         self.assertEqual(manifest['pending'], {case.id: case.pending for case in cases if case.pending})
         self.assertTrue(all(callable(case.run) for case in cases if not case.pending))
-        self.assertEqual(set(counts['by_family']), {f'W{i:02d}' for i in range(1, 55)})
+        self.assertEqual(set(counts['by_family']), {f'W{i:02d}' for i in range(1, 55)} |
+                         {f'T{i:02d}' for i in range(1, 61)})
         self.assertEqual(len(cases), len({case.id for case in cases}))
+        self.assertEqual(len(cases), len({case.id.casefold() for case in cases}),
+                         'case directories must not collide on case-insensitive filesystems')
 
     def test_leaf_metadata_digest_covers_more_than_counts(self):
         manifest = json.loads(Path(__file__).with_name('manifest.json').read_text())
@@ -55,7 +58,7 @@ class ManifestTests(unittest.TestCase):
         audit = document.split('#### Audited wire leaf inventory\n', 1)[1].split('### Tools and workspace', 1)[0]
         rows = re.findall(r'^\| (W\d\d) \| (\d+) \| (\d+) \| (.+) \|$', audit, re.MULTILINE)
         self.assertEqual(len(rows), 54)
-        cases = collect()
+        cases = [case for case in collect() if case.area == 'wire']
         self.assertEqual({row[0] for row in rows}, {case.id.split('.')[0] for case in cases})
         for family, total, runnable, status in rows:
             group = [case for case in cases if case.id.startswith(family + '.')]
