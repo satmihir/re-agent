@@ -154,19 +154,62 @@ def identity(suite, manifest, temp_root_width=None):
             "reference_binary_sha256": manifest["reference_binary_sha256"], "temp_root_width": temp_root_width}
 
 
-def verify_cache(lane, suite, manifest, cases, lock, jobs=4):
-    """Replay all cached cases and validate exact inventory against committed normalized locks."""
+STAMP = "verified.json"
+
+
+def cache_fingerprint(lane):
+    """Stat every cached file, so any later write, replacement or removal invalidates a stamp."""
+    digest = hashlib.sha256()
+    for root, directories, files in os.walk(lane):
+        directories.sort()
+        for name in sorted(files):
+            path = Path(root) / name
+            relative = str(path.relative_to(lane))
+            if relative in (STAMP, STAMP + ".tmp"):
+                continue
+            info = path.lstat()
+            digest.update(("%s\0%d\0%d\0%d\0%o\n" % (relative, info.st_size, info.st_mtime_ns,
+                                                    info.st_ino, info.st_mode)).encode())
+    return digest.hexdigest()
+
+
+def write_stamp(lane):
+    """Record that a complete replay passed for exactly these files."""
+    fingerprint = cache_fingerprint(lane)
+    temporary = lane / (STAMP + ".tmp")
+    temporary.write_text(json.dumps({"fingerprint": fingerprint}) + "\n")
+    os.replace(temporary, lane / STAMP)
+
+
+def stamp_valid(lane):
+    stamp = lane / STAMP
+    if stamp.is_symlink() or not stamp.is_file():
+        return False
+    try:
+        recorded = json.loads(stamp.read_bytes()).get("fingerprint")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return recorded == cache_fingerprint(lane)
+
+
+def verify_cache(lane, suite, manifest, cases, lock, jobs=4, only=None):
+    """Replay cached cases and validate exact inventory against committed normalized locks.
+
+    With only, replay just those cases; the inventory, identities and binary are still checked.
+    """
     run.verify_inventory(lane, cases, manifest)
     expected = lock["cases"]
-    actual = {path.name for path in lane.iterdir()} - {"inventory.json", "cache.json", "reference"}
+    actual = {path.name for path in lane.iterdir()} - {"inventory.json", "cache.json", "reference", STAMP}
     check_ids(actual, expected)
+    selected = sorted(expected) if only is None else sorted(set(only) & set(expected))
     with ProcessPoolExecutor(max_workers=jobs) as pool:
-        futures = [pool.submit(verify_case, case_id, lane / case_id, expected[case_id]) for case_id in sorted(expected)]
+        futures = [pool.submit(verify_case, case_id, lane / case_id, expected[case_id]) for case_id in selected]
         for future in futures:
             future.result()
     verify_binary(lane / "reference", manifest)
-    from parity import samples
-    samples.verify_samples(lane, suite)
+    if only is None:
+        from parity import samples
+        samples.verify_samples(lane, suite)
     return lane
 
 
@@ -259,6 +302,7 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
             (failed / "failure.txt").write_text(str(exc))
             raise run.HarnessError("reference verification failed; evidence %s: %s" % (failed, exc)) from exc
         (staging / "cache.json").write_text(json.dumps(identity(suite, manifest, temp_root_width), sort_keys=True) + "\n")
+        write_stamp(staging)
         old = Path(temporary) / "previous"
         if lane.exists():
             # Keep the old cache until every new case has passed replay and locks.
@@ -272,8 +316,13 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
     return lane
 
 
-def ensure_cache(suite, manifest, cases, jobs=4):
-    """Regenerate absent/stale data; reject corruption in a cache claiming the current identity."""
+def ensure_cache(suite, manifest, cases, jobs=4, selected=None, full=False):
+    """Regenerate absent/stale data; reject corruption in a cache claiming the current identity.
+
+    A complete replay is stamped with a fingerprint of every cached file's metadata, and later
+    runs skip the replay while that fingerprint holds. A selection without a valid stamp
+    replays only the selected cases. full forces a complete replay regardless.
+    """
     lock = read_lock(suite, manifest)
     lane = guard_cache(cache_path(manifest), manifest)
     marker = lane / "cache.json"
@@ -292,13 +341,21 @@ def ensure_cache(suite, manifest, cases, jobs=4):
                                (cached_width, current["temp_root_width"]))
     if cached != current:
         return regenerate(suite, manifest, cases, lock, jobs)
-    return verify_cache(lane, suite, manifest, cases, lock, jobs)
+    if not full and stamp_valid(lane):
+        run.verify_inventory(lane, cases, manifest)
+        verify_binary(lane / "reference", manifest)
+        return lane
+    if selected is not None and not full:
+        return verify_cache(lane, suite, manifest, cases, lock, jobs, only=selected)
+    verify_cache(lane, suite, manifest, cases, lock, jobs)
+    write_stamp(lane)
+    return lane
 
 
 def main(argv=None):
     """Regenerate the pinned reference or explicitly update locks before approval."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--jobs", type=int, default=run.default_jobs())
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args(argv)
     started = time.monotonic()

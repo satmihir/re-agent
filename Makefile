@@ -58,10 +58,11 @@ N ?= 5
 SET ?= all
 
 # Never loads .env or builds the candidate; the executable is the boundary.
-JOBS ?= 4
+# Leave two cores free, at most six parallel cases; parity.run uses the same default.
+JOBS ?= $(shell python3 -c 'import os; print(max(1, min(6, (os.cpu_count() or 2) - 2)))')
 parity-golden:
 	python3 -m parity.golden --jobs "$(JOBS)" $(if $(filter 1,$(UPDATE)),--update)
 
 parity:
 	python3 -m unittest discover -s parity -p '*test.py'
-	python3 -m parity.run --bin "$(BIN)" --jobs "$(JOBS)" $(if $(AREA),--area "$(AREA)") $(if $(CASE),--case "$(CASE)") $(if $(filter 1,$(KEEP_ARTIFACTS)),--keep-artifacts)
+	python3 -m parity.run --bin "$(BIN)" --jobs "$(JOBS)" $(if $(AREA),--area "$(AREA)") $(if $(CASE),--case "$(CASE)") $(if $(filter 1,$(KEEP_ARTIFACTS)),--keep-artifacts) $(if $(filter 0,$(SLOW)),--skip-slow) $(if $(filter 1,$(VERIFY)),--verify-cache)

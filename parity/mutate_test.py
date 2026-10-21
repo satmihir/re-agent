@@ -122,6 +122,50 @@ class MutationTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual(result["status"], "build_failed")
 
+    def test_fail_fast_stops_at_first_intended_catcher_and_otherwise_runs_the_rest(self):
+        mutation = dict(self.mutation, cases=["W99.a", "W99.b", "W99.c"])
+        killed = "Traceback (most recent call last):\n  File \"case.py\", line 1, in run\nAssertionError: intended marker"
+
+        def build(argv, cwd, artifacts, name, timeout, env=None):
+            if argv[:2] == ["go", "build"]:
+                Path(argv[argv.index("-o") + 1]).write_bytes(b"mutant")
+            return {"exit_code": 0}, b""
+
+        def rows(cases, status, reason=""):
+            return [{"id": case, "status": status, "reason": reason} for case in cases]
+
+        for first_survives in (False, True):
+            with self.subTest(first_survives=first_survives):
+                calls = []
+
+                def run(binary, cases, directory, timeout, jobs=1):
+                    calls.append((list(cases), jobs))
+                    if len(calls) == 1:
+                        return {"exit_code": 0}, {}, rows(cases, "passed")
+                    if len(calls) == 2 and first_survives:
+                        return {"exit_code": 0}, {}, rows(cases, "passed")
+                    return {"exit_code": 1}, {}, rows(cases, "failed", killed)
+
+                root = self.root / ("survives" if first_survives else "killed")
+                root.mkdir()
+                with patch.object(mutate, "run_cases", side_effect=run), patch.object(mutate, "extract_reference"), \
+                     patch.object(mutate, "apply_mutation", return_value={}), patch.object(mutate, "command", side_effect=build):
+                    result = mutate.check_mutation(mutation, Path(sys.executable), b"", root, 1, jobs=6, all_catchers=False)
+                self.assertEqual(result["status"], "caught")
+                self.assertEqual(calls[0], (mutation["cases"], 6))
+                if first_survives:
+                    self.assertEqual([c for c, _ in calls[1:]], [["W99.a"], ["W99.b", "W99.c"]])
+                    self.assertEqual(result["mutant_cases_run"], mutation["cases"])
+                else:
+                    self.assertEqual([c for c, _ in calls[1:]], [["W99.a"]])
+                    self.assertEqual(result["mutant_cases_run"], ["W99.a"])
+
+    def test_case_runs_pass_jobs_to_the_runner(self):
+        with patch.object(mutate, "command", return_value=({"exit_code": 0}, b"")) as command, patch.object(mutate, "load_report", return_value=({}, [])):
+            mutate.run_cases(Path(sys.executable), ["W99.exact"], self.root / "jobs", 10, jobs=6)
+        argv = command.call_args.args[0]
+        self.assertEqual(argv[argv.index("--jobs") + 1], "6")
+
     def test_patch_is_unique_atomic_and_records_original_and_final_digests(self):
         file = self.root / "internal/reagent/test.go"
         file.parent.mkdir(parents=True)

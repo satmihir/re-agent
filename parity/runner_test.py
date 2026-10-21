@@ -1119,12 +1119,12 @@ while True: time.sleep(1)
         case = Case("W99", "fixture capture", lambda ctx: ctx.invoke(["help"]))
         cases = [case] + [Case("W98.later-%02d" % index, "declared dependency", lambda _: self.fail("pending executed"), pending="requires later area") for index in range(15)]
         lock = {"cases": {case.id: golden.case_lock({"exact": b"normalized"}, {"exact": "B"}, [])}}
-        with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")), patch("parity.run.__file__", str(suite / "run.py")), patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.build_reference", side_effect=lambda suite, manifest, destination, **_: shutil.copy2(self.binary, destination)), patch("parity.samples.SELECTIONS", {}), patch("parity.observe.finish", side_effect=observed), patch("parity.observe.compare") as compare, patch("parity.golden.ensure_cache", autospec=True, side_effect=lambda *_: golden.cache_path(manifest)) as cache:
+        with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")), patch("parity.run.__file__", str(suite / "run.py")), patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.build_reference", side_effect=lambda suite, manifest, destination, **_: shutil.copy2(self.binary, destination)), patch("parity.samples.SELECTIONS", {}), patch("parity.observe.finish", side_effect=observed), patch("parity.observe.compare") as compare, patch("parity.golden.ensure_cache", autospec=True, side_effect=lambda *_, **__: golden.cache_path(manifest)) as cache:
             lane = golden.regenerate(suite, manifest, cases, lock, jobs=2)
             expected = lane / "W99"
             self.assertTrue((expected / "raw/invoke-001.stdout").is_file())
             self.assertTrue((expected / "normalized/exact").is_file())
-            self.assertEqual({path.name for path in expected.parent.iterdir()}, {case.id, "inventory.json", "reference", "cache.json"})
+            self.assertEqual({path.name for path in expected.parent.iterdir()}, {case.id, "inventory.json", "reference", "cache.json", golden.STAMP})
             inventory_path = expected.parent / "inventory.json"
             inventory_bytes = inventory_path.read_bytes()
             inventory = json.loads(inventory_bytes)
@@ -1138,7 +1138,7 @@ while True: time.sleep(1)
             self.assertEqual(leaves[-1], {"id": case.id, "description": case.description, "comparison": case.comparison,
                 "slow": case.slow, "platforms": list(case.platforms), "status": "implemented", "pending": None})
             self.assertEqual(main(["--bin", str(self.binary), "--artifacts", str(self.root / "candidate-artifacts")]), 0)
-            cache.assert_called_once_with(suite.resolve(), manifest, cases, 1)
+            cache.assert_called_once_with(suite.resolve(), manifest, cases, run.default_jobs(), selected=None, full=False)
             compare.assert_called_once_with({"exact": b"normalized"}, {"exact": b"normalized"})
             compared = json.loads((self.root / "candidate-artifacts/report.json").read_bytes())
             self.assertTrue(compared["gate_success"])
@@ -1285,7 +1285,7 @@ while True: time.sleep(1)
             self.assertTrue((failures[0] / "captured/W99.first/replay.json").is_file())
             self.assertTrue((failures[0] / "artifacts/W99.second/replay.json").is_file())
             self.assertEqual(golden.regenerate(suite, manifest, cases, lock, jobs=1), lane)
-            self.assertEqual({path.name for path in lane.iterdir()}, {"inventory.json", "cache.json", "reference", "W99.first", "W99.second"})
+            self.assertEqual({path.name for path in lane.iterdir()}, {"inventory.json", "cache.json", "reference", "W99.first", "W99.second", golden.STAMP})
             self.assertEqual(len(json.loads((lane / "inventory.json").read_bytes())["cases"]), 3)
             self.assertEqual(json.loads((lane / "cache.json").read_bytes()), golden.identity(suite, manifest))
 
@@ -1483,7 +1483,7 @@ while True: time.sleep(1)
         with patch("parity.run.collect_cases", return_value=cases), patch("parity.golden.ensure_cache", autospec=True, side_effect=HarnessError("reference cache sentinel")) as cache, patch("parity.run.ProcessPoolExecutor") as pool, patch("sys.stderr", new_callable=io.StringIO) as stderr:
             self.assertEqual(main(["--bin", str(self.binary), "--artifacts", str(artifacts)]), 2)
         cache.assert_called_once()
-        self.assertEqual(cache.call_args.args[2:], (cases, 1))
+        self.assertEqual(cache.call_args.args[2:], (cases, run.default_jobs()))
         pool.assert_not_called()
         self.assertIn("reference cache sentinel", stderr.getvalue())
         self.assertFalse((artifacts / "report.json").exists())
@@ -1510,6 +1510,30 @@ while True: time.sleep(1)
         self.assertTrue((artifacts / case.id / "normalized/exact").is_file())
         compare.assert_not_called()
         cache.assert_not_called()
+
+    def test_skip_slow_is_a_selection_never_a_gate(self):
+        fast = Case("W99.fast", "fast leaf", lambda ctx: ctx.invoke(["help"]))
+        slow = Case("W99.slow", "slow leaf", lambda _: self.fail("slow leaf ran"), slow=True)
+        artifacts = self.root / "skip-slow"
+        with patch("parity.run.collect_cases", return_value=[fast, slow]), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), \
+                patch("parity.observe.finish", side_effect=observed):
+            status = main(["--bin", str(self.binary), "--probe", "--skip-slow", "--artifacts", str(artifacts)])
+        report = json.loads((artifacts / "report.json").read_bytes())
+        self.assertEqual(status, 0)
+        self.assertEqual(report["selected"], ["W99.fast"])
+        self.assertEqual(report["scope"], "selection")
+        self.assertFalse(report["gate_success"])
+
+    def test_selected_comparison_asks_for_selected_verification(self):
+        cases = [Case("W99.a", "a", lambda _: None), Case("W99.b", "b", lambda _: None)]
+        artifacts = self.root / "selected-verify"
+        with patch("parity.run.collect_cases", return_value=cases), \
+                patch("parity.golden.ensure_cache", autospec=True, side_effect=HarnessError("stop here")) as cache, \
+                patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(main(["--bin", str(self.binary), "--case", "W99.b", "--artifacts", str(artifacts)]), 2)
+            self.assertEqual(cache.call_args.kwargs, {"selected": ["W99.b"], "full": False})
+            self.assertEqual(main(["--bin", str(self.binary), "--verify-cache", "--artifacts", str(self.root / "full-verify")]), 2)
+            self.assertEqual(cache.call_args.kwargs, {"selected": None, "full": True})
 
     def test_probe_does_not_bypass_observer_and_platform_unavailability(self):
         other = "linux" if sys.platform == "darwin" else "darwin"
