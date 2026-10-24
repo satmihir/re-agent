@@ -575,6 +575,7 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)")
 	fmt.Fprintln(w, "  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)")
 	fmt.Fprintln(w, "  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)")
+	fmt.Fprintln(w, "  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)")
 	fmt.Fprintln(w, "  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume")
 	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables")
 	fmt.Fprintln(w, "  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false")

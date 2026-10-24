@@ -3,6 +3,7 @@ package reagent
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEnvironmentSettings_DigitsAndFourBooleanSpellingsOnly(t *testing.T) {
@@ -33,6 +34,28 @@ func TestEnvironmentSettings_TimeoutsShareTheDigitRule(t *testing.T) {
 		t.Setenv("REAGENT_RESPONSE_IDLE_TIMEOUT", raw)
 		if _, err := responseTimeout("REAGENT_RESPONSE_IDLE_TIMEOUT", ResponseIdleTimeout); err == nil {
 			t.Fatalf("%q accepted", raw)
+		}
+	}
+}
+
+func TestEnvironmentSettings_WorkspaceGitTimeout(t *testing.T) {
+	t.Setenv("REAGENT_WORKSPACE_GIT_TIMEOUT", "")
+	if got := workspaceGitTimeout(); got != 2*time.Second {
+		t.Fatalf("default %s", got)
+	}
+	for raw, want := range map[string]time.Duration{"1": time.Second, "60": time.Minute, "3600": time.Hour} {
+		t.Setenv("REAGENT_WORKSPACE_GIT_TIMEOUT", raw)
+		if err := validateHTTPEnvironment(); err != nil {
+			t.Fatalf("%q: %v", raw, err)
+		}
+		if got := workspaceGitTimeout(); got != want {
+			t.Fatalf("%q: got %s", raw, got)
+		}
+	}
+	for _, raw := range []string{"0", "3601", "+5", " 5", "1.5", "5s"} {
+		t.Setenv("REAGENT_WORKSPACE_GIT_TIMEOUT", raw)
+		if err := validateHTTPEnvironment(); err == nil || !strings.Contains(err.Error(), "REAGENT_WORKSPACE_GIT_TIMEOUT") {
+			t.Fatalf("%q: %v", raw, err)
 		}
 	}
 }

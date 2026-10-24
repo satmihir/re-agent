@@ -109,6 +109,37 @@ func TestSnapshot_GitBranchAndChanges(t *testing.T) {
 	}
 }
 
+// A loaded machine can take longer than the default probe bound. The setting
+// lets the snapshot wait instead of silently dropping its Git section.
+func TestSnapshot_WorkspaceGitTimeoutSetting(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitTest(t, dir, "init", "-q", "--template=", "-b", "main")
+	// Delay only the status probe, past the two-second default.
+	bin := t.TempDir()
+	script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = status ] && sleep 2.5; done\nexec '" + git + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, tc := range []struct {
+		setting string
+		hasGit  bool
+	}{{"", false}, {"5", true}} {
+		t.Setenv("REAGENT_WORKSPACE_GIT_TIMEOUT", tc.setting)
+		var got workspaceState
+		if err := json.Unmarshal(collectSnapshot(context.Background(), dir, false), &got); err != nil {
+			t.Fatal(err)
+		}
+		if (got.Git != nil) != tc.hasGit || tc.hasGit && got.Git.Branch != "main" {
+			t.Fatalf("setting %q: git %+v", tc.setting, got.Git)
+		}
+	}
+}
+
 func TestSnapshot_NoRemoteOmitsTheDefaultBranch(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {

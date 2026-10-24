@@ -202,6 +202,12 @@ Duration strings such as `5m`, fractions and out-of-range values fail at startup
 The settings apply to all harness HTTP clients, including authentication;
 authentication's existing overall deadlines still apply.
 
+`REAGENT_WORKSPACE_GIT_TIMEOUT` bounds each Git probe in the workspace snapshot
+attached to a turn: whole seconds from **1 to 3600**, default **2**. A probe that
+runs out of time leaves the Git section out of that snapshot. Raise it on a
+heavily loaded machine, such as a parity run, so the snapshot doesn't depend on
+how busy the machine is.
+
 ## In chat
 
 | | |
