@@ -284,7 +284,7 @@ func validateHTTPEnvironment() error {
 			return fmt.Errorf("%s must be a full http or https URL with a host and no query or fragment", variable)
 		}
 	}
-	for _, variable := range []string{"REAGENT_RESPONSE_HEADER_TIMEOUT", "REAGENT_RESPONSE_IDLE_TIMEOUT"} {
+	for _, variable := range []string{"REAGENT_RESPONSE_HEADER_TIMEOUT", "REAGENT_RESPONSE_IDLE_TIMEOUT", "REAGENT_WORKSPACE_GIT_TIMEOUT"} {
 		if _, err := responseTimeout(variable, time.Second); err != nil {
 			return err
 		}

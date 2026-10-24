@@ -83,7 +83,7 @@ func collectSnapshot(ctx context.Context, root string, refsOnly bool) json.RawMe
 
 // v0 §6 amendment (2026-10-01): these probes inspect refs, never worktree contents.
 func collectGitRefs(ctx context.Context, root string) *gitState {
-	configCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	configCtx, cancel := context.WithTimeout(ctx, workspaceGitTimeout())
 	config, _, err := gitInspectCommand(configCtx, root, "config", "--get-regexp", `^(remote\..*\.promisor|extensions\.partialclone)$`)
 	cancel()
 	if len(config) > 0 || ctx.Err() != nil {
@@ -112,8 +112,17 @@ func collectGitRefs(ctx context.Context, root string) *gitState {
 	return &git
 }
 
+// workspaceGitTimeout bounds each snapshot Git probe. The default keeps a slow
+// repository from delaying a turn; REAGENT_WORKSPACE_GIT_TIMEOUT lets a loaded
+// machine wait longer, so the snapshot does not depend on how busy it is.
+func workspaceGitTimeout() time.Duration {
+	// CLI startup rejects malformed values before any snapshot is collected.
+	timeout, _ := responseTimeout("REAGENT_WORKSPACE_GIT_TIMEOUT", 2*time.Second)
+	return timeout
+}
+
 func snapshotGit(ctx context.Context, root string, args ...string) (string, bool) {
-	deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
+	deadline, cancel := context.WithTimeout(ctx, workspaceGitTimeout())
 	defer cancel()
 	out, seen, err := gitInspectCommand(deadline, root, args...)
 	return string(out), err == nil && seen <= MaxResultBytes
