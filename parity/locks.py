@@ -305,7 +305,7 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     if jobs == 1:
         new_cases = {case_id: frozen_lock(staging / case_id) for case_id in executable}
     else:
-        with ProcessPoolExecutor(max_workers=jobs) as pool:
+        with ProcessPoolExecutor(max_workers=max(jobs, run.replay_jobs())) as pool:
             futures = {case_id: pool.submit(frozen_lock, staging / case_id) for case_id in executable}
             new_cases = {case_id: future.result() for case_id, future in futures.items()}
     protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)

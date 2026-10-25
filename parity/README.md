@@ -196,8 +196,12 @@ python3 -m parity.run --list
 python3 -m unittest discover -s parity -p '*test.py'
 ```
 
-**Speed.** `JOBS` defaults to the core count minus two, at most six; the barriers
-hold at six. Actual case isolation is detected in shared fixture setup, not a
+**Speed.** Comparisons and mutations default `JOBS` to the core count minus two, at
+most twelve (six on an eight-core Mac); reference captures keep at most six because
+they publish protected locks. Raw replay and lock derivation run no binaries, so
+they use every core but two. Slow leaves start first within each phase; reports
+keep inventory order. `UNIT=0` skips `make parity`'s unit preflight for inner
+loops; acceptance runs keep it. Actual case isolation is detected in shared fixture setup, not a
 handwritten list: Git recorder installation or fixture Git-repository discovery
 (including later switch targets and configured GIT_DIR) promotes the case to
 machine-wide exclusive ownership through cleanup. Other cases share the workload

@@ -295,7 +295,7 @@
   "known_limitations": [
     "C17 nested shell duration-ms ledger sites vary for zero versus nonzero raw durations; normalized bytes remain identical. Not repaired in the Linux lane; see linux-blockers.md."
   ],
-  "suite_digest": "8d8919d0f2e82573aa0b3c917a72f33143e1c9182a0aa54bdc603f79afb75949",
+  "suite_digest": "b12e26bdfa396a38e741c828240143f807d4c148039ed9368b07b34863cae383",
   "verification_evidence": "linux-lane.md (Linux); cli-acceptance.json (historical Darwin)",
   "unverified": [
     "Real Darwin execution of shared Linux-lane harness changes",
