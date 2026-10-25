@@ -7,7 +7,6 @@ import gzip
 import hashlib
 import io
 import json
-import math
 import os
 from pathlib import Path
 import pwd
@@ -26,7 +25,9 @@ import zlib
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from parity.invocation_time import validate_bounds
 from parity.provider import Provider
+from parity.processes import CaseProcesses
 
 
 RAW_FILE_LIMIT = 32 * 1024 * 1024
@@ -95,6 +96,7 @@ def isolated_env(home, temporary):
         "XDG_CACHE_HOME": str(home / ".cache"), "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_DATA_HOME": str(home / ".local/share"), "TMPDIR": str(temporary),
         "TZ": "UTC", "LANG": "C", "LC_ALL": "C", "TERM": "dumb",
+        "REAGENT_WORKSPACE_GIT_TIMEOUT": "60",
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_TERMINAL_PROMPT": "0", "GIT_AUTHOR_NAME": "Parity Fixture",
         "GIT_AUTHOR_EMAIL": "parity@example.invalid", "GIT_COMMITTER_NAME": "Parity Fixture",
@@ -116,6 +118,8 @@ class Context:
         guard_artifacts(artifacts)
         self.artifacts = Path(artifacts).resolve()
         self.case = case
+        self.exclusive = False
+        self._workload = None
         self.coverage = Path(coverage) if coverage else self.artifacts / "coverage"
         guard_artifacts(self.coverage)
         self.observations = {}
@@ -132,10 +136,24 @@ class Context:
             guard_private(path, self._private)
             path.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.env = isolated_env(self.home, self.root / "tmp")
+        self._process_guard = CaseProcesses(self.root)
+
+    def require_exclusive(self):
+        """Promote before installing a recorder or collecting deadline-bound Git evidence."""
+        if self._workload is not None:
+            self._workload.require_exclusive()
+        self.exclusive = True
+
+    def prepare_startup(self, env=None):
+        """Detect fixture Git evidence, including later workspace-switch targets."""
+        environment = self.env if env is None else dict(self.env, **env)
+        if not self.exclusive and (environment.get('GIT_DIR') or next(self.root.rglob('.git'), None) is not None):
+            self.require_exclusive()
 
     @property
     def server(self):
         """Lazily start this case's recording provider."""
+        self.prepare_startup()
         if self._server is None:
             self._server = Provider()
             base = self._server.url
@@ -172,13 +190,14 @@ class Context:
         destination.write_bytes(data)
         self.observations[name] = data
 
-    def invoke(self, args, stdin=b"", env=None, timeout=30, on_start=None):
+    def invoke(self, args, stdin=b"", env=None, timeout=30, on_start=None, cli_workspace=True):
         """Invoke with optional concurrent on_start(process) controller and managed cleanup."""
         args = list(map(str, args))
         index = len(self.invocations) + 1
         prefix = "invoke-%03d" % index
         trace = self.artifacts / (prefix + (".trace.jsonl" if args[:1] == ["run"] else ".traces"))
         if args[:1] in (["run"], ["chat"]):
+            self.prepare_startup(env)
             self.server  # Configure every active destination before launching a client.
             managed = ("--workspace", "--trace-file", "--trace-dir")
             supplied = {}
@@ -191,7 +210,15 @@ class Context:
                         raise HarnessError("Context owns --workspace")
                     if name != "--workspace" and not supplied[name].is_relative_to(self.artifacts):
                         raise HarnessError("trace destinations must be inside artifacts")
-            inserts = [] if "--workspace" in supplied else ["--workspace", str(self.workspace)]
+            if cli_workspace is not True and (self.case is None or not self.case.id.startswith(('C05.', 'C07.'))):
+                raise HarnessError('CLI workspace overrides belong only to C05/C07 fixtures')
+            if cli_workspace not in (True, None, '.', '/'):
+                destination = Path(cli_workspace)
+                if not destination.is_absolute() or not destination.is_relative_to(self.root):
+                    raise HarnessError('CLI workspace override must be inside the case root')
+            inserts = []
+            if '--workspace' not in supplied and cli_workspace is not None:
+                inserts = ['--workspace', str(self.workspace) if cli_workspace is True else str(cli_workspace)]
             trace_flag = "--trace-file" if args[0] == "run" else "--trace-dir"
             if trace_flag in supplied:
                 trace = supplied[trace_flag]
@@ -216,8 +243,10 @@ class Context:
         cover.mkdir(parents=True, exist_ok=False)
         environment["GOCOVERDIR"] = str(cover)
         command = [self.binary, *args]
+        monotonic_started = time.monotonic()
         started = time.time()
         record = {"argv": command, "args": args, "stdin": stdin, "start": started, "started": started,
+                  "monotonic_started": monotonic_started,
                   "env": dict(environment), "trace": trace, "coverage": cover}
         self.invocations.append(record)
         out = self.artifacts / (prefix + ".stdout")
@@ -230,6 +259,7 @@ class Context:
             process = subprocess.Popen(command, cwd=self.workspace, env=environment, stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, umask=0o022)
             self._processes.append(process)
+            self._process_guard.register(process.pid)
 
             def drain(source, target):
                 retained = 0
@@ -281,7 +311,6 @@ class Context:
             except subprocess.TimeoutExpired:
                 timed_out = True
             finally:
-                # A successful leader must not leave executing descendants in its group.
                 self._terminate(process)
                 for thread in [*readers, feeder]:
                     thread.join(timeout=2)
@@ -289,8 +318,9 @@ class Context:
                         capture_errors.append("candidate pipe did not close after process-group cleanup")
                 self._processes.remove(process)
         ended = time.time()
+        monotonic_ended = time.monotonic()
         record.update(stdout=out.read_bytes(), stderr=err.read_bytes(), status=process.returncode, returncode=process.returncode,
-                      end=ended, ended=ended, timed_out=timed_out)
+                      end=ended, ended=ended, monotonic_ended=monotonic_ended, timed_out=timed_out)
         self._record(prefix + ".stdout", record["stdout"])
         self._record(prefix + ".stderr", record["stderr"])
         self._record(prefix + ".status", str(process.returncode).encode() + b"\n")
@@ -370,8 +400,10 @@ class Context:
                                  "completed": response.completed, "chunk_lengths": [len(chunk) for chunk in response.chunks]},
                                  separators=(",", ":")).encode())
 
-    @staticmethod
-    def _terminate(process):
+    def _terminate(self, process):
+        # Other groups may be intentional fixture children until the case ends.
+        if process.poll() is not None:
+            self._process_guard.note_leaks(group=process.pid)
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -387,29 +419,58 @@ class Context:
         process.wait(timeout=2)
 
     def close(self):
-        """Release provider barriers and reap owned candidate process groups."""
+        """Release provider barriers, assert case process lifetime and clean survivors."""
         if self._closed:
             return
         self._closed = True
         if self._server is not None:
             self._server.close()
-        for process in self._processes:
-            self._terminate(process)
-        self._processes.clear()
-        self.collect()
+        try:
+            self._process_guard.close()
+        finally:
+            for process in self._processes:
+                process.wait(timeout=2)
+            self._processes.clear()
+            self.collect()
 
 
 def collect_cases():
     """Load the shared inventory, never implementation-specific cases."""
     from parity.cases.wire import collect
-    from parity.cases import tools_arguments, tools_files, tools_exec, tools_git, tools_workspace
-    cases = list(collect())
+    from parity.cases import cli, tools_arguments, tools_files, tools_exec, tools_git, tools_workspace
+    cases = list(collect()) + cli.collect()
     for module in (tools_arguments, tools_files, tools_exec, tools_git, tools_workspace):
         cases.extend(module.collect())
     ids = [case.id for case in cases]
     if len(set(ids)) != len(ids):
         raise HarnessError("duplicate case IDs")
     return cases
+
+
+def schedule_cases(cases, worker, arguments, jobs, executor, on_error=None):
+    """Finish the parallel pool before one exclusive worker; retain inventory order."""
+    results = [None] * len(cases)
+    for exclusive in (False, True):
+        phase = [(index, case) for index, case in enumerate(cases) if case.exclusive == exclusive]
+        if not phase:
+            continue
+        # Closing the first executor also joins its workers before exclusive startup.
+        with executor(max_workers=1 if exclusive else jobs) as pool:
+            futures = [(index, case, pool.submit(worker, *arguments(case))) for index, case in phase]
+            for index, case, future in futures:
+                try:
+                    results[index] = future.result()
+                except Exception as exc:
+                    if on_error is None:
+                        raise
+                    results[index] = on_error(case, exc)
+    return results
+
+
+def worker_failure(case, error):
+    """Keep a candidate worker exception in the ordinary per-case failure report."""
+    return {"id": case.id, "status": "failed", "reason": "worker failed: %s" % error,
+            "artifacts": {}, "artifact_policies": {}}
 
 
 def select_cases(cases, selections=(), areas=()):
@@ -432,7 +493,13 @@ def select_cases(cases, selections=(), areas=()):
 
 
 def run_case(case_id, binary, root, artifacts, coverage=None):
-    """Worker entry point: reload callables locally instead of pickling closures."""
+    """Keep a dynamically promoted machine workload gate through execution and cleanup."""
+    from parity.capture_lock import CaseWorkload
+    with CaseWorkload() as workload:
+        return _run_case(case_id, binary, root, artifacts, coverage, workload)
+
+
+def _run_case(case_id, binary, root, artifacts, coverage, workload):
     from parity import observe
     case = next(case for case in collect_cases() if case.id == case_id)
     if case.pending or sys.platform not in case.platforms:
@@ -443,26 +510,47 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
     try:
         os.umask(0o022)
         context = Context(binary, root, artifacts, case=case, coverage=coverage)
+        context._workload = workload
+        if case.exclusive:
+            context.require_exclusive()
         case.run(context)
         if context._server is not None:
             context._server.assert_complete()
         context.close()
         if context._server is not None:
             context._server.assert_complete()
+        if case.id.startswith('C17.'):
+            for index, invocation in enumerate(context.invocations, 1):
+                context._record('invoke-%03d.stdin' % index, invocation['stdin'])
         raw = evidence_files(context.artifacts, excluded=("coverage",))
         replay = {"root": str(context.root), "artifacts": str(context.artifacts),
                   "server": context._server.url if context._server else "",
-                  "invocations": [{"started": item["started"], "ended": item["ended"]} for item in context.invocations],
+                  "invocations": [{key: item[key] for key in ('started', 'ended', 'monotonic_started', 'monotonic_ended')
+                                   if key in item} for item in context.invocations],
                   "traces": [str(path.relative_to(context.artifacts)) for path in context.trace_paths],
                   "requests": len(context._server.requests) if context._server else 0}
         if case.area == "tools":
             from parity.observe_tools_exec import ALLOW_ENV
             for bounds, item in zip(replay["invocations"], context.invocations):
                 bounds["tool_env"] = {key: item["env"][key] for key in ALLOW_ENV if key in item["env"]}
+        if case.id.startswith('C02.') or case.id == 'C04.oversized':
+            for bounds, item in zip(replay['invocations'], context.invocations):
+                if case.id == 'C04.oversized' or item['args'][:1] in (['version'], ['--version']):
+                    bounds['cli_args'] = item['args']
+                if 'cli_oversized_probe' in item:
+                    bounds['cli_oversized_probe'] = 1
+        for index, (bounds, item) in enumerate(zip(replay['invocations'], context.invocations), 1):
+            if 'invoke-%03d.terminal.json' % index in raw:
+                bounds['terminal_args'] = item['args']
+                bounds['terminal_size'] = item['terminal']
+                if item.get('env', {}).get('API_PROXY_URL'):
+                    bounds['terminal_proxy'] = item['env']['API_PROXY_URL']
         if case.id == "W27.connection-refused":
             replay["case_id"] = case.id
             for bounds, item in zip(replay["invocations"], context.invocations):
                 bounds["closed_openai_base"] = item["env"]["REAGENT_OPENAI_BASE_URL"]
+        # Preserve raw clock anchors even when observation or validation rejects them.
+        (context.artifacts / "replay.json").write_text(json.dumps(replay, indent=2) + "\n")
         normalized = observe.finish(context)
         if not isinstance(normalized, dict) or not normalized or any(not isinstance(name, str) or not isinstance(value, bytes) for name, value in normalized.items()):
             raise HarnessError("observe.finish must return a nonempty dict[str, bytes]")
@@ -471,8 +559,8 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
             raise HarnessError("observe.finish must declare B/N/S in context.artifact_policies for every artifact")
         ledger = json.loads((context.artifacts / "substitutions.json").read_bytes())
         replay["raw_policies"] = account_raw(raw, normalized, policies, replay)
-        validate_replay(raw, replay, normalized, policies, ledger)
         (context.artifacts / "replay.json").write_text(json.dumps(replay, indent=2) + "\n")
+        validate_replay(raw, replay, normalized, policies, ledger)
         (context.artifacts / "artifact-policies.json").write_text(json.dumps(policies, indent=2) + "\n")
         for name, data in normalized.items():
             target = Path(artifacts) / "normalized" / artifact_name(name)
@@ -491,8 +579,14 @@ def run_case(case_id, binary, root, artifacts, coverage=None):
             except Exception:
                 result = {"id": case.id, "status": "failed", "reason": (result.get("reason", "") + "\ncleanup failed:\n" + traceback.format_exc())[-16384:],
                           "artifacts": {}, "artifact_policies": context.artifact_policies}
-    if context is not None and result["status"] == "failed":
-        (context.artifacts / "failure.txt").write_text(result["reason"])
+    if context is not None:
+        result['exclusive'] = context.exclusive
+        guard = context._process_guard
+        result["leak_check"] = "clean" if guard.checked and not guard.leaks else "failed"
+        if guard.leaks:
+            result["leak_pids"] = sorted({process.pid for process in guard.leaks.values()})
+        if result["status"] == "failed":
+            (context.artifacts / "failure.txt").write_text(result["reason"])
     return result
 
 
@@ -592,17 +686,40 @@ def replay_case(raw, replay):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
         invocations = []
+        previous_monotonic_end = None
         for index, bounds in enumerate(replay["invocations"], 1):
-            if bounds.keys() - {"started", "ended", "closed_openai_base", "tool_env"}:
+            if bounds.keys() - {"started", "ended", "monotonic_started", "monotonic_ended", "closed_openai_base", "tool_env", "cli_args", "cli_oversized_probe", "terminal_args", "terminal_size", "terminal_proxy"}:
                 raise HarnessError("unexpected replay invocation fields")
-            if any(type(bounds[key]) not in (int, float) or not math.isfinite(bounds[key]) for key in ("started", "ended")) or bounds["started"] > bounds["ended"]:
-                raise HarnessError("invalid replay process bounds")
+            try:
+                begin, end = validate_bounds(bounds)
+            except ValueError as exc:
+                raise HarnessError(str(exc)) from exc
+            if 'monotonic_started' in bounds:
+                if previous_monotonic_end is not None and begin < previous_monotonic_end:
+                    raise HarnessError('invalid replay invocation ordering')
+                previous_monotonic_end = end
             prefix = "invoke-%03d" % index
             status = raw[prefix + ".status"]
             code = int(status)
             if status != str(code).encode() + b"\n":
                 raise HarnessError("invalid raw invocation status")
             invocation = dict(bounds, stdout=raw[prefix + ".stdout"], stderr=raw[prefix + ".stderr"], returncode=code)
+            if 'cli_args' in bounds:
+                args = bounds['cli_args']
+                if Path(root).name == 'C04.oversized':
+                    expected_args = ['run', '--workspace', root + '/workspace', '--trace-file',
+                                     artifact_root + '/' + prefix + '.trace.jsonl', '--show-context',
+                                     '--prompt-file', root + '/prompt.txt']
+                    if args != expected_args:
+                        raise HarnessError('invalid oversized-preview configuration witness')
+                elif not Path(root).name.startswith('C02.') or args not in (['version'], ['--version'], ['run', '-h'], ['run', '--help'], ['chat', '-h'], ['chat', '--help']):
+                    raise HarnessError('invalid version-command configuration witness')
+                invocation['args'] = args
+            if 'cli_oversized_probe' in bounds:
+                if Path(root).name != 'C04.oversized' or index != 2 or bounds['cli_oversized_probe'] != 1 or len(invocations) != 1:
+                    raise HarnessError('invalid oversized-preview invocation linkage')
+                invocation['cli_oversized_probe'] = invocations[0]
+                invocation['cli_oversized_prompt'] = raw['cli-prompt.bytes']
             if "tool_env" in bounds:
                 from parity.observe_tools_exec import ALLOW_ENV
                 env = bounds["tool_env"]
@@ -617,6 +734,29 @@ def replay_case(raw, replay):
                 if replay.get("case_id") != "W27.connection-refused" or Path(root).name != replay["case_id"] or match is None or int(match[1]) > 65535:
                     raise HarnessError("invalid case-specific closed endpoint allocation")
                 invocation["env"] = {"REAGENT_OPENAI_BASE_URL": base}
+            if prefix + '.terminal.json' in raw:
+                journal = json.loads(raw[prefix + '.terminal.json'])
+                from parity.observe_cli_terminal import replay as replay_terminal
+                replay_terminal(raw[prefix + '.tty'], journal)
+                args, size = bounds.get('terminal_args'), bounds.get('terminal_size')
+                if (not isinstance(args, list) or not args or args[0] != 'chat'
+                        or any(not isinstance(arg, str) for arg in args)
+                        or not isinstance(size, dict) or size.keys() - {'rows', 'cols', 'stdout_tty'}
+                        or journal['initial_size'] != [size.get('rows'), size.get('cols')]):
+                    raise HarnessError('invalid terminal invocation configuration witness')
+                invocation.update(args=args, terminal=size, tty=raw[prefix + '.tty'],
+                                  stdin=b''.join(bytes.fromhex(event['hex']) for event in journal['events'] if event['kind'] == 'input'),
+                                  trace=directory / (prefix + '.traces'))
+                if 'terminal_proxy' in bounds:
+                    proxy = bounds['terminal_proxy']
+                    if not isinstance(proxy, str) or not proxy.startswith(server + '/') or any(ch in proxy for ch in ('\r', '\n', '#', '?')):
+                        raise HarnessError('terminal proxy escaped allocated fixture endpoint')
+                    invocation['env'] = dict(invocation.get('env', {}), API_PROXY_URL=proxy)
+            elif any(key in bounds for key in ('terminal_args', 'terminal_size', 'terminal_proxy')):
+                raise HarnessError('terminal invocation configuration lacks raw evidence')
+            if Path(root).name.startswith('C17.'):
+                invocation['stdin'] = raw[prefix + '.stdin']
+                invocation['trace'] = directory / (prefix + '.traces')
             invocations.append(invocation)
         traces = []
         for name in replay["traces"]:
@@ -636,7 +776,7 @@ def replay_case(raw, replay):
                 raise HarnessError("request escaped allocated loopback provider")
             response = replay_response(raw, index)
             requests.append(dict(request, body=raw[prefix + ".body"], response=response))
-        ctx = SimpleNamespace(root=Path(root), artifacts=directory, artifact_root=Path(artifact_root),
+        ctx = SimpleNamespace(root=Path(root), workspace=Path(root) / 'workspace', artifacts=directory, artifact_root=Path(artifact_root),
                               invocations=invocations,
                               trace_paths=traces, observations=dict(raw), artifact_policies={},
                               _server=SimpleNamespace(url=server, requests=requests) if server else None)
@@ -665,6 +805,38 @@ def account_raw(raw, normalized, policies, replay):
             accounted[response + ".json"] = "S"
             if response + ".headers" in raw:
                 accounted[response + ".headers"] = "S"
+    from parity.observe_cli_terminal import replay as replay_terminal
+    terminals = {name for name in raw if name.endswith('.terminal.json')}
+    if {name for name in raw if name.endswith('.tty')} != {name.removesuffix('.terminal.json') + '.tty' for name in terminals}:
+        raise HarnessError('unpaired raw terminal artifacts')
+    for name in sorted(terminals):
+        prefix = name.removesuffix('.terminal.json')
+        match = re.fullmatch(r'invoke-([0-9]{3})', prefix)
+        if match is None or not 1 <= int(match[1]) <= len(replay['invocations']):
+            raise HarnessError('raw terminal artifacts lack an invocation owner')
+        screen = prefix + '.screens.json'
+        stderr = 'invocation-%d.stderr' % int(match[1])
+        tty = prefix + '.tty'
+        replay_terminal(raw[tty], json.loads(raw[name]))
+        if (raw[tty] != raw[prefix + '.stderr'] or screen not in normalized
+                or policies.get(screen) not in ('B', 'N') or policies.get(stderr) != 'S'
+                or json.loads(normalized[stderr]) != {'terminal_screens': screen}):
+            raise HarnessError('missing certified raw terminal projection')
+        accounted[name] = accounted[tty] = 'S'
+    from parity.observe_cli_sessions import LOCAL_RESETS
+    if Path(replay['root']).name in LOCAL_RESETS:
+        for name, policy in (('invoke-001.stdin', 'B'),
+                             ('invoke-001.session-1.checkpoint.json', 'N'),
+                             ('invoke-001.session-2.checkpoint.json', 'N')):
+            if name not in raw or name not in normalized or policies.get(name) != policy:
+                raise HarnessError('missing certified local-reset witness: ' + name)
+            accounted[name] = policy
+    if Path(replay['root']).name == 'C38.interrupt-running-command':
+        name = 'cli-exec-executable.json'
+        if name not in raw:
+            raise HarnessError('missing cancelled-exec executable witness')
+        # replay_case has already bound this configuration to its exact exec result.
+        accounted[name] = 'N'
     from parity.observe_tools import ARTIFACTS
     for name in ARTIFACTS & raw.keys() & normalized.keys():
         accounted[name] = policies[name]
@@ -1000,7 +1172,7 @@ def accepted_outcomes(cases, results, success):
 
 def leaf_inventory(cases, manifest):
     """Describe every declared leaf, independently of the current selection or outcome."""
-    fields = ["id", "description", "comparison", "slow", "pending", "platforms"]
+    fields = ["id", "description", "comparison", "slow", "pending", "platforms", "exclusive"]
     metadata = [{field: list(case.platforms) if field == "platforms" else getattr(case, field)
                  for field in fields} for case in sorted(cases, key=lambda case: case.id)]
     raw = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1137,8 +1309,8 @@ def validate_capture(binary, manifest, golden):
         raise HarnessError("capture refuses an existing golden lane, even when empty")
 
 
-def main(argv=None):
-    """Select, execute and compare cases, returning the documented harness status."""
+def _main(argv=None):
+    """Select, execute and compare cases while the CLI holds the capture lock."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin", default=os.environ.get("BIN"))
     parser.add_argument("--case", action="append", default=[])
@@ -1179,7 +1351,8 @@ def main(argv=None):
         manifest = json.loads((suite / "manifest.json").read_bytes())
         from parity import golden as reference
         golden = None
-        artifacts = args.artifacts.absolute() if args.artifacts else Path(tempfile.mkdtemp(prefix="reagent-parity-artifacts-"))
+        # Match reference artifact-path widths as well as case-root widths.
+        artifacts = args.artifacts.absolute() if args.artifacts else Path(tempfile.mkdtemp(prefix="reagent-parity-cases-")) / "artifacts"
         guard_artifacts(artifacts)
         if artifacts.exists() and any(artifacts.iterdir()):
             raise HarnessError("--artifacts must be empty")
@@ -1191,24 +1364,18 @@ def main(argv=None):
         inventory_error = None
         if not args.probe:
             subset = None if len(selected) == len(cases) else [case.id for case in selected]
-            golden = reference.ensure_cache(suite, manifest, cases, args.jobs, selected=subset, full=args.verify_cache)
+            golden = reference.ensure_cache(suite, manifest, cases, args.jobs, selected=subset,
+                                            full=args.verify_cache, read_only=True)
             try:
                 verify_inventory(golden, cases, manifest)
             except (HarnessError, OSError, ValueError, TypeError) as exc:
                 inventory_error = str(exc)
         with tempfile.TemporaryDirectory(prefix="reagent-parity-cases-") as temporary:
-            with ProcessPoolExecutor(max_workers=args.jobs) as pool:
-                futures = [pool.submit(execute_case, case.id, args.bin, str(Path(temporary) / case.id),
-                                       str(artifacts / case.id), str(Path(coverage) / case.id) if coverage else None,
-                                       None if args.probe else str(golden), inventory_error, args.keep_artifacts)
-                           for case in selected]
-                results = []
-                for case, future in zip(selected, futures):
-                    try:
-                        result = future.result()
-                    except Exception as exc:
-                        result = {"id": case.id, "status": "failed", "reason": "worker failed: %s" % exc, "artifacts": {}, "artifact_policies": {}}
-                    results.append(result)
+            results = schedule_cases(selected, execute_case,
+                lambda case: (case.id, args.bin, str(Path(temporary) / case.id),
+                              str(artifacts / case.id), str(Path(coverage) / case.id) if coverage else None,
+                              None if args.probe else str(golden), inventory_error, args.keep_artifacts),
+                args.jobs, ProcessPoolExecutor, on_error=worker_failure)
         has_executable = any(not case.pending for case in selected)
         for result in results:
             if args.probe and result["status"] == "passed":
@@ -1239,6 +1406,9 @@ def main(argv=None):
                   "reference_binary_sha256": manifest.get("reference_binary_sha256"),
                   "accepted_gaps": manifest.get("accepted_gaps", []), "results": results,
                   "counts": counts, "coverage_counts": coverage_counts,
+                  "leak_checks": {"clean": sum(result.get('leak_check') == 'clean' for result in results),
+                                  "failed": sum(result.get('leak_check') == 'failed' for result in results),
+                                  "pids": sorted({pid for result in results for pid in result.get('leak_pids', [])})},
                   "pending": [{"id": case.id, "reason": case.pending or pending_reasons.get(case.id),
                                "selected": case.id in selected_ids}
                               for case in cases if case.pending or case.id in pending_reasons],
@@ -1248,6 +1418,7 @@ def main(argv=None):
         result_by_id = {result["id"]: result for result in results}
         report["case_ledger"] = [{"id": case.id, "area": case.area, "platforms": list(case.platforms),
                                  "slow": case.slow, "pending": case.pending,
+                                 "exclusive": result_by_id.get(case.id, {}).get('exclusive'),
                                  "status": result_by_id.get(case.id, {}).get("status", "omitted"),
                                  "artifact_policies": result_by_id.get(case.id, {}).get("artifact_policies", {})}
                                 for case in cases]
@@ -1259,6 +1430,21 @@ def main(argv=None):
             print("PROBE ONLY: assertions/normalization observed; no golden comparison or gate success")
         return int(bool(inventory_error) or not accepted_outcomes(selected, results, "observed" if args.probe else "passed"))
     except (HarnessError, OSError, ValueError, ImportError) as exc:
+        print("parity: " + str(exc), file=sys.stderr)
+        return 2
+
+
+def main(argv=None):
+    """Share read-only comparison invocations while captures retain publication exclusion."""
+    from parity.capture_lock import capture_lock
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        # golden.main owns its exclusive publication lock; never nest it here.
+        if '--golden-update' in arguments:
+            return _main(arguments)
+        with capture_lock(shared=True):
+            return _main(arguments)
+    except OSError as exc:
         print("parity: " + str(exc), file=sys.stderr)
         return 2
 

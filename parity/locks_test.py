@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -170,6 +171,28 @@ class LockTest(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, "raw replay differs"):
                     locks.update_lock(suite, manifest, stage, cases, jobs=1)
             self.assertEqual(path.read_bytes(), before)
+            published = {name: (suite / name).read_bytes()
+                         for name in ('inventory.json', 'policy.json', 'samples/index.json')}
+            for case_id in ('W01.test', 'T01.test', 'C01.test'):
+                sample = suite / 'samples' / (case_id + '.tar.gz')
+                sample.write_bytes(b'existing sample')
+                for mutation in ('changed', 'missing'):
+                    def change_existing_sample(lane, destination):
+                        refresh_samples(lane, destination)
+                        replacement = destination / 'samples' / sample.name
+                        if mutation == 'missing':
+                            replacement.unlink()
+                        else:
+                            replacement.write_bytes(b'changed sample')
+                        return [case_id]
+                    with self.subTest(sample=case_id, mutation=mutation), \
+                         patch.object(locks, 'frozen_lock', return_value=self.lock), \
+                         patch.object(samples, 'refresh_samples', side_effect=change_existing_sample):
+                        with self.assertRaisesRegex(AssertionError, 'existing sample identity violation'):
+                            locks.update_lock(suite, manifest, stage, cases, jobs=1)
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertEqual(sample.read_bytes(), b'existing sample')
+                    self.assertEqual({name: (suite / name).read_bytes() for name in published}, published)
 
     def test_frozen_lock_requires_replay_validation(self):
         from parity import run
@@ -180,6 +203,241 @@ class LockTest(unittest.TestCase):
              patch.object(run, "validate_replay", side_effect=AssertionError("raw replay differs")):
             with self.assertRaisesRegex(AssertionError, "raw replay differs"):
                 locks.frozen_lock(Path("unused"))
+
+
+class ZeroExecTimingLockTest(unittest.TestCase):
+    def setUp(self):
+        from parity.observe import Normalizer, go_json
+        normal = Normalizer('/allocated/root', '')
+        outcome = dict(ok=True, data=dict(argv=['true'], timeout_ms=10000, duration_ms=0),
+                       workspace='/allocated/root/workspace')
+        history = [dict(kind='tool', tool=dict(outcome=outcome))]
+        self.raw = {
+            'trace-1.jsonl': go_json(dict(type='tool.finished', seq=1,
+                                        data=dict(name='exec', outcome=outcome))) + b'\n'
+                             + go_json(dict(type='model.request', seq=2, data=dict(history=history))) + b'\n'
+                             + go_json(dict(type='tool.finished', seq=3,
+                                            data=dict(name='exec', outcome=outcome))) + b'\n',
+            'cache-input': go_json(dict(history=history)),
+            'http-1.request': go_json(dict(input=[dict(type='function_call_output',
+                                                      output=go_json(outcome).decode())])),
+            'chain': go_json(dict(steps=[outcome['data'], outcome['data']])),
+        }
+        self.artifacts = {name: b''.join(normal.json(line, name) for line in raw.splitlines(keepends=True))
+                          if name.endswith('.jsonl') else normal.json(raw, name)
+                          for name, raw in self.raw.items()}
+        self.policies = {name: 'N' for name in self.artifacts}
+        self.ledger = normal.ledger
+        self.zero_rows = [entry for entry in self.ledger if entry['kind'] == 'duration-ms']
+        self.assertEqual(len(self.zero_rows), 7)
+        self.assertTrue(all(entry['before'] == entry['after'] == 'MA==' for entry in self.zero_rows))
+        self.previous_ledger = [entry for entry in self.ledger if entry['kind'] != 'duration-ms']
+        self.previous = locks.case_lock(self.artifacts, self.policies, self.previous_ledger)
+        self.current = locks.case_lock(self.artifacts, self.policies, self.ledger)
+        self.documents = {'artifact-policies.json': locks.canonical(self.policies), 'replay.json': b'{}'}
+        self.capture = {'raw': self.raw, 'normalized': self.artifacts}
+        self.frozen = (self.documents, self.ledger + [{'frozen_evidence': {}}], self.capture)
+
+    def test_only_replay_proven_zero_rows_migrate_wire_and_tool_locks(self):
+        from parity import run
+        old = {case_id: copy.deepcopy(self.previous) for case_id in ('W01.zero', 'W02.zero', 'T01.zero')}
+        old['W03.unchanged'] = self.current
+        new = {case_id: copy.deepcopy(self.current) for case_id in old}
+        original = copy.deepcopy((old, new))
+        with patch.object(run, 'read_frozen_case', return_value=self.frozen) as read, \
+             patch.object(run, 'validate_replay') as validate:
+            baseline, updates = locks.approved_zero_exec_timing_updates(old, new, Path('stage'))
+        self.assertEqual((old, new), original)
+        self.assertEqual(baseline, new)
+        self.assertEqual({call.args[0] for call in read.call_args_list},
+                         {Path('stage') / case_id for case_id in ('W01.zero', 'W02.zero', 'T01.zero')})
+        self.assertEqual(validate.call_count, 3)
+        for call in validate.call_args_list:
+            self.assertEqual(call.args, (self.raw, {}, self.artifacts, self.policies, self.ledger))
+        self.assertEqual([entry['id'] for entry in updates], ['T01.zero', 'W01.zero', 'W02.zero'])
+        expected_sites = [{key: entry[key] for key in ('artifact', 'path')} for entry in self.zero_rows]
+        for update in updates:
+            self.assertEqual(update['old_ledger_sha256'], self.previous['ledger_sha256'])
+            self.assertEqual(update['new_ledger_sha256'], self.current['ledger_sha256'])
+            self.assertEqual(update['sites'], expected_sites)
+        locks.protect_wire_locks(baseline, new)
+        locks.protect_previous_locks(baseline, new)
+        with self.assertRaisesRegex(AssertionError, 'area-1 lock identity violation'):
+            locks.protect_wire_locks(old, new)
+        with self.assertRaisesRegex(AssertionError, 'earlier-area lock identity violation'):
+            locks.protect_previous_locks(old, new)
+
+    def test_other_differences_never_receive_a_guard_exemption(self):
+        from parity import run
+        for control in ('normalized-bytes', 'policy', 'extra-site', 'removed-site',
+                        'existing-zero-site', 'nonzero', 'float-zero',
+                        'missing-case', 'outside-area', 'new-case'):
+            with self.subTest(control=control):
+                artifacts, policies, ledger = copy.deepcopy((self.artifacts, self.policies, self.ledger))
+                previous = copy.deepcopy(self.previous)
+                case_id = 'C01.zero' if control == 'outside-area' else 'W01.zero'
+                if control == 'normalized-bytes':
+                    artifacts['cache-input'] += b' '
+                if control == 'policy':
+                    policies['cache-input'] = 'B'
+                if control == 'extra-site':
+                    ledger.append(dict(self.previous_ledger[0], path=['unexpected']))
+                if control == 'removed-site':
+                    ledger.remove(next(entry for entry in ledger if entry['kind'] != 'duration-ms'))
+                if control == 'existing-zero-site':
+                    previous = locks.case_lock(self.artifacts, self.policies,
+                                               self.previous_ledger + self.zero_rows[:1])
+                if control in ('nonzero', 'float-zero'):
+                    for entry in ledger:
+                        if entry['kind'] == 'duration-ms':
+                            entry['before'] = 'MQ==' if control == 'nonzero' else 'MC4w'
+                current = locks.case_lock(artifacts, policies, ledger)
+                old, new = {case_id: previous}, {case_id: current}
+                if control == 'missing-case':
+                    new = {}
+                if control == 'new-case':
+                    old = {}
+                frozen = ({'artifact-policies.json': locks.canonical(policies), 'replay.json': b'{}'},
+                          ledger + [{'frozen_evidence': {}}], {'raw': self.raw, 'normalized': artifacts})
+                with patch.object(run, 'read_frozen_case', return_value=frozen), \
+                     patch.object(run, 'validate_replay'):
+                    baseline, updates = locks.approved_zero_exec_timing_updates(old, new, Path('stage'))
+                self.assertEqual(baseline, old)
+                self.assertEqual(updates, [])
+                if control not in ('outside-area', 'new-case'):
+                    with self.assertRaisesRegex(AssertionError, 'earlier-area lock identity violation'):
+                        locks.protect_previous_locks(baseline, new)
+
+    def test_frozen_evidence_and_full_replay_remain_mandatory(self):
+        from parity import run
+        old, new = {'T01.zero': self.previous}, {'T01.zero': self.current}
+        original = copy.deepcopy((old, new))
+        with patch.object(run, 'read_frozen_case', side_effect=run.HarnessError('missing frozen case')):
+            with self.assertRaisesRegex(run.HarnessError, 'missing frozen case'):
+                locks.approved_zero_exec_timing_updates(old, new, Path('stage'))
+        with patch.object(run, 'read_frozen_case', return_value=self.frozen), \
+             patch.object(run, 'validate_replay', side_effect=run.HarnessError('raw replay differs')):
+            with self.assertRaisesRegex(run.HarnessError, 'raw replay differs'):
+                locks.approved_zero_exec_timing_updates(old, new, Path('stage'))
+        forged = {'T01.zero': dict(self.current, ledger_sha256='0' * 64)}
+        with patch.object(run, 'read_frozen_case', return_value=self.frozen), \
+             patch.object(run, 'validate_replay'):
+            with self.assertRaisesRegex(AssertionError, 'migration evidence differs'):
+                locks.approved_zero_exec_timing_updates(old, forged, Path('stage'))
+        self.assertEqual((old, new), original)
+        with self.assertRaisesRegex(AssertionError, 'earlier-area lock identity violation'):
+            locks.protect_previous_locks(old, new)
+
+
+class TerminalProjectionLockTest(unittest.TestCase):
+    def setUp(self):
+        from parity.observe import Normalizer
+        from parity.observe_cli_terminal import encoded, integrate
+        from parity.vt import Terminal
+        raw = b"\x1b[31mhello\x1b[0m"
+        terminal = Terminal(3, 20)
+        terminal.feed(raw)
+        metadata = encoded(dict(version=1, initial_size=[3, 20],
+                                events=[dict(kind="snapshot", offset=len(raw), label="ready")],
+                                snapshots=[dict(label="ready", offset=len(raw), state=terminal.snapshot())]))
+        root = Path("/allocated/C21.fixture")
+        context = SimpleNamespace(root=root, artifacts=root / "artifacts",
+                                  invocations=[dict(stderr=raw, stdin=b"")],
+                                  observations={"invoke-001.tty": raw, "invoke-001.terminal.json": metadata})
+        normal = Normalizer(root, None)
+        self.artifacts, _, stderr = integrate(context, normal, [])
+        self.artifacts.update(stderr)
+        self.policies = {name: "S" if name in stderr else "B" for name in self.artifacts}
+        self.ledger = normal.ledger
+        self.context = context
+
+    def test_actual_observer_rows_lock_and_round_trip_with_owned_witnesses(self):
+        contract = locks.ledger_contract(self.ledger, self.artifacts)
+        owners = ("invoke-001.tty", "invoke-001.terminal.json", "invocation-1.stderr")
+        self.assertEqual(contract["sites"], sorted(
+            [[name, ["terminal-state-projection"], "terminal-state-projection", 1] for name in owners],
+            key=locks.canonical))
+        self.assertEqual(contract["certificates"], sorted(
+            [dict(artifact=name, kind="terminal-state-projection", classification="S",
+                  certificate="invoke-001.screens.json") for name in owners], key=locks.canonical))
+        expected = locks.case_lock(self.artifacts, self.policies, self.ledger)
+        cases = {"C21.fixture": expected}
+        self.assertEqual(locks.unpack(locks.pack(cases)), cases)
+        locks.verify_case("C21.fixture", expected, self.artifacts, self.policies, self.ledger)
+
+    def test_frozen_lock_replays_terminal_evidence_and_rejects_ledger_tampering(self):
+        from parity import run
+        raw = dict(self.context.observations)
+        raw.update({"invoke-001.stderr": raw["invoke-001.tty"], "invoke-001.stdout": b"", "invoke-001.status": b"0\n"})
+        replay = dict(root=str(self.context.root), artifacts=str(self.context.artifacts), server="", requests=0, traces=[],
+                      invocations=[dict(started=0, ended=1,
+                                        terminal_args=["chat", "--workspace", str(self.context.root / "workspace")],
+                                        terminal_size=dict(rows=3, cols=20, stdout_tty=False))])
+        artifacts, policies, ledger = run.replay_case(raw, replay)
+        replay["raw_policies"] = run.account_raw(raw, artifacts, policies, replay)
+        documents = {"artifact-policies.json": locks.canonical(policies), "replay.json": locks.canonical(replay)}
+        capture = {"raw": raw, "normalized": artifacts}
+        expected = locks.case_lock(artifacts, policies, ledger)
+        with patch.object(run, "read_frozen_case", return_value=(documents, ledger + [{"frozen_evidence": {}}], capture)):
+            self.assertEqual(locks.frozen_lock(Path("unused")), expected)
+        projection = next(index for index, entry in enumerate(ledger) if entry.get("kind") == "terminal-state-projection")
+        changed = copy.deepcopy(ledger)
+        changed[projection]["certificate"] = "invoke-002.screens.json"
+        for invalid in (changed, ledger[:projection] + ledger[projection + 1:], ledger + [ledger[projection]]):
+            with self.subTest(count=len(invalid)), self.assertRaisesRegex(run.HarnessError, "substitution ledger differs"):
+                run.validate_replay(raw, replay, artifacts, policies, invalid)
+
+    def test_projection_requires_every_observer_field_and_rejects_extras(self):
+        original = self.ledger[0]
+        changes = [{key: value for key, value in original.items() if key != missing} for missing in original]
+        changes += [dict(original, **{extra: "forged"}) for extra in ("case", "witness", "raw", "extra")]
+        for changed in changes:
+            with self.subTest(fields=sorted(changed)), self.assertRaises(AssertionError):
+                locks.ledger_contract([changed], self.artifacts)
+
+    def test_projection_rejects_forged_owner_path_classification_and_certificate(self):
+        changes = [dict(classification=value) for value in ("B", "N", None, 1)]
+        changes += [dict(path=value) for value in ([], ["other"], ["terminal-state-projection", 0], "terminal-state-projection")]
+        changes += [dict(artifact=value) for value in ("out", "invoke-000.tty", "invoke-01.tty", "invoke-001.stdout",
+                                                      "invocation-0.stderr", "invocation-01.stderr", "invoke-002.tty")]
+        changes += [dict(certificate=value) for value in (None, 1, {}, [], "", "invoke-002.screens.json",
+                                                         "../invoke-001.screens.json", "invocation-1.stderr")]
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                locks.ledger_contract([dict(self.ledger[0], **change)], self.artifacts)
+        artifacts = dict(self.artifacts, **{"invoke-002.screens.json": b"forged"})
+        with self.assertRaisesRegex(AssertionError, "terminal projection certificate"):
+            locks.ledger_contract([dict(self.ledger[0], certificate="invoke-002.screens.json")], artifacts)
+        artifacts = {name: raw for name, raw in self.artifacts.items() if name != "invoke-001.screens.json"}
+        with self.assertRaisesRegex(AssertionError, "terminal projection certificate"):
+            locks.ledger_contract(self.ledger, artifacts)
+
+    def test_certificate_is_not_admitted_on_other_substitutions(self):
+        for kind in locks.SUBSTITUTION_KINDS:
+            if kind == "terminal-state-projection":
+                continue
+            with self.subTest(kind=kind), self.assertRaisesRegex(AssertionError, "row fields"):
+                locks.ledger_contract([dict(row(kind=kind), classification="S", certificate="invoke-001.screens.json")], self.artifacts)
+
+    def test_projection_contract_excludes_raw_values_but_retains_certificate_multiplicity(self):
+        contract = locks.ledger_contract(self.ledger, self.artifacts)
+        changed = copy.deepcopy(self.ledger)
+        for entry in changed:
+            entry.update(start=999, end=1000, before="different", after="different", before_sha256="raw-digest",
+                         after_sha256="other-digest", before_length=1, after_length=2)
+        self.assertEqual(contract, locks.ledger_contract(changed[::-1], self.artifacts))
+        encoded = locks.canonical(contract)
+        for forbidden in (b"before", b"after", b"start", b"end", b"raw-digest", self.ledger[0]["before_sha256"].encode()):
+            self.assertNotIn(forbidden, encoded)
+        for changed in (self.ledger[:-1], self.ledger + self.ledger[:1]):
+            with self.subTest(count=len(changed)):
+                self.assertNotEqual(locks.digest(contract), locks.digest(locks.ledger_contract(changed, self.artifacts)))
+
+    def test_nonterminal_contract_keeps_existing_site_only_serialization(self):
+        ledger = [row(artifact="out", path=["data", "workspace"]), row(artifact="out", path=["data", "workspace"])]
+        self.assertEqual(locks.ledger_contract(ledger, {"out": b"<ROOT>"}),
+                         {"version": 1, "sites": [["out", ["data", "workspace"], "allocated-path-or-reference", 2]],
+                          "certificates": []})
 
 
 if __name__ == "__main__":

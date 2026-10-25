@@ -9,6 +9,7 @@ from pathlib import Path
 import tarfile
 import unittest
 
+from parity.locks import unpack
 from parity.observe_delivery import _PLANS
 from parity.samples import SELECTIONS, bundle, normalized_digest
 
@@ -42,6 +43,7 @@ class SampleTests(unittest.TestCase):
         inventory = json.loads((suite / 'inventory.json').read_bytes())
         cases = {case['id']: case for case in inventory['cases']}
         index = json.loads((suite / 'samples/index.json').read_bytes())
+        locks = unpack(json.loads((suite / 'expected/darwin.json').read_bytes()))
         selected = {row['id'] for row in index['cases']}
         self.assertEqual(len(selected), len(index['cases']))
         # New selections are checked against live cases below, then frozen by parity-golden.
@@ -69,6 +71,9 @@ class SampleTests(unittest.TestCase):
                 self.assertEqual(sum(map(len, artifacts.values())), row['normalized_bytes'])
                 self.assertEqual(normalized_digest(artifacts), row['normalized_sha256'])
                 self.assertEqual(raw, bundle(row['id'], artifacts, metadata['artifact_policies']))
+                self.assertEqual(locks[row['id']]['artifacts'], [
+                    [name, len(data), hashlib.sha256(data).hexdigest(), metadata['artifact_policies'][name]]
+                    for name, data in sorted(artifacts.items())])
 
     def test_semantic_policy_enumerates_only_the_registered_delivery_cases(self):
         policy = json.loads(Path(__file__).with_name('policy.json').read_bytes())

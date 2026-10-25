@@ -6,6 +6,7 @@ import math
 import re
 
 from parity.cases.wire_endpoints import ANTHROPIC, OPENAI, _stream
+from parity.invocation_time import elapsed
 from parity.cases.wire_decode import REPLY as CHAT_REPLY, _last_prompt, event, reply, sse
 
 
@@ -29,9 +30,13 @@ def _cancellation(kind, phase, request, invocations, events, chat=False):
     invocation = invocations[0]
     started, ended, code = (invocation.get(key) for key in ("started", "ended", "returncode"))
     expected_code = 0 if chat or kind == "auth-revoke" else 2 if kind.startswith("auth-") else 1
+    try:
+        duration = elapsed(invocation)
+    except ValueError as exc:
+        raise AssertionError("W54 cancellation invocation violates its exit or 15s fixture bound") from exc
     if (type(code) is not int or code != expected_code
             or any(type(value) not in (int, float) or not math.isfinite(value) for value in (started, ended))
-            or not 0 <= ended - started <= 15):
+            or not 0 <= duration <= 15):
         raise AssertionError("W54 cancellation invocation violates its exit or 15s fixture bound")
     if any(event.get("type") == "model.accepted" for event in events):
         raise AssertionError("W54 cancellation cannot have accepted model output")

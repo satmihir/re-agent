@@ -546,9 +546,10 @@ def collect():
     add('T27.filter-tripwire', 'Ordinary status fires filter; restricted switch/next/reset/model snapshots never do', _filter_tripwire)
     add('T59.maps-numbers', 'Sorted nested Jev maps versus struct order; exact float lexemes, signed zero and int64 above 2^53', _maps_numbers)
     add('T60.empty-null', 'Empty arrays/strings versus explicit null data retain exact bounded envelopes', _empty_null)
+    from parity.cases.cli_dependencies import human_consent, lifetime
+    cases.append(Case('T23.human-consent', 'Terminal approval and denied human selection', human_consent))
+    cases.append(Case('T26.lifetime', 'Workspace grant survives reset/model/fresh but not chat exit', lifetime))
     for identity, reason in (
-            ('T23.human-consent', 'C16 PTY workspace consent driver: terminal approval and denied human selection'),
-            ('T26.lifetime', 'C16 PTY/reset/model/fresh session driver required to prove grant lifetime'),
             ('T27.agent-bindings', 'A20/A21 concurrent agent workspace bindings driver'),
             ('T56.dropped-inherited-compact-reset', 'A31/A32 actual GC drop/inheritance and compaction/reset fixtures')):
         cases.append(Case(identity, reason, None, pending=reason))

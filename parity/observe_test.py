@@ -47,6 +47,48 @@ class OracleTests(unittest.TestCase):
         self.assertEqual(entry['before_sha256'], sha256(b'23'))
         self.assertEqual(entry['before_length'], 2)
 
+    def test_exec_timing_sites_include_zero_in_results_history_and_embedded_echoes(self):
+        from parity.locks import ledger_contract
+
+        results = []
+        for duration in (0, 1, 3, 25):
+            with self.subTest(duration=duration):
+                normal = Normalizer('/allocated/root', '')
+                outcome = dict(data=dict(argv=['true'], timeout_ms=10000, duration_ms=duration))
+                history = dict(history=[dict(kind='tool', tool=dict(outcome=outcome))])
+                documents = {
+                    'trace-1.jsonl': go_json(dict(type='tool.finished', seq=1,
+                                                data=dict(name='exec', outcome=outcome))) + b'\n',
+                    'cache-input': go_json(history),
+                    'request': go_json(dict(input=[dict(type='function_call_output',
+                                                       output=go_json(outcome).decode())])),
+                    'chain': go_json(dict(steps=[outcome['data'], outcome['data']])),
+                }
+                normalized = {name: normal.json(raw, name) for name, raw in documents.items()}
+                sites = [row for row in normal.ledger if row['kind'] == 'duration-ms']
+                self.assertEqual(len(sites), 5)
+                if duration == 0:
+                    self.assertTrue(all(row['before'] == row['after'] for row in sites))
+                results.append((normalized, ledger_contract(normal.ledger, normalized)))
+        self.assertTrue(all(result == results[0] for result in results))
+
+    def test_exec_timing_does_not_register_native_prose_or_nonexec_zero_sites(self):
+        normal = Normalizer('/allocated/root', '')
+        raw = go_json(dict(type='model.accepted', seq=1, data=dict(native=dict(
+            items=[dict(steps=[dict(argv=['true'], timeout_ms=10000, duration_ms=3)])]))))
+        self.assertEqual(normal.json(raw, 'trace-1.jsonl'), raw)
+        for document in (dict(duration_ms=3, text='duration_ms: 3'),
+                         dict(type='api.attempt.finished', seq=1, data=dict(duration_ms=0)),
+                         dict(shell=dict(command='true', duration_ms=0))):
+            raw = go_json(document)
+            self.assertEqual(normal.json(raw, 'other'), raw)
+        self.assertEqual(normal.ledger, [])
+        for value in (-1, True, 3600001):
+            raw = go_json(dict(type='tool.finished', seq=1,
+                               data=dict(name='exec', outcome=dict(data=dict(duration_ms=value)))))
+            with self.subTest(value=value), self.assertRaisesRegex(AssertionError, 'duration out of bounds'):
+                normal.json(raw, 'trace-1.jsonl')
+
     def test_provider_trace_lookalike_fields_do_not_grant_harness_event_authority(self):
         normal = Normalizer('/allocated/root', '127.0.0.1:3000')
         raw = b'{"type":"run.started","seq":1,"session_id":"0123456789abcdef","data":{"build":null},"number":1e+09}'

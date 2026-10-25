@@ -20,6 +20,114 @@
   ],
   "typed_allowlist": [
     {
+      "kind": "terminal-workspace-path",
+      "owner": "T23.human-consent and T26.lifetime permission locations, exec-mode workspace announcements and workspace-tool activity target cells only",
+      "validation": "Unique accepted/start/finish lifecycle in the exact invocation, valid grant/switch transitions and complete literal rendered field including width/truncation; literal model output excluded",
+      "replacement": "Only the visible allocation-root prefix; suffixes, text, cell geometry, cursor and styles remain exact"
+    },
+    {
+      "kind": "tool-human-approved-workspace-path",
+      "owner": "T23.human-consent and T26.lifetime successful human grant outcomes only",
+      "validation": "Replay-certified permission picker, exact highlighted Enter input, launch configuration, accepted call/start/finish provenance and exact allocated target/workspace outcome",
+      "replacement": "Only independently allocated approved_path/workspace leaves"
+    },
+    {
+      "kind": "tool-human-workspace-echo",
+      "owner": "Exact echoes of certified T23/T26 outcomes in typed history/native input strings and handoff records",
+      "validation": "Complete raw outcome equals its unique independently accepted call and finish; recursively checked enclosing output/handoff/request-body schema; model text and native assistant output excluded",
+      "replacement": "Only witnessed allocated path leaves, preserving all other lexemes"
+    },
+    {
+      "kind": "terminal-startup-session",
+      "owner": "Exact startup Session ID cells and corresponding resume hints, plus C16 fresh-implement announcements certified by the same invocation's trace/input",
+      "validation": "Complete raw terminal replay and cell provenance plus matching Run/configuration or repeated header/hint witness; literal model output never enters the slot",
+      "replacement": "Stable typed Session token preserving every cell position, style and cursor"
+    },
+    {
+      "kind": "terminal-startup-path",
+      "owner": "Exact startup workspace allocation cells only",
+      "validation": "Raw startup line grammar, case root allocation, launch evidence and complete raw-to-screen provenance; duplicated literal model text remains literal",
+      "replacement": "Only allocated path cells, preserving physical grid geometry and styles"
+    },
+    {
+      "kind": "terminal-exec-timeout-elapsed",
+      "owner": "C26 exec timeout numeric screen cells",
+      "validation": "One exact command and independently paired exec start/result inside the owning invocation; timeout floor, termination reason, unknown effects and displayed duration validated through the existing exec-timeout witness and Go-compatible rounding; complete raw-to-cell provenance",
+      "replacement": "Only the elapsed number becomes a same-width canonical numeric slot; units, cells outside it, geometry, styles and cursor remain exact"
+    },
+    {
+      "kind": "terminal-progress-spinner",
+      "owner": "C34 queued-before-reply and C35 resized-retained-input/queued-before-reply progress cells only",
+      "validation": "Known spinner glyph, exact CSI/newline-framed waiting/model/auth/step line, independent raw request and trace ownership, invocation bounds, replayed resize geometry and surviving sampled progress-cell provenance; no model/prose/general-spinner matches",
+      "replacement": "Only the known one-cell spinner becomes its canonical known glyph; all other cells, widths, styles and cursor remain literal"
+    },
+    {
+      "kind": "terminal-artifact-path",
+      "owner": "Terminal trace-path diagnostic cells only",
+      "validation": "Exact trace path independently witnessed by run.finished and invocation allocation, complete raw-to-cell replay",
+      "replacement": "Only owned artifact path cells with geometry/styles/cursor unchanged"
+    },
+    {
+      "kind": "terminal-state-projection",
+      "owner": "Sealed PTY raw stream and driver event/snapshot metadata",
+      "validation": "Replay every raw byte, query reply, resize and input event; certify exact snapshot grid/cursor/styles/scrollback and reject unknown/incomplete controls; screens remain exact after narrow typed slots",
+      "replacement": "Semantic transport projection to exact sampled screens; raw offsets, byte-stream lengths and redraw cadence are not screen observations"
+    },
+    {
+      "kind": "cli-reset-checkpoint",
+      "owner": "C12.reset and C12.reset-extra local-only reset checkpoint witnesses",
+      "validation": "Exact configured stdin, clean exit, startup/fresh footer identity grammar and multiplicity, both independent checkpoint envelope/state IDs, original state SHA-256, workspace/model/effort/mode and empty idle state",
+      "replacement": "Only typed Session IDs, launch/active allocation paths and the independently launch-matched Runtime Workspace line in the pinned prompt; recompute the normalized state digest, preserving all unrelated checkpoint and prompt lexemes"
+    },
+    {
+      "kind": "cli-exec-executable",
+      "owner": "C38 cancelled exec resolved_executable leaf only",
+      "validation": "Pre-invocation isolated PATH and symlink-target evidence, exact argv/cwd, independently owned case workspace and one cancelled exec start/result/Run lifecycle inside the invocation; no arbitrary paths or other-family output",
+      "replacement": "Only the configured allocated executable path becomes <ROOT>/home/.parity-bin/python3"
+    },
+    {
+      "kind": "cli-shell-termination",
+      "owner": "C37 foreground-interrupt typed shell history fields and their exact HTTP echoes only",
+      "validation": "Configured command, independent helper startup capture, foreground process group, helper death, absent tripwire, exact traced Entry and HTTP agreement; only the two documented interrupted/killed-by-interrupt races",
+      "replacement": "Canonical interrupted=true, signal=interrupt; literal output/effects retained"
+    },
+    {
+      "kind": "cli-shell-status",
+      "owner": "C37 complete witnessed interrupted shell footer only",
+      "validation": "Same independently validated shell Entry and exact original footer wording/duration; no generic signals or arbitrary prose",
+      "replacement": "Canonical equivalent footer for the two explicitly permitted signal races"
+    },
+    {
+      "kind": "cli-shell-workspace",
+      "owner": "C17 and independently process-witnessed C37 complete native input_text shell Entry echoes only",
+      "validation": "Exact typed traced shell Entry, recorded stdin command, invocation trace directory ownership, workspace allocation, and one independently captured matching HTTP string",
+      "replacement": "Only the Entry workspace path, preserving command and literal output bytes"
+    },
+    {
+      "kind": "cli-shell-duration-ms",
+      "owner": "C17 and independently process-witnessed C37 complete native input_text shell Entry echoes only",
+      "validation": "Exact same traced Entry and independent HTTP agreement; integer duration inside invocation bounds",
+      "replacement": "Only duration_ms becomes zero"
+    },
+    {
+      "kind": "cli-shell-elapsed",
+      "owner": "C17 human-shell footer elapsed span or C37 independently witnessed shell duration",
+      "validation": "Unique matching typed shell Entry, exit/truncation fields and one-decimal duration equality; no model stdout or arbitrary prose",
+      "replacement": "Only elapsed value becomes canonical zero; footer wording stays literal"
+    },
+    {
+      "kind": "cli-validated-preview-request-length",
+      "owner": "C04.oversized rejected preview stderr request byte count only",
+      "validation": "Exact 11 MiB x fixture bytes, two same-configuration public previews, first submitted prompt x, exit/status/channel and complete owned error grammar; length equals raw preview minus LF plus independently known prompt delta",
+      "replacement": "Byte count recomputed from normalized public preview plus literal prompt delta; all diagnostic prose remains literal"
+    },
+    {
+      "kind": "cli-version-build-metadata",
+      "owner": "C02 successful version/--version stdout only",
+      "validation": "Recorded exact CLI argv, exit 0, empty stderr and complete single-line reagent prefix/build suffix; no ordinary run or model reply can enter this slot",
+      "replacement": "Only the validated build suffix becomes <BUILD>; product prefix and newline remain literal"
+    },
+    {
       "kind": "git-index-stat-cache",
       "owner": "Guarded Git inspection ls-files --stage --debug helper stdout and pre-command binary index snapshot",
       "validation": "Complete stdout independently reconstructed from checksummed SHA-1/SHA-256 v2/v3 index, exact guarded argv and literal scope; preserve paths, OIDs, modes, flags, size and extension bytes; reject forged stats, malformed snapshots and unrelated commands",
@@ -63,7 +171,7 @@
     },
     {
       "kind": "git-do-jev-ms",
-      "owner": "T41-T54 and W53.propagation.git-do owned git_do result timing and typed history echoes",
+      "owner": "T41-T54, T59.maps-numbers and W53.propagation.git-do owned git_do result timing and typed history echoes",
       "validation": "Unique matching independent Jev HTTP capture with intent, snapshot and question ownership, no reused captures; integer bounded by tool-call and invocation intervals",
       "replacement": 0
     },

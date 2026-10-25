@@ -30,7 +30,7 @@ class MutationTests(unittest.TestCase):
 
     def test_all_36_have_unique_applicable_or_later_pending_classification(self):
         mutate.validate_manifest(self.manifest)
-        self.assertEqual({m["id"] for m in self.manifest["mutations"]}, {3, 4, 5, *range(9, 30), 36})
+        self.assertEqual({m["id"] for m in self.manifest["mutations"]}, {1, 2, 3, 4, 5, 6, *range(9, 30), 36})
         broken = copy.deepcopy(self.manifest)
         broken["later_pending"].pop()
         with self.assertRaisesRegex(ValueError, "all 36"):
@@ -98,6 +98,42 @@ class MutationTests(unittest.TestCase):
         (self.root / "invoke-001.stderr").unlink()
         (self.root / "invoke-001.status").write_text("-9")
         self.assertEqual(self.classify(rows)[0], "harness_failure")
+
+    def test_only_bound_assertion_cleanup_signals_can_reach_intended_classification(self):
+        directory = self.root / 'W99.exact'
+        directory.mkdir()
+        status = directory / 'invoke-001.status'
+        receipt = directory / 'invoke-001.failure-cleanup.json'
+        reason = 'Traceback (most recent call last):\n    assert intended\nAssertionError: intended marker\n'
+        valid = {'exception_type': 'AssertionError', 'exception': 'intended marker', 'returncode': None}
+        cases = [
+            ('term', -15, valid, reason, 'clean', False, 'caught'),
+            ('kill', -9, valid, reason, 'clean', False, 'caught'),
+            ('interrupt', -2, valid, reason, 'clean', False, 'harness_failure'),
+            ('baseline', -15, valid, reason, 'clean', True, 'harness_failure'),
+            ('already_exited', -15, dict(valid, returncode=-15), reason, 'clean', False, 'harness_failure'),
+            ('wrong_exception', -15, dict(valid, exception_type='RuntimeError'), reason, 'clean', False, 'harness_failure'),
+            ('wrong_message', -15, dict(valid, exception='other'), reason, 'clean', False, 'harness_failure'),
+            ('extra_member', -15, dict(valid, extra=True), reason, 'clean', False, 'harness_failure'),
+            ('unrelated_assertion', -15, dict(valid, exception='other'), reason.replace('intended marker', 'other'), 'clean', False, 'unrelated_assertion'),
+            ('no_terminal_assertion', -15, valid, reason + 'RuntimeError: later\n', 'clean', False, 'harness_failure'),
+            ('leaked_child', -15, valid, reason, 'failed', False, 'harness_failure'),
+            ('no_leak_check', -15, valid, reason, None, False, 'harness_failure'),
+            ('missing', -15, None, reason, 'clean', False, 'harness_failure'),
+            ('malformed', -15, 'not-json', reason, 'clean', False, 'harness_failure'),
+        ]
+        for name, code, value, failure, leaks, baseline, expected in cases:
+            with self.subTest(name=name):
+                status.write_text(str(code))
+                receipt.unlink(missing_ok=True)
+                if value is not None:
+                    receipt.write_text(value if isinstance(value, str) else json.dumps(value))
+                rows = [{'id': 'W99.exact', 'status': 'failed', 'reason': failure, 'leak_check': leaks}]
+                self.assertEqual(self.classify(rows, baseline=baseline)[0], expected)
+        receipt.write_text(json.dumps(valid))
+        (directory / 'invoke-001.stderr').write_text('panic: after assertion\n')
+        rows = [{'id': 'W99.exact', 'status': 'failed', 'reason': reason, 'leak_check': 'clean'}]
+        self.assertEqual(self.classify(rows)[0], 'panic')
 
     def test_case_runs_keep_baseline_and_mutant_evidence_for_classification(self):
         with patch.object(mutate, "command", return_value=({"exit_code": 0}, b"")) as command, patch.object(mutate, "load_report", return_value=({}, [])):
@@ -237,6 +273,9 @@ class MutationTests(unittest.TestCase):
 
     def test_definition_patterns_target_current_intended_assertion_expressions(self):
         examples = {
+            1: 'assert result.stdout == b"", "unknown command used stdout channel"',
+            2: 'assert result.returncode == 2, "post-prompt misplaced flag was accepted"',
+            6: 'raise AssertionError("queued submission lost after long reply")',
             3: 'assert _parts(body)[0]["text"] == expected.decode()',
             4: "assert outcome['ok'] is False and outcome['code'] == code, outcome",
             5: 'assert [r["kind"] for r in records] == ["user", "assistant", "shell"]',

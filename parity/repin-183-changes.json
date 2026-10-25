@@ -1,0 +1,51 @@
+{
+  "status": "approved migration; publication and proof receipts in cli-acceptance.json:repin_183",
+  "attribution": "satmihir/re-agent#183 — Make the workspace-snapshot Git timeout configurable",
+  "url": "https://github.com/satmihir/re-agent/pull/183",
+  "old_reference_commit": "14944a6bd8e35815effb74270218483804c29615",
+  "new_reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
+  "new_reference_binary_sha256": "b8d7e8cea619cba3f0f3d233e6e2898723a7100677c58b73ebd501d853bd64ed",
+  "shared_environment": {"REAGENT_WORKSPACE_GIT_TIMEOUT": "60"},
+  "proof": "Each new frozen case passed complete raw replay. Exactly one stdout/stderr artifact gains the single 114-byte line below. Removing that line and recomputing its derived hash/length metadata reconstructs the complete prior artifact map and lock. All ledger contracts remain identical. Both inverse deterministic bundles reconstruct the complete prior sample bytes. No masks or permanent guard exceptions were added.",
+  "added_line": "  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)\n",
+  "unchanged_ledger_sha256_for_all_nine": "b6f44d8a7687b4418af40ab15a99813d79f3c7a861537723e44f288de008e748",
+  "lock_migrations": [
+    {
+      "ids": ["W53.defaults.endpoints", "W53.defaults.endpoints.unset", "W54.defaults", "W54.defaults.unset", "C01.help", "C01.long-help", "C01.short-help"],
+      "artifact": "invocation-1.stdout",
+      "old_artifact_bytes": 2208,
+      "new_artifact_bytes": 2322,
+      "old_artifact_sha256": "24c193a7b93985553b181651c4b734eeb0ea47536ee528a7a046832ad3879d33",
+      "new_artifact_sha256": "68f7fb5a4b80620f297f7e9803e548df08d2a4a6abed7d5356092f2fff718546",
+      "old_normalized_sha256": "17da3e26faedc3bb39026768034e8b304cadf03ac99d4de3a97e008f60329755",
+      "new_normalized_sha256": "70df100300c810badff430ececf6af4b177d1268d2e0a8debc36e9470d6958a1"
+    },
+    {
+      "ids": ["C01.no-args"],
+      "artifact": "invocation-1.stderr",
+      "old_normalized_sha256": "dc6b8680df6f151db28fb5752a4ebafc21a3a369b1f9c0247ebda310e03a0a5b",
+      "new_normalized_sha256": "e60b66cc5ad1267ba80b578ec1d4fc145030e88ce4f881dd77d989be2c748b5b"
+    },
+    {
+      "ids": ["C01.unknown"],
+      "artifact": "invocation-1.stderr",
+      "old_normalized_sha256": "4da4c18ad592581a94612a4e3d7d8d9de2784df206b164dee15690a39607bbf8",
+      "new_normalized_sha256": "5b631fb546b12f2cfff7478047fc282b4b287b80ee5153211f3aaafe05a048a6"
+    }
+  ],
+  "sample_migrations": [
+    {
+      "id": "W53.defaults.endpoints",
+      "old_bundle_sha256": "06e39a3e3233ff3d806211d3b14b56b82b934da11281a054b18b3fba73e6faa8",
+      "new_bundle_sha256": "2b3983fee71e225459a6c3b0af0be0fade001142f6b8b78c68b2296ebb81a53f"
+    },
+    {
+      "id": "C01.unknown",
+      "old_bundle_sha256": "df9e313c985d7ec75e9da5abc87628241b4ba7256658af6bf2e29551da240ca0",
+      "new_bundle_sha256": "3039e2f54069e361782a206afc51c59c75dbea6db159e2b98f9211ff7206fa43"
+    }
+  ],
+  "other_locks_required_identical": 3747,
+  "other_sample_bundles_required_identical": 151,
+  "raw_proof": "/tmp/reagent-parity-cli-repin-183-proof/help-migration-proof.json"
+}

@@ -213,7 +213,9 @@ class Provider:
                 while not event.wait(.05):
                     if self._stopped.is_set():
                         return
-            if self._stopped.wait(response.header_delay):
+            # Keep Jev's measured milliseconds nonzero so omitempty cannot change result shape.
+            header_delay = max(response.header_delay, .005) if model == "jev-1.13.0" else response.header_delay
+            if self._stopped.wait(header_delay):
                 return
             chunks = list(response.chunks) if response.chunks is not None else [response.encoded()]
             chunks = [chunk.encode() if isinstance(chunk, str) else chunk for chunk in chunks]

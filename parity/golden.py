@@ -227,7 +227,7 @@ def capture_case(case_id, binary, root, artifacts, destination):
 def update_oracle(suite, manifest, lane, cases, jobs=4):
     """Prepare explicit re-pin data and publish its seal only after every reference replay passes."""
     from parity import locks
-    updated_manifest = dict(manifest)
+    updated_manifest = dict(manifest, goldens_frozen=True, freeze_status="ready")
     with tempfile.TemporaryDirectory(prefix="parity-oracle-update-") as temporary:
         prepared = Path(temporary)
         for source in suite.glob("*.py"):
@@ -238,6 +238,15 @@ def update_oracle(suite, manifest, lane, cases, jobs=4):
         for name in ("mutations.json", "policy.json"):
             shutil.copyfile(suite / name, prepared / name)
         lock = locks.update_lock(prepared, updated_manifest, lane, cases, jobs)
+        acceptance_path = suite / "cli-acceptance.json"
+        if acceptance_path.exists():
+            acceptance = json.loads(acceptance_path.read_bytes())
+            phase = acceptance.setdefault("zero_exec_timing_migration", {})
+            updates = {row['id']: row for row in phase.get('ledger_updates', [])}
+            for row in lock['approved_zero_exec_timing_updates']:
+                updates[row['id']] = row
+            phase['ledger_updates'] = [updates[key] for key in sorted(updates)]
+            (prepared / acceptance_path.name).write_text(json.dumps(acceptance, ensure_ascii=False, indent=2) + "\n")
         updated_manifest["suite_digest"] = ""
         (prepared / "manifest.json").write_text(json.dumps(updated_manifest, indent=2) + "\n")
         updated_manifest["suite_digest"] = run.suite_digest(prepared)
@@ -245,6 +254,8 @@ def update_oracle(suite, manifest, lane, cases, jobs=4):
         verify_cache(lane, prepared, updated_manifest, cases, lock, jobs)
         generated = ["expected/" + sys.platform + ".json", "inventory.json", "policy.json",
                      *["samples/" + path.name for path in (prepared / "samples").iterdir()], "manifest.json"]
+        if acceptance_path.exists():
+            generated.append(acceptance_path.name)
         originals = {relative: (suite / relative).read_bytes() if (suite / relative).exists() else None
                      for relative in generated}
         try:
@@ -278,17 +289,20 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
             working = Path(working)
             temp_root_width = len(str(working.resolve()))
             try:
-                with ProcessPoolExecutor(max_workers=jobs) as pool:
-                    futures = [pool.submit(capture_case, case.id, str(binary), str(working / case.id),
-                                           str(working / "artifacts" / case.id), str(staging / case.id)) for case in cases]
-                    results = [future.result() for future in futures]
+                results = run.schedule_cases(cases, capture_case,
+                    lambda case: (case.id, str(binary), str(working / case.id),
+                                  str(working / "artifacts" / case.id), str(staging / case.id)),
+                    jobs, ProcessPoolExecutor)
                 if not run.accepted_outcomes(cases, results, "passed"):
                     failures = [result for result in results if result["status"] != "passed"]
                     raise run.HarnessError(json.dumps(failures))
             except Exception as exc:
                 failed = lane.parent / ("failed-" + str(time.time_ns()))
-                shutil.copytree(working, failed, symlinks=True)
+                # Workspaces contain fixture FIFOs; preserve replay evidence, not
+                # live filesystem objects that copytree cannot copy.
                 shutil.copytree(staging, failed / "captured", symlinks=True)
+                if (working / "artifacts").exists():
+                    shutil.copytree(working / "artifacts", failed / "artifacts", symlinks=True)
                 (failed / "failure.txt").write_text(str(exc))
                 raise run.HarnessError("reference capture failed; evidence %s: %s" % (failed, exc)) from exc
         (staging / "inventory.json").write_text(json.dumps(run.leaf_inventory(cases, manifest), ensure_ascii=False, indent=2) + "\n")
@@ -316,17 +330,20 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
     return lane
 
 
-def ensure_cache(suite, manifest, cases, jobs=4, selected=None, full=False):
+def ensure_cache(suite, manifest, cases, jobs=4, selected=None, full=False, read_only=False):
     """Regenerate absent/stale data; reject corruption in a cache claiming the current identity.
 
     A complete replay is stamped with a fingerprint of every cached file's metadata, and later
     runs skip the replay while that fingerprint holds. A selection without a valid stamp
     replays only the selected cases. full forces a complete replay regardless.
+    Read-only comparisons never regenerate or stamp a cache under their shared lock.
     """
     lock = read_lock(suite, manifest)
     lane = guard_cache(cache_path(manifest), manifest)
     marker = lane / "cache.json"
     if not lane.exists():
+        if read_only:
+            raise run.HarnessError('reference cache absent; prepare it with make parity-golden before comparisons')
         return regenerate(suite, manifest, cases, lock, jobs)
     if lane.is_symlink() or not lane.is_dir():
         raise run.HarnessError("invalid reference cache: " + str(lane))
@@ -340,6 +357,8 @@ def ensure_cache(suite, manifest, cases, jobs=4, selected=None, full=False):
                                "regenerate the cache with make parity-golden (check TMPDIR)" %
                                (cached_width, current["temp_root_width"]))
     if cached != current:
+        if read_only:
+            raise run.HarnessError('reference cache identity differs; prepare it with make parity-golden before comparisons')
         return regenerate(suite, manifest, cases, lock, jobs)
     if not full and stamp_valid(lane):
         run.verify_inventory(lane, cases, manifest)
@@ -348,12 +367,13 @@ def ensure_cache(suite, manifest, cases, jobs=4, selected=None, full=False):
     if selected is not None and not full:
         return verify_cache(lane, suite, manifest, cases, lock, jobs, only=selected)
     verify_cache(lane, suite, manifest, cases, lock, jobs)
-    write_stamp(lane)
+    if not read_only:
+        write_stamp(lane)
     return lane
 
 
-def main(argv=None):
-    """Regenerate the pinned reference or explicitly update locks before approval."""
+def _main(argv=None):
+    """Regenerate the pinned reference while the CLI holds the capture lock."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jobs", type=int, default=run.default_jobs())
     parser.add_argument("--update", action="store_true")
@@ -371,6 +391,17 @@ def main(argv=None):
         print("parity-golden: %s (%.3fs)" % (lane, time.monotonic() - started))
         return 0
     except (run.HarnessError, OSError, ValueError, KeyError, TypeError) as exc:
+        print("parity-golden: " + str(exc), file=sys.stderr)
+        return 2
+
+
+def main(argv=None):
+    """Hold the machine-wide capture lock through preparation and publication."""
+    from parity.capture_lock import capture_lock
+    try:
+        with capture_lock():
+            return _main(argv)
+    except OSError as exc:
         print("parity-golden: " + str(exc), file=sys.stderr)
         return 2
 

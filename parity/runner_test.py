@@ -77,6 +77,83 @@ print('stderr sentinel', file=sys.stderr)
         self.addCleanup(context.close)
         return context
 
+    def test_invocation_keeps_backwards_wall_anchors_and_monotonic_elapsed(self):
+        from parity.invocation_time import elapsed
+        context = self.context()
+        with patch('parity.run.time.time', side_effect=[1000., 900.]):
+            result = context.invoke(['help'])
+        self.assertEqual(result.returncode, 0)
+        invocation = context.invocations[0]
+        self.assertEqual((invocation['started'], invocation['ended']), (1000., 900.))
+        self.assertEqual((invocation['start'], invocation['end']), (1000., 900.))
+        self.assertGreater(elapsed(invocation), 0)
+        self.assertLess(elapsed(invocation), 10)
+
+    def test_terminal_invocation_keeps_backwards_wall_and_monotonic_elapsed(self):
+        from parity.invocation_time import elapsed
+        from parity.terminal import TerminalSession
+        from parity.tty_test import FIXTURE
+        self.binary.write_text('#!%s\n' % sys.executable + FIXTURE)
+        context = self.context()
+        with patch('parity.terminal.time.time', side_effect=[1000., 900.]):
+            with TerminalSession(context, rows=12, cols=32) as session:
+                session.wait_prompt()
+                session.send(b'q')
+                result = session.finish()
+        self.assertEqual(result.returncode, 0)
+        invocation = context.invocations[0]
+        self.assertEqual((invocation['started'], invocation['ended']), (1000., 900.))
+        self.assertGreater(elapsed(invocation), 0)
+        self.assertLess(elapsed(invocation), 10)
+        self.assertEqual(invocation['stderr'], (context.artifacts / 'invoke-001.tty').read_bytes())
+
+    def test_replay_metadata_survives_observer_and_validation_failures(self):
+        from parity.invocation_time import elapsed
+        for stage in ('observer', 'validation'):
+            with self.subTest(stage=stage):
+                artifacts = self.root / (stage + '-artifacts')
+                case = Case('W99', 'replay failure evidence', lambda ctx: ctx.invoke(['help']))
+
+                def observe(ctx):
+                    self.assertTrue((artifacts / 'replay.json').is_file())
+                    if stage == 'observer':
+                        raise AssertionError('observer rejected evidence')
+                    return observed(ctx)
+
+                with patch('parity.run.collect_cases', return_value=[case]), \
+                        patch('parity.run.time.time', side_effect=[1000., 900.]), \
+                        patch('parity.observe.finish', side_effect=observe), \
+                        patch('parity.run.validate_replay', side_effect=HarnessError('validation rejected evidence')):
+                    result = run_case(case.id, self.binary, self.root / stage, artifacts)
+                self.assertEqual(result['status'], 'failed')
+                self.assertIn(stage + ' rejected evidence', result['reason'])
+                metadata = json.loads((artifacts / 'replay.json').read_bytes())
+                invocation = metadata['invocations'][0]
+                self.assertEqual((invocation['started'], invocation['ended']), (1000., 900.))
+                self.assertGreater(elapsed(invocation), 0)
+                self.assertEqual('raw_policies' in metadata, stage == 'validation')
+                self.assertIn(b'stderr sentinel', (artifacts / 'invoke-001.stderr').read_bytes())
+                self.assertTrue((artifacts / 'failure.txt').is_file())
+
+    def test_workspace_git_timeout_is_fixed_for_pipe_and_terminal(self):
+        from parity.terminal import TerminalSession
+        from parity.tty_test import FIXTURE
+
+        with patch.dict(os.environ, {'REAGENT_WORKSPACE_GIT_TIMEOUT': 'invalid'}):
+            context = self.context()
+        result = context.invoke(['help'])
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)['env']['REAGENT_WORKSPACE_GIT_TIMEOUT'], '60')
+        self.binary.write_text('#!%s\n' % sys.executable + FIXTURE)
+        with TerminalSession(context, rows=12, cols=32) as session:
+            session.wait_prompt()
+            session.send(b'q')
+            result = session.finish()
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)['env']['REAGENT_WORKSPACE_GIT_TIMEOUT'], '60')
+        self.assertEqual([item['env']['REAGENT_WORKSPACE_GIT_TIMEOUT']
+                          for item in context.invocations], ['60', '60'])
+
     def test_invocation_isolated_and_coverage_unique(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "never inherit", "HTTPS_PROXY": "never inherit",
                                     "REAGENT_CONTEXT_WINDOW_TOKENS": "42", "EDITOR": "never inherit"}):
@@ -379,7 +456,8 @@ while True: time.sleep(1)
         finish.assert_called_once()
 
     def test_main_compares_candidates_concurrently_inside_workers(self):
-        cases = [Case("W99.first", "first", lambda _: None), Case("W99.second", "second", lambda _: None)]
+        cases = [Case("W99.first", "first", lambda _: None, exclusive=False),
+                 Case("W99.second", "second", lambda _: None, exclusive=False)]
         barrier = threading.Barrier(2)
         parent_thread, comparing_threads = threading.get_ident(), []
 
@@ -422,7 +500,7 @@ while True: time.sleep(1)
             with urlopen(HTTPRequest(ctx.server.url + "/fixture", data=b"fixture-request"), timeout=3) as response:
                 self.assertEqual(response.read(), b"fixture-response")
             (ctx.artifacts / "fixture.bin").write_bytes(b"raw\xff evidence")
-        case = Case("W01", "raw replay fixture", run)
+        case = Case("W01", "raw replay fixture", run, exclusive=True)
         with patch("parity.run.collect_cases", return_value=[case]):
             result = run_case(case.id, str(self.binary), str(self.root / "fixture-root"), str(source))
         self.assertEqual(result["status"], "passed", result.get("reason"))
@@ -453,8 +531,8 @@ while True: time.sleep(1)
         policies = json.loads(documents["artifact-policies.json"])
         reordered = dict(reversed(list(policies.items())))
         self.update_document_bytes(golden, "artifact-policies.json", (" \n" + json.dumps(reordered, separators=(" , ", " : ")) + "\r\n").encode())
-        inventory = leaf_inventory([Case("W01", "raw replay fixture", lambda _: None),
-                                    Case("W98", "pending dependency", lambda _: None, pending="later area")], {"reference_commit": "fixture"})
+        inventory = leaf_inventory([Case("W01", "raw replay fixture", lambda _: None, exclusive=True),
+                                    Case("W98", "pending dependency", lambda _: None, pending="later area", exclusive=True)], {"reference_commit": "fixture"})
         (golden.parent / "inventory.json").write_bytes((" \n" + json.dumps(inventory, indent=2) + "\r\n").encode())
         return golden.parent
 
@@ -465,9 +543,9 @@ while True: time.sleep(1)
         digest = hashlib.sha256(self.binary.read_bytes()).hexdigest()
         previous["reference_binary_sha256"] = digest
         inventory_path.write_text(json.dumps(previous))
-        added = Case("W99.addition", "new executable vector", lambda ctx: ctx.invoke(["help"]))
-        cases = [Case("W01", "raw replay fixture", lambda _: None),
-                 Case("W98", "pending dependency", lambda _: None, pending="later area"), added]
+        added = Case("W99.addition", "new executable vector", lambda ctx: ctx.invoke(["help"]), exclusive=False)
+        cases = [Case("W01", "raw replay fixture", lambda _: None, exclusive=True),
+                 Case("W98", "pending dependency", lambda _: None, pending="later area", exclusive=True), added]
         manifest = {"freeze_status": "ready", "reference_commit": "fixture", "reference_binary_sha256": digest}
         reviewed = leaf_inventory(cases, manifest)
         manifest["leaf_inventory"] = {"metadata_fields": reviewed["metadata_fields"], "metadata_sha256": reviewed["metadata_sha256"]}
@@ -570,7 +648,8 @@ while True: time.sleep(1)
         with patch("parity.run.run_case", side_effect=AssertionError("no executions during extension")), patch("parity.run.freeze_case", wraps=freeze_case) as freeze:
             artifacts, original_result = additions[0]
             restored = load_capture(cases[-1], artifacts)
-            self.assertEqual(restored, original_result)
+            self.assertEqual(restored, {key: value for key, value in original_result.items() if key not in ('leak_check', 'exclusive')})
+            self.assertNotIn('leak_check', restored, 'loading historical evidence does not execute a leak check')
             additions = [(artifacts, restored)]
             extend_capture(source, destination, additions, manifest, cases, self.binary)
             self.assertEqual([call.args[1].name for call in freeze.call_args_list], ["W99.addition"])
@@ -600,7 +679,8 @@ while True: time.sleep(1)
         baseline = {str(path.relative_to(artifacts)): path.read_bytes() for path in artifacts.rglob("*") if path.is_file()}
         self.assertFalse((artifacts / "result.json").exists())
         with patch("parity.run.run_case", side_effect=AssertionError("must not execute")), patch("parity.run.Context", side_effect=AssertionError("must not create execution context")):
-            self.assertEqual(load_capture(cases[-1], artifacts), expected)
+            self.assertEqual(load_capture(cases[-1], artifacts),
+                             {key: value for key, value in expected.items() if key not in ('leak_check', 'exclusive')})
         for mutation in ("failure", "comparison", "overflow", "raw", "normalized", "policy", "ledger", "missing"):
             with self.subTest(mutation=mutation):
                 for path in artifacts.rglob("*"):
@@ -695,6 +775,9 @@ while True: time.sleep(1)
         self.assertEqual(after[new_end:], before[end:])
         self.assertIn(b'"\\u0061rtifact" :', after)
         self.assertEqual((destination / "inventory.json").read_bytes(), baseline["inventory.json"])
+        inventory = json.loads(baseline["inventory.json"])
+        self.assertIn("exclusive", inventory["metadata_fields"])
+        self.assertTrue(all(leaf["exclusive"] for leaf in inventory["cases"]))
         for kind in ("raw", "normalized"):
             old_entries, new_entries = original_ledger[-1]["frozen_evidence"][kind], ledger[-1]["frozen_evidence"][kind]
             self.assertEqual({key: (value["sha256"], value["length"]) for key, value in old_entries.items()},
@@ -712,7 +795,7 @@ while True: time.sleep(1)
         source = self.repack_fixture()
         baseline = {str(path.relative_to(source)): path.read_bytes() for path in source.rglob("*") if path.is_file()}
         destination = self.root / "repacked"
-        for mutation in ("raw", "gzip", "metadata", "missing", "extra", "inventory", "write"):
+        for mutation in ("raw", "gzip", "metadata", "missing", "extra", "inventory", "exclusive", "write"):
             with self.subTest(mutation=mutation):
                 for path in source.rglob("*"):
                     if path.is_file():
@@ -735,9 +818,12 @@ while True: time.sleep(1)
                     (source / "W01/replay.json").unlink()
                 elif mutation == "extra":
                     (source / "W01/raw/unaccounted").write_bytes(b"not declared")
-                elif mutation == "inventory":
+                elif mutation in ("inventory", "exclusive"):
                     inventory = json.loads(baseline["inventory.json"])
-                    inventory["cases"][0]["description"] = "changed"
+                    if mutation == "exclusive":
+                        inventory["cases"][0]["exclusive"] = False
+                    else:
+                        inventory["cases"][0]["description"] = "changed"
                     (source / "inventory.json").write_text(json.dumps(inventory))
                 with patch("parity.observe.finish", side_effect=AssertionError("observer must not run")):
                     if mutation == "write":
@@ -1028,7 +1114,7 @@ while True: time.sleep(1)
         replay = json.loads(replay_bytes)
         self.assertNotIn(b"must-not-retain", replay_bytes)
         self.assertEqual(replay["case_id"], case.id)
-        self.assertEqual(set(replay["invocations"][0]), {"started", "ended", "closed_openai_base"})
+        self.assertEqual(set(replay["invocations"][0]), {"started", "ended", "monotonic_started", "monotonic_ended", "closed_openai_base"})
         self.assertEqual(replay["invocations"][0]["closed_openai_base"], base)
         raw = {name: (artifacts / name).read_bytes() for name in replay["raw_policies"]}
         for mutation in ("case", "root", "zero-port", "large-port", "host", "credential", "environment", "key"):
@@ -1120,8 +1206,8 @@ while True: time.sleep(1)
         manifest = {"reference_commit": "a" * 40,
                     "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
         self.seal_suite(suite, manifest)
-        case = Case("W99", "fixture capture", lambda ctx: ctx.invoke(["help"]))
-        cases = [case] + [Case("W98.later-%02d" % index, "declared dependency", lambda _: self.fail("pending executed"), pending="requires later area") for index in range(15)]
+        case = Case("W99", "fixture capture", lambda ctx: ctx.invoke(["help"]), exclusive=False)
+        cases = [case] + [Case("W98.later-%02d" % index, "declared dependency", lambda _: self.fail("pending executed"), pending="requires later area", exclusive=True) for index in range(15)]
         lock = {"cases": {case.id: golden.case_lock({"exact": b"normalized"}, {"exact": "B"}, [])}}
         with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")), patch("parity.run.__file__", str(suite / "run.py")), patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.build_reference", side_effect=lambda suite, manifest, destination, **_: shutil.copy2(self.binary, destination)), patch("parity.samples.SELECTIONS", {}), patch("parity.observe.finish", side_effect=observed), patch("parity.observe.compare") as compare, patch("parity.golden.ensure_cache", autospec=True, side_effect=lambda *_, **__: golden.cache_path(manifest)) as cache:
             lane = golden.regenerate(suite, manifest, cases, lock, jobs=2)
@@ -1140,9 +1226,10 @@ while True: time.sleep(1)
             self.assertEqual(sum(leaf["status"] == "pending" for leaf in leaves), 15)
             self.assertTrue(all(leaf["pending"] == "requires later area" for leaf in leaves[:-1]))
             self.assertEqual(leaves[-1], {"id": case.id, "description": case.description, "comparison": case.comparison,
-                "slow": case.slow, "platforms": list(case.platforms), "status": "implemented", "pending": None})
+                "slow": case.slow, "platforms": list(case.platforms), "status": "implemented", "pending": None,
+                "exclusive": case.exclusive})
             self.assertEqual(main(["--bin", str(self.binary), "--artifacts", str(self.root / "candidate-artifacts")]), 0)
-            cache.assert_called_once_with(suite.resolve(), manifest, cases, run.default_jobs(), selected=None, full=False)
+            cache.assert_called_once_with(suite.resolve(), manifest, cases, run.default_jobs(), selected=None, full=False, read_only=True)
             compare.assert_called_once_with({"exact": b"normalized"}, {"exact": b"normalized"})
             compared = json.loads((self.root / "candidate-artifacts/report.json").read_bytes())
             self.assertTrue(compared["gate_success"])
@@ -1152,7 +1239,7 @@ while True: time.sleep(1)
             self.assertEqual(compared["counts"]["pending"], 15)
             self.assertEqual(len(compared["pending"]), 15)
             self.assertTrue(compared["inventory_verified"])
-            for mutation in ("missing", "omitted-leaf", "extra-leaf", "description", "comparison", "slow", "platforms", "pending", "status", "reference"):
+            for mutation in ("missing", "omitted-leaf", "extra-leaf", "description", "comparison", "slow", "platforms", "pending", "status", "exclusive", "reference"):
                 with self.subTest(inventory=mutation):
                     changed = json.loads(inventory_bytes)
                     if mutation == "missing":
@@ -1166,7 +1253,7 @@ while True: time.sleep(1)
                             changed["reference_commit"] = "different reference"
                         else:
                             changed["cases"][0][mutation] = {"description": "changed", "comparison": "B", "slow": True,
-                                "platforms": ["other"], "pending": "different dependency", "status": "implemented"}[mutation]
+                                "platforms": ["other"], "pending": "different dependency", "status": "implemented", "exclusive": False}[mutation]
                         inventory_path.write_text(json.dumps(changed))
                     output = self.root / ("inventory-" + mutation)
                     self.assertEqual(main(["--bin", str(self.binary), "--case", "W99", "--artifacts", str(output)]), 1)
@@ -1515,6 +1602,30 @@ while True: time.sleep(1)
         compare.assert_not_called()
         cache.assert_not_called()
 
+    def test_default_artifact_allocation_matches_reference_case_path_width(self):
+        created, roots = [], []
+        allocate = tempfile.mkdtemp
+
+        def local_directory(suffix=None, prefix=None, dir=None):
+            path = allocate(suffix=suffix, prefix=prefix, dir=self.root if dir is None else dir)
+            created.append(Path(path))
+            return path
+
+        def observe(ctx):
+            roots.append(ctx.root.parent)
+            return observed(ctx)
+
+        case = Case('W99.default-artifacts', 'default allocation', lambda ctx: ctx.invoke(['help']))
+        with patch('parity.run.tempfile.mkdtemp', side_effect=local_directory), \
+             patch('parity.run.collect_cases', return_value=[case]), \
+             patch('parity.run.ProcessPoolExecutor', ThreadPoolExecutor), \
+             patch('parity.observe.finish', side_effect=observe):
+            self.assertEqual(main(['--bin', str(self.binary), '--probe']), 0)
+        parents = [path for path in created if (path / 'artifacts/report.json').is_file()]
+        self.assertEqual(len(parents), 1)
+        self.assertTrue(parents[0].name.startswith('reagent-parity-cases-'))
+        self.assertEqual(len(str(parents[0].resolve())), len(str(roots[0].resolve())))
+
     def test_skip_slow_is_a_selection_never_a_gate(self):
         fast = Case("W99.fast", "fast leaf", lambda ctx: ctx.invoke(["help"]))
         slow = Case("W99.slow", "slow leaf", lambda _: self.fail("slow leaf ran"), slow=True)
@@ -1535,9 +1646,9 @@ while True: time.sleep(1)
                 patch("parity.golden.ensure_cache", autospec=True, side_effect=HarnessError("stop here")) as cache, \
                 patch("sys.stderr", new_callable=io.StringIO):
             self.assertEqual(main(["--bin", str(self.binary), "--case", "W99.b", "--artifacts", str(artifacts)]), 2)
-            self.assertEqual(cache.call_args.kwargs, {"selected": ["W99.b"], "full": False})
+            self.assertEqual(cache.call_args.kwargs, {"selected": ["W99.b"], "full": False, "read_only": True})
             self.assertEqual(main(["--bin", str(self.binary), "--verify-cache", "--artifacts", str(self.root / "full-verify")]), 2)
-            self.assertEqual(cache.call_args.kwargs, {"selected": None, "full": True})
+            self.assertEqual(cache.call_args.kwargs, {"selected": None, "full": True, "read_only": True})
 
     def test_probe_does_not_bypass_observer_and_platform_unavailability(self):
         other = "linux" if sys.platform == "darwin" else "darwin"

@@ -1,0 +1,1650 @@
+{
+  "status": "passed_with_declared_pending",
+  "prior_stop_reason": "Jev fixture-only repair, three targets, strict full capture and full candidate passed unchanged expectations. Third PTY stability pass failed protected C31.paste-and-submit screen/cursor bytes; stopped before mutations or PR.",
+  "current_phase": "startup_order_repair",
+  "startup_order_repair": {
+    "authorization": "User approved fixture-only startup ordering repair with event-driven regression and preserved process ownership/cleanup, then continue without asking: C31/other startup cases3x; PTY stability3 passes under load; mutations1/2/6; open exact-title PR, not merge. Stop for protected lock/sample change or new Go defect. Prior full capture/candidate already passed; repeat only if driver changes locked output, and report it.",
+    "implementation": "parity/terminal.py:127-149 records ownership, configures selectors and exit/wake descriptors, starts the PTY reader and waits for its readiness event before process-guard registration. Partial startup failures close descriptors and terminate/reap the owned process, join threads and retain evidence while preserving the original error. No sleeps, unsolicited CPR, retries, cursor/cell masks, normalization or Go changes.",
+    "regression": "parity/terminal_io_test.py:125-169 holds registration with an event, requires a real peer to consume the correct CPR within100ms before release, then verifies ordinary input, shutdown and exact final-state replay. Failure table covers registration before/after discovery, selector setup, reader start, slave configuration and cleanup-inspection failure. Runtime-only negative control withheld service until registration and produced the expected missing-CPR assertion, with cleanup completed; no source mutation retained.",
+    "focused_gate": {"command": "env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest parity.terminal_io_test parity.tty_test parity.vt_test", "output": "Ran 40 tests in 15.926s; OK", "startup_repetitions": "Three repetitions: Ran 3 tests in 2.072s; OK", "executed_by": "t20"},
+    "python_gate": {"command": "python3 -m unittest discover -s parity -p '*test.py'", "output": "Ran 531 tests in 118.049s; OK (skipped=11)", "exit_code": 0, "log": "/tmp/reagent-parity-cli-startup-order-proof/python-gate.log"},
+    "suite_digest": "529497dbff01282d28ebe2cc687476a815a2645db7b8057acd99af7e1ded6851",
+    "startup_proof_suite_digest": "0f35899df99099986971b3144de78df90b63c59d7587f8cde6b77aebde78a91f",
+    "prior_suite_digest": "884609b68d2f1f39bcbac7b1dfb239333333f8109036526d37eedf67d88ab48a",
+    "proof_root": "/tmp/reagent-parity-cli-startup-order-proof",
+    "cache_preparation": {"receipt": "/tmp/reagent-parity-cli-startup-order-proof/preparation.json", "duration_seconds": 186.01165691576898, "complete_raw_replay": true, "cases": 3756, "locks_and_samples": "unchanged", "full_executable_capture": false, "provenance": "Separate hardlinked namespace from the successful Jev full raw capture. Current-code complete official replay, exact inventory/binary/lock/sample checks precede atomic replacement of identity/stamp. Prior cache remains unchanged.", "fingerprint": "d77b98497dc1a6910964bd4f4e4c5e7be05570b503da622d9c36a49105cad7bc"},
+    "targeted": {"status": "passed", "receipt": "/tmp/reagent-parity-cli-startup-order-proof/targeted.json", "selectors": ["C28", "C29", "C30", "C31", "C39", "C40", "C42"], "rounds": 3, "jobs": 6, "passed_each": 12, "pending_each": 0, "failed_each": 0, "clean_leak_checks_each": 12, "duration_seconds": [7.468681332655251, 7.453866209369153, 7.652861000038683], "coverage": "Auto/fresh startup, wrapped/pasted input, resize, narrow terminal and color/no-color/redirected output shapes; all locked bytes unchanged"},
+    "pty_stability": {"status": "passed; three clean passes and clean full load completion", "receipt": "/tmp/reagent-parity-cli-startup-order-proof/stability.json", "jobs": 8, "passed_each": 56, "pending_each": 20, "failed_each": 0, "clean_leak_checks_each": 56, "duration_seconds": [51.47258429136127, 48.27792304195464, 47.82519399980083], "overlap": "All three began after the actual full comparison runner launch, after its Python prerequisite, and finished while that same full load remained active", "purpose": "Three C21-C44 JOBS8 passes during a fresh actual full comparison load; require clean load completion. This is the requested load, not a discretionary repeat of the earlier acceptance candidate run.", "observer_correction": "Initial controller incorrectly required candidate PGID to match make, although case invocations own separate sessions. It was stopped before launching any PTY pass, preserving the original full load. Ancestry observation confirmed the actual comparison runner before the three PTY passes; Darwin kqueue NOTE_EXITSTATUS observes the original load exit. No executable case or full load was restarted."},
+    "full_load": {"status": "passed", "exit_code": 0, "exit_observer": "Darwin kqueue NOTE_EXITSTATUS raw_wait_status0 for original load; no replacement load", "duration_seconds": 1442.2180442810059, "report": "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-bfsdcyc7/artifacts/report.json", "log": "/tmp/reagent-parity-cli-startup-order-proof/pty-load.log", "jobs": 6, "selected": 3816, "passed": 3756, "pending": 60, "failed": 0, "unavailable": 0, "not_executed": 0, "clean_leak_checks": 3756, "leak_pids": [], "inventory_verified": true, "actual_exclusive_results": 236, "suite_digest": "0f35899df99099986971b3144de78df90b63c59d7587f8cde6b77aebde78a91f"},
+    "mutations": {"status": "passed", "selected": [1, 2, 6], "all_baselines_passed": true, "all_intended_assertions_caught": true, "receipt": "/tmp/reagent-parity-cli-startup-order-proof/mutations-complete.json", "mutation1_and_2": "Retain successful executable measurements from the initial run; replayed their baseline and catcher reports through final classifier without executable repeats", "mutation6_final_report": "/private/tmp/reagent-parity-cli-startup-order-mutation6-final-xxxxxxxxxxxxx/report.json", "mutation6_final_assertion": "queued submission lost after held reply release", "initial_result_retained": "Initial batch caught1/2 but mutation6 was harness_failure: intended assertion occurred while child live, then fixture cleanup produced status-15. Never relabelled as a kill.", "corrected_measurements": "Only mutation6 rerun after deterministic witness/classifier repair; first corrected measurement retained but not final approval because review found a cleanup-error witness gap. Final measurement follows the reviewed guard and passes baseline plus intended catch. No mutation4, capture, full acceptance candidate or stability-pass repeat."},
+    "assertion_cleanup_followup": {"scope": "Failure-only fixture evidence and mutation classification, no production Go, normalization, lock/sample or successful-case byte changes", "implementation": "TerminalSession captures exception type/message and live returncode before requested cleanup. It publishes a case/invocation-bound failure-cleanup.json only after error-free finish, _save and collect. The classifier accepts only non-baseline TERM/KILL with that live AssertionError witness, exact final traceback assertion and clean leak check; the intended failure pattern still must match. Unwitnessed signals, other signal kinds, panics, build failures, runner failures, unrelated assertions and cleanup/persistence errors remain non-kills.", "review": "t23 found that an earlier witness could survive a suppressed cleanup error. Fixed before final approval: publish after _save/collect and only when failure is None. Reviewer rechecked and closed blocker; no further blockers in hunks. No writes/tests/commands by reviewer.", "tests": "65 focused tests in19.911s; OK. Added live-child assertion cleanup boundary and injected second-termination, save and collect errors; no witness survives those failures. Classifier table retains rejection cases and panic precedence.", "full_python_gate": {"exit_code": 0, "output": "Ran 534 tests in 122.790s; OK (skipped=11)", "log": "/tmp/reagent-parity-cli-startup-order-proof/python-final-gate.log"}, "passing_proof_disposition": "Earlier3 target rounds,3 PTY passes and the required full load retain their startup-proof seal. Subsequent code only records failed-body cleanup witnesses and classifies mutation evidence; successful __exit__/rendering paths and locked output are unchanged. Do not relabel earlier executable runs with the final seal, and do not repeat them to hide failures.", "final_cache": {"receipt": "/tmp/reagent-parity-cli-startup-order-proof/final-preparation.json", "duration_seconds": 192.75506099965423, "complete_current_code_raw_replay": true, "cases": 3756, "sample_bundles": 153, "locks_samples_inventory_binary_verified": true, "full_executable_capture": false, "lane": "/tmp/reagent-parity-cli-startup-order-proof/final-cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/darwin", "fingerprint": "7e2fd21a676c556030db234f8c510d17d30eb0b7a75d0f59df32afd9c6c7dedd", "prior_namespaces": "Preserved unchanged, including intermediate cleanup-cache with its full replay receipt; no cache identity silently reused"}, "final_go_gates": "go build ./..., go vet ./..., go test ./..., make check all exit0; cmd/reagent [no test files], internal/reagent (cached)", "final_tty": {"exit_code": 0, "duration_seconds": 67.51261787489057, "verdict": "all 27 scenarios passed", "full_screens_and_output": "/tmp/reagent-parity-cli-startup-order-proof/publication-tty-check.log"}}, 
+    "gates": {"go_build": 0, "go_vet": 0, "go_test": 0, "make_check": 0, "go_test_output": "? github.com/satmihir/re-agent/cmd/reagent [no test files]\nok github.com/satmihir/re-agent/internal/reagent (cached)", "tty_check": {"exit_code": 0, "duration_seconds": 65.96577987493947, "verdict": "all27 scenarios passed", "screens_and_full_output": "/tmp/reagent-parity-cli-startup-order-proof/tty-check.log", "scenario_note": "No production-terminal behavior added; the new scenario exercises fixture startup in parity/terminal_io_test.py."}},
+    "capture_candidate_disposition": "Retain prior successful single capture and independent candidate under jev_response_floor as historical proof for their seal. No new full capture or separate acceptance candidate repeat; current-code full raw replay prepares retained evidence for comparisons. Required full stability load is separately identified.",
+    "historical_qualification": "The service gap and regression are demonstrated, not historical C31 causation. Earlier phases and their source line references remain historical snapshots. Existing C18/C43/C44 and area4 pending coverage stays explicit; no new Go defect identified.",
+    "agent_accounting_overlay": {"source": "Latest threads(subtree=true); prior tables remain historical", "new_agents": 1, "total_agents": 23, "accounting_complete": true, "input_tokens": 57830539, "cached_input_tokens": 53547008, "output_tokens": 393666, "reasoning_tokens": 113833, "unreported_attempts": 4, "reused": [{"id": "t20", "name": "c29-cursor-diagnosis", "work": "Fixture implementation and focused tests; parent reviewed source and ran full Python/executable proofs", "cumulative_tokens": {"input": 6651252, "cached_input": 6199296, "output": 38600, "reasoning": 19645}, "trace": "/Users/mihirsathe/Library/Caches/reagent/runs/agent-94b8b02a3d598993/events.jsonl"}, {"id": "t22", "name": "repin-183-audit", "work": "Read-only PR scope review, excluding new driver; no new concrete blockers, no commands/tests/writes", "cumulative_tokens": {"input": 3573022, "cached_input": 3303808, "output": 9552, "reasoning": 3079}, "trace": "/Users/mihirsathe/Library/Caches/reagent/runs/agent-b2b63eca02c9fc09/events.jsonl"}], "new_agent": {"id": "t23", "name": "cleanup-witness-review", "work": "Read-only narrow witness/classifier safety review; found cleanup-error blocker, then closed it after source/test correction; no commands/tests/writes", "cumulative_tokens": {"input": 151790, "cached_input": 114944, "output": 1349, "reasoning": 538}, "trace": "/Users/mihirsathe/Library/Caches/reagent/runs/agent-2698588a539efa2e/events.jsonl"}, "other_agents": "All other20 lifetime agent costs and traces unchanged from repin_183.agent_accounting; no children running"},
+    "publication_audit": {"status": "passed", "receipt": "/tmp/reagent-parity-cli-startup-order-proof/publication-audit.json", "protected_files_unchanged_since_repair_authorization": 158, "prior_raw_cache_fingerprint_unchanged": true, "current_raw_cache_fingerprint_unchanged": true, "owned_parity_invocations_remaining": 0, "production_go_and_dependencies": "git_inspect status: no staged, unstaged or untracked changes in internal, cmd, go.mod or go.sum", "pending": "60 declared leaves remain pending, including35 CLI; no complete-suite or100% claim"},
+    "pr": "Requested proofs complete with explicit declared pending; authorized commit/push/open follows this report under exact title Parity area 3: CLI and terminal (C01–C44). Do not merge. Actual publication URL is returned to the user after verification."
+  },
+  "c31_startup_investigation": {
+    "authorization": "Investigation only of C31 startup cursor fallback. No repair, comparison change, executable case rerun, proof restart or PR authorized by this follow-up.",
+    "status": "investigation complete; fixture repair awaits authorization",
+    "observed_ordering": "parity/terminal.py:118-148 launches the child, appends ownership, registers with the process guard, sets up selectors/exit/wake descriptors, then starts the PTY reader. No reader-ready acknowledgement precedes return. A runnable child can issue its initial cursor query before service begins.",
+    "guard_qualification": "parity/processes.py:155-172 inspects one PID synchronously, registers identity under a lock and starts a monitor; full discovery is in that monitor before its first event wait. Fresh guards normally have no existing monitor lock contention. Running PTY reads do not acquire the guard lock; monitor/GIL or OS-scheduling effects in the historical failure were not measured. JOBS workers are separate processes.",
+    "controlled_diagnostic": {
+      "receipt": "/tmp/reagent-c31-startup-investigation/diagnostic.json",
+      "purpose": "Synthetic offline startup-ordering experiment, not C31 parity execution or acceptance proof",
+      "method": "Peer emits a cursor query immediately after raw-mode setup and uses a 100ms protocol receive deadline. An event-controlled barrier holds registration until the peer reports deadline expiry; no arbitrary synchronization sleep.",
+      "baseline": {"peer_reply": "accepted", "prompt_row": 10, "exit_code": 0, "exact_replay": true},
+      "held_registration": {"peer_reply": "100ms deadline expired", "reader_before_release": false, "prompt_row": 21, "exit_code": 0, "exact_replay": true},
+      "both_journals": {"query_offset": 18, "reply": {"kind": "reply", "offset": 22, "hex": "1b5b31303b3152"}},
+      "after_reader_ready_control": "Holding the guard lock after reader/prompt readiness did not prevent correct CPR consumption before lock release. Ordinary next input, shutdown and exact final-state replay passed. This excludes direct running-reader dependence on that lock, not GIL starvation.",
+      "retained_artifacts": "/tmp/reagent-c31-startup-investigation/{baseline,held}/{tty,terminal.json}"
+    },
+    "demonstrated": "Pre-reader bookkeeping can make a peer deadline expire and trigger fallback while the journal still records the correct reply at the logical query-end offset.",
+    "historical_c31_uncertainty": "No timing receipt shows registration actually exceeded the historical C31 deadline. A startup service gap is demonstrated, but historical causation is unproved. Go read-error paths and competing-reader alternatives have not been exhaustively excluded; no new Go defect claimed.",
+    "offset_limitation": "parity/terminal.py:218-226 appends a complete read chunk before parsing. Lines183-194 journal replies at logical parsed query-end offsets, then write them. Historical offset857 does not distinguish timely service, buffered query-plus-fallback, delayed write or delayed Go-side consumption.",
+    "fallback_source": "internal/reagent/region_cursor.go:22-53 uses a100ms deadline and returns zero on timeout or qualifying read error. region.go:166-170,194-214 places a four-row pane at row21 in a24-row terminal with three CRLFs when the initial row is unusable. These two files have no committed difference between HEAD and pinned60fda0d.",
+    "coverage_gap": "parity/terminal_io_test.py:81-87,145-149 releases queries only after __enter__ and wait_prompt; parity/tty_test.py:28-33 waits indefinitely for startup CPR. Neither checks the initial100ms service deadline.",
+    "verification": {"focused_test": "python3 -m unittest parity.terminal_io_test -v: Ran 5 tests in 6.927s; OK", "full_python_and_tty": "Not rerun during investigation; no terminal implementation changed", "report_and_go_gates": "go build ./..., go vet ./..., go test ./... and make check all exit0. go test: ? github.com/satmihir/re-agent/cmd/reagent [no test files]; ok github.com/satmihir/re-agent/internal/reagent (cached). JSON investigation/proof-history assertions and unchanged suite digest validated; git_inspect worktree_diff for internal, cmd, go.mod and go.sum is empty."},
+    "scope": "No suite source, test, manifest, lock, sample, normalizer, production Go or cache identity changed. No actual C31 run or executable proof launched. Only acceptance JSON and README record findings; both are excluded from the suite digest.",
+    "proposed_not_implemented": "Fixture-only startup ordering repair: service the PTY before potentially blocking registration/bookkeeping, establish reader readiness, preserve process ownership and exceptional cleanup, and add an event-driven startup-deadline regression. This cannot guarantee immunity to all OS scheduling delays. No sleeps, unsolicited CPR, retries, masks or oracle changes.",
+    "remaining": "Await repair authorization and a bounded remaining-proof agreement. Prior capture/candidate remain evidence for their existing seal, not proof of a changed driver. PTY stability is incomplete, its full load was interrupted, and mutations1/2/6, final fresh TTY gate and PR remain unstarted. Do not automatically repeat completed full runs.",
+    "agent_accounting_overlay": {"historical_table": "repin_183.agent_accounting remains unchanged", "reused": "t20 c29-cursor-diagnosis: read-only source review, no writes/commands/tests/proof runs", "new_agents": 0, "total_agents": 22, "accounting_complete": true, "input_tokens": 54064411, "cached_input_tokens": 50023168, "output_tokens": 376835, "reasoning_tokens": 104789, "unreported_attempts": 4, "t20_cumulative": [4081985, 3781248, 24514, 11805, 0], "t20_investigation_increment": [795732, 627328, 3070, 1830, 0], "trace": "/Users/mihirsathe/Library/Caches/reagent/runs/agent-94b8b02a3d598993/events.jsonl"}
+  },
+  "jev_response_floor": {
+    "authorization": "User requested a fixture-only fixed fake-server response delay of at least 5 ms for every Jev case, no normalizer or lock change. Three targeted T41-T54/W53 git-do runs, then one strict capture, one candidate run, PTY stability under load, mutations 1/2/6 and the exact-title PR; do not merge.",
+    "implementation": "Shared Provider uses request model jev-1.13.0 to floor response.header_delay at .005, including custom Jev endpoint prefixes. Existing longer transport delays, response bytes/status, cancellation and non-Jev scheduling are preserved. No controller synchronization sleep, production Go, normalizer or oracle edits.",
+    "unit_check": "python3 -m unittest parity.provider_test parity.endpoint_fixture_test: Ran 3 tests in 0.333s; OK. Real loopback headers measured after the configured floor; exact wait arguments, longer delays, error status, custom endpoint and non-Jev isolation checked.",
+    "suite_digest": "884609b68d2f1f39bcbac7b1dfb239333333f8109036526d37eedf67d88ab48a",
+    "prior_suite_digest": "a08af7cd31d9cabaee505f4a2cc90f6367cd3dd2370f03189a003e27f5cc6ab6",
+    "cache_preparation": "Retain prior raw caches and failed capture. Clone the prior passing prepared cache into a separate namespace; require complete official raw replay, unchanged logical locks and samples before binding the changed fixture/test suite identity. This is not the required later executable capture.",
+    "target_selection": "All T41-T54 plus W53.propagation.git-do, with direct dependent T59.maps-numbers included: 72 runnable leaves, no pending. Default JOBS=6, three sequential runs, kept raw evidence to verify actual Jev-using result milliseconds are present and positive.",
+    "proof_root": "/tmp/reagent-parity-cli-jev-delay-proof",
+    "receipt": "/tmp/reagent-parity-cli-jev-delay-proof/proof.json",
+    "status": "stopped: protected C31 screen mismatch in third PTY stability pass",
+    "pty_stability": {
+      "jobs": 8,
+      "families": "C21-C44",
+      "first_two": {"exit_codes": [0, 0], "passed_each": 56, "pending_each": 20, "failed_each": 0, "clean_leak_checks_each": 56, "duration_seconds": [71.16677674977109, 71.47938775038347], "overlap": "Each started after actual full comparison launch and ended while it was still running", "reports": ["/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-9v4nge0t/artifacts/report.json", "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-4jduih8k/artifacts/report.json"]},
+      "third": {"exit_code": 1, "passed": 55, "failed": 1, "pending": 20, "unavailable": 0, "not_executed": 0, "clean_leak_checks": 56, "inventory_verified": true, "case": "C31.paste-and-submit", "exclusive": false, "report": "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-04g7_cl0/artifacts/report.json"},
+      "full_load": "Interrupted after the protected PTY failure, not counted as a completed clean load. Its Python prerequisite passed: Ran 529 tests in 127.196s; OK (skipped=11).",
+      "diagnostic_receipt": "/tmp/reagent-parity-cli-jev-delay-proof/pty-failure.json",
+      "protected_difference": {
+        "artifact": "invoke-001.screens.json",
+        "reference_bytes": 987650,
+        "candidate_bytes": 1220242,
+        "reference_sha256": "731bf48d0de63af0e57b6e638bf9347555f04f3548ea7e9540f7122796e32abf",
+        "candidate_sha256": "2d1a2cfb3ad6382fd8c4905ee032cfd1bfe08d5e787e51cabce06497bb19e26e",
+        "unchanged_normalized_artifacts": 11,
+        "observations": "Both start at 24x80 and record initial ESC[10;1R at byte857, with the query starting at offset853. Reference then draws at CSI10;1H; candidate emits three CRLFs then CSI21;1H. paste-input cursor row10 versus21; paste-submitted row17 versus21 and scrollback0 versus7; final cursor19 versus20, with candidate scrollback10. Later cursor replies14/20 versus24/24. HTTP body, trace, status and all other normalized artifacts identical.",
+        "interpretation": "Candidate raw output is consistent with startup cursor fallback (regionPlacement), but byte-offset records do not establish response timing against cursorRow's 100ms deadline. No root cause or new Go defect claimed. This is not a Jev timing-field mismatch.",
+        "source": "parity/cases/cli_pty.py:182-192; internal/reagent/region_cursor.go:22-26; internal/reagent/region.go:166-170; parity/terminal.py:192-194 records and writes query replies at exact parsed query ends."
+      },
+      "cleanup": "Controller SIGINT did not stop full load within45s and retained uncertain PID17431. Fresh PID/start/command/ancestry inspection confirmed all nine owned processes in group17431 and no detached descendants; SIGTERM stopped that exact group in0.309s. No remaining verified owned PIDs or machine-lock holders; controller exited. Separate cleanup-result.json resolves the historical uncertain field without altering the original receipt.",
+      "cache": "Post-capture fingerprint remains 2693390f88d8010177bee8891b290163dd51c358932e97c2fa616f1ba5f58607; new full raw reference and prior caches retained.",
+      "not_started": ["mutations 1/2/6", "commit", "push", "PR"],
+      "disposition": "No C31 repair, screen/cursor masking, oracle refresh or rerun. Await authorization for any further C31 investigation/repair; retain successful capture/candidate and failed PTY raw evidence."
+    },
+    "candidate": {"command": "make parity BIN=/tmp/reagent-parity-cli-repin-183-proof/candidate", "jobs": 6, "exit_code": 0, "duration_seconds": 1538.5926081673242, "passed": 3756, "failed": 0, "pending": 60, "unavailable": 0, "not_executed": 0, "clean_leak_checks": 3756, "inventory_verified": true, "recorder_cases_not_exclusive": [], "report": "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-euxvkf_1/artifacts/report.json", "unit_prerequisite": "Ran 529 tests in 120.799s; OK (skipped=11)", "cache": "fingerprint unchanged after read-only comparison"},
+    "capture": {"command": "make parity-golden", "update": false, "jobs": 6, "exit_code": 0, "reported_seconds": 1505.407, "wrapper_seconds": 1505.5438343328424, "runnable_captures": 3756, "declared_pending": 60, "complete_raw_replay": "passed", "committed_locks_and_samples": "verified unchanged", "log": "/tmp/reagent-parity-cli-jev-delay-proof/capture.log"},
+    "targeted_gate": {"status": "passed", "jobs": 6, "rounds": 3, "selected_each": 72, "passed_each": 72, "failed_each": 0, "pending_each": 0, "clean_leak_checks_each": 72, "duration_seconds": [193.7591389999725, 190.9592351252213, 191.367703625001], "actual_jev_results_each": 19, "minimum_raw_jev_ms": [7, 6, 7], "raw_checks": "Every actual git_do result with jev_calls retained a positive integer jev_ms and ran exclusively. T41.jev.selection.none, W53.propagation.git-do and T59.maps-numbers independently required in each raw evidence set. Prepared cache remained read-only; all existing expectations unchanged."},
+    "full_unit_gate": {"tests": 529, "skipped": 11, "duration_seconds": 124.278, "exit_code": 0, "output": "Ran 529 tests in 124.278s; OK (skipped=11)"},
+    "preparation_receipt": {"status": "passed", "duration_seconds": 203.96681229164824, "complete_raw_replay": true, "locks_unchanged": 3756, "sample_bundles_unchanged": 153, "full_executable_capture": false},
+    "stop_verification": {"go_build": 0, "go_vet": 0, "go_test": 0, "make_check": 0, "go_test_output": "? github.com/satmihir/re-agent/cmd/reagent [no test files]\nok github.com/satmihir/re-agent/internal/reagent (cached)", "report_checks": "Stopped JSON, three successful targets, successful single capture/candidate, two clean PTY passes plus retained third-pass failure, resolved owned-group cleanup, unchanged suite seal and raw-cache fingerprint, and unchanged lock/sample protection validated", "tty_check": "Not rerun after protected stability failure; no terminal implementation changes in this fixture-only repair, and no PR attempted", "agent_accounting": "No agents started or reused this turn. Latest threads(subtree=true) confirms all22 lifetime agents and costs unchanged from repin_183.agent_accounting; accounting_complete=true", "production_scope": "git_inspect worktree_diff internal, cmd, go.mod and go.sum empty"},
+    "remaining": "Await authorization for C31 startup cursor-fallback investigation/repair; no further executable proof or PR. All three Jev targets, one strict full capture and one full candidate completed successfully; only two of three PTY stability passes clean. Mutations 1/2/6 and PR remain unstarted. No lock, sample, normalizer or production Go change for this fixture-only repair."
+  },
+  "history_note": "Earlier named sections describe historical attempts, including the old-pin startup snapshot stop. Current authorized repair/proofs are under startup_order_repair; investigation findings remain under c31_startup_investigation. Completed Jev proofs and the PTY stop remain under jev_response_floor. repin_183 retains the earlier approved migration, five clean stress pairs and stopped optional-timing capture. Complete approved W/T zero-exec timing migrations remain under zero_exec_timing_migration.ledger_updates and must appear in the PR body.",
+  "repin_183": {
+    "authorization": "User approved all nine inverse-proven help-only locks and two dependent sample bundles, attributed to satmihir/re-agent#183; all other 3747 locks and 151 bundles must remain identical. Shared REAGENT_WORKSPACE_GIT_TIMEOUT=60 for reference and candidate. Rerun five targeted default-JOBS repeats under full make parity load; only after a clean gate, one full capture, one full independent candidate pass, three PTY stability passes under load, mutations 1/2/6 and open, not merge, the exact-title area3 PR.",
+    "status": "stopped after strict full reference verification failed; stress gate passed",
+    "latest_authorization": "User reduced the stress requirement to three clean rounds, finish any current round and skip the rest, then proceed directly to one capture, one candidate pass, three PTY stability passes under load, mutations 1/2/6 and the PR. Inspection found all five pairs had already completed cleanly; no further stress rounds launched.",
+    "publication": {
+      "status": "passed",
+      "duration_seconds": 367.567748375237,
+      "changed_locks": 9,
+      "unchanged_locks": 3747,
+      "changed_sample_bundles": 2,
+      "unchanged_sample_bundles": 151,
+      "migration_attribution_and_full_hashes": "repin-183-changes.json",
+      "complete_official_raw_replay": "passed, with existing lock/sample guards unchanged",
+      "suite_digest": "a08af7cd31d9cabaee505f4a2cc90f6367cd3dd2370f03189a003e27f5cc6ab6",
+      "normalized_tree_sha256": "20572585f180597bc1fb8c1f09a8367e9b9b44cbf3d5a79603d8af12480e4529",
+      "receipt": "/tmp/reagent-parity-cli-repin-183-proof/preparation.json",
+      "full_executable_capture": false
+    },
+    "stress_gate": {
+      "status": "passed",
+      "jobs": 6,
+      "selected": 260,
+      "recorder_cases": 149,
+      "required_clean_rounds": 3,
+      "completed_clean_rounds": 5,
+      "targeted_counts_each": {"passed": 260, "failed": 0, "pending": 0, "unavailable": 0, "not_executed": 0, "clean_leak_checks": 260, "recorder_cases_exclusive": 149},
+      "load_counts_each": {"passed": 3756, "failed": 0, "pending": 60, "unavailable": 0, "not_executed": 0, "clean_leak_checks": 3756, "recorder_cases_exclusive": 149},
+      "targeted_seconds": [1649.3545155422762, 1567.8363924999721, 1598.4244620827958, 1683.9292922080494, 1645.51399158407],
+      "full_load_seconds": [2167.3125384580344, 2039.8812062502839, 1944.6507616667077, 2102.962329333648, 2042.5436983746476],
+      "all_rounds": "Inventory verified, correct sealed suite digest, all 149 recorder results exclusive; target began after actual full comparison launch and ended while it was still running. No failures, leaks, startup snapshot loss or protected mismatch.",
+      "interruption_reconciliation": "The cancelled command was a polling reader. The detached controller finished all five pairs; authoritative receipt says passed, no active processes. ps and lsof found no remaining owned proof processes or machine-lock holders before the single final capture launched.",
+      "load": "Each targeted repeat is paired with a fresh full make parity at default JOBS, begins after its comparison launch, must finish while load remains active, and requires that full load to finish cleanly before the next round.",
+      "receipt": "/tmp/reagent-parity-cli-repin-183-proof/stress-report.json"
+    },
+    "pre_stress_cache_provenance": "Reuse retained replay-verified old-pin frozen evidence for exactly 3747 unchanged expectations; replace only nine help leaves with fresh #183 reference captures; bind the prepared namespace to the new reference binary and inventory, then verify complete raw replay and samples before stamping. This preparation is not a new full executable reference capture. The single full new-pin capture remains after five clean stress repeats.",
+    "help_scope_audit": {
+      "affected_leaves": ["W53.defaults.endpoints", "W53.defaults.endpoints.unset", "W54.defaults", "W54.defaults.unset", "C01.no-args", "C01.unknown", "C01.help", "C01.long-help", "C01.short-help"],
+      "affected_sample_bundles": ["W53.defaults.endpoints", "C01.unknown"],
+      "proof": "All nine new-reference cases captured successfully and fully raw-replay verified. Each changes exactly one stdout/stderr artifact by exactly the 114-byte timeout help line added in #183; removing that line reconstructs the complete prior artifact map and complete lock, with unchanged ledger contract. Both inverse sample bundles exactly recover old complete bundle SHAs. Raw evidence and full old/new hashes retained in proof_root/help-migration-proof.json. Initial proof script correctly failed on stale derived ledger hash metadata; recalculating only that derived hash/length after the inverse transform made the complete proof pass; executable cases did not fail.",
+      "other_locks_required_identical": 3747,
+      "other_sample_bundles_required_identical": 151,
+      "oracle_changes_published": true,
+      "sample_changes_published": true,
+      "verification": "New pipe/real-PTY shared environment regression passed. Full Python gate: Ran 528 tests in 134.789s; OK (skipped=11). go build ./..., go vet ./..., go test ./... and make check all exit 0. No new stress campaign, preparatory full capture, full proofs or PR.",
+      "agent": {"id": "t22", "name": "repin-183-audit", "authority": "read", "input_tokens": 903049, "cached_input_tokens": 790528, "output_tokens": 5063, "reasoning_tokens": 1174, "unreported_attempts": 1}
+    },
+    "final_review": {"agent": "t22 repin-183-audit", "status": "no concrete blockers in reviewed scheduling, cache, PTY I/O and terminal ownership paths", "verification": "Read-only source review; no tests or executable proof claimed by reviewer. Parent confirmed no production Go/dependency worktree changes and independently recomputed sealed suite digest.", "trace": "/Users/mihirsathe/Library/Caches/reagent/runs/agent-b2b63eca02c9fc09/events.jsonl"},
+    "final_proofs": {
+      "status": "stopped on protected mismatch",
+      "capture": {"command": "make parity-golden", "update": false, "jobs": 6, "exit_code": 2, "duration_seconds": 1432.724320541136, "captured_runnable_cases": 3756, "declared_pending": 60, "publication": false, "verification": "Failed committed lock comparison for T41.jev.selection.none; full successful replay/sample verification is not claimed."},
+      "static_lock_audit": {"method": "Decode every retained frozen case and recompute complete logical locks; not another executable run or full replay", "cases": 3756, "identical": 3755, "mismatches": 1, "decode_errors": 0, "receipt": "/tmp/reagent-parity-cli-repin-183-proof/final-capture-lock-audit.json"},
+      "mismatch": {
+        "id": "T41.jev.selection.none",
+        "artifact": "trace-1.jsonl",
+        "exact_difference": "Sealed raw result has jev_ms:2, normalized to explicit jev_ms:0. Fresh raw omits jev_ms. Only that member is absent at tool.finished data.outcome.data and next model.requested history[2].tool.outcome.data. Removing exactly those two 11-byte members reconstructs the complete fresh normalized trace. All other normalized artifacts and policies are identical; exactly the two corresponding git-do-jev-ms ledger sites disappear.",
+        "trace_old_bytes": 64259,
+        "trace_new_bytes": 64237,
+        "trace_old_sha256": "9870c4ad8e00c6cb7cd2c9c9d5d4602efaad5bb582baa4b552e819ff810ad4de",
+        "trace_new_sha256": "abe72c79998f8131aeecab1d9f7a6358bd6c9ed3e07b73c77a7244730c32f2a5",
+        "normalized_old_sha256": "60b5823fecb4966ceeb8d0e1976faed1f114e8f630cc565e2c613880b74d6528",
+        "normalized_new_sha256": "180adf4f2c1b200cb76ba5cffc712f8ed0896ce880612211f70bdf145d3e161d",
+        "ledger_old_sha256": "e7f12be8d21624ec69dad6b84283568ab03d69f95e11bec8068f4f9a9478a77f",
+        "ledger_new_sha256": "0e737e79fbd375ef239f1268f8e829a5022e0d4d6ebae5092fb9a242a99d9e29",
+        "source": "internal/reagent/tool_git_do.go:132 uses json omitempty for JevMS and :474-479 accumulates measured milliseconds; unchanged between branch HEAD and new reference. parity/observe_tools.py:63-65 validates/normalizes the member only when present, so absent versus normalized-zero remains a shape difference. This inherited timing-presence gap is distinct from approved T31 zero-exec identity-row migrations.",
+        "startup_snapshot": "Present in both fresh model requests; complete normalized Git command bytes identical. No startup Git snapshot loss observed in this capture.",
+        "disposition": "No repair, normalization change, oracle/sample refresh or rerun authorized by this stop. Preserve all raw evidence and the previous prepared cache."
+      },
+      "capture_receipt": "/tmp/reagent-parity-cli-repin-183-proof/final-capture.json",
+      "sequence_receipt": "/tmp/reagent-parity-cli-repin-183-proof/final-proofs.json",
+      "failure_evidence": "/tmp/reagent-parity-cli-repin-183-proof/cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/failed-1792882314561144000",
+      "not_started": ["full independent candidate pass", "three PTY stability passes under load", "mutations 1/2/6", "commit", "push", "PR"],
+      "cleanup": "Both detached controllers exited; no active child processes, uncertain cleanup PIDs, remaining owned proof processes or machine-lock holders found. No automatic retry.",
+      "prelaunch_correction": "Corrected a mistyped suite-digest assertion in the temporary orchestration command while it was waiting for capture, before any candidate/PTY/mutation execution. Waiting controller stopped cooperatively; original receipt retained. No executable proof rerun or sealed input change.",
+      "audit_correction": "Initial ledger-site summary incorrectly expected path on non-site metadata rows; filtered them for the sole differing case. All 3756 frozen cases decoded successfully; no executable rerun."
+    },
+    "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
+    "reference_binary_sha256": "b8d7e8cea619cba3f0f3d233e6e2898723a7100677c58b73ebd501d853bd64ed",
+    "candidate_binary_sha256": "d7fbb6f41a7304ccbdca2e3da119f949e63600876e6be22f2d7cdbbdde5b9600",
+    "source_archive_sha256": "ca34e1afffdf84aed73c47a816a1ef78de38f50d6b2366ad5f6b9146499dabbd",
+    "attribution": "https://github.com/satmihir/re-agent/pull/183 — Make the workspace-snapshot Git timeout configurable",
+    "shared_environment": {"REAGENT_WORKSPACE_GIT_TIMEOUT": "60"},
+    "proof_root": "/tmp/reagent-parity-cli-repin-183-proof",
+    "agent_accounting": {
+      "source": "threads(subtree=true), latest lifetime roster; t22 reused for final read-only review, no new agents admitted this turn",
+      "total_agents": 22,
+      "accounting_complete": true,
+      "fields": ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "unreported_attempts"],
+      "total": [53268679, 49395840, 373765, 102959, 4],
+      "by_agent": {
+        "t1 cli-args": [2695133, 2562304, 21214, 3930, 0],
+        "t2 chat-commands": [4446484, 4232064, 30765, 6006, 0],
+        "t3 terminal-driver": [5539251, 5119232, 52716, 11461, 0],
+        "t4 terminal-cases": [2744240, 2608000, 19352, 3347, 0],
+        "t5 leak-check": [933113, 876672, 13396, 5507, 0],
+        "t6 earlier-leaves": [5435577, 5041664, 39133, 9528, 0],
+        "t7 terminal-races": [2544973, 2368000, 14217, 3661, 0],
+        "t8 terminal-complete": [3173132, 2850944, 17267, 3877, 0],
+        "t9 observer-integrate": [1935720, 1789952, 9790, 3297, 0],
+        "t10 cli-proof-review": [159126, 112896, 1812, 965, 0],
+        "t11 git-lock-diagnosis": [858429, 739200, 8930, 5528, 0],
+        "t12 terminal-ledger-fix": [922899, 841472, 8643, 3193, 0],
+        "t13 exclusive-runner": [2885050, 2705792, 12955, 2891, 0],
+        "t14 reset-lock-diagnosis": [1867977, 1734400, 6906, 1026, 1],
+        "t15 optin-recorder": [2364347, 2054400, 24853, 10279, 0],
+        "t16 reset-session-slots": [1683413, 1558784, 11379, 1761, 0],
+        "t17 pty-fixture-stability": [4309436, 4002816, 23916, 7193, 0],
+        "t18 monotonic-evidence": [1424083, 1302144, 11257, 2785, 0],
+        "t19 timing-migration-tests": [890312, 840192, 7409, 2436, 0],
+        "t20 c29-cursor-diagnosis": [3286253, 3153920, 21444, 9975, 0],
+        "t21 cli-slot-migration-proof": [641780, 588032, 8255, 1900, 2],
+        "t22 repin-183-audit": [2527951, 2312960, 8156, 2413, 1]
+      }
+    },
+    "stop_verification": {"go_build": 0, "go_vet": 0, "go_test": 0, "make_check": 0, "go_test_output": "? github.com/satmihir/re-agent/cmd/reagent [no test files]\nok github.com/satmihir/re-agent/internal/reagent (cached)", "report_checks": "Stopped-proof JSON, all 22 agent costs/totals, unchanged sealed suite, exact nine approved lock/two bundle migration and absence of later proofs validated", "tty_check": "Not rerun this turn: stopped at protected capture mismatch before later terminal proofs; last historical 27-scenario pass is retained under cursor_resize_resumption.tty_check", "source_scope": "git_inspect worktree_diff of internal, cmd, go.mod and go.sum empty; no production Go/dependency edits"},
+    "remaining": "Await authorization for the inherited optional Jev timing presence gap before any repair or additional proof. Candidate, PTY stability under load, mutations 1/2/6 and PR remain unstarted. No implementation, policy, oracle, sample, manifest or inventory edits during final proof; retained pre-final cache and failed full raw capture preserved."
+  },
+  "cursor_resize_resumption": {
+    "authorization": "User answered yes to addressing C29/C35 as well, without relaxing protected cursor or cell comparisons; continue earlier targeted-five/full-load gate and subsequent full proofs, stability, mutations 1/2/6 and PR. Stop on startup Git snapshot loss after detected exclusivity or any other unapproved protected difference.",
+    "status": "stopped: startup Git snapshot loss after detected exclusivity",
+    "stress_reconciliation": {
+      "inspected_on": "2026-10-24",
+      "interruption": "Previous foreground tool was cancelled with uncertain effects. Inspected retained reports, logs, ps and both machine-lock holders before any retry. No owned proof processes or lock holders remained; no campaign was restarted.",
+      "round_1": {
+        "exit_code": 0,
+        "jobs": 6,
+        "selected": 260,
+        "passed": 260,
+        "failed": 0,
+        "duration_seconds": 1880.3522051251493,
+        "overlap": "Began after full make parity reached actual comparison; full process was still running at round end",
+        "recorder_cases_exclusive": 149,
+        "leak_checks_clean": 260,
+        "report": "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-y9086l6s/artifacts/report.json"
+      },
+      "remaining_rounds": "No complete second-round log/report was found. Interrupted work is not counted; five-clean-repeat gate remains incomplete.",
+      "reconciliation_checks": "Acceptance JSON parsing and stopped-evidence assertions passed. go build ./..., go vet ./..., go test ./... and make check all exited 0; Go tests cached. No parity proof restarted.",
+      "agents": {"new_agents_this_reconciliation": 0, "lifetime_agents": 21, "input_tokens": 50740728, "cached_input_tokens": 47082880, "output_tokens": 365609, "reasoning_tokens": 100546, "unreported_attempts": 3, "accounting_complete": true},
+      "full_load": {
+        "command": "make parity BIN=/tmp/reagent-parity-cli-stress-proof/candidate",
+        "jobs": 6,
+        "unit_gate": "Ran 527 tests in 163.010s; OK (skipped=11)",
+        "make_result": "make: *** [parity] Error 1; runner comparison failed",
+        "counts": {"total": 3816, "selected": 3816, "passed": 3754, "failed": 2, "pending": 60, "unavailable": 0, "not_executed": 0},
+        "leak_checks": {"clean": 3756, "failed": 0, "pids": []},
+        "report": "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-544jc0n7/artifacts/report.json",
+        "failures": [
+          {"id": "T49.ship_pr.normal", "exclusive": true, "leak_check": "clean", "expected_command_count": 25, "actual_command_count": 21, "expected_command_bytes": 4571, "actual_command_bytes": 2477},
+          {"id": "T51.latest-default.clean", "exclusive": true, "leak_check": "clean", "expected_command_count": 17, "actual_command_count": 13, "expected_command_bytes": 3505, "actual_command_bytes": 1531}
+        ],
+        "exact_difference": "For both cases, the four initial guarded probes are absent: status --porcelain=v2 --branch; symbolic-ref --short refs/remotes/origin/HEAD; rev-list --left-right --count HEAD...origin/main; rev-parse --git-path FETCH_HEAD. Removing exactly those four complete lines from reference command bytes reconstructs candidate bytes exactly. Parsed normalized trace differs only by absent history[0].user.workspace.git in trace lines 2 and 6. All seven other normalized artifacts are byte-identical.",
+        "source_evidence": "parity/cases/tools_git.py:49-50 acquires exclusivity before fixture setup. parity/capture_lock.py:63-69 promotes shared to exclusive ownership. internal/reagent/snapshot.go:52-78 omits Git state when the initial status probe fails; snapshot.go:115-119 gives each probe a two-second timeout. Snapshot loss is observed; timeout versus launch failure is not directly established by retained evidence."
+      },
+      "disposition": "Stopped as explicitly requested. No further repeats, full proof capture/candidate pass, PTY stability campaign, mutations 1/2/6, commit, push or PR. No production Go, reference pin, oracle, policy, sample or sealed source changes during reconciliation. Keep prepared cache and retained failure evidence pending a separately authorized deterministic Go timeout repair."
+    },
+    "prepared_cache": {"source": "single retained preparatory capture, recovered raw replays and one fresh targeted C29 driver check; no full executable recapture", "duration_seconds": 568.855069, "verification": "Official update_oracle and complete verify_cache passed before lane publication; normal strict W/T and all-existing-sample guards kept intact after isolated proved3-bundle migration", "changed_locks": ["C12.reset", "C12.reset-extra", "C26.exec-timeout-continues", "C34.typeahead-queue-long-reply", "C35.resize-during-turn", "C38.interrupt-running-command"], "changed_bundles": ["C26.exec-timeout-continues", "C35.resize-during-turn", "C38.interrupt-running-command"], "WT_locks_unchanged": 3419, "other_bundles_unchanged": 150, "C29_lock_and_sample_unchanged": true, "temp_root_width": 86, "normalized_tree_sha256": "e3efaeb42893a72421720a6f6db891926a21e120221fe6fd59f18148b87c8c8b", "suite_digest": "fa7fb93e86a6361dec469e4d8bcdd7216a37095ccb2b838ba750f45f3b6a5709"},
+    "C29": {
+      "diagnosis": "Retained raw shutdown CPR query at offset8861 was answered only at9330 after Go's 100ms query deadline, selecting the fallback region/cursor row20. The driver had waited for the correct preceding next-turn prompt; another prompt wait would not solve the post-submit query. Old raw unavailable, but complete screen equality after restoring only cursor.row18 and the observed fallback controls establish the narrow difference; scheduling cause was not proven.",
+      "repair": "Dedicated selector/I/O owner continuously services PTY output while controller snapshots serialize/persist; query replies are emitted at exact parsed query-end offsets, including split reads, before trailing redraw is interpreted. Condition-based control barriers, immutable cell/container snapshot view, joined cleanup. No EOF teardown, unsolicited CPR, sleeps, geometry changes or cursor masks; no Go edits.",
+      "tests": "Real offline PTY peer asks CPR while controller serialization/persistence is blocked by Events; must consume correct response before releasing next frame. Split reads, cursor/cells, next ordinary input, errors/timeouts/persistence cleanup covered. Driver grows61lines.",
+      "executable_check": {
+        "case": "C29.fresh-prompt",
+        "duration_seconds": 2.812014,
+        "status": "passed",
+        "leak_check": "clean",
+        "entire_old_lock_identical": true,
+        "final_cursor_row": 18,
+        "sample_unchanged": true
+      }
+    },
+    "spinner": "C34/C35 now accept exact newline or cursor-position framing. For each owned queued/resized snapshot, replay prior resizes, bind the surviving known glyph to the held Run/model request/auth/step and prompt geometry, and require an exact raw printed owner. Normalize only that cell, including canonical identity sites; deduplicate shared raw origins. Retained raw replay passes with1 C34 and2 C35 sites; C34 sample bytes unchanged.",
+    "C38": "The independently replay-validated executable witness is consumed as case-scoped typed raw evidence N rather than retained as allocation-bearing B output. Other-family witness bytes remain literal. Retained full raw replay passes and no residual witness output remains.",
+    "default_artifact_allocation": "Plain make parity's old automatic artifact prefix differed in width from reference working/artifacts paths. Changed its default to reagent-parity-cases-<8 chars>/artifacts, with CLI-boundary regression proving equal resolved allocation widths. Explicit --artifacts behavior is unchanged. No display geometry masking.",
+    "offline_gate": {
+      "tests": 526,
+      "skipped": 11,
+      "duration_seconds": 162.409,
+      "exit_code": 0,
+      "go_build": 0,
+      "go_vet": 0,
+      "go_test": 0,
+      "make_check": 0,
+      "after_default_allocation_fix": "16 focused CLI/slot/PTY I/O tests passed in25.440s; background make parity will rerun full suite, now527 tests"
+    },
+    "tty_check": {
+      "command": "make tty-check",
+      "exit_code": 0,
+      "duration_seconds": 67.109,
+      "verdict": "all 27 scenarios passed",
+      "output": "Tool output bounded; representative resize-while-typing and narrow-terminal screens and complete verdict observed. No live APIs."
+    },
+    "approved_cli_migration_proof": {
+      "method": "Independently frozen raw replay validates each new projection. Transform only enumerated old text-cell spans and one executable-path JSON leaf, then require exact complete artifact-map and official sample bundle equality. For C12, restore only historical Runtime Workspace and dependent state digest; exact old lengths/SHAs are recovered for all4 checkpoint artifacts.",
+      "samples": [
+        {
+          "id": "C26.exec-timeout-continues",
+          "old_bundle_sha256": "a6effe542c1a0af88879cd0a74d73670f8c345532a883f792101a4e1d4eb96d4",
+          "new_bundle_sha256": "e94d1ed3a395b220225fbae525ccff50208f625c8cab5d6371eb816f4aee4c48",
+          "only_change": "12 numeric elapsed-text cells across3 frames"
+        },
+        {
+          "id": "C35.resize-during-turn",
+          "old_bundle_sha256": "61b16da7411e1a17a32266e2baf8b979e893c8b7c381a51f6b41e85139330182",
+          "new_bundle_sha256": "4f8e37e4ff1c81f5e64f9c396ff03f7543dc73bb8235e2d8aeb2c1627eba0401",
+          "only_change": "2 known progress spinner cells"
+        },
+        {
+          "id": "C38.interrupt-running-command",
+          "old_bundle_sha256": "288b422103bcd9c20c1f6472bc7eb7d306a4d0f89d8abd2d5ae1eb85258516e3",
+          "new_bundle_sha256": "fdcc24f1e5f735365644d1612bf60ec2fd9eb22f0430f9c7edb6d16b80fd00d4",
+          "only_change": "692 changed text cells within4 owned174-cell path spans, plus one exact resolved_executable trace leaf"
+        }
+      ],
+      "all_other_fields": "Artifact keys/policies, all styles, widths, geometry, cursors, events and unrelated bytes exact. C29 sample and full lock unchanged. Other150 bundles and all3419 W/T locks remain protected. No permanent sample-guard exception; migrate only these independently proved3 bundles once before normal strict publication."
+    }
+  },
+  "targeted_stress_repair": {
+    "status": "stopped during preparatory cache rebuild on unapproved sample differences",
+    "preparatory_result": {
+      "command": "make parity-golden UPDATE=1",
+      "jobs": 6,
+      "exit_code": 2,
+      "duration_seconds": 1475.63327,
+      "purpose": "single authorized preparatory rebuild, not the later full proof capture",
+      "initial_outcome": "3755 runnable captures froze successfully; C26 alone failed the newly introduced terminal elapsed parser; 60 leaves stayed pending. No publication occurred.",
+      "C26_recovery": "Exact raw activity ends with ESC[15;3H cursor restore, not only scroll-region reset. Added that valid positive-row/column CSI lookahead plus regression containing the exact failed styled/framed sequence. The first regression fixture lacked its closing synchronized-update control and was corrected. 69 focused tests then passed. Recovered original raw capture through official replay_case/account_raw/freeze_case, adding only the raw_policies metadata missing because observation originally failed; original program bytes, clocks and allocations retained. Full frozen raw replay passed. No executable recapture.",
+      "protected_audit": {
+        "mode": "complete frozen-lock decoding, not a second full raw replay",
+        "existing_WT_cases": 3419,
+        "identical": 3419,
+        "differences": [],
+        "missing": [],
+        "decode_errors": [],
+        "startup_snapshot_loss_found": false
+      },
+      "full_lock_audit": "After C26 recovery all 3756 frozen cases decoded. Differences only in C12.reset, C12.reset-extra, C26.exec-timeout-continues, C29.fresh-prompt, C35.resize-during-turn and C38.interrupt-running-command. C34 lock stayed identical, but its new progress rule did not match the actual newline-framed progress display; see remaining_defects.",
+      "sample_audit": "Official sample encoder ran only in an outside scratch directory; proposed changes were C26, C29, C35 and C38. C26/C38 are direct requested slot dependents; C29/C35 are not approved sample refreshes. No proposed bundle was copied into the workspace. No guard exception or expectation update.",
+      "unapproved_differences": [
+        {
+          "id": "C29.fresh-prompt",
+          "artifact": "invoke-001.screens.json",
+          "observation": "Every cell, grid and scrollback compared identical; only final.cursor.row differs, expected 18 versus captured 20. Cursor col=0, pending_wrap=false, visible=true in both. Cause/Go defect not established; no cursor mask or driver fix attempted.",
+          "old_bundle_sha256": "46204b0831e2278cb2a3bd0cd90febad021c90f15a64d9f0bb53de06f825c941",
+          "proposed_bundle_sha256": "7c9dbb8d8b0ef6c463743521368a90db32c12bebd1ce67d39aa591edf3d7d2d1",
+          "old_screens_sha256": "8b82d02761dbba27e66b2e499bb3c938294fdd5ab3d64f61997a7df3822e029f",
+          "captured_screens_sha256": "e995c9059828fd43e4f4507d03f37b21beb8216609a48d7298b8b7694323a752"
+        },
+        {
+          "id": "C35.resize-during-turn",
+          "artifact": "invoke-001.screens.json",
+          "observation": "One cell in queued-before-reply grid row 16: expected U+2839, captured U+2819, before 'waiting for gpt-6-luna · API key · step 1'. C35 shares _typeahead with C34 using resize=True (cli_pty.py:220-259,281-282), but the new spinner slot is C34-only. No extra-family slot or expected sample update assumed authorized.",
+          "old_bundle_sha256": "61b16da7411e1a17a32266e2baf8b979e893c8b7c381a51f6b41e85139330182",
+          "proposed_bundle_sha256": "dc227e7aea548dc26bbd33e78514ec8ab7af5430e54283b39860d84bc8476ba1",
+          "old_screens_sha256": "b55f6f1c96ad372f4a9457a662078bcd5c61670734e4a36b6286ea7f418d8f45",
+          "captured_screens_sha256": "66091f713b6c8bd94b74c34735d19c92bfe9168c263343a65a89c0cb66d9071e"
+        }
+      ],
+      "remaining_defects": [
+        "C34: current progress matcher requires an explicit cursor-position CSI immediately before the progress line, but this real capture prints it after a newline following the status line. The new terminal-progress-spinner ledger row count is zero. Expected literal U+280B happened to match this time; no stability claim is justified. Add exact newline-frame regression and bind the actual cell provenance before more campaigns.",
+        "C38: cli-exec-executable.json is independently validated but remains a residual retained B artifact with allocated search_path/executable strings. Shared raw-consumption integration was not completed when the scheduling agent hit its cap, and existing synthetic tests missed it. Need case-scoped independently certified witness consumption or owned path normalization; otherwise a comparison will flake. Current retained artifact is 432 bytes, SHA256 43bea72aac080b0cb4abead72b0a3107964b6c38076e38d552780a31773ac6f4. No fix after protected-sample stop."
+      ],
+      "post_recovery_gate": {
+        "python_tests": 519,
+        "skipped": 11,
+        "duration_seconds": 121.383,
+        "python_exit_code": 0,
+        "go_build": 0,
+        "go_vet": 0,
+        "go_test": 0,
+        "make_check": 0
+      },
+      "disposition": "No second preparatory capture, no targeted repeats/background full make parity, no later full proofs, PTY stability, mutations 1/2/6, commit, push or PR. Manifest remains blocked/unfrozen with no accepted seal. All workspace lock and bundle bytes remain at pre-preparation baseline. No Go changes or deterministic snapshot-timeout change.",
+      "diagnostic_strength": "For C29, restoring only final.cursor.row exactly reconstructs the complete old screen document. For C35, restoring only the queued-before-reply row16/col2 glyph exactly reconstructs the complete old screen document. These in-memory diagnostic reversals were never published or accepted as normalization.",
+      "retained_evidence": {
+        "root": "/tmp/reagent-parity-cli-stress-proof",
+        "regular_file_bytes": 204481744,
+        "failed_lane": "cache/reagent-parity/14944a6bd8e35815effb74270218483804c29615/failed-1792801515797479000/captured",
+        "purpose": "Unfinished preparatory lane retained deliberately for replay/authorized repair without another full rebuild. It is NOT a verified/published comparison cache. Includes all 3756 frozen cases after C26 recovery, original failure evidence, baseline, logs, reference binary, scratch proposals and compact diagnostics.",
+        "publication_lock": "Verified released by nonblocking acquisition; persistent inode retained",
+        "cleanup": "Defer this owned root until repairs/proof finish; do not clean the only reusable raw evidence again."
+      }
+    },
+    "preparatory_authorization": "User answered yes to one preparatory reference cache rebuild before the five targeted repeats; this is distinct from the later full proof capture.",
+    "authorization": "Detect exclusivity in shared fixture setup, not by case list; fix C12/C26/C34/C38 owned slots. Then failing/related C12,C26,C34,C38,T02,T49 families plus every recorder case five times at default JOBS while another full make parity runs. Full proofs only after every repeat clean; then one capture, one candidate, PTY stability, mutations 1/2/6 and PR. Any lost startup Git snapshot after detected exclusivity stops proof; no Go timeout fix has been attempted.",
+    "exclusivity": {
+      "detection": "Shared tools_git._setup and tools_arguments.denied_commands promote before recorder setup. Shared Context startup setup discovers fixture .git markers, later workspace-switch targets and configured GIT_DIR, including per-launch environment overrides, before piped/PTY launch.",
+      "enforcement": "Every case holds shared machine workload ownership; detected cases drop shared ownership before acquiring exclusive ownership, held through process cleanup and observer completion. Stable workload.lock is shared across parity invocations. Publication keeps exclusive capture.lock; comparisons share capture.lock only in read-only cache mode.",
+      "classification": "All actual Case scheduling hints now default false; no handwritten exclusive case list. Results/case ledger report detected exclusivity. The old Case field remains a compatibility scheduling hint, not the source of recorder classification.",
+      "unit_proof": "Installer-boundary discovery through actual case callables classifies all 149 current recorder consumers exclusive before shared fixture work, including all seven T02.git_do.pr variants, all ten T01.git_do variants, four T49 leaves and cross-module recorder users. Separate tests cover repo/gitfile/switch-target/GIT_DIR detection, both launch paths, simultaneous cross-process promotions, read-only comparison overlap, exclusive-publication refusal and cleanup ownership.",
+      "metadata_sha256": "7ce958b339349bb9d739447683cefb1bc63a9c41967f9548217a88a0e08bf5bb"
+    },
+    "owned_slots": {
+      "C12": "Checkpoint state.prompt.text normalizes only the exact Runtime Workspace line bound to independent launch/active checkpoint configuration; embedded/project/prose path lookalikes remain literal. Original state digest must verify; dependent normalized digest recomputed. Session IDs and other allocated paths retain existing strict ownership.",
+      "C26": "One numeric screen elapsed slot uses the existing exec-timeout traced start/result/command/invocation witness and Go-compatible displayed rounding. No units, other cells, width, styles or cursor changes.",
+      "C34": "Only the known one-cell spinner at the queued-before-reply progress location, with model/auth/step, request/Run, time and prompt-geometry witnesses. No general spinner/prose mask.",
+      "C38_screens": "CSI-framed cancellation trace announcement and blocked diagnostic share the exact independently run.finished-owned allocated trace path slot, preserving wrapped tails and physical cell geometry.",
+      "C38_executable": "Fixture captures cli-exec-executable.json before invocation from its actual isolated PATH/symlink. Exactly one cancelled exec call/Run lifecycle inside the invocation owns argv/cwd/workspace and resolved_executable. Only that typed leaf becomes <ROOT>/home/.parity-bin/python3; model-native and arbitrary paths stay literal.",
+      "policy_kinds_added": [
+        "cli-exec-executable",
+        "terminal-exec-timeout-elapsed",
+        "terminal-progress-spinner"
+      ]
+    },
+    "cache_and_publication": {
+      "comparison_behavior": "Comparisons may overlap but cannot regenerate or stamp caches under a shared lock; absent/stale caches fail before case execution with a preparation instruction. Captures/cache publication retain exclusive fail-fast ownership.",
+      "blocker": "Preparatory evidence captured once, then stopped on unapproved C29/C35 sample differences. Retained raw frozen evidence can be replayed after authorized repairs without another full rebuild; no valid published comparison cache exists yet.",
+      "dependent_work": "Before comparison campaigns, fresh targeted reference evidence must refresh only requested C12/C26/C34/C38 slot expectations and directly dependent CLI samples (C26/C38, C34 only if its canonical spinner changes). Existing sample guard has not been relaxed; no sample or normalized lock has been refreshed yet. Any unrelated byte/row/bundle change must stop.",
+      "metadata_reconciliation": "Reconciled deterministic inventory scheduling-hint metadata. Full prior capture exposed samples.refresh_samples omitting pending CLI-family metadata; now pending_families derives from inventory, and sample index metadata is reconciled. No bundle payload or lock bytes changed."
+    },
+    "verification": {
+      "python_tests": 518,
+      "skipped": 11,
+      "duration_seconds": 112.858,
+      "python_exit_code": 0,
+      "go_build": 0,
+      "go_vet": 0,
+      "go_test": 0,
+      "make_check": 0,
+      "focused_integration_tests": 72,
+      "focused_integration_duration_seconds": 12.491,
+      "development_failures": "Initial 517-test run found stale scheduling/cache-call expectations, test /var symlink namespace, and previously generated sample pending-family metadata. Corrected those dependents. Expanding installer discovery initially let unrelated optional git_inspect test setup reach a missing sentinel; restricted that probe at its repository boundary. Final full gate clean. No production Go defect demonstrated.",
+      "tty_check": "Not run: no production terminal input/display changes; fixture startup locking and observer projections only. Real PTY stability and full executable proof remain pending."
+    },
+    "agents": {
+      "used_this_phase": {
+        "t15 optin-recorder": {
+          "input_tokens": 1602079,
+          "cached_input_tokens": 1355904,
+          "output_tokens": 16514,
+          "reasoning_tokens": 8078,
+          "outcome": "token cap reached with bounded file effects; parent completed integration/tests"
+        },
+        "t17 pty-fixture-stability": {
+          "input_tokens": 3132331,
+          "cached_input_tokens": 3045248,
+          "output_tokens": 15864,
+          "reasoning_tokens": 5002,
+          "outcome": "delivered; parent integrated policy/tests"
+        }
+      },
+      "lifetime_agents": 19,
+      "lifetime_input_tokens": 46812695,
+      "lifetime_cached_input_tokens": 43340928,
+      "lifetime_output_tokens": 335910,
+      "lifetime_reasoning_tokens": 88671,
+      "unreported_attempts": 1,
+      "accounting_complete": true,
+      "running": 0
+    },
+    "campaign": {
+      "preparatory_capture_run": true,
+      "targeted_repeats_run": 0,
+      "background_full_make_parity_run": false,
+      "full_capture_run": false,
+      "full_candidate_run": false,
+      "pty_stability_run": false,
+      "mutations_1_2_6_run": false,
+      "commit_push_pr": false,
+      "live_apis": false,
+      "linux": false
+    },
+    "integrity": "No Go source or dependency changes. Working normalized oracle remains byte-identical to the pre-preparation baseline, with prior 3756-lock tree 4007b5418469fd576ddc4816dc27cdb49c9ce30a1a2f9ec39f6ad4e9e5ff34a4. All 153 sample bundles and sample index byte-identical to that baseline. Unaccepted raw preparatory lane retained at the owned root above so replay can continue without another capture. Machine publication lock verified released; persistent lock inodes retained. Manifest blocked/unfrozen/no accepted suite seal."
+  },
+  "zero_exec_timing_migration": {
+    "authorization": "User approved any existing W/T case whose sole difference is ledger contract gaining eligible zero-valued exec timing sites, with normalized artifacts byte-identical. Any normalized artifact, existing sample bundle or non-timing ledger difference stops proof. One full capture, one full candidate, PTY load stability, mutations 1/2/6, then open PR; never merge.",
+    "status": "stopped after candidate; protected normalized-output difference",
+    "candidate": {
+      "command": "python3 -m parity.run --bin /tmp/reagent-parity-cli-class-proof/candidate --jobs 6 --artifacts /var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-p_hwqpb9/artifacts",
+      "build": "Independent git archive of exact pin; go build -o /tmp/reagent-parity-cli-class-proof/candidate ./cmd/reagent; no trimpath, buildvcs override, ldflags or coverage instrumentation",
+      "archive_commit": "14944a6bd8e35815effb74270218483804c29615",
+      "archive_sha256": "ae09e37e6bd216b30fd5923f26f1ace3693470b0e4d5e2c19ced8dc69b0b3856",
+      "binary_sha256": "ddf5883c0da4b022cdee0e31f7abe7ee104aac80eb6aaf3954b9d68693f3a255",
+      "exit_code": 1,
+      "duration_seconds": 1460.319206,
+      "total": 3816,
+      "selected": 3816,
+      "passed": 3748,
+      "failed": 8,
+      "pending": 60,
+      "gate_success": false,
+      "inventory_verified": true,
+      "leak_checks": {
+        "clean": 3756,
+        "failed": 0,
+        "pids": []
+      },
+      "scope": "full-platform",
+      "platform": "darwin/arm64",
+      "unexecuted_platforms": [
+        "linux"
+      ],
+      "cache": "Existing successful capture reused under machine-wide lock; no regeneration, probe mode or concurrent parity invocation",
+      "artifact_width": "Temporary reagent-parity-cases-<8 chars>/artifacts prefix matches reference artifact-path width; exact geometry remained literal"
+    },
+    "candidate_failures": [
+      {
+        "id": "C12.reset",
+        "kind": "normalized checkpoint",
+        "artifacts": [
+          "invoke-001.session-1.checkpoint.json",
+          "invoke-001.session-2.checkpoint.json"
+        ],
+        "observation": "state.prompt.text retains allocated workspace root (reference reagent-parity-cases-ccwvdmrn; candidate reagent-parity-cases-opkgb4yz); only that JSON leaf and dependent sha256 differ. Launch, active and IDs were normalized, but the prompt workspace was not. Both checkpoint lengths 4396 bytes.",
+        "source": "parity/observe_cli_sessions.py:56-69"
+      },
+      {
+        "id": "C12.reset-extra",
+        "kind": "normalized checkpoint",
+        "artifacts": [
+          "invoke-001.session-1.checkpoint.json",
+          "invoke-001.session-2.checkpoint.json"
+        ],
+        "observation": "Same surviving state.prompt.text allocation and dependent sha256 as C12.reset; both checkpoint lengths 4402 bytes.",
+        "source": "parity/observe_cli_sessions.py:56-69"
+      },
+      {
+        "id": "C26.exec-timeout-continues",
+        "kind": "exact terminal cells",
+        "artifacts": [
+          "invoke-001.screens.json"
+        ],
+        "observation": "One cell in each of timeout/next-turn/final frames differs: timed out after 10.2s versus 10.3s. Equal 1111241-byte documents. No normalization or expected-output relaxation applied.",
+        "expected_sha256": "faf2ff40a6b09658275c6709a66a53f1da599a3b002b41ea44a896ae4b1ba723",
+        "actual_sha256": "33726f1fba126a94fe96fdbe3a4ac0e66e12c1b749594b85eec4c7949eb3e403"
+      },
+      {
+        "id": "C34.typeahead-queue-long-reply",
+        "kind": "exact terminal cells",
+        "artifacts": [
+          "invoke-001.screens.json"
+        ],
+        "observation": "queued-before-reply grid row 16 has one spinner-cell difference: U+280B versus U+2819, before 'waiting for gpt-6-luna · API key · step 1'. Equal 4916040-byte documents. No broad spinner mask applied.",
+        "expected_sha256": "d6c493354b1a5dbd6cb0790f8a8e3791196134d0fd9f8ac3f955c0ba52ef8efa",
+        "actual_sha256": "60f9e7000ad6e9aef8dc83749aa41d78844a23e0151b7b1c9e39150cfc7f2866"
+      },
+      {
+        "id": "C38.interrupt-running-command",
+        "kind": "normalized screens and trace",
+        "artifacts": [
+          "invoke-001.screens.json",
+          "trace-1.jsonl"
+        ],
+        "observation": "Screens retain wrapped trace-path tails in exec-cancelled, blocked-next-turn, next-turn and final scrollback: reference ccwvdmrn/invoke trace 42bb205f694a64d9 versus candidate artifact root p_hwqpb9/run b558e745387ea5da. Widths are equal. Trace-1 differs only in tool.finished data.outcome.data.resolved_executable: allocated home/.parity-bin/python3 root ccwvdmrn versus opkgb4yz. Parser accepts framing but these distinct unnormalized sites remain.",
+        "screens_expected_sha256": "39631c9f356caaba4d8a03154361e131558969eba2478a47cb2fa423ded10eec",
+        "screens_actual_sha256": "5819a13fc256be389a1038758cb52bdb9af5c94beac0d90f6d80d0d02ba67549",
+        "trace_expected_sha256": "696411226d03e8fc9e6abd89473b9894e5d4193a07bb94f5a571c0164cdbf031",
+        "trace_actual_sha256": "878f81622c781f1107c169a0a6fac2f315a024bb7858a12b74f372cbefd82655"
+      },
+      {
+        "id": "T02.git_do.pr.zero",
+        "kind": "fixture missing startup recorder evidence",
+        "observation": "commands.jsonl absent; fixture raises FileNotFoundError before observation/replay metadata. Tool trace independently reports expected invalid_arguments, pr must be a positive integer, effect none. Does not establish a Go argument-validation defect.",
+        "source": "parity/cases/tools_arguments.py:169-200"
+      },
+      {
+        "id": "T02.git_do.pr.negative",
+        "kind": "fixture missing startup recorder evidence",
+        "observation": "Same absent commands.jsonl and FileNotFoundError as pr.zero; traced git_do outcome is the expected invalid_arguments, effect none.",
+        "source": "parity/cases/tools_arguments.py:169-200"
+      },
+      {
+        "id": "T49.ship_pr.feature",
+        "kind": "protected normalized-output mismatch; stop condition",
+        "artifacts": [
+          "git/git-commands.jsonl",
+          "trace-1.jsonl"
+        ],
+        "observation": "Expected 21 recorded Git commands, candidate 17. Exactly four guarded startup snapshot commands are absent: status --porcelain=v2 --branch; symbolic-ref --short refs/remotes/origin/HEAD; rev-list --left-right --count HEAD...origin/main; rev-parse --git-path FETCH_HEAD. Removing only those commands in memory exactly recovers candidate argv sequence. Normalized trace differs only at history[0].user.workspace.git in two events. No expected bytes or locks changed to accept it; scheduling/root cause not established by this single run.",
+        "commands_expected_sha256": "45ac69a0fc4123a4fb4ddfa8b33ceb54a3ed1d94b0449fa6886a9a8a8f7afe31",
+        "commands_actual_sha256": "f5135ac2268f77410236bad584a9e9a8ecd9a6a53c8c4a0961a7e973cd74a974",
+        "trace_expected_sha256": "ea3bb395e8e92c872facf8ef7d5a3d4762aecedbb7d86bb092f11cd60119d0ba",
+        "trace_actual_sha256": "0ec313e67b2607dd09909f8babf0d0be6f85511907b9e3dd9e2a689e86cb5231"
+      }
+    ],
+    "stop_disposition": "No second capture/candidate, no stability load runs, mutations 1/2/6, commit, push or PR. No failure-related source fix or protected expectation refresh after the stop. Reference capture outputs remain as evidence, but manifest is blocked/unfrozen and the accepted suite seal is cleared because candidate proof failed. No Go source/dependency changes. Live APIs and Linux were not exercised.",
+    "final_integrity": "Only T31.missing ledger differs from the phase baseline, which already included approved T31.start. Every existing normalized artifact/policy and all 115 existing bundles remain identical. Candidate failures were not accepted or used to regenerate expectations.",
+    "post_recording_checks": {
+      "command": "python3 -m unittest parity.manifest_test parity.locks_test parity.golden_test parity.cli_sessions_test parity.tty_test parity.observe_test",
+      "tests": 120,
+      "duration_seconds": 11.418,
+      "exit_code": 0,
+      "go_build": 0,
+      "go_vet": 0,
+      "go_test": 0,
+      "make_check": 0,
+      "tty_check": "Not run; no production terminal input/display changes. Full reference/candidate passes exercised real PTYs; stability campaign was blocked by candidate failure."
+    },
+    "cleanup": {
+      "status": "verified removed",
+      "roots": [
+        {
+          "path": "/var/folders/_p/b9rl778n74g84mq_npml6jk80000gn/T/reagent-parity-cases-p_hwqpb9",
+          "regular_file_bytes_removed": 49899235
+        },
+        {
+          "path": "/tmp/reagent-parity-cli-class-proof",
+          "regular_file_bytes_removed": 207777002
+        }
+      ],
+      "removed": "owned reference cache, candidate binary/source archive, raw failure evidence, logs, audit/baseline and reports; compact findings retained here and in README",
+      "shared_reference_cache_changed": false,
+      "machine_lock": "ownership verified released by nonblocking acquisition; persistent inode retained",
+      "raw_evidence_retained": false
+    },
+    "agents": {
+      "used_this_phase": [
+        "t19 timing-migration-tests"
+      ],
+      "phase_input_tokens": 890312,
+      "phase_cached_input_tokens": 840192,
+      "phase_output_tokens": 7409,
+      "phase_reasoning_tokens": 2436,
+      "lifetime_agents": 19,
+      "lifetime_input_tokens": 42078285,
+      "lifetime_cached_input_tokens": 38939776,
+      "lifetime_output_tokens": 303532,
+      "lifetime_reasoning_tokens": 75591,
+      "unreported_attempts": 1,
+      "accounting_complete": true,
+      "running": 0
+    },
+    "preflight": {
+      "python_tests": 504,
+      "skipped": 11,
+      "duration_seconds": 158.02,
+      "go_build": 0,
+      "go_vet": 0,
+      "go_test": 0,
+      "make_check": 0
+    },
+    "capture": {
+      "command": "make parity-golden UPDATE=1",
+      "jobs": 6,
+      "exit_code": 0,
+      "duration_seconds": 2102.289848,
+      "runnable_passed": 3756,
+      "pending": 60,
+      "new_locks": 340,
+      "new_cli_sample_bundles": 38,
+      "existing_sample_bundles_unchanged": 115,
+      "only_new_protected_migration": "T31.missing",
+      "existing_normalized_artifacts_and_policies_identical": true,
+      "normalized_tree_sha256": "4007b5418469fd576ddc4816dc27cdb49c9ce30a1a2f9ec39f6ad4e9e5ff34a4",
+      "suite_digest": "bfae668b5e13cfea3e1f4da45095a374e5c05fbfb88ff952cdba7026f439372e",
+      "performance": "35m 02s; approximately 15-minute target not met"
+    },
+    "proof_rule": "Full raw replay validates every candidate migration. Normalized artifact descriptors and policies must match. Remove only validated duration-ms identity rows whose raw and canonical bytes are exactly zero; the complete previous lock must be reconstructed exactly. Other protected differences still reach unchanged strict guards. All existing sample bundles are protected before publication.",
+    "ledger_updates": [
+      {
+        "id": "T31.missing",
+        "old_ledger_sha256": "f7ac2b56d40c7241f576ac48b4a492f79fc22fa09ebaa5013c0a7aa72115c4af",
+        "new_ledger_sha256": "3bab9def870e3683db2929e54bf8f6da4ac932c1cbfade678891c828ac0a38fe",
+        "sites": [
+          {
+            "artifact": "cache-input",
+            "path": [
+              "history",
+              2,
+              "tool",
+              "outcome",
+              "data",
+              "duration_ms"
+            ]
+          },
+          {
+            "artifact": "trace-1.jsonl",
+            "path": [
+              "data",
+              "outcome",
+              "data",
+              "duration_ms"
+            ]
+          },
+          {
+            "artifact": "trace-1.jsonl",
+            "path": [
+              "data",
+              "history",
+              2,
+              "tool",
+              "outcome",
+              "data",
+              "duration_ms"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "T31.start",
+        "old_ledger_sha256": "f7ac2b56d40c7241f576ac48b4a492f79fc22fa09ebaa5013c0a7aa72115c4af",
+        "new_ledger_sha256": "3bab9def870e3683db2929e54bf8f6da4ac932c1cbfade678891c828ac0a38fe",
+        "normalized_sha256_unchanged": "a36ab318d61e62fbc67a78f37e46a78432ec6c02721a5f41c41d98edef613c8f",
+        "proof": "Prior explicitly approved isolated migration, retained in approved_rounds.T31_start; fresh protected-reference evidence and full raw replay verified identical normalized artifacts/policies."
+      }
+    ]
+  },
+  "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
+  "reference_binary_sha256": "b8d7e8cea619cba3f0f3d233e6e2898723a7100677c58b73ebd501d853bd64ed",
+  "platform": "darwin/arm64",
+  "go_version": "go1.23.3",
+  "python_version": "3.11.5",
+  "counts": {
+    "total": 3816,
+    "runnable": 3756,
+    "pending": 60,
+    "slow": 103,
+    "wire": {
+      "total": 2761,
+      "runnable": 2748,
+      "pending": 13
+    },
+    "tools": {
+      "total": 683,
+      "runnable": 671,
+      "pending": 12
+    },
+    "cli": {
+      "total": 372,
+      "runnable": 337,
+      "pending": 35
+    }
+  },
+  "case_metadata_sha256": "7ce958b339349bb9d739447683cefb1bc63a9c41967f9548217a88a0e08bf5bb",
+  "preservation": {
+    "old_locks_replayed": 3416,
+    "unchanged": 3413,
+    "mismatched": 3,
+    "mismatches": [
+      {
+        "id": "T40.hostile-programs.clean",
+        "artifacts": [
+          "git/git-commands.jsonl",
+          "trace-1.jsonl"
+        ],
+        "before_normalized_sha256": "2ce29442d12eb9e2220c09026055c4c73e598c3a829f6493464348fab712267e",
+        "after_normalized_sha256": "91716567a18f51a6854f6d4795de2222a3fde4f64dae9738a5abcb8926ff372b",
+        "before_ledger_sha256": "ff7173d98fcf6670f6a40d6f3bfb2b64c03c61608762843e96b7c93d0b00e3ef",
+        "after_ledger_sha256": "1112e54bf69702f7e04e0396655283ba30c846a74b2fb15bdc73d2a7d37cfaed"
+      },
+      {
+        "id": "T41.jev.selection.write-at",
+        "artifacts": [
+          "git/git-commands.jsonl",
+          "trace-1.jsonl"
+        ],
+        "before_normalized_sha256": "85c7f11fb3c800cd763bdb2c540b929e8d7b74c99b2cc013d30473237c1df033",
+        "after_normalized_sha256": "0527b5741f91658f17a30c4b8e465d96620921e5bc26f27168040790ab80313a",
+        "ledger_sha256": "522df677f616466006a90f9a65de438b20b2c32b4ec794907c55906d6729a5ea"
+      },
+      {
+        "id": "T59.maps-numbers",
+        "artifacts": [
+          "trace-1.jsonl"
+        ],
+        "before_normalized_sha256": "1ca6b7ef9bb8df3090a7e9baae9d36eec05b834ca66c9a85f7f9ccb0e23fde81",
+        "after_normalized_sha256": "94c27184badcdc5722edaca9cea6098173b8f0059542a2d9e80f4cae4f772f6e",
+        "ledger_sha256": "c5d202302d967d24febff7e6b1217fc9cdd2658bf5bebc99d5a1814a1ecb1a91"
+      }
+    ],
+    "causes": "Follow-up investigation: exact failed hashes explained by omitted startup Git snapshot/probes in T40/T41 and inherited unnormalized Jev timing in T59. Original startup timeout/load trigger not proved. See lock-investigation.md. No expectation refreshed.",
+    "old_sample_bundles": 115,
+    "byte_identical_sample_bundles": 115,
+    "old_sample_sha_map_sha256": "4e11fdfa32b26bb2c4dc1117d9585b8468a3d8159de1402a9ac183f708a8b3a8",
+    "oracle_inventory_samples_seal_published": false
+  },
+  "proof": {
+    "python_unittest": {
+      "tests": 445,
+      "skipped": 11,
+      "duration_seconds": 128.113,
+      "exit_code": 0
+    },
+    "go_build": {
+      "exit_code": 0,
+      "duration_seconds": 1.778
+    },
+    "make_check": {
+      "exit_code": 0,
+      "duration_seconds": 8.849,
+      "checks": [
+        "gofmt",
+        "go vet ./...",
+        "go test ./..."
+      ]
+    },
+    "final_blocked_manifest_checks": {
+      "tests": 6,
+      "duration_seconds": 0.09,
+      "exit_code": 0
+    },
+    "final_go_gate": {
+      "build_exit_code": 0,
+      "vet_exit_code": 0,
+      "test_exit_code": 0,
+      "test_output": "? github.com/satmihir/re-agent/cmd/reagent [no test files]\nok github.com/satmihir/re-agent/internal/reagent (cached)"
+    },
+    "golden_attempts": [
+      {
+        "command": "make parity-golden UPDATE=1",
+        "exit_code": 2,
+        "duration_seconds": 1413.41,
+        "failures": [
+          "T23.human-consent: consent path wrapped at 120 columns",
+          "T35.redirected: invocation cleanup killed fixture children before liveness assertion"
+        ],
+        "leak_report": "T35 reported PIDs 37618 and 37619 before cleanup; diagnostic rerun reproduced the harness boundary bug.",
+        "retention_failure": "Workspace FIFO copy failed and successful captures were lost."
+      },
+      {
+        "command": "make parity-golden UPDATE=1",
+        "exit_code": 2,
+        "duration_seconds": 1287.111,
+        "reason_for_replacement": "First capture could not be reused after FIFO retention failure; underlying fixture/cleanup causes repaired and checked.",
+        "runnable_captures_retained": 3756,
+        "verification_failure": "invalid substitution row fields: terminal S-projection certificate is not accepted by locks.ledger_contract",
+        "leaks": "No capture failure reported; no aggregate golden leak report emitted, so this is not the required full-comparison leak proof."
+      }
+    ],
+    "protected_lock_replay_duration_seconds": 105.265,
+    "T26_exact_reference_candidate_comparison": {
+      "passed": true,
+      "duration_seconds": 49.11,
+      "clean_leak_checks": 2
+    },
+    "focused_repaired_probes": [
+      "C37.interrupt-shell-command",
+      "C41.model-availability including short-height text fallback",
+      "T23.human-consent",
+      "T35.redirected"
+    ],
+    "full_candidate_comparison": "not run",
+    "targeted_make_C30": "not run: no published cache",
+    "terminal_jobs8_load_runs": "not run",
+    "mutation_1_2_6_and_C16_for_4": "not run",
+    "coverage_VERIFY_serial_final_repeatability": "not run by scope",
+    "make_tty_check": "not run; no production terminal code changes",
+    "linux": "not run"
+  },
+  "development_failures_and_repairs": [
+    "APFS C15 HIGH/high case-ID collision fixed with uppercase-high.",
+    "C41 actual destination request witnesses and NO_COLOR PTY startup ownership repaired.",
+    "C37 switched to a relative helper command and ignores SIGINT before readiness; terminal fixture now requires cancellation kill rather than masking different geometry.",
+    "T26 mid-session fresh Session hint certified against fresh input/config and owned trace header; exact comparison passed.",
+    "wait_prompt requires bracketed-paste mode 2004; regression test rejects an old visible prompt.",
+    "Fake merged-stdout fixture output ordering and child SIGHUP/readiness were synchronized after focused test failures.",
+    "Case-wide leak checks no longer run at each invocation exit; successful invocation-group survivors are recorded before group cleanup, while intentional other groups remain inspectable until case end.",
+    "Golden failure retention now copies frozen captures and failure artifacts, not workspace FIFOs; boundary regression test passed.",
+    "Historical stop: terminal projection ledger serializer integration was unresolved. Subsequently fixed and tested in authorized_resumption.terminal_ledger_repair; new capture blockers are recorded there separately."
+  ],
+  "pending": {
+    "precise_leaf_reasons": "manifest.json pending map; collection matches audited metadata digest",
+    "earlier_leaves_implemented_but_not_frozen": [
+      "W50.picker",
+      "T23.human-consent",
+      "T26.lifetime"
+    ],
+    "T36.before-start": "CLI/provider readiness follows signal.NotifyContext at chat.go:939 but exposes no barrier between model acceptance and loop.go:369 dispatch ctx.Err(); tool.started at loop.go:408 is too late. Area 4 requires an agent/dispatch barrier.",
+    "area4": [
+      "C14.cancel",
+      "C15.agents",
+      "C19",
+      "C20",
+      "C23",
+      "C24",
+      "C25"
+    ],
+    "stopped_families": {
+      "C18": {
+        "leaves": 11,
+        "repro": "cases.cli_pty_commands.edit(ctx, 'visual')",
+        "observation": "next ordinary question became ext ordinary question",
+        "caveat": "Observation preceded mode-2004 readiness; fixture handoff synchronization error is not ruled out. Not a conclusively synchronized Go defect. Family not resumed."
+      },
+      "C43": {
+        "leaves": 8,
+        "repro": "cases.cli_pty_render._edit(ctx, 'clear-screen')",
+        "observation": "Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no handler."
+      },
+      "C44": {
+        "leaves": 9,
+        "repro": "cases.cli_pty_races._cancel_typeahead(ctx)",
+        "observation": "After trace-confirmed cancellation, stale queued input reached the next request instead of the fresh question."
+      }
+    }
+  },
+  "normalization": {
+    "policy": "policy.json typed allowlist; independent raw/config/trace/process witnesses and negative tests",
+    "terminal": "Exact raw replay, cells, cursor, styles and geometry; only owned cell-text slots. No broad spinner/text masking.",
+    "C41_reconciliation": "Pin has no paging/filter keys. lineinput.go:319-321,366-367 refuses a short-height picker; chat.go:129-131 prints renderModels. Tested fallback and following model turn.",
+    "unverified": "Incomplete-Markdown intermediate states; completed Markdown/progress/provider continuation exercised."
+  },
+  "leak_check_limitations": [
+    "Evidence-based ownership, not absolute OS containment: descendants clearing environment and leaving case directories before observation may evade attribution.",
+    "macOS lacks pidfds; identity-check-to-signal race remains.",
+    "Linux implementation unexecuted."
+  ],
+  "agents": {
+    "phase": "historical totals before authorized resumption; current cumulative totals are in authorized_resumption.agents",
+    "count": 11,
+    "ids_and_names": {
+      "t1": "cli-args",
+      "t2": "chat-commands",
+      "t3": "terminal-driver",
+      "t4": "terminal-cases",
+      "t5": "leak-check",
+      "t6": "earlier-leaves",
+      "t7": "terminal-races",
+      "t8": "terminal-complete",
+      "t9": "observer-integrate",
+      "t10": "cli-proof-review",
+      "t11": "git-lock-diagnosis"
+    },
+    "input_tokens": 30465178,
+    "cached_input_tokens": 28300928,
+    "output_tokens": 228592,
+    "reasoning_tokens": 57107,
+    "cost_fields": [
+      "input_tokens",
+      "cached_input_tokens",
+      "output_tokens",
+      "reasoning_tokens"
+    ],
+    "cost_by_agent": {
+      "t1": [
+        2695133,
+        2562304,
+        21214,
+        3930
+      ],
+      "t2": [
+        4446484,
+        4232064,
+        30765,
+        6006
+      ],
+      "t3": [
+        5539251,
+        5119232,
+        52716,
+        11461
+      ],
+      "t4": [
+        2744240,
+        2608000,
+        19352,
+        3347
+      ],
+      "t5": [
+        933113,
+        876672,
+        13396,
+        5507
+      ],
+      "t6": [
+        5435577,
+        5041664,
+        39133,
+        9528
+      ],
+      "t7": [
+        2544973,
+        2368000,
+        14217,
+        3661
+      ],
+      "t8": [
+        3173132,
+        2850944,
+        17267,
+        3877
+      ],
+      "t9": [
+        1935720,
+        1789952,
+        9790,
+        3297
+      ],
+      "t10": [
+        159126,
+        112896,
+        1812,
+        965
+      ],
+      "t11": [
+        858429,
+        739200,
+        8930,
+        5528
+      ]
+    },
+    "accounting_complete": true,
+    "running": 0
+  },
+  "followup_investigation": {
+    "date": "2026-10-22",
+    "scope": "investigation only; no repair, oracle publication, manifest unblock or full proof restart",
+    "report": "lock-investigation.md",
+    "protected_binary_sha256_verified": true,
+    "area2_harness_commit": "8c46f5e7397698f0bce3a2ac68f5f38c2d9da4d9",
+    "ordinary_captures": 24,
+    "area2": {
+      "captures": 12,
+      "matching_locks": 12,
+      "T40_matches": "5/5",
+      "T41_matches": "5/5",
+      "T59_matches": "2/2"
+    },
+    "area3": {
+      "captures": 12,
+      "matching_locks": 11,
+      "T40_matches": "5/5",
+      "T41_matches": "5/5",
+      "T59_matches": "1/2",
+      "clean_leak_checks": 12
+    },
+    "paired_capture_duration_seconds": 30.673,
+    "limited_parallel_git_capture_duration_seconds": 13.531,
+    "controlled_captures": 3,
+    "T40_T41_control": "Unchanged area2 runner; existing dispatcher fail setting forces initial guarded status exit41. Both assertions pass and trace hashes exactly match original failures. Injected failure logs the status unlike original. Demonstrates omission branch, not original timeout cause.",
+    "T59_control": {
+      "runner": "unchanged area2",
+      "loopback_marker_work": "fixed 100000-round PBKDF2, no sleeps or changed reply bytes",
+      "processing_seconds": 0.022254,
+      "jev_ms": 25,
+      "case_assertions": "passed",
+      "lock": "mismatch",
+      "ledger": "unchanged"
+    },
+    "original_failed_hash_reconstruction": {
+      "T40": "Remove first four guarded Git command rows and eight initial workspace.git members; shift remaining Git-ledger line sites by four. Both normalized and ledger SHA-256 exactly match original failure.",
+      "T41": "Remove first four guarded Git command rows and two initial workspace.git members. Both normalized and ledger SHA-256 exactly match original failure.",
+      "T59": "Change only result jev_ms and history echo from 1 to 3. Both normalized and ledger SHA-256 exactly match original failure.",
+      "restriction": "in-memory diagnostic only, not accepted replay evidence, oracle output or new normalization"
+    },
+    "remaining_uncertainty": "Original startup status timeout or launch failure was not observed directly. Added process-sampling overhead is a hypothesis, not demonstrated cause; twenty ordinary Git-only captures matched.",
+    "repair_permission_needed": "T59 stable normalization would change its old artifact and ledger locks, requiring explicit immutable-lock exception. Do not mask missing Git state in T40/T41.",
+    "code_and_oracle_changes": false,
+    "additional_agent": "t11; static read-only investigation, parent independently checked conclusions",
+    "verification": {
+      "targeted_captures_and_hash_assertions": "completed",
+      "metadata_unit_tests": 6,
+      "metadata_unit_test_seconds": 0.095,
+      "report_JSON_accounting": "passed",
+      "go_build": "passed",
+      "go_vet": "passed",
+      "go_test": "passed (cached)"
+    },
+    "cleanup": {
+      "status": "verified removed",
+      "root": "/tmp/reagent-parity-investigation",
+      "regular_file_bytes_removed": 37361554,
+      "shared_cache_changed": false
+    }
+  },
+  "t59_timing_repair": {
+    "status": "targeted repair applied; full area3 campaign still blocked",
+    "authorization": "User approved T59 timing normalization and its protected artifact/ledger lock change; matching T59 sample/index updated as a direct dependent.",
+    "reference_pin_unchanged": true,
+    "normalization": "Exactly T59.maps-numbers reuses existing git-do-jev-ms rule, canonical zero; unique raw tool-call, HTTP intent/snapshot/questions and invocation-time witnesses required.",
+    "regression_tests": [
+      "Stable explicit 0,1,3,25,999 timing values and matching history echoes",
+      "Exact signed zero, float/exponent and int64-above-2^53 lexemes retained",
+      "Forged/missing HTTP, call and invocation witnesses rejected",
+      "Forged history echo rejected; native/prose remains literal",
+      "Other T59 IDs not enabled",
+      "All sample artifact descriptors match committed locks",
+      "T59 remains protected against future unapproved refreshes"
+    ],
+    "development_failure": "First focused unit run failed because the synthetic fixture used Python exponent spellings; fixture now explicitly supplies the intended Go lexemes. No production code workaround.",
+    "old_normalized_sha256": "1ca6b7ef9bb8df3090a7e9baae9d36eec05b834ca66c9a85f7f9ccb0e23fde81",
+    "new_normalized_sha256": "8b9858f42233b470650565c97024f0b8afa8f5ab44f97bb547ed4893b35a5ed1",
+    "old_ledger_sha256": "c5d202302d967d24febff7e6b1217fc9cdd2658bf5bebc99d5a1814a1ecb1a91",
+    "new_ledger_sha256": "b2cb0f10cd0782c1019448f9a724ef746759538537d34869177658bad3e457fe",
+    "changed_artifacts": [
+      "T59.maps-numbers/trace-1.jsonl: two jev_ms scalars 1 to 0"
+    ],
+    "witnessed_timing_sites": 2,
+    "new_normalized_tree_sha256": "348193026d5a5ea2b2600ecb1e6a3712e64bb6b7af6ec29963cd00dc2c8fb37a",
+    "sample": {
+      "path": "T59.maps-numbers.tar.gz",
+      "old_bundle_sha256": "72c2c920e18d1c7f91b16490a20d4d370686d718d0513a8238e4537a1703fdba",
+      "new_bundle_sha256": "b5b3fc8fec4e4b22278a5d91e692e6c186e0d2f9fb459906ebd52be87ab0ee89",
+      "normalized_sha256": "af84946cad43a97a3dd6fdaef74afda983b25f474b3cc7c3181a354b960c8d46"
+    },
+    "unchanged_other_locks": 3415,
+    "byte_identical_other_sample_bundles": 114,
+    "guard_exceptions_added": false,
+    "executable_captures": {
+      "count": 2,
+      "raw_jev_ms": [
+        5,
+        21
+      ],
+      "method": "normal plus fixed loopback CPU-work marker; no sleeps or live API",
+      "complete_raw_replays": 2,
+      "updated_lock_comparisons_passed": 2,
+      "updated_sample_comparisons_passed": 2,
+      "clean_leak_checks": 2
+    },
+    "focused_unit_tests": {
+      "tests": 30,
+      "duration_seconds": 0.907,
+      "status": "passed"
+    },
+    "final_checks": {
+      "python": {
+        "tests": 446,
+        "duration_seconds": 111.608,
+        "skipped": 11,
+        "exit_code": 0,
+        "output": "Ran 446 tests in 111.608s\nOK (skipped=11)"
+      },
+      "go_build": {
+        "command": "go build ./...",
+        "exit_code": 0
+      },
+      "go_vet": {
+        "command": "go vet ./...",
+        "exit_code": 0
+      },
+      "go_test": {
+        "command": "go test ./...",
+        "exit_code": 0,
+        "output": "?    github.com/satmihir/re-agent/cmd/reagent [no test files]\nok   github.com/satmihir/re-agent/internal/reagent (cached)"
+      },
+      "make_check": {
+        "exit_code": 0
+      },
+      "tty_check": "not run: no production terminal input/display changes in this repair"
+    },
+    "full_cache_inventory_CLI_samples_suite_seal": "not published; only approved T59 lock/sample and dependent tree/index metadata changed",
+    "new_agents_used": 0,
+    "cleanup": {
+      "status": "verified removed",
+      "root": "/tmp/reagent-t59-timing-repair",
+      "regular_file_bytes_removed": 12031145,
+      "shared_cache_changed": false,
+      "retained_proof": "this report and repair documentation; raw captures and reference binary removed"
+    }
+  },
+  "authorized_resumption": {
+    "scope": "no Go changes; three full default-JOBS capture proofs before working-suite golden publication, one full plain-candidate comparison with three concurrent PTY stability runs, mutations 1/2/6 and C16-first mutation 4, then open (do not merge) the exact-title PR",
+    "protected_baseline": {
+      "existing_locks": 3416,
+      "sample_bundles": 115,
+      "only_lock_changed_from_HEAD": "T59.maps-numbers",
+      "all_current_baseline_locks_and_bundles_must_remain_identical": true
+    },
+    "capture_proof_plan": "Use a disposable local suite/repository copy and isolated cache for three complete make parity-golden captures at default JOBS=6: sandbox-only UPDATE=1 bootstraps the not-yet-published CLI oracle, followed by two ordinary lock-verifying captures. Each must preserve every current W/T lock and sample. Only then perform one working-suite UPDATE=1. No verification guard is relaxed.",
+    "terminal_ledger_repair": {
+      "pre_fix_failure": "AssertionError: invalid substitution row fields at parity/locks.py:127; golden verification reports the same error after capturing all 3756 runnable cases",
+      "root_cause": "observe_cli_terminal.integrate emits three terminal-state-projection rows with classification=S and certificate=invoke-001.screens.json; ledger_contract's strict ordinary substitution schema rejected certificate as an extra field.",
+      "minimal_reproduction_python": [
+        "from pathlib import Path",
+        "from types import SimpleNamespace",
+        "from parity.observe import Normalizer",
+        "from parity.observe_cli_terminal import encoded, integrate",
+        "from parity.locks import case_lock, ledger_contract",
+        "raw = b'hello'",
+        "metadata = encoded(dict(version=1, initial_size=[3, 20], events=[], snapshots=[]))",
+        "ctx = SimpleNamespace(root=Path('/allocated/C21.fixture'), artifacts=Path('/allocated/C21.fixture/artifacts'), invocations=[dict(stderr=raw, stdin=b'')], observations={'invoke-001.tty': raw, 'invoke-001.terminal.json': metadata})",
+        "normal = Normalizer(ctx.root, None)",
+        "artifacts, _, stderr = integrate(ctx, normal, []); artifacts.update(stderr)",
+        "lock = case_lock(artifacts, {name: 'S' if name in stderr else 'B' for name in artifacts}, normal.ledger)",
+        "print(len(normal.ledger), len(ledger_contract(normal.ledger, artifacts)['certificates']), lock['ledger_sha256'])"
+      ],
+      "reproduction_command": "python3 -c \"import json,pathlib; r=json.loads(pathlib.Path('parity/cli-acceptance.json').read_text())['authorized_resumption']['terminal_ledger_repair']; exec('\\n'.join(r['minimal_reproduction_python']))\"",
+      "pre_fix_observation": "Actual observer produced 3 rows; case_lock raised AssertionError: invalid substitution row fields (agent t12 before repair).",
+      "post_fix_observation": "Parent independently reproduced: observer rows 3; retained certificates 3; ledger_sha256 76ed1872bdb696314402aa2712e48b3bf3fa605d8c7d0d2fdf8933d372e9c420; exit 0.",
+      "fix": "Only terminal-state-projection requires classification and certificate, with exact S classification/path, canonical invocation ownership and existing matching screens witness. Retain artifact/kind/classification/certificate in the stable contract; reject certificate on every other substitution kind. Full raw replay still independently rederives and compares the complete ledger.",
+      "regressions": "Seven tests cover actual observer serialization and lock round-trip, frozen raw replay, missing/extra/forged rows and fields, owner/path/classification/witness, ordinary-kind rejection, determinism/multiplicity and unchanged nonterminal serialization.",
+      "focused_agent_checks": {
+        "command": "python3 -m unittest parity.locks_test parity.cli_lock_test parity.tools_lock_test parity.tty_test.TerminalProjectionTest -v",
+        "tests": 35,
+        "duration_seconds": 1.228,
+        "exit_code": 0
+      }
+    },
+    "scheduling": {
+      "contract": "Case.exclusive defaults true. Audited help/version/argument-rejection paths alone opt out. Shared schedule_cases joins the parallel executor before starting a one-worker exclusive executor, retaining inventory-order results; golden captures and candidate/probe runs use it.",
+      "scope": "Within each invocation only, not a global machine lock. All Run, preview, startup snapshot and Git-recorder cases are conservatively exclusive, including PTYs; --jobs 8 does not make exclusive PTY cases parallel.",
+      "runnable_parallel": 56,
+      "runnable_exclusive": 3700,
+      "pending_exclusive": 60,
+      "metadata_sha256": "5ad6c409008a4f35290623fc22a54073f7a38b85ab55901ee64202a19b256a5c",
+      "unit_tests": "Ten event/barrier tests cover overlap and executor-shutdown boundaries, ordering/jobs=1/empty phases, errors, pending/platform outcomes, conservative inventory classification, metadata identity and both golden/candidate/probe integrations.",
+      "focused_agent_checks": {
+        "tests": 103,
+        "duration_seconds": 39.751,
+        "exit_code": 0
+      }
+    },
+    "full_capture_proofs": [
+      {
+        "number": 1,
+        "command": "make parity-golden UPDATE=1",
+        "publication": "disposable suite copy only",
+        "jobs": 6,
+        "exit_code": 0,
+        "duration_seconds": 5810.248063,
+        "runnable_cases": 3756,
+        "protected_locks_identical": 3416,
+        "protected_bundles_identical": 115,
+        "T40_T41_raw_replay_and_locks": "both pass"
+      },
+      {
+        "number": 2,
+        "command": "make parity-golden",
+        "publication": "none; failed",
+        "jobs": 6,
+        "exit_code": 2,
+        "duration_seconds": 4527.35159,
+        "T40_T41_raw_replay_and_locks": "both pass",
+        "failure": "W01.matrix-proxy-gpt-6-sol-max-ro1-plan1: HarnessError invalid replay process bounds at run.py:660 during run_case validate_replay; clean leak check",
+        "subsequent_protected_audit": {
+          "identical": 3414,
+          "mismatched": [
+            "W53.propagation.git-do"
+          ],
+          "missing_frozen_case": "W01.matrix-proxy-gpt-6-sol-max-ro1-plan1"
+        }
+      },
+      {
+        "number": 3,
+        "command": "make parity-golden",
+        "publication": "none; failed verification",
+        "jobs": 6,
+        "exit_code": 2,
+        "duration_seconds": 5625.225556,
+        "runnable_cases_captured": 3756,
+        "T40_T41_raw_replay_and_locks": "both pass",
+        "aggregate_replay_audit": {
+          "compared": 3756,
+          "identical": 3751,
+          "protected_locks_identical": 3416,
+          "mismatches": [
+            "C12.reset",
+            "C12.reset-extra",
+            "C16.implement-fresh",
+            "C38.interrupt-running-command",
+            "C41.effort-digit-6"
+          ],
+          "duration_seconds": 178.898465
+        }
+      }
+    ],
+    "T40_T41_three_capture_locks": {
+      "T40.hostile-programs.clean": {
+        "normalized_sha256": "2ce29442d12eb9e2220c09026055c4c73e598c3a829f6493464348fab712267e",
+        "ledger_sha256": "ff7173d98fcf6670f6a40d6f3bfb2b64c03c61608762843e96b7c93d0b00e3ef"
+      },
+      "T41.jev.selection.write-at": {
+        "normalized_sha256": "85c7f11fb3c800cd763bdb2c540b929e8d7b74c99b2cc013d30473237c1df033",
+        "ledger_sha256": "522df677f616466006a90f9a65de438b20b2c32b4ec794907c55906d6729a5ea"
+      }
+    },
+    "new_blockers": {
+      "W01_replay_bounds": {
+        "observation": "replay_case rejects nonfinite/non-numeric bounds or started > ended; Context.invoke records both using time.time (run.py:229,301). Exact failed values were lost because replay.json is written only after validate_replay (run.py:530-531).",
+        "inference": "A backwards wall-clock adjustment is plausible, not established. No guard relaxed or timestamps repaired; failed capture rejected."
+      },
+      "W53.propagation.git-do": {
+        "capture": 2,
+        "observation": "Four initial guarded Git probes absent: status --porcelain=v2 --branch; symbolic-ref --short refs/remotes/origin/HEAD; rev-list --left-right --count HEAD...origin/main; rev-parse --git-path FETCH_HEAD. Initial workspace.git absent from trace lines 2 and 6, history index 0. Git command log 3344 -> 1174 bytes; trace 63665 -> 63541 bytes. Policies and ledger unchanged.",
+        "expected_normalized_sha256": "8c43783cb2041c91148c18484ba6f3b8c4b4102b36aaa9b8f9d80b3f92724918",
+        "captured_normalized_sha256": "9b4fe0d89eeb8c0f1133fa71da95106d16b1243aac2b1015f6697f6078e0536b",
+        "ledger_sha256": "b2cb0f10cd0782c1019448f9a724ef746759538537d34869177658bad3e457fe",
+        "consequence": "Serial scheduling stabilizes the requested T40/T41 controls across these captures but does not guarantee all startup snapshots. Trigger remains unproved; protected W53 lock unchanged, no masking or refresh allowed."
+      },
+      "C12.reset_and_reset-extra": {
+        "observation": "Only invocation-1.stderr differs: two newly allocated reset-session ID spans remain literal; 495 bytes in both captures, policies and ledger identical. Startup ID is already normalized; local-only reset has no trace header or provider request.",
+        "source": "cases/cli_commands.py:83-90; observe.py identity registration/reference matching",
+        "limitation": "Current retained C12 raw evidence lacks stdin/checkpoint witnesses. A strict input/checkpoint-owned repair requires new narrow retention and targeted recapture; no global hex-ID mask added."
+      },
+      "C16.implement-fresh": {
+        "observation": "Only 90 cell text values differ in invoke-001.screens.json (3461297 bytes), all at new reset-session ID sites; policies and ledger identical.",
+        "cause": "observe_cli_terminal.py:276-285 skips mid-session announcements outside T26.lifetime, despite independently traced fresh handoff. Exact width-preserving owned slots need extending; no geometry/text masking added."
+      },
+      "C38.interrupt-running-command": {
+        "observation": "invoke-001.screens.json differs at 173 scalar text sites (2139105 bytes); trace-1.jsonl differs only in three embedded exec-source fixture URLs using allocated ports 59835 vs 59669. Policies and ledger identical.",
+        "source": "cases/cli_pty_signals.py:33-54 embeds server.url into Python exec source; observe_cli_terminal.py:286-294 only owns standalone trace-path lines, not the blocked-next-turn diagnostic.",
+        "limitation": "Exact provenance of every differing terminal cell not exhaustively established. HTTP readiness proves helper startup, not the later os.read boundary. Need narrow fixture/witness corrections, not arbitrary exec-source normalization."
+      },
+      "C41.effort-digit-6": {
+        "observation": "Only three cell texts differ: picker-closed snapshot row 16 columns 15-17 says low vs max. Final state and all other artifacts match; policies and ledger identical.",
+        "cause": "cases/cli_pty_render.py:249-251 waits for confirmation then a generic prompt; terminal.py:205-215 does not require expected effort status. Picker teardown can restore the old prompt before the next chat iteration updates status (region_picker.go:14-21; chat.go:289-290,761-769).",
+        "consequence": "Consistent with a real transient frame sampled too early. Require expected status readiness; do not normalize away the low/max difference."
+      }
+    },
+    "final_checks": {
+      "python": {
+        "command": "python3 -m unittest discover -s parity -p '*test.py'",
+        "tests": 463,
+        "skipped": 11,
+        "duration_seconds": 101.789,
+        "exit_code": 0
+      },
+      "go_build": {
+        "command": "go build ./...",
+        "exit_code": 0
+      },
+      "go_vet": {
+        "command": "go vet ./...",
+        "exit_code": 0
+      },
+      "go_test": {
+        "command": "go test ./...",
+        "exit_code": 0
+      },
+      "make_check": {
+        "exit_code": 0
+      },
+      "make_tty_check": "not run: no production terminal input/display changes; full captures did execute the runnable PTY cases",
+      "post_recording_check": {
+        "command": "python3 -m unittest parity.manifest_test parity.scheduling_test parity.locks_test",
+        "tests": 34,
+        "duration_seconds": 0.222,
+        "exit_code": 0
+      },
+      "post_recording_integrity": "Documented standalone serializer reproduction passes; all 3416 working W/T locks and 115 bundle SHAs exactly match pre-resumption baseline; manifest blocked and metadata SHA reconciled."
+    },
+    "plain_candidate_build": {
+      "reference_commit": "14944a6bd8e35815effb74270218483804c29615",
+      "source_archive_sha256": "ae09e37e6bd216b30fd5923f26f1ace3693470b0e4d5e2c19ced8dc69b0b3856",
+      "command": "go build -o /tmp/reagent-parity-cli-final-evidence/candidate ./cmd/reagent",
+      "flags": "plain archived-pin build; no coverage/trimpath/ldflags/buildvcs override",
+      "exit_code": 0,
+      "duration_seconds": 5.191248,
+      "binary_sha256": "9a1a9cf596dc4930002b582c0d952b374372c936814a434eb74a9ac0b74c0b8f",
+      "comparison": "not run; blocked before publication"
+    },
+    "agents": {
+      "new": {
+        "t12": {
+          "name": "terminal-ledger-fix",
+          "input_tokens": 922899,
+          "cached_input_tokens": 841472,
+          "output_tokens": 8643,
+          "reasoning_tokens": 3193
+        },
+        "t13": {
+          "name": "exclusive-runner",
+          "input_tokens": 2885050,
+          "cached_input_tokens": 2705792,
+          "output_tokens": 12955,
+          "reasoning_tokens": 2891
+        },
+        "t14": {
+          "name": "reset-lock-diagnosis",
+          "input_tokens": 1867977,
+          "cached_input_tokens": 1734400,
+          "output_tokens": 6906,
+          "reasoning_tokens": 1026,
+          "unreported_attempts": 1
+        }
+      },
+      "lifetime_agents": 14,
+      "input_tokens": 36141104,
+      "cached_input_tokens": 33582592,
+      "output_tokens": 257096,
+      "reasoning_tokens": 64217,
+      "unreported_attempts": 1,
+      "accounting_complete": true,
+      "running": 0
+    },
+    "proof_status": "partial: scheduler, serializer, tests and three T40/T41 lock comparisons pass; three globally clean captures not achieved. Working-suite golden update, full candidate comparison, PTY load/stability and mutation executions not run; no PR, commit or push. No new CLI locks/samples or suite seal published. All current protected W/T locks/sample bundles remain unchanged.",
+    "cleanup": {
+      "status": "verified removed",
+      "root": "/tmp/reagent-parity-cli-final-evidence",
+      "regular_file_bytes_removed": 690772361,
+      "shared_cache_changed": false,
+      "removed": "disposable local clone, isolated golden cache, raw/frozen captures, logs, baseline copies and reference/candidate binaries",
+      "retained_proof": "this report and repair/investigation documentation only",
+      "consequence": "No raw evidence or binaries retained; stronger reset/checkpoint ownership and further executable diagnosis require fresh authorized targeted captures."
+    }
+  },
+  "course_correction": {
+    "status": "stopped on single capture failure; corrected implementation remains incomplete and not executable-accepted",
+    "proof_limit": "One full make parity-golden UPDATE=1 capture and one full plain archived-pin candidate make parity. If either has a new flake, retain a small exact report and stop without another full capture. Only if both are clean run three C21-C44 PTY stability passes at jobs=8 and mutations 1/2/6, then open the exact-title PR; do not merge.",
+    "scheduling": {
+      "default_exclusive": false,
+      "exclusive_cases": "130 tools_git leaves plus T59.maps-numbers and W53.propagation.git-do",
+      "runnable_parallel": 3624,
+      "runnable_exclusive": 132,
+      "pending_parallel": 60,
+      "PTY_cases_parallel": true,
+      "metadata_sha256": "adcf3247a320bb8e9a6531d3724a5a86e29a412b2b0fa1b4643369d13d2aef5a"
+    },
+    "recorder": "Fixed POSIX launcher execs the unchanged recorder body using quoted Python -I -S. Regressions exercise exact argv, binary stdout/stderr, exit status, hostile Python environment/imports, failure injection/index certificates and old-record equivalence.",
+    "machine_lock": {
+      "path": "actual user's ~/.cache/reagent-parity/capture.lock (pwd UID home, not environment HOME)",
+      "scope": "per-user machine-wide across workspaces, pins and XDG cache overrides",
+      "held_by": "parity.golden.main and parity.run.main, including reference/cache preparation and execution/publication",
+      "contention": "fail before work, exit 2; no automatic retries",
+      "lifetime": "OS advisory flock, noninheritable descriptor, persistent inode never unlinked; process death releases ownership",
+      "limits": "CLI boundary exclusion, not containment of arbitrary direct helper calls or unrelated OS load"
+    },
+    "clocks": "New subprocess and PTY records retain both raw wall anchors and monotonic anchors. Ordered finite monotonic bounds and monotonic elapsed values are authoritative for invocation ordering/duration; incomplete pairs fail closed. Legacy frozen evidence keeps original validation. UTC display/trace ownership remains strict. Replay metadata is written before observation and before validation, preserving failed evidence.",
+    "typed_session_slots": "C12 exact configured stdin and both real checkpoint envelopes/state IDs/digests/configuration/empty idle state own distinct SESSION_1/SESSION_2. Preserve unrelated checkpoint lexemes and recompute only dependent normalized digest. C16 fresh selection is owned by four old/old/new/new trace headers, selected picker snapshot and exact input journal; midstream ID cells preserve width/styles/cursor. No global hex mask.",
+    "C38": "Exec argv is fixed python3 exec-ready.py; allocated readiness URL stays in private workspace helper, not on-screen source. Blocked-next-turn path slots require exact diagnostic and matching cancelled run.finished trace path/counts.",
+    "C41": "Require expected model/effort in the actual framed prompt status row before snapshot/next turn, not generic prompt or scrollback confirmation text.",
+    "golden_publication": "Successful update stages goldens_frozen=true, verifies full prepared oracle, and publishes only after verification; failure cannot mutate the input manifest/frozen flag.",
+    "development_checks": "Focused integration initially ran 148 tests with one negative-control exception-type mismatch (elapsed helper now raises ValueError for invalid bounds); test still requires rejection and now accepts that typed error. Prior agent synthetic test failures and inventory/default assumptions were corrected; no executable capture has run in this correction yet.",
+    "final_checks": {
+      "python": {
+        "tests": 498,
+        "skipped": 11,
+        "duration_seconds": 141.82,
+        "exit_code": 0
+      },
+      "go_build": {
+        "command": "go build ./...",
+        "exit_code": 0
+      },
+      "go_vet": {
+        "command": "go vet ./...",
+        "exit_code": 0
+      },
+      "go_test": {
+        "command": "go test ./...",
+        "exit_code": 0
+      },
+      "make_check": {
+        "exit_code": 0
+      },
+      "tty_check": "not run: no production terminal input/display changes; real PTY parity cases run in full capture"
+    },
+    "capture": {
+      "command": "make parity-golden UPDATE=1",
+      "jobs": 6,
+      "attempts": 1,
+      "exit_code": 2,
+      "duration_seconds": 1533.586569,
+      "performance": "25m 34s rounded; much faster than prior 75-97 minute conservative serial captures, but not the requested approximately 15-minute target",
+      "total_leaves": 3816,
+      "runnable": 3756,
+      "successful_frozen_cases": 3752,
+      "pending": 60,
+      "publication": "none; case failures stopped before oracle/sample/seal publication; goldens_frozen remains false",
+      "failed_cases": [
+        {
+          "id": "C12.reset",
+          "failure": "AssertionError: reset session announcements differ at cases/cli_commands.py:92",
+          "stage": "fixture, before checkpoint retention/replay construction",
+          "leak_check": "clean"
+        },
+        {
+          "id": "C12.reset-extra",
+          "failure": "AssertionError: reset session announcements differ at cases/cli_commands.py:92",
+          "stage": "fixture, before checkpoint retention/replay construction",
+          "leak_check": "clean"
+        },
+        {
+          "id": "C16.implement-fresh",
+          "failure": "AssertionError: fresh implementation lacks two traced resume footers at observe_cli_sessions.py:85",
+          "stage": "observer; replay.json retained before validation",
+          "leak_check": "clean"
+        },
+        {
+          "id": "C38.interrupt-running-command",
+          "failure": "AssertionError: cancelled exec lacks its exact blocked-next-turn diagnostic at observe_cli_terminal.py:296",
+          "stage": "observer; replay.json retained before validation",
+          "leak_check": "clean"
+        }
+      ],
+      "raw_diagnosis": {
+        "C12": "Actual raw stderr has two session-ID lines (startup and reset), not the fixture's required three, and one complete reset/resume announcement, not local_reset's required two. There is no second exit announcement. Both C12 raw channels and stdin survived; checkpoint copying and replay construction were not reached. The new synthetic fixtures encoded an incorrect two-footer assumption. This is our introduced fixture/observer defect, not a demonstrated Go regression or probabilistic flake.",
+        "C16": "Actual raw PTY likewise has one fresh-implement resume announcement, followed by fresh session; implementing plan. Four trace headers exist but the new observer wrongly requires two announcements. Synthetic tests encoded the same incorrect extra-footer assumption. No ownership mask was relaxed after capture.",
+        "C38": "Actual _printed stream contains CSI 20;1H immediately before error: the last run ended with cancelled; inspect the trace at <owned-path> and use /compact or /reset to continue, then CSI r and CSI 22;13H. The new ^...$ line-only regex rejects this valid framed terminal diagnostic. Its synthetic test omitted these real CSI boundaries. No post-failure parser change or recapture occurred.",
+        "C41": "Case passed its new expected-status readiness check; no repeated stability/determinism claim is made."
+      },
+      "protected_raw_replay_audit": {
+        "compared": 3416,
+        "identical_locks": 3415,
+        "missing": [],
+        "duration_seconds": 121.76003,
+        "T40_T41_W53_T59": "all match artifact and ledger locks",
+        "all_protected_normalized_artifact_bytes_identical": true,
+        "T31.start": {
+          "normalized_sha256_expected_and_captured": "a36ab318d61e62fbc67a78f37e46a78432ec6c02721a5f41c41d98edef613c8f",
+          "expected_ledger_sha256": "f7ac2b56d40c7241f576ac48b4a492f79fc22fa09ebaa5013c0a7aa72115c4af",
+          "captured_ledger_sha256": "3bab9def870e3683db2929e54bf8f6da4ac932c1cbfade678891c828ac0a38fe",
+          "observation": "Captured raw exec duration_ms is 3, normalized to 0. Three duration-ms rows occur at cache-input history[2].tool.outcome.data.duration_ms, trace-1.jsonl data.outcome.data.duration_ms and data.history[2].tool.outcome.data.duration_ms. All artifact descriptors/policies are identical.",
+          "diagnostic_reconstruction": "Removing only those three rows in memory exactly reproduces the expected ledger hash. This was diagnostic only, never accepted replay/oracle data. Normalizer.json records substitutions only if bytes change (observe.py:666-667), so original zero duration would have no duration rows. Original historical raw duration is unavailable; a zero-duration baseline is inferred, not directly observed.",
+          "consequence": "Protected ledger lock unchanged. No timing masking, refresh, or further executable proof authorized after this failed capture."
+        }
+      },
+      "working_oracle_integrity": {
+        "locks_unchanged_from_pre_correction": 3416,
+        "bundles_unchanged": 115,
+        "only_existing_HEAD_lock_change": "previously approved T59.maps-numbers"
+      }
+    },
+    "candidate": "not run: single capture failed; stop condition honored. PTY stability, mutations 1/2/6, commit/push/PR also not run.",
+    "agents": {
+      "new": {
+        "t15": {
+          "name": "optin-recorder",
+          "input_tokens": 762268,
+          "cached_input_tokens": 698496,
+          "output_tokens": 8339,
+          "reasoning_tokens": 2201
+        },
+        "t16": {
+          "name": "reset-session-slots",
+          "input_tokens": 1683413,
+          "cached_input_tokens": 1558784,
+          "output_tokens": 11379,
+          "reasoning_tokens": 1761,
+          "state": "step limit reached; no uncertain exec effects"
+        },
+        "t17": {
+          "name": "pty-fixture-stability",
+          "input_tokens": 696500,
+          "cached_input_tokens": 608384,
+          "output_tokens": 5616,
+          "reasoning_tokens": 1431
+        },
+        "t18": {
+          "name": "monotonic-evidence",
+          "input_tokens": 1424083,
+          "cached_input_tokens": 1302144,
+          "output_tokens": 11257,
+          "reasoning_tokens": 2785
+        }
+      },
+      "lifetime_agents": 18,
+      "input_tokens": 40707368,
+      "cached_input_tokens": 37750400,
+      "output_tokens": 293687,
+      "reasoning_tokens": 72395,
+      "unreported_attempts": 1,
+      "accounting_complete": true,
+      "running": 0
+    },
+    "cleanup": {
+      "status": "verified removed",
+      "root": "/tmp/reagent-parity-cli-course-correction",
+      "regular_file_bytes_removed": 195107319,
+      "shared_reference_cache_regenerated": false,
+      "persistent_machine_lock_inode_retained": true,
+      "lock_ownership_released": "verified by successful nonblocking acquisition after capture",
+      "retained_proof": "this report, README and lock investigation only",
+      "consequence": "Raw failed captures and reference binary were removed after extracting exact failure/framing/count and digest evidence; further executable diagnosis requires newly authorized captures."
+    }
+  },
+  "approved_rounds": {
+    "status": "stopped after capture round 1 on protected T31.missing ledger mismatch; no second capture or PR",
+    "authorization": "At most two captures; second only for failures confined to area-3 checks written here. Stop on any other protected-lock mismatch or Go defect. After clean capture/candidate run PTY load stability and mutations 1/2/6, then open PR, never merge.",
+    "fixes": "C12/C16 require exactly one independently owned resume announcement. C38 accepts valid CSI framing, with the exact failed 24x80 sequence tested without changing geometry/styles/cursor. Eligible exec duration sites and embedded echoes count even at zero; native/prose and unrelated zero timing remain unchanged.",
+    "development_checks": "Initial 51-test focused run found two regression-fixture/echo issues: native fixture lacked native.items envelope, and embedded zero echo lacked its parent ledger row. Corrected fixture and identity-echo recording; 51 tests then passed. Agent C38 regression run: 21 tests passed.",
+    "T31_start": {
+      "approval": "ledger-only change explicitly authorized if sole existing lock difference and normalized artifacts identical",
+      "proof": "Fresh protected-reference run passed, clean leak check; complete frozen raw replay validated using official encoder before publication",
+      "normalized_sha256_unchanged": "a36ab318d61e62fbc67a78f37e46a78432ec6c02721a5f41c41d98edef613c8f",
+      "old_ledger_sha256": "f7ac2b56d40c7241f576ac48b4a492f79fc22fa09ebaa5013c0a7aa72115c4af",
+      "new_ledger_sha256": "3bab9def870e3683db2929e54bf8f6da4ac932c1cbfade678891c828ac0a38fe",
+      "integrity": "Before-digest checked; only T31.start ledger changed. Other 3415 logical locks, 115 bundles and sample index unchanged. Normalized tree unchanged. No permanent guard exception."
+    },
+    "preflight": {
+      "python_tests": 501,
+      "skipped": 11,
+      "duration_seconds": 142.987,
+      "exit_code": 0,
+      "go_build": 0,
+      "go_vet": 0,
+      "go_test": 0,
+      "make_check": 0,
+      "tty_check": "not run: no production terminal input/display changes; full capture exercised real PTYs"
+    },
+    "capture": {
+      "command": "make parity-golden UPDATE=1",
+      "jobs": 6,
+      "attempts": 1,
+      "exit_code": 2,
+      "duration_seconds": 1469.487455,
+      "successful_frozen_cases": 3756,
+      "pending": 60,
+      "failure": "earlier-area lock identity violation: T31.missing",
+      "stage": "protected-lock verification before publication",
+      "publication": "none; manifest remains blocked and goldens_frozen=false",
+      "performance": "24m 29s; approximately 15-minute target not met"
+    },
+    "protected_audit": {
+      "mode": "complete frozen lock decoding, not a complete repeated raw replay",
+      "duration_seconds": 22.339701,
+      "compared": 3416,
+      "identical": 3415,
+      "missing": [],
+      "errors": [],
+      "sole_difference": "T31.missing ledger_sha256",
+      "all_normalized_artifacts_and_policies_identical": true,
+      "limitation": "An attempted full raw-replay audit timed out after 300 seconds without a report; it was not repeated. Targeted complete raw replay then passed for T31.missing, T31.start, C12.reset, C12.reset-extra, C16.implement-fresh and C38.interrupt-running-command."
+    },
+    "T31_missing": {
+      "normalized_sha256_unchanged": "0664ea2f324d653f762e7dab025950275abd3ff9ace69932209d1dfdce893adf",
+      "expected_ledger_sha256": "f7ac2b56d40c7241f576ac48b4a492f79fc22fa09ebaa5013c0a7aa72115c4af",
+      "captured_ledger_sha256": "3bab9def870e3683db2929e54bf8f6da4ac932c1cbfade678891c828ac0a38fe",
+      "cause": "Three eligible duration-ms sites have raw and canonical value zero. Deterministic counting now records their identity substitutions. Sites: cache-input history[2].tool.outcome.data.duration_ms; trace-1.jsonl data.outcome.data.duration_ms; trace-1.jsonl data.history[2].tool.outcome.data.duration_ms.",
+      "diagnostic": "Removing only these three rows in memory exactly reconstructs the historical ledger hash; never published or used as accepted replay. This is a dependent protected-lock consequence of deterministic counting, not a demonstrated Go defect.",
+      "disposition": "Protected T31.missing lock unchanged; no authorization assumed from T31.start approval. Stop condition honored."
+    },
+    "integrity_after_failure": "Only approved T31.start differs from pre-repair working locks. All other 3415 locks and all 115 sample bundles plus index unchanged; no Go/dependency staged or unstaged changes. No new CLI locks, samples or suite seal published.",
+    "remaining_proof": "No second capture, candidate pass/build, PTY stability, mutations 1/2/6, commit, push or PR. Blocked pending instruction about T31.missing.",
+    "post_recording_tests": {
+      "command": "python3 -m unittest parity.manifest_test parity.locks_test parity.cli_sessions_test parity.tty_test parity.observe_test",
+      "tests": 96,
+      "duration_seconds": 10.873,
+      "exit_code": 0
+    },
+    "cleanup": {
+      "status": "verified removed",
+      "root": "/tmp/reagent-parity-cli-approved-rounds",
+      "regular_file_bytes_removed": 203754351,
+      "removed": "isolated cache, failed frozen capture, targeted evidence, logs, baseline and reference binary",
+      "shared_reference_cache_changed": false,
+      "lock_ownership": "verified released by successful nonblocking acquisition; persistent inode retained",
+      "retained_proof": "this report and README only; raw evidence removed"
+    },
+    "agents": {
+      "used_this_phase": {
+        "t17": {
+          "name": "pty-fixture-stability",
+          "input_tokens": 480605,
+          "cached_input_tokens": 349184,
+          "output_tokens": 2436,
+          "reasoning_tokens": 760
+        }
+      },
+      "lifetime_agents": 18,
+      "input_tokens": 41187973,
+      "cached_input_tokens": 38099584,
+      "output_tokens": 296123,
+      "reasoning_tokens": 73155,
+      "unreported_attempts": 1,
+      "accounting_complete": true,
+      "running": 0
+    }
+  },
+  "production_go_changed": false,
+  "live_api_calls": false,
+  "commit_push_pr_merge": "none",
+  "cleanup": {
+    "status": "verified removed",
+    "removed": [
+      "/tmp/reagent-parity-cli-work",
+      "owned failed-1792683871047199000 cache evidence",
+      "owned failed-1792687024816904000 cache evidence",
+      "empty owned cache pin directory"
+    ],
+    "raw_bytes_removed": 1275511938,
+    "retained_proof": "this small report and documentation only; no new C sample bundles published",
+    "consequence": "Raw captures and binaries are no longer available; further diagnosis requires fresh authorized captures."
+  }
+}
