@@ -1,6 +1,6 @@
 # #188 — comparison repair and ordered proof
 
-**Darwin fixture fixes ready for Mac recapture. Latest Linux targeted comparison: 6/6 passed; mutation 34 caught.**
+**A12 matcher-lock race fixed; ready for Mac recapture. Latest Linux proof: three 10/10 passes at 12 jobs, including every A12 leaf and audited T27.filter-tripwire.**
 
 The preceding full Linux comparison passed 4,111 runnable leaves, zero failures, 29 pending. It was not repeated for this narrow fixture repair.
 
@@ -8,7 +8,61 @@ Darwin entries pending the Mac capture
 
 The pin remains `60fda0d3f3eabc76fa11deed72aed7850532c97e`. This continuation changes only Python harness/fixtures, policy, Linux evidence and documentation. No production Go, dependencies, comparison tolerances, broad masks, CI or tooling were added. Providers remain scripted loopback fakes; every case retains `REAGENT_WORKSPACE_GIT_TIMEOUT=60`. No merge or final #139/85%-coverage approval is requested.
 
-## Darwin fixture repair (2026-10-25)
+## Matcher-lock race repair (2026-10-25)
+
+The user's Darwin recapture of `268a257` froze 4,110/4,111: A12.poll-0's root poll arrived before the worker, and its witness waited for worker arrival while holding the provider matcher lock. The worker could not match until that wait failed.
+
+`parity/cases/agents_context.py:273–287` now gates the root's poll **Response**, outside the matcher lock, on the worker's arrival Event. The witness only checks content, with `polling wait must time out before the worker reply` as its diagnostic. The existing trace controller releases the worker only when the subsequent `joined` wait starts, outside the matcher; the polling, sentinel batch and repeated receipt checks remain intact. `Provider.expect` documents the nonblocking-marker contract. No timing watchdog was added.
+
+The new `agents_context_test.py` regression drives the real loopback Provider and real fixture queue: it matches the root poll first, proves its reply is held, then submits the worker and receives the root reply without stalling. It also exercises the trace-controlled worker release and consumes all scripts. Only the Go execution boundary is replaced; the controller receives explicitly authored trace records, not a claimed live Go trace. The standalone test passed in **0.058 s**.
+
+### A/C/T callback audit
+
+The read-only audit covered all 19 A/C/T case/support modules, imported checkpoint admission/import fixtures and their wire helper callbacks. Callable paths inspected:
+
+| Callback/helper | Finding |
+| --- | --- |
+| `agents_context.queue.select` and polling/named/bindings/fixed_history witnesses | Polling's Event wait was the sole inter-request wait. The others parse/assert in memory and may set Events; no waits. |
+| `agents_effects.Script.add` actor lambda, reused by A/C/T/checkpoint fixtures | JSON/regex/string matching only. |
+| `agents_checkpoints_admission._sharing` parent_start/child_start/parent_end | JSON/field comparisons and in-memory scans only. |
+| `tools_git._jev_reply.answer` | In-memory JSON/arithmetic/assertions/response assignment only. |
+| `tools_workspace._maps_numbers.classify` | In-memory JSON/string/assertions/response assignment only. |
+| `tools_workspace._filter_tripwire.restricted` | **Additional fix:** removed `marker.exists()` filesystem I/O from the matcher. The identical post-chat check remains, before the positive control; the tripwire persists until explicit fixture cleanup, so any firing is still caught. |
+| `cli_commands.expect`, imported `wire_routing._expect/_router` callers | A/C/T callers use literal markers, not hidden blocking callbacks. |
+
+No other waits, subprocess/socket/filesystem I/O or custom lock acquisitions were found in these callback paths. `Script.wait`, `TraceBarrier.wait`, PTY predicates and `on_start` controllers are outside provider matching and may wait. W-only callbacks were outside this audit's requested scope. The T27 negative test now forbids `Path.exists()` during matcher calls and still rejects a persistent fired tripwire despite valid ref-only snapshots.
+
+### Latest proof and seal
+
+Only **A12.poll-0, A12.poll-1 and T27.filter-tripwire** were freshly captured with the protected pin, in **1.685 / 2.628 / 2.138 s**, all leak-clean. Their exact normalized/ledger locks stayed unchanged. Complete retained-lane replay/publication passed in **452.677 s**, with the normal unmodified guards: **no case-lock changes, no sample/index changes** (357 sample files), and all **155 Darwin lock/index/bundle files unchanged**. No extra reference cases executed.
+
+Latest seal: `8e13fa9eb9ee2377e94c09555d7a7f6675fdd5a1fecdf1e673194e9ac01dae04`; Linux tree remains `c8cab1ef43c1c2e71e4b7966928daec7d25cb67133bf7894ed7e6abd9a782ff8`.
+
+Proof root `P=/tmp/reagent-parity-agents-proof/phase5-matcher-race`, using the unchanged pinned environment. Three separate commands ran, with `N=1`, `2`, `3`:
+
+```sh
+python3 -m parity.run --bin /tmp/reagent-parity-agents-proof/plain-reference \
+  --jobs 12 --case A12 --case T27.filter-tripwire --keep-artifacts --artifacts $P/repeat${N}
+```
+
+Results: **10 passed, 0 failed each**, **10 clean leak checks each**, **6.56 / 6.53 / 6.53 s**. Every report matches the latest suite seal. These are targeted passes (`gate_success=false`), not a new full-suite gate. Reports and passing raw evidence remain in `repeat{1,2,3}/report.json` and adjacent case directories.
+
+The Python unit suite passed **672 tests, OK, 14 skipped** in **76.584 s**. Its printed runner failures are intentional negative fixtures. Fresh project Go gate (`go-gate.log`; cached Go test result):
+
+```text
+$ go build ./... && go vet ./... && go test ./...
+?   github.com/satmihir/re-agent/cmd/reagent [no test files]
+ok  github.com/satmihir/re-agent/internal/reagent (cached)
+real 2.00
+user 5.72
+sys 1.91
+```
+
+Receipts: `*-capture.json`, `transitions.json`, `publication.json`. Complete frozen lane: `replayed-lane/`; previous canonical cache retained as `canonical-before/`. All prior lanes/reports remain. No production Go or terminal behavior changed; no full comparison, mutation rerun, `make tty-check`, public provider call or local Darwin execution is claimed. **Do not merge; the user will rerun the Mac capture.**
+
+One new read-only agent, **t12 matcher-audit**, audited callbacks; parent inspected the finding, made every edit and ran every executable check. Reported usage: **970,597 input / 833,792 cached input / 4,721 output / 1,100 reasoning tokens**; trace `/home/mihir/.cache/reagent/runs/agent-b0dd76e0163dc261/events.jsonl`. Latest subtree accounting: **12 lifetime agents**, **49,790,990 input / 46,770,688 cached input / 295,614 output / 76,720 reasoning tokens**, parent excluded. One historical attempt still has unreported usage. Earlier tables below are historical; no other agents were used for this repair.
+
+## Previous Darwin fixture repair (2026-10-25)
 
 The Mac capture stopped at 4,107/4,111 on two fixture bugs, not production Go behavior:
 
@@ -17,7 +71,7 @@ The Mac capture stopped at 4,107/4,111 on two fixture bugs, not production Go be
 
 Only **A21.ledger** received a fresh protected-reference Linux capture (**33.423 s**, clean leak check). The three C20 leaves replayed retained Linux raw evidence with byte-identical normalized artifacts, policies and substitution ledgers; no C20 reference recapture ran. Complete publication replay/verification passed in **466.523 s**, authorizing only A21.ledger's exact old/new lock pair in the publication process. Only its Linux sample bundle/index entry changed. All other case locks and **155 Darwin lock/index/bundle files** remained byte-identical. Persistent guards/comparison behavior were not changed.
 
-Latest seal: `ba33c9055415ae42ccd69555c43d4cdf969ab72ccf2de05a99ab95e9b91c3a71`; Linux tree: `c8cab1ef43c1c2e71e4b7966928daec7d25cb67133bf7894ed7e6abd9a782ff8`.
+Previous fixture repair seal: `ba33c9055415ae42ccd69555c43d4cdf969ab72ccf2de05a99ab95e9b91c3a71`; Linux tree: `c8cab1ef43c1c2e71e4b7966928daec7d25cb67133bf7894ed7e6abd9a782ff8`.
 
 Proof root `P=/tmp/reagent-parity-agents-proof/phase4-darwin-fixes`; pinned environment unchanged:
 

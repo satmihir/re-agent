@@ -1,5 +1,5 @@
 {
-  "status": "darwin_fixture_fixes_linux_targeted_passed_awaiting_mac_recapture",
+  "status": "matcher_lock_race_fixed_linux_three_repeats_passed_awaiting_mac_recapture",
   "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
   "base_commit": "7d1373aa56d283798b4ffab37af613be6308e27d",
   "platform": "linux/amd64",
@@ -11,6 +11,27 @@
   "full_comparison_report": "/tmp/reagent-parity-agents-proof/phase3/full-report.json",
   "full_comparison_original_report": "/tmp/reagent-parity-cases-hw230efu/artifacts/report.json",
   "historical_failed_full_report": "/tmp/reagent-parity-agents-proof/phase2-full-report.json",
+  "matcher_lock_repair": {
+    "proof_root": "/tmp/reagent-parity-agents-proof/phase5-matcher-race",
+    "fresh_reference_cases": ["A12.poll-0", "A12.poll-1", "T27.filter-tripwire"],
+    "capture_seconds": [1.685, 2.628, 2.138],
+    "capture_clean_leak_checks": 3,
+    "audit": {"scope": "all 19 A/C/T case/support modules, imported checkpoint modules and relevant wire helpers", "additional_fix": "T27.filter-tripwire: moved filesystem check out of matcher; existing final assertion retained", "other_blocking_callbacks_found": false},
+    "root_poll_before_worker_regression_seconds": 0.058,
+    "publication_seconds": 452.677,
+    "changed_case_locks": [],
+    "sample_files_unchanged": 357,
+    "darwin_files_unchanged": 155,
+    "targeted": {"jobs": 12, "selectors": ["A12", "T27.filter-tripwire"], "repeats": 3, "passed_per_repeat": 10, "failed_per_repeat": 0, "clean_leak_checks_per_repeat": 10, "seconds": [6.56, 6.53, 6.53], "gate_success": false, "scope": "targeted; not a whole-suite gate", "reports": ["/tmp/reagent-parity-agents-proof/phase5-matcher-race/repeat1/report.json", "/tmp/reagent-parity-agents-proof/phase5-matcher-race/repeat2/report.json", "/tmp/reagent-parity-agents-proof/phase5-matcher-race/repeat3/report.json"]},
+    "python_gate": {"tests": 672, "skipped": 14, "passed": true, "seconds": 76.584},
+    "go_gate": {"command": "go build ./... && go vet ./... && go test ./...", "exit_code": 0, "go_test_cached": true, "seconds": 2.00},
+    "suite_digest": "8e13fa9eb9ee2377e94c09555d7a7f6675fdd5a1fecdf1e673194e9ac01dae04",
+    "normalized_tree_sha256": "c8cab1ef43c1c2e71e4b7966928daec7d25cb67133bf7894ed7e6abd9a782ff8",
+    "full_comparison_rerun": false,
+    "mac_execution": false,
+    "agent": {"id": "t12", "name": "matcher-audit", "authority": "read", "input_tokens": 970597, "cached_input_tokens": 833792, "output_tokens": 4721, "reasoning_tokens": 1100, "trace": "/home/mihir/.cache/reagent/runs/agent-b0dd76e0163dc261/events.jsonl"},
+    "lifetime_agent_accounting": {"total_agents": 12, "input_tokens": 49790990, "cached_input_tokens": 46770688, "output_tokens": 295614, "reasoning_tokens": 76720, "unreported_attempts": 1, "parent_excluded": true}
+  },
   "darwin_fixture_repair": {
     "proof_root": "/tmp/reagent-parity-agents-proof/phase4-darwin-fixes",
     "fresh_reference_cases": ["A21.ledger"],
@@ -87,7 +108,9 @@
   ],
   "retained": {
     "initial_failed_capture": "/tmp/reagent-parity-agents-proof/cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/failed-1792915126312807276",
-    "all_4111_frozen_cases": "/tmp/reagent-parity-agents-proof/phase4-darwin-fixes/replayed-lane",
+    "all_4111_frozen_cases": "/tmp/reagent-parity-agents-proof/phase5-matcher-race/replayed-lane",
+    "prior_phase4_frozen_cases": "/tmp/reagent-parity-agents-proof/phase4-darwin-fixes/replayed-lane",
+    "prior_phase4_canonical_cache": "/tmp/reagent-parity-agents-proof/phase5-matcher-race/canonical-before",
     "prior_phase3_frozen_cases": "/tmp/reagent-parity-agents-proof/phase3/replayed-lane",
     "prior_phase3_canonical_cache": "/tmp/reagent-parity-agents-proof/phase4-darwin-fixes/canonical-before",
     "prior_retained_lane": "/tmp/reagent-parity-agents-proof/recovered-lane",
@@ -105,5 +128,5 @@
   "new_dependencies": false,
   "live_provider_calls": false,
   "tty_check": "not run: terminal production code was not changed",
-  "agent_concurrency_deviation": "Nested delegation briefly exceeded the requested global limit of four before parent detection; further subdelegation was prohibited. Historical eight-agent accounting is in agents-area4.md; current 11-agent lifetime accounting is in agents-comparison-repair.md. No nested delegation occurred during comparison repair."
+  "agent_concurrency_deviation": "Nested delegation briefly exceeded the requested global limit of four before parent detection; further subdelegation was prohibited. Historical eight-agent accounting is in agents-area4.md; current 12-agent lifetime accounting is in agents-comparison-repair.md. No nested delegation occurred during comparison repair or matcher audit."
 }

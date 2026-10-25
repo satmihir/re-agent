@@ -1,14 +1,19 @@
 """Negative oracles and optional real-executable tests for A01–A14."""
 
+from concurrent.futures import ThreadPoolExecutor
 import copy
+from http.client import HTTPConnection
 import json
 import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+from urllib.parse import urlsplit
 
-from parity.cases.agents_context import collect, dependency_cases
+from parity.cases.agents_context import OPENAI, PARENT, collect, dependency_cases, polling
+from parity.provider import Provider
 from parity.observe_agents_context import Agents, RESULT, ROSTER, actor, cache_points, check_delivery, check_native_prefix, outcomes
 
 
@@ -25,6 +30,62 @@ class AgentContextTests(unittest.TestCase):
                                              'W53.propagation.child', 'W53.propagation.nested-child',
                                              'T27.agent-bindings'})
         self.assertTrue(all(case.run and not case.pending for case in dependencies.values()))
+
+    def test_poll_request_before_worker_arrival_does_not_block_the_matcher(self):
+        with tempfile.TemporaryDirectory() as temporary, Provider() as server:
+            root = Path(temporary)
+            ctx = SimpleNamespace(root=root, workspace=root / 'workspace', artifacts=root / 'artifacts',
+                                  env={}, server=server)
+            ctx.workspace.mkdir()
+            ctx.artifacts.mkdir()
+            address = urlsplit(server.url)
+            parent = HTTPConnection(address.hostname, address.port, timeout=2)
+            worker = HTTPConnection(address.hostname, address.port, timeout=2)
+            path = '/openai/v1/responses'
+            def request(connection, text, outputs=()):
+                body = dict(model=OPENAI, input=[dict(role='user', content=[dict(type='input_text', text=text)]), *outputs])
+                connection.request('POST', path, json.dumps(body), {'Content-Type': 'application/json'})
+            def reply(connection):
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200, server.errors)
+                return json.loads(response.read())
+            def exercise(_ctx, on_start):
+                request(parent, PARENT)
+                reply(parent)
+                request(parent, PARENT)
+                reply(parent)
+                poll = dict(type='function_call_output', call_id='wait',
+                            output=json.dumps(dict(data=dict(timed_out=True))))
+                request(parent, PARENT, [poll])
+                server.wait(3, timeout=2)
+                self.assertEqual(len(server.requests), 3, 'worker must not arrive before the root poll matches')
+                self.assertIsNotNone(server.requests[-1].selector)
+                self.assertFalse(server.requests[-1].response.completed, 'poll reply must await worker arrival')
+                request(worker, 'CHILD_worker\n\nContext brief')
+                server.wait(4, timeout=2)
+                self.assertEqual([item['call_id'] for item in reply(parent)['output']], ['joined', 'read'])
+                self.assertFalse(server.requests[-1].response.completed, 'worker must remain held until joined starts')
+                trace = ctx.artifacts / 'events.jsonl'
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    controller = pool.submit(on_start, None)
+                    started = dict(type='tool.started', data=dict(call_id='joined'))
+                    trace.write_text(json.dumps(started) + '\n')
+                    self.assertEqual(reply(worker)['output'][0]['content'][0]['text'], 'polling child complete')
+                    with trace.open('a') as stream:
+                        stream.write(json.dumps(dict(type='tool.finished', data=dict(call_id='joined'))) + '\n')
+                    controller.result(timeout=2)
+                for _ in range(2):
+                    request(parent, PARENT, [poll])
+                    reply(parent)
+                server.assert_complete()
+                raise StopIteration('polling script exercised without a Go process')
+            try:
+                with patch('parity.cases.agents_context.run', side_effect=exercise):
+                    with self.assertRaisesRegex(StopIteration, 'polling script exercised'):
+                        polling(ctx, 0)
+            finally:
+                parent.close()
+                worker.close()
 
     def test_actor_does_not_treat_projected_or_delivered_tasks_as_authority(self):
         def body(text):

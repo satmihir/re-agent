@@ -305,7 +305,7 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "ba33c9055415ae42ccd69555c43d4cdf969ab72ccf2de05a99ab95e9b91c3a71",
+  "suite_digest": "8e13fa9eb9ee2377e94c09555d7a7f6675fdd5a1fecdf1e673194e9ac01dae04",
   "verification_evidence": "agents-area4.md (area 4 and retained evidence); linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin entries pending the Mac capture",

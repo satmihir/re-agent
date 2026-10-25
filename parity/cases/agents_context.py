@@ -277,15 +277,13 @@ def polling(ctx, seconds):
                   and item.get('call_id') == 'wait']
         if values:
             poll = json.loads(values[0]['output'])
-            assert poll['data']['timed_out'] is True, poll
-            assert ready.wait(10)
-            release.set()
+            assert poll['data']['timed_out'] is True, ('polling wait must time out before the worker reply', poll)
     queue(ctx, 'root', [[spawn(name='worker')], [wait(timeout=seconds)],
                         [wait(id='joined'), call('read', 'read_file', {'path': 'sentinel'})],
-                        [wait(('t1',), id='receipt')], 'polling complete'], witness=witness)
+                        [wait(('t1',), id='receipt')], 'polling complete'], barriers={2: ready}, witness=witness)
     queue(ctx, 'worker', ['polling child complete'], arrived=ready, barriers={0: release})
     put(ctx, 'sentinel', 'BATCH_SENTINEL')
-    run(ctx)
+    run(ctx, on_start=lambda _: finish_children_in_order(ctx, [('joined', release)]))
     out = outcomes(ctx)
     assert out['wait']['data']['timed_out'] is True
     assert out['joined']['data']['timed_out'] is False
