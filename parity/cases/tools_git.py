@@ -7,6 +7,7 @@ import select
 import os
 import pty
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,7 @@ def _commit(ctx, message):
 
 
 def _setup(ctx, algorithm='sha1', remote=False, feature=False, pr=None):
+    ctx.require_exclusive()
     ctx.git_real = shutil.which('git', path=ctx.env['PATH'])
     assert ctx.git_real
     ctx.git_commands = []
@@ -66,10 +68,16 @@ def _setup(ctx, algorithm='sha1', remote=False, feature=False, pr=None):
         _git(ctx, 'switch', '-q', '-c', 'feature/parity')
     helper = ctx.root / 'git-bin'
     helper.mkdir()
-    for source, name in [('git_command.py', 'git'), ('git_gh.py', 'gh')]:
-        target = helper / name
-        target.write_text('#!' + sys.executable + '\n' + (FIXTURES / source).read_text().split('\n', 1)[1])
-        target.chmod(0o700)
+    # A shell launcher keeps both Python flags portable across OS shebang rules.
+    script = helper / 'git_command.py'
+    script.write_text((FIXTURES / 'git_command.py').read_text())
+    target = helper / 'git'
+    target.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' -I -S ' +
+                      shlex.quote(str(script)) + ' "$@"\n')
+    target.chmod(0o700)
+    target = helper / 'gh'
+    target.write_text('#!' + sys.executable + '\n' + (FIXTURES / 'git_gh.py').read_text().split('\n', 1)[1])
+    target.chmod(0o700)
     state = ctx.root / 'gh-state.json'
     state.write_text(json.dumps(pr or {'present': False}))
     ctx.env.update(PATH=str(helper) + os.pathsep + ctx.env['PATH'], PARITY_REAL_GIT=ctx.git_real,

@@ -325,6 +325,7 @@ class Normalizer:
         self.artifacts = str(artifacts) if artifacts is not None else None
         self.authority = authority
         self.started, self.ended = started, ended
+        self.elapsed_bound = max(0, ended - started)
         self.ids = {'session': {}, 'run': {}}
         self.ledger = []
         self.cache_keys = {}
@@ -547,6 +548,12 @@ class Normalizer:
             last = loc[-1] if loc else None
             replacement = None
             rule = None
+            exec_echo = False
+            exec_timing = ((event == 'tool.finished' and top.value.get('data', {}).get('name') == 'exec'
+                            and loc == ('data', 'outcome', 'data', 'duration_ms'))
+                           or (not native(loc) and last == 'duration_ms' and isinstance(parent, dict)
+                               and 'argv' in parent and 'timeout_ms' in parent
+                               and ('tool' in loc or 'steps' in loc or 'output' in path)))
             if event and loc == ('time',):
                 if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z', value):
                     raise AssertionError('trace timestamp is not RFC3339Nano UTC')
@@ -567,18 +574,14 @@ class Normalizer:
                     raise AssertionError('run build metadata is not a string')
                 replacement, rule = go_string('<BUILD>'), 'build-metadata'
             elif event in ('model.switch.finished', 'model.switch.failed') and loc == ('data', 'latency_ms'):
-                if type(value) is not int or not 0 <= value <= max(0, self.ended-self.started)*1000:
+                if type(value) is not int or not 0 <= value <= self.elapsed_bound*1000:
                     raise AssertionError('model switch latency outside invocation bounds')
                 replacement, rule = b'0', 'model-switch-latency-ms'
             elif ((event == 'api.attempt.finished' and loc == ('data', 'duration_ms'))
                   or (event == 'auto.route' and loc == ('data', 'router_latency_ms'))
                   or (not native(loc) and last == 'duration_ms' and 'shell' in loc
                       and isinstance(parent, dict) and 'command' in parent)
-                  or (event == 'tool.finished' and top.value.get('data', {}).get('name') == 'exec'
-                      and loc == ('data', 'outcome', 'data', 'duration_ms'))
-                  or (not native(loc) and last == 'duration_ms' and isinstance(parent, dict)
-                      and 'argv' in parent and 'timeout_ms' in parent
-                      and ('tool' in loc or 'steps' in loc or 'output' in path))) and isinstance(value, (int, float)):
+                  or exec_timing) and isinstance(value, (int, float)):
                 if isinstance(value, bool) or not 0 <= value <= 3600000:
                     raise AssertionError('duration out of bounds')
                 replacement, rule = b'0', 'duration-ms'
@@ -602,6 +605,9 @@ class Normalizer:
                             new, rule = self.text(value, artifact, path+loc), 'registered-text-span'
                 elif event == 'run.finished' and loc == ('data', 'reason'):
                     new, rule = self.server_text(value), 'owned-run-reason-authority'
+                elif (not native(loc) and getattr(self, 'commands', None) is not None
+                      and (shell := self.commands.shell_text(value, artifact, path + loc, parent)) is not None):
+                    new, rule = shell, 'cli-shell-workspace'
                 elif not native(loc) and effect_workspace(loc, parent):
                     new, rule = self.text(value, artifact, path+loc), 'effect-record-workspace'
                 elif last == 'date' and isinstance(parent, dict) and parent.get('kind') == 'workspace_state' and not native(loc):
@@ -643,7 +649,9 @@ class Normalizer:
                                 lex(value.encode())
                             except (ValueError, UnicodeError):
                                 return  # Rejected call arguments are literal diagnostic evidence.
+                        ledger_start = len(self.ledger)
                         new = self.json(value.encode(), artifact, path+loc+(layer,)).decode()
+                        exec_echo = any(row.get('kind') == 'duration-ms' for row in self.ledger[ledger_start:])
                     elif value.startswith('Historical conversation supplied by re:agent, encoded as JSON records below.'):
                         prefix, records = value.rsplit('\n', 1)
                         new = prefix+'\n'+self.json(records.encode(), artifact, path+loc+('handoff',)).decode()
@@ -657,17 +665,27 @@ class Normalizer:
                             normalized = self.json(snapshot[:stop].encode(), artifact, path+loc+('snapshot',)).decode()
                             new = prefix + marker + normalized + snapshot[stop:]
                     rule = rule or 'registered-text-span'
-                if new != value:
+                if new != value or exec_echo:
                     replacement = string_spans(raw[token.start:token.end], value, new)
-            if replacement is not None and replacement != raw[token.start:token.end]:
+            if replacement is not None and (replacement != raw[token.start:token.end] or exec_timing or exec_echo):
                 self.record(artifact, path+loc, raw[token.start:token.end], replacement, rule, token.start, token.end)
-                changes.append((token.start, token.end, replacement))
+                if replacement != raw[token.start:token.end]:
+                    changes.append((token.start, token.end, replacement))
                 return
             for key, item in token.children:
                 visit(item, loc+(key,), value)
 
         visit(top, (), None)
-        return replace_spans(raw, changes)
+        normalized = replace_spans(raw, changes)
+        races = getattr(self, 'races', None)
+        if races is not None and path[:1] != ('provider-response',):
+            normalized = races.json(raw, normalized, artifact)
+            if (races.record is not None and isinstance(top.value, dict)
+                    and all(key in top.value for key in ('model', 'instructions', 'tools', 'history'))):
+                for index, entry in reversed(list(enumerate(top.value['history']))):
+                    if entry.get('kind') == 'shell':
+                        normalized = races.shell(raw, normalized, artifact, ('history', index, 'shell'))
+        return normalized
 
 
 def register_closed_endpoint(ctx, normal, events, captures):
@@ -775,17 +793,24 @@ def auth_status_stdout(ctx, normal, invocation, captures, artifact):
 def finish(ctx):
     """Validate raw evidence, normalize declared dynamic fields, retain a ledger."""
     invocations = ctx.invocations
-    started = min((x['started'] for x in invocations), default=0)
-    ended = max((x['ended'] for x in invocations), default=float('inf'))
+    started = min((min(x['started'], x['ended']) for x in invocations), default=0)
+    ended = max((max(x['started'], x['ended']) for x in invocations), default=float('inf'))
     server = getattr(ctx, '_server', None)
     authority = server.url.split('://', 1)[1] if server else ''
     normal = Normalizer(ctx.root, authority, started, ended,
                         artifacts=getattr(ctx, 'artifact_root', ctx.artifacts))
+    if invocations and all('monotonic_started' in item or 'monotonic_ended' in item for item in invocations):
+        from parity.invocation_time import validate_bounds
+        bounds = [validate_bounds(item) for item in invocations]
+        normal.elapsed_bound = max(end for _, end in bounds) - min(start for start, _ in bounds)
+    from parity.observe_cli_commands import Commands
+    normal.commands = Commands(normal, ctx)
     results = {}
     semantic_artifacts = set()
     trace_files = ctx.trace_paths
     traces = []
     requests = []
+    cache_inputs = []
     for path in trace_files:
         raw = Path(path).read_bytes()
         lines = raw.splitlines(keepends=True)
@@ -803,14 +828,29 @@ def finish(ctx):
                 if all(k in data for k in ('model', 'instructions', 'tools', 'history')):
                     data_token = child(lex(line), 'data')
                     requestspec = line[data_token.start:data_token.end]
-                    raw_key = cache_key(requestspec)
-                    canonical_spec = normal.json(requestspec, 'cache-input')
-                    canonical_key = cache_key(canonical_spec)
-                    normal.cache_keys[raw_key] = canonical_key
-                    normal.record('cache-key', (), raw_key.encode(), canonical_key.encode(), 'cache-prefix')
+                    cache_inputs.append(requestspec)
             traces.append((path, line))
     # Link trace request bodies to independent HTTP captures, not to themselves.
     captures = server.requests if server else []
+    from parity.observe_tools import ARTIFACTS, Tools
+    from parity.observe_cli_dependencies import WorkspaceEchoes, cancelled_exec_executable
+    from parity.observe_cli_races import Races
+    observations = getattr(ctx, 'observations', {})
+    case_id = Path(ctx.root).name
+    tools = Tools(normal, traces, captures, invocations=invocations,
+                  case_id=case_id, observations=observations)
+    echoes = WorkspaceEchoes(normal, traces, invocations, observations, case_id)
+    tools.path_outcomes.update(echoes.path_outcomes)
+    tools.path_outcomes.update(cancelled_exec_executable(normal, traces, invocations, observations, case_id))
+    normal.json = echoes.json
+    events = [lex(line).value for _, line in traces]
+    normal.races = Races(normal, events, captures, invocations, case_id, observations)
+    for requestspec in cache_inputs:
+        raw_key = cache_key(requestspec)
+        canonical_spec = normal.json(requestspec, 'cache-input')
+        canonical_key = cache_key(canonical_spec)
+        normal.cache_keys[raw_key] = canonical_key
+        normal.record('cache-key', (), raw_key.encode(), canonical_key.encode(), 'cache-prefix')
     # Public proxy endpoints need not end in /responses. Identify generative
     # requests by their recorded logical shape, not a path spelling.
     def is_generation(request):
@@ -821,7 +861,6 @@ def finish(ctx):
         return isinstance(body, dict) and 'model' in body and ('input' in body or 'messages' in body)
 
     generative = [r for r in captures if is_generation(r)]
-    events = [lex(line).value for _, line in traces]
     register_closed_endpoint(ctx, normal, events, captures)
     remaining = list(generative)
     for attempt in (event for event in events if event['type'] == 'api.attempt.started'):
@@ -867,21 +906,36 @@ def finish(ctx):
             normal.cache_keys[key] = cache_key(canonical)
     from parity.observe_derived import Derived
     derived = Derived(normal, traces, captures, invocations=invocations)
-    from parity.observe_tools import ARTIFACTS, Tools
-    observations = getattr(ctx, 'observations', {})
-    tools = Tools(normal, traces, captures, invocations=invocations,
-                  case_id=Path(ctx.root).name, observations=observations)
     # Validate all identities before processing references in stdout/stderr.
     for _, line in traces:
         ev = json.loads(line)
         normal.identity(ev['session_id'], 'session')
         normal.identity(ev['run_id'], 'run')
     for invocation in invocations:
-        normal.register_display_sessions(invocation['stderr'].decode('utf-8', 'surrogateescape'))
+        if 'terminal' not in invocation:
+            normal.register_display_sessions(invocation['stderr'].decode('utf-8', 'surrogateescape'))
+    from parity.observe_cli_sessions import local_reset
+    results.update(local_reset(ctx, normal, invocations, traces))
+    from parity.observe_cli_terminal import integrate
+    # Replay stores files in a temporary directory, but displayed paths refer to
+    # the original allocation. Terminal certificates bind those original paths.
+    from types import SimpleNamespace
+    artifact_root = Path(getattr(ctx, 'artifact_root', ctx.artifacts))
+    terminal_ctx = SimpleNamespace(root=ctx.root, artifacts=artifact_root, artifact_root=artifact_root,
+                                   observations=observations, _server=server,
+                                   invocations=[dict(item, trace=artifact_root / ('invoke-%03d.traces' % index))
+                                                for index, item in enumerate(invocations, 1)])
+    terminal_traces = [(artifact_root / Path(path).relative_to(ctx.artifacts), line) for path, line in traces]
+    screens, _, terminal_stderr = integrate(terminal_ctx, normal, terminal_traces)
+    results.update(screens)
+    semantic_artifacts.update(terminal_stderr)
     for i, invocation in enumerate(invocations):
         for channel in ('stdout', 'stderr'):
             raw = invocation[channel]
             name = f'invocation-{i+1}.{channel}'
+            if name in terminal_stderr:
+                results[name] = terminal_stderr[name]
+                continue
             if channel == 'stdout' and raw.lstrip().startswith(b'{'):
                 try:
                     value = lex(raw).value
@@ -892,6 +946,10 @@ def finish(ctx):
                     # the independent prefix against the live same-input run.
                     results[name] = normal.json(raw, name)
                     continue
+            if channel == 'stdout' and Path(ctx.root).name.startswith('C02.'):
+                from parity.observe_cli_args import version_stdout
+                results[name] = version_stdout(normal, invocation, name)
+                continue
             if channel == 'stdout':
                 # Only independently certified auth CLI output is not model text.
                 results[name] = auth_status_stdout(ctx, normal, invocation, captures, name)
@@ -900,7 +958,12 @@ def finish(ctx):
             # remains strict. Surrogate escape preserves every untouched byte.
             text = normal.text(raw.decode('utf-8', 'surrogateescape'), name, ())
             if channel == 'stderr':
+                if Path(ctx.root).name == 'C04.oversized':
+                    from parity.observe_cli_args import oversized_stderr
+                    text = oversized_stderr(normal, invocation, name).decode('utf-8', 'surrogateescape')
                 text = derived.display(text, name, invocation)
+                text = normal.commands.display(text, name, invocation)
+                text = normal.races.text(text, name)
             results[name] = text.encode('utf-8', 'surrogateescape')
         results[f'invocation-{i+1}.status'] = str(invocation['returncode']).encode()
     paths = []

@@ -25,7 +25,7 @@ import time
 
 SUITE = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).with_name("mutations.json")
-REF_COMMIT = "14944a6bd8e35815effb74270218483804c29615"
+REF_COMMIT = "60fda0d3f3eabc76fa11deed72aed7850532c97e"
 
 
 def sha256(data):
@@ -217,6 +217,28 @@ def run_cases(binary, cases, directory, timeout, jobs=1):
         return process, {"report_error": str(error)}, []
 
 
+def assertion_cleanup(path, rows):
+    """Recognize a live PTY deliberately terminated after its reported assertion."""
+    receipt = path.with_suffix(".failure-cleanup.json")
+    if receipt.is_symlink() or not receipt.is_file() or receipt.stat().st_size > 65536:
+        return False
+    try:
+        value = json.loads(receipt.read_bytes())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(value, dict) or set(value) != {"exception_type", "exception", "returncode"}:
+        return False
+    if value["exception_type"] != "AssertionError" or value["returncode"] is not None:
+        return False
+    if not isinstance(value["exception"], str) or not value["exception"]:
+        return False
+    row = next((row for row in rows if row.get("id", row.get("case")) == path.parent.name), {})
+    reason = row.get("reason", "")
+    return (row.get("status") == "failed" and row.get("leak_check") == "clean"
+            and isinstance(reason, str) and reason.startswith("Traceback (most recent call last):")
+            and reason.rstrip().endswith("\nAssertionError: " + value["exception"]))
+
+
 def classify(process, report, rows, mutation, directory, baseline=False):
     if process.get("exit_code") not in (0, 1) or process.get("timeout") or process.get("launch_error"):
         return "harness_failure", []
@@ -230,7 +252,9 @@ def classify(process, report, rows, mutation, directory, baseline=False):
     if has_panic(directory):
         return "panic", []
     for path in directory.rglob("invoke-*.status"):
-        if int(path.read_text().strip()) < 0:
+        status = int(path.read_text().strip())
+        if status < 0 and (baseline or status not in (-signal.SIGTERM, -signal.SIGKILL)
+                           or not assertion_cleanup(path, rows)):
             return "harness_failure", []
     statuses = [str(row.get("status", "")).lower() for row in rows]
     if any(status not in ("pass", "passed", "fail", "failed") for status in statuses):

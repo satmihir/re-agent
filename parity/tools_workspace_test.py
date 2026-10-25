@@ -18,10 +18,10 @@ class WorkspaceFixturesTest(unittest.TestCase):
         for family in [*range(23, 29), *range(55, 61)]:
             self.assertTrue(any(case.id.startswith('T%02d.' % family) and case.run for case in cases))
         self.assertEqual({case.id for case in cases if case.pending}, {
-            'T23.human-consent', 'T26.lifetime', 'T27.agent-bindings',
+            'T27.agent-bindings',
             'T56.dropped-inherited-compact-reset'})
         reasons = ' '.join(case.pending or '' for case in cases)
-        for dependency in ('C16', 'A20/A21', 'A31/A32'):
+        for dependency in ('A20/A21', 'A31/A32'):
             self.assertIn(dependency, reasons)
 
     def test_go_json_escape_bytes_not_ascii_only_or_python_default(self):

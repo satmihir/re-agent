@@ -424,7 +424,7 @@ def collect():
     pending = 'Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet'
     add('T36.child-cancel-reset', 'Child cancellation, blocked session reset and next ordinary turn', lambda ctx: None, pending=pending)
     add('T36.before-start', 'Cancellation admitted before command startup has no process effects', lambda ctx: None,
-        pending='Requires a later CLI/agent barrier after signal.NotifyContext installation and before loop dispatch ctx.Err(); --scripted has no such handshake, while launch-time SIGINT races handler installation and post-tool.started SIGINT is already after admission')
+        pending='Area 4 agent/dispatch barrier required: chat.go:939 installs signal.NotifyContext before provider I/O, so CLI/provider readiness proves handler installation but cannot stop between model acceptance and loop.go:369 dispatch ctx.Err(); tool.started at loop.go:408 is already after admission. --scripted exposes no earlier handshake')
     for name in ('same-root', 'overlapping-root', 'nonoverlapping-root', 'canonical-alias', 'per-chain-step', 'bounds'):
         add('T37.' + name, 'Advisory concurrent_exec identities, canonical roots and bounded records', lambda ctx: None, pending=pending)
     return cases

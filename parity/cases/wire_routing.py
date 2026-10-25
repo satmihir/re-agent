@@ -1542,10 +1542,12 @@ def collect():
                 add(f"W43.routes-{len(ladder)}-boundary-{boundary + 1}-{suffix}",
                     "Configured seven/eight-route cumulative threshold", _distribution, probabilities, selected,
                     ladder=ladder, flags=("--model", destination, "--reasoning-effort", effort), configured=(destination, effort))
+    from parity.cases.cli_dependencies import picker
+    cases.append(model.Case('W50.picker', 'Interactive model picker selection', picker))
     for case_id, description, dependency in [
         ("W39.agent", "Router agent-result trust and roster provenance", "agent lifecycle fixtures (A03–A14)"),
         ("W47.agent", "Agent-labelled Entries in model handoff", "agent lifecycle fixtures (A03–A14)"),
-        ("W50.picker", "Interactive model picker selection", "PTY driver (C20)"),
+
         ("W52.gc", "Model handoff after request-view GC", "GC fixtures (A29–A32)"),
         ("W52.resume", "Restore switched pinned prefix from checkpoint", "checkpoint fixtures (A34–A37)"),
     ]:

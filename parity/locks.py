@@ -27,7 +27,12 @@ SUBSTITUTION_KINDS = (
     "git-do-allocated-remote", "exec-allocated-executable", "exec-literal-environment",
     "exec-fixture-cwd", "exec-fixture-stdout-length", "tool-allocated-path-argument",
     "git-fixture-workspace", "tool-workspace-refusal", "tool-approved-workspace-path",
-    "git-index-stat-cache", "exec-owned-elapsed",
+    "git-index-stat-cache", "exec-owned-elapsed", "cli-version-build-metadata", "cli-validated-preview-request-length",
+    "cli-shell-workspace", "cli-shell-duration-ms", "cli-shell-elapsed",
+    "tool-human-approved-workspace-path", "tool-human-workspace-echo",
+    "terminal-startup-session", "terminal-startup-path", "terminal-artifact-path",
+    "terminal-state-projection", "terminal-workspace-path", "cli-shell-termination", "cli-shell-status",
+    "cli-reset-checkpoint", "cli-exec-executable", "terminal-exec-timeout-elapsed", "terminal-progress-spinner",
 )
 
 COMPARISON_POLICY = {
@@ -119,10 +124,22 @@ def ledger_contract(ledger, artifacts):
         path = row.get("path")
         required = {"artifact", "kind", "path", "start", "end", "before", "after",
                     "before_sha256", "after_sha256", "before_length", "after_length"}
-        if not required <= row.keys() or row.keys() - required - {"case", "classification"}:
+        optional = {"case", "classification"}
+        if kind == "terminal-state-projection":
+            required |= {"classification", "certificate"}
+            optional = set()
+        if not required <= row.keys() or row.keys() - required - optional:
             raise AssertionError("invalid substitution row fields")
         if not isinstance(path, list) or any(type(item) not in (str, int) for item in path):
             raise AssertionError("invalid substitution path")
+        if kind == "terminal-state-projection":
+            owner = re.fullmatch(r"invoke-([0-9]{3})\.(?:tty|terminal\.json)|invocation-([1-9][0-9]{0,2})\.stderr", artifact)
+            number = int(owner[1] or owner[2]) if owner else 0
+            witness = "invoke-%03d.screens.json" % number
+            if (not number or path != ["terminal-state-projection"] or row["classification"] != "S"
+                    or row["certificate"] != witness or witness not in artifacts):
+                raise AssertionError("invalid terminal projection certificate")
+            certificates.append({key: row[key] for key in ("artifact", "kind", "classification", "certificate")})
         if kind.startswith("case-specific-closed-port-"):
             kind = "case-specific-closed-port"
         site = (artifact, tuple(path), kind)
@@ -288,7 +305,9 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {case_id: pool.submit(frozen_lock, staging / case_id) for case_id in executable}
             new_cases = {case_id: future.result() for case_id, future in futures.items()}
-    protect_wire_locks(old_cases, new_cases)
+    protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
+    protect_wire_locks(protected_cases, new_cases)
+    protect_previous_locks(protected_cases, new_cases)
     document = {**pack(new_cases), "reference_identity": {key: manifest.get(key) for key in REFERENCE_FIELDS}}
     changed = sorted(case_id for case_id in old_cases.keys() & new_cases.keys() if old_cases[case_id] != new_cases[case_id])
     report = {"changed_case_digests": [{"id": case_id,
@@ -304,6 +323,10 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
             shutil.copytree(suite / "samples", prepared / "samples")
         shutil.copyfile(staging / "inventory.json", prepared / "inventory.json")
         sample_changes = samples.refresh_samples(staging, prepared)
+        for original in (suite / "samples").glob("*.tar.gz"):
+            replacement = prepared / "samples" / original.name
+            if not replacement.exists() or replacement.read_bytes() != original.read_bytes():
+                raise AssertionError("existing sample identity violation: " + original.name)
         (prepared / relative).write_bytes(canonical(document) + b"\n")
         (prepared / "policy.json").write_text(json.dumps(policy, ensure_ascii=False, indent=2) + "\n")
         generated = ["inventory.json", "policy.json",
@@ -315,8 +338,39 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     manifest["normalized_lock"] = relative
     manifest["normalized_tree_sha256"] = document["normalized_tree_sha256"]
     print(json.dumps({**report, "changed_sample_cases": sample_changes,
+                      "approved_zero_exec_timing_updates": timing_updates,
                       "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))
-    return {**document, "cases": new_cases}
+    return {**document, "cases": new_cases, "approved_zero_exec_timing_updates": timing_updates}
+
+
+def approved_zero_exec_timing_updates(old_cases, new_cases, staging):
+    """Prove approved ledger-only migrations by reconstructing each exact prior lock."""
+    from parity import run
+
+    protected, updates = dict(old_cases), []
+    for case_id, previous in sorted(old_cases.items()):
+        actual = new_cases.get(case_id)
+        if (not case_id.startswith(('W', 'T')) or actual is None or actual == previous
+                or actual != dict(previous, ledger_sha256=actual['ledger_sha256'])):
+            continue
+        documents, ledger, captured = run.read_frozen_case(Path(staging) / case_id)
+        policies = json.loads(documents['artifact-policies.json'])
+        run.validate_replay(captured['raw'], json.loads(documents['replay.json']),
+                            captured['normalized'], policies, ledger[:-1])
+        if case_lock(captured['normalized'], policies, ledger) != actual:
+            raise AssertionError('migration evidence differs from captured lock: ' + case_id)
+        # Replay emits identity duration rows only for eligible exec timing sites.
+        zero_rows = [row for row in ledger if row.get('kind') == 'duration-ms'
+                     and row.get('path', [])[-1:] == ['duration_ms']
+                     and row.get('before') == row.get('after') == 'MA==']
+        legacy = [row for row in ledger if row not in zero_rows]
+        if not zero_rows or case_lock(captured['normalized'], policies, legacy) != previous:
+            continue
+        protected[case_id] = actual
+        updates.append(dict(id=case_id, old_ledger_sha256=previous['ledger_sha256'],
+                            new_ledger_sha256=actual['ledger_sha256'],
+                            sites=[dict(artifact=row['artifact'], path=row['path']) for row in zero_rows]))
+    return protected, updates
 
 
 def protect_wire_locks(old_cases, new_cases):
@@ -327,3 +381,11 @@ def protect_wire_locks(old_cases, new_cases):
                      and new_cases.get(case_id) != previous)
     if changed:
         raise AssertionError('area-1 lock identity violation: ' + ', '.join(changed))
+
+
+def protect_previous_locks(old_cases, new_cases):
+    """Area 3 can add leaves but cannot refresh any existing wire or tool oracle."""
+    changed = sorted(case_id for case_id, previous in old_cases.items()
+                     if case_id.startswith(('W', 'T')) and new_cases.get(case_id) != previous)
+    if changed:
+        raise AssertionError('earlier-area lock identity violation: ' + ', '.join(changed))

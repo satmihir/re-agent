@@ -3,10 +3,398 @@
   "format": "Deterministic gzip tar: case.json and artifacts/<logical path>; every normalized artifact is complete.",
   "review": "tar -tzf parity/samples/<case>.tar.gz; tar -xOzf parity/samples/<case>.tar.gz artifacts/<path>. Opaque/binary artifacts are not converted to text.",
   "pending_families": {
-    "W13": "All four fork cases depend on the later agents area; no expected output is fabricated.",
-    "T37": "All six concurrent exec observations require the controlled A20/A21 agent lifecycle fixtures."
+    "C18": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+    "C19": "area 4: canonical v2 fixtures, cross-import, shared-HOME identity and persisted-field crosswalk",
+    "C20": "area 4: checkpoint save-failure fixtures before model/tool publication; trace warning alone cannot prove persistence barriers",
+    "C23": "area 4 agent scheduler/barrier fixtures: nested live counts, elapsed-slot binding, finish/delivery and private reply assertions",
+    "C24": "area 4 writing-agent fixture: bind child applied effects and root recap without leaking private reply",
+    "C25": "area 4 A24: controlled agent admission, correlated tree usage and cross-turn named-session reuse",
+    "C43": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+    "C44": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+    "T37": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+    "W13": "Later agents area: native/nested fork admission and controlled child requests"
   },
   "cases": [
+    {
+      "id": "C01.unknown",
+      "description": "Help/error channel: unknown",
+      "why": "Unknown-command help, stderr/stdout channels and exit code; mutation 1 catcher.",
+      "path": "C01.unknown.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 2362,
+      "normalized_sha256": "dc21b151265537cff90a69b6c1766e4401a15471d719ae2b6b651094c9ecf1ec",
+      "bundle_sha256": "3039e2f54069e361782a206afc51c59c75dbea6db159e2b98f9211ff7206fa43"
+    },
+    {
+      "id": "C02.version",
+      "description": "Version metadata presence: version",
+      "why": "Version prefix and narrowly certified build metadata.",
+      "path": "C02.version.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 17,
+      "normalized_sha256": "fd6a250f44f3e2fa03608d034ab0abc49589127cf833e6461095e15dc471a1b9",
+      "bundle_sha256": "fcc01f55a595df567b7340c657dc9e2b33f63d533d2307bb1000b78927286a8c"
+    },
+    {
+      "id": "C03.post-prompt",
+      "description": "Flag rejection: post-prompt",
+      "why": "Post-prompt flag rejection; mutation 2 catcher.",
+      "path": "C03.post-prompt.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 144,
+      "normalized_sha256": "a70a73080a4fb3f718927aebdf75537f09431b8dae02da68dfe5100a72aa5372",
+      "bundle_sha256": "b0987746e3c2c9816432d2088258a2659ff27b39057932216dd2f0a30ff59bc5"
+    },
+    {
+      "id": "C03.terminator",
+      "description": "Prompt parsing: terminator",
+      "why": "Explicit -- retains flag-looking prompt bytes.",
+      "path": "C03.terminator.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 15760,
+      "normalized_sha256": "d7155a2dc9204db86cc840c8586229d07612dfd0cafc5cf7a705c6a575b94e48",
+      "bundle_sha256": "59dd2c1c5e4c1ee099533d90396dfb547fa5b39d57469391ce2a518988b9470e"
+    },
+    {
+      "id": "C04.file-crlf",
+      "description": "Exact prompt bytes: file crlf",
+      "why": "One-LF removal preserves the CR byte in a file prompt.",
+      "path": "C04.file-crlf.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 15751,
+      "normalized_sha256": "c447fdacd5b622f0141f7b18183a42c6227cb5792241807801076a7ee123f01d",
+      "bundle_sha256": "57215dfdff1671db7db7abcec2dcb1422b2d048dd4fd66fd8f682b2fab733a77"
+    },
+    {
+      "id": "C05.agents-script",
+      "description": "Invalid combination: agents-script",
+      "why": "Invalid feature combination fails before external effects.",
+      "path": "C05.agents-script.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 85,
+      "normalized_sha256": "9cfbc893728f469d4f6698cfd6f220dc905e9422427e0bd92d7654bcb9989231",
+      "bundle_sha256": "204d2f4cf7d1807b83d13529f97e8533d81af8609e4a779e6ee096ee0d3713e1"
+    },
+    {
+      "id": "C06.anthropic-key",
+      "description": "Startup rejects: anthropic-key",
+      "why": "Credential requirement on the independently selected provider.",
+      "path": "C06.anthropic-key.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 87,
+      "normalized_sha256": "ae72c92c9988fc54d3c283b108255809cebc7d01723f05898fb9cf21ef752fc1",
+      "bundle_sha256": "ee1382e54271526e078b9fa58378bae99a77c2772ec0120ee825a4ea983998e2"
+    },
+    {
+      "id": "C07.grant-absolute",
+      "description": "Workspace preapproval: absolute",
+      "why": "Launch grant and canonical root evidence.",
+      "path": "C07.grant-absolute.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 15755,
+      "normalized_sha256": "8d200da3c9f776c8cce657fdf86db1a8a42f3e144416a91792d37c81d4b365d6",
+      "bundle_sha256": "2e11a6fda37b4fbc15449317ae19bf67133289ecb6934f78c5774f91e09e3610"
+    },
+    {
+      "id": "C08.agents",
+      "description": "Optional feature on: agents",
+      "why": "Launch-feature declarations without invoking an agent.",
+      "path": "C08.agents.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 21411,
+      "normalized_sha256": "161f6bdeddaf7412159ef3b84f485dc663035b127e5765b4d4af42e8cbccadb5",
+      "bundle_sha256": "af414895b644d52337a2b67e15f0670b88108ca195f848496d4294606d38cb30"
+    },
+    {
+      "id": "C09.tool-recap",
+      "description": "Reply/diagnostic separation: tool",
+      "why": "Reply-only stdout plus tool progress and recap on stderr.",
+      "path": "C09.tool-recap.tar.gz",
+      "artifacts": 4,
+      "normalized_bytes": 50542,
+      "normalized_sha256": "50ff7532b0e53b0613ccdf088c637907be465a390b14272ce83fbeb1991158cd",
+      "bundle_sha256": "da9a338f338707694f0427ee165a78d474b459c2d475400887c292b25327e4c2"
+    },
+    {
+      "id": "C10.duplicate-next-step",
+      "description": "Accepted script history/at-most-once mutation: duplicate-next-step",
+      "why": "Accepted-call ledger prevents duplicate effects across model steps.",
+      "path": "C10.duplicate-next-step.tar.gz",
+      "artifacts": 4,
+      "normalized_bytes": 50743,
+      "normalized_sha256": "ec4f68663448850d1674ae601bb0c4da9ff2f3ce4029eeb70dc4c3c0ddcaa7d5",
+      "bundle_sha256": "2d5b599f18fc8836ad55da8bc548a4ae432f6a322f4c08c8858e3d816b4a237b"
+    },
+    {
+      "id": "C11.ambiguous",
+      "description": "Piped scanner input: ambiguous",
+      "why": "Piped input command-versus-submission behavior.",
+      "path": "C11.ambiguous.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 402,
+      "normalized_sha256": "cd9b69fe54be82a71e7f125b926cbbf4a80a3b88d78ff84275793025076a0d95",
+      "bundle_sha256": "100939fcfc1f109ceaba6f18da6bd7f33e96c49b9a51c2bdae39723bfe912449"
+    },
+    {
+      "id": "C12.context",
+      "description": "Local command never submits a turn",
+      "why": "Local context breakdown with no provider request.",
+      "path": "C12.context.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 575,
+      "normalized_sha256": "d19fd4d694a7aec08d7084130ea85ba0579e2a01a182a4e2b4ff18b22c749e75",
+      "bundle_sha256": "68e5e651e7086e8c739122a043b747dc3bbf0f0612a70c6cb0e080434259aedf"
+    },
+    {
+      "id": "C13.pin-same-model",
+      "description": "Valid controls pin Auto; failed changes do not",
+      "why": "Manual selection preserves pinning semantics on the following request.",
+      "path": "C13.pin-same-model.tar.gz",
+      "artifacts": 11,
+      "normalized_bytes": 66732,
+      "normalized_sha256": "6c7782c978d64249df188d509ba1e871a7e70a730e082591537ac0d9b14be3a6",
+      "bundle_sha256": "7138f06de1fb38eb58c265b07693bf4844ed38e5bed1a325e5d7cd899cd7466f"
+    },
+    {
+      "id": "C14.default",
+      "description": "Compaction transaction and following turn: default",
+      "why": "Compaction request, committed summary and ordinary following turn.",
+      "path": "C14.default.tar.gz",
+      "artifacts": 27,
+      "normalized_bytes": 187134,
+      "normalized_sha256": "d99abd4d90acf19dfe883f4a2a22fa5c10d01fa849cc1af554e8ee1340337918",
+      "bundle_sha256": "6bc4cf225bc1856988ad8e071e69d33347225f5e0ce28f98d1f5e8a852b90271"
+    },
+    {
+      "id": "C15.uppercase-high",
+      "description": "Review level parsing and prompt",
+      "why": "Case-sensitive review level validation.",
+      "path": "C15.uppercase-high.tar.gz",
+      "artifacts": 3,
+      "normalized_bytes": 397,
+      "normalized_sha256": "e67bd3c7548bd24f33b17933708de4459059c55ed233b4598881da45b44e1a11",
+      "bundle_sha256": "6f2bd90749a239969aa63b89a2c9f380db561e2dd9218055e9cb7ca8f66c3ee0"
+    },
+    {
+      "id": "C16.implement-here",
+      "description": "Actual plan picker choice, request history and next normal turn",
+      "why": "Real plan picker and next-turn mode transition.",
+      "path": "C16.implement-here.tar.gz",
+      "artifacts": 36,
+      "normalized_bytes": 3805099,
+      "normalized_sha256": "ac1433aa8cc2e63952d031a057f7f46f8575dd898fba2c85e3c1bce603c49daa",
+      "bundle_sha256": "0dae913ec25ca171176b4e170fea0d32f2a0e994747808da1699044e0407a34b"
+    },
+    {
+      "id": "C16.refuse-edit_file-flag",
+      "description": "Plan dispatch refuses effects and leaves file unchanged",
+      "why": "Plan dispatch denial preserves independently read bytes; mutation 4 catcher.",
+      "path": "C16.refuse-edit_file-flag.tar.gz",
+      "artifacts": 5,
+      "normalized_bytes": 68537,
+      "normalized_sha256": "ce4c84c9bece6730ca188767716cd58f146f9a82e727f26049a1c794a36dfea4",
+      "bundle_sha256": "27a9b076717c40f701160b793d81cb294cf22d0a5dcbc86587b763ebab4dfd59"
+    },
+    {
+      "id": "C17.success",
+      "description": "Human shell history, literal output and following request",
+      "why": "Human shell history, actual effects and independently matched request string.",
+      "path": "C17.success.tar.gz",
+      "artifacts": 12,
+      "normalized_bytes": 68058,
+      "normalized_sha256": "e85393d5c100684a2bc9e65161063596565d976089412a8a4bea83bd79e99f39",
+      "bundle_sha256": "50e9d7e3802fa978caf0cbc32d4de271f38929678de85841aef33e69acde613d"
+    },
+    {
+      "id": "C21.context-gc",
+      "description": "Dim GC notice, restored status and next turn",
+      "why": "Dim GC notice, restored terminal status and next turn.",
+      "path": "C21.context-gc.tar.gz",
+      "artifacts": 132,
+      "normalized_bytes": 4884623,
+      "normalized_sha256": "3d158a4f7f29fe8721b2760e91da7de332a94141b9c2a10ce15ea75881a20973",
+      "bundle_sha256": "7628e2f5454251ea1a11f53d3ec9326c176b581c2692de9920e2cccad99726ba"
+    },
+    {
+      "id": "C22.review-command",
+      "description": "Review completion, invalid syntax, actual tool loop and next turn",
+      "why": "Review completion, invalid syntax and actual tool loop.",
+      "path": "C22.review-command.tar.gz",
+      "artifacts": 6,
+      "normalized_bytes": 1401820,
+      "normalized_sha256": "8251b88c3ce7bae3194b29a0d4a3be2c35f2dd02679984fdc2101729dba25b92",
+      "bundle_sha256": "0dd4746ea91684c4080f7f579c960788c7f063013c5341826608ee8d9f707bd7"
+    },
+    {
+      "id": "C26.exec-timeout-continues",
+      "description": "Exec timeout does not block next ordinary turn",
+      "why": "Real exec timeout presentation and continued ordinary turn.",
+      "path": "C26.exec-timeout-continues.tar.gz",
+      "artifacts": 6,
+      "normalized_bytes": 1197686,
+      "normalized_sha256": "34d032e966d8f942d15587d5ef1844182617a72eca3ceba9fe32d9237465619c",
+      "bundle_sha256": "e94d1ed3a395b220225fbae525ccff50208f625c8cab5d6371eb816f4aee4c48"
+    },
+    {
+      "id": "C27.model-retry",
+      "description": "Retry-wait state, recovered response and unreported billing attempt",
+      "why": "Retry-wait screen, successful retry and billing attempt accounting.",
+      "path": "C27.model-retry.tar.gz",
+      "artifacts": 27,
+      "normalized_bytes": 1635624,
+      "normalized_sha256": "60342822da8063cdb67ffb68b631b0aca867bd2f717ed0bc7355ab77c237e042",
+      "bundle_sha256": "340eee5cf08195ebcb9016bf01ccf7710f13057f7c4916bf481b8bd5c24864e4"
+    },
+    {
+      "id": "C28.auto-startup",
+      "description": "Auto startup is quiet and makes no routing request",
+      "why": "Auto status before any router or model request.",
+      "path": "C28.auto-startup.tar.gz",
+      "artifacts": 4,
+      "normalized_bytes": 658261,
+      "normalized_sha256": "f809d09f08914a5112b45214e7a272de0e773dec7f2dc7160928b8de2b898f86",
+      "bundle_sha256": "e3db08fa1c992f71a046e1d02eba4304f490c528b0f97c61ed9281494a8837a7"
+    },
+    {
+      "id": "C29.fresh-prompt",
+      "description": "Fresh prompt region and subsequent turn",
+      "why": "Prompt region immediately follows actual PTY reply output.",
+      "path": "C29.fresh-prompt.tar.gz",
+      "artifacts": 5,
+      "normalized_bytes": 1020270,
+      "normalized_sha256": "bd37b331533d4a9514845c9806b00a780e898bd4fb0ee25cb67bff9c302c12e0",
+      "bundle_sha256": "46204b0831e2278cb2a3bd0cd90febad021c90f15a64d9f0bb53de06f825c941"
+    },
+    {
+      "id": "C30.wrap-and-edit",
+      "description": "Wrapped input, indentation and Ctrl-U recovery",
+      "why": "Exact wrapped input cells, cursor and Ctrl-U redraw.",
+      "path": "C30.wrap-and-edit.tar.gz",
+      "artifacts": 5,
+      "normalized_bytes": 1349717,
+      "normalized_sha256": "6385c75aa906253acdc889fcb4e54143240883fd5d0ed8d747ab58ce077ae511",
+      "bundle_sha256": "95ec00e4ebf49dc3dd7831271771f1859431e467996c8203f7beb49b4e370df2"
+    },
+    {
+      "id": "C31.paste-and-submit",
+      "description": "Bracketed multiline paste makes exactly one unchanged request",
+      "why": "Multiline bracketed paste submitted as one turn.",
+      "path": "C31.paste-and-submit.tar.gz",
+      "artifacts": 12,
+      "normalized_bytes": 1053778,
+      "normalized_sha256": "e34910bcaeae953391e7a4774ee15320d6307be9dd34277ad7eaac0a74a06920",
+      "bundle_sha256": "0f4001d1627640733e36b4c9a7174a5657224f9bb3b5f02a3b538d16ea2328de"
+    },
+    {
+      "id": "C32.tool-turn",
+      "description": "Tool/result/summary presentation and next turn",
+      "why": "Tool progress, output, summary and restored prompt.",
+      "path": "C32.tool-turn.tar.gz",
+      "artifacts": 6,
+      "normalized_bytes": 1250028,
+      "normalized_sha256": "88d5f6707fa0350e06a9587b6857bc902bfe592df71d72999694450262c14e84",
+      "bundle_sha256": "be3372e8783c7efdcc0c792fce4f2c89532b3203001dd45bd060b34334eb4abe"
+    },
+    {
+      "id": "C33.long-reply-during-turn",
+      "description": "All eighty reply lines reach ordered scrollback exactly once",
+      "why": "All long-reply lines reach the PTY scrollback exactly once.",
+      "path": "C33.long-reply-during-turn.tar.gz",
+      "artifacts": 6,
+      "normalized_bytes": 4475697,
+      "normalized_sha256": "108357cd1412200a593282fcf14cfe242f2e4a449dcde83f8ef19db2304ca187",
+      "bundle_sha256": "0b7d56db8af073a393aeba07b48ac5c13d4a9c148da57fb4d9fafd9aef672ce0"
+    },
+    {
+      "id": "C34.typeahead-queue-long-reply",
+      "description": "Barrier proves queued input is neither early nor lost under output pressure",
+      "why": "Queued input survives actual PTY reply pressure; mutation 6 catcher.",
+      "path": "C34.typeahead-queue-long-reply.tar.gz",
+      "artifacts": 28,
+      "normalized_bytes": 5164231,
+      "normalized_sha256": "7f2695a7d48c2cc8edfdbd242ea8897af95fd4e1c3d498f447459dd86689afd1",
+      "bundle_sha256": "6db7d9ab4101d330c4eed5d7866bfc54df7837cb38a22b2e91102ecd862458c2"
+    },
+    {
+      "id": "C35.resize-during-turn",
+      "description": "Active turn resize retains queued input and full reply",
+      "why": "Barrier-controlled SIGWINCH, resized rules and output preservation.",
+      "path": "C35.resize-during-turn.tar.gz",
+      "artifacts": 28,
+      "normalized_bytes": 4264738,
+      "normalized_sha256": "b05c76667d16da20dce744556934045f9d120ad690cfb8fa1f4abe4e286facde",
+      "bundle_sha256": "4f8e37e4ff1c81f5e64f9c396ff03f7543dc73bb8235e2d8aeb2c1627eba0401"
+    },
+    {
+      "id": "C36.edit-error-recovery",
+      "description": "Owned editor error restores prompt and next turn",
+      "why": "Editor failure recovers the real controlling terminal.",
+      "path": "C36.edit-error-recovery.tar.gz",
+      "artifacts": 5,
+      "normalized_bytes": 1034582,
+      "normalized_sha256": "890f4c470d0e07858c175e9d7d08471b1de75d1d0d403463f0659568e14dca91",
+      "bundle_sha256": "731f054bb7c9b2d46a9fb284d9d50b27f7eba01ed925d4a5047731e93ab79aa3"
+    },
+    {
+      "id": "C37.interrupt-shell-command",
+      "description": "Foreground process barrier, interrupt record and prompt recovery",
+      "why": "Foreground process barrier and the narrowly witnessed signal alternatives.",
+      "path": "C37.interrupt-shell-command.tar.gz",
+      "artifacts": 20,
+      "normalized_bytes": 1124692,
+      "normalized_sha256": "c9f462bcb60c23d133f506b070767b8a12b4acbc1abd63eae06a9b4109f0e65c",
+      "bundle_sha256": "31eadc6a2293ff1b654fa7845799030c49f8881f2fb7947be42991d5f59c57f0"
+    },
+    {
+      "id": "C38.interrupt-running-command",
+      "description": "Cancelled exec blocks next turn until reset",
+      "why": "Exec cancellation, uncertain effects and reset recovery.",
+      "path": "C38.interrupt-running-command.tar.gz",
+      "artifacts": 13,
+      "normalized_bytes": 2205669,
+      "normalized_sha256": "9822b0928d4c2611671c7123d2c7b1e4eba87681b8dadf88472b81da899a3f35",
+      "bundle_sha256": "fdcc24f1e5f735365644d1612bf60ec2fd9eb22f0430f9c7edb6d16b80fd00d4"
+    },
+    {
+      "id": "C39.resize-while-typing",
+      "description": "Resize preserves input/cursor and exact submitted request",
+      "why": "Resizing preserves edited input and cursor.",
+      "path": "C39.resize-while-typing.tar.gz",
+      "artifacts": 12,
+      "normalized_bytes": 684256,
+      "normalized_sha256": "50d7ea7dfd5ecd792f42892aee279aabfd63d210304ee7a3356a81d58dcdf628",
+      "bundle_sha256": "17bee05c2865708bc944bfcfc20e00324c4e478d6fe9432bda69abc7963692c5"
+    },
+    {
+      "id": "C40.narrow-terminal",
+      "description": "Usable input and next turn without full region at eighteen columns",
+      "why": "Usable input without a full prompt region at 18 columns.",
+      "path": "C40.narrow-terminal.tar.gz",
+      "artifacts": 6,
+      "normalized_bytes": 530437,
+      "normalized_sha256": "462d2ffdda614526c8b38fa0f9b5079290e7902544c60008741719eca4fd2f8d",
+      "bundle_sha256": "199cfb172496b7a7b89412f3c205703ae23b268b60d4b7a0fa01bc7bb28c1384"
+    },
+    {
+      "id": "C41.effort-cancel-ctrl-c",
+      "description": "Picker cancellation retains state and terminal input",
+      "why": "Picker cancellation restores exact terminal state.",
+      "path": "C41.effort-cancel-ctrl-c.tar.gz",
+      "artifacts": 12,
+      "normalized_bytes": 1411246,
+      "normalized_sha256": "5007495a4426c324912b87c1b0536678904c9003c4446059209d20f7f42fe92e",
+      "bundle_sha256": "d8ccd91d3b6ce5ddbac33c7286070e7bd8a1f17f3da33fb6d13b0b3a9d4fcb87"
+    },
+    {
+      "id": "C42.markdown-color-48",
+      "description": "Headings/code/lists/tables/links and combining/wide Unicode cells and styles",
+      "why": "Exact Markdown styled cells and wide/combining Unicode at narrow width.",
+      "path": "C42.markdown-color-48.tar.gz",
+      "artifacts": 6,
+      "normalized_bytes": 1307281,
+      "normalized_sha256": "d3e922c186cf5b2bb8544403f19b18e14e0621e6d06c987af5fca0e4891542f4",
+      "bundle_sha256": "f7b13325b4e2a74919304bbba162a0f55d76b2745a79e2577041400829c264d1"
+    },
     {
       "id": "W01.catalog-gpt-6-sol-model",
       "description": "Public catalog /model for gpt-6-sol",
@@ -533,9 +921,9 @@
       "why": "Default endpoint diagnostics without public I/O.",
       "path": "W53.defaults.endpoints.tar.gz",
       "artifacts": 3,
-      "normalized_bytes": 2209,
-      "normalized_sha256": "2a5dc44d185f6062be204824194f6d3501271fccfa39547451e986450706d4a8",
-      "bundle_sha256": "06e39a3e3233ff3d806211d3b14b56b82b934da11281a054b18b3fba73e6faa8"
+      "normalized_bytes": 2323,
+      "normalized_sha256": "b389256634f93a992a26ec1646957f1f517ff3c731117da41d442e4cd178282b",
+      "bundle_sha256": "2b3983fee71e225459a6c3b0af0be0fade001142f6b8b78c68b2296ebb81a53f"
     },
     {
       "id": "W53.issuer.models.password",
@@ -1144,8 +1532,8 @@
       "path": "T59.maps-numbers.tar.gz",
       "artifacts": 16,
       "normalized_bytes": 73233,
-      "normalized_sha256": "77cc2bf4bef52c70379fe8970b95753f8331ecb3d8374208e43884971edae6dc",
-      "bundle_sha256": "72c2c920e18d1c7f91b16490a20d4d370686d718d0513a8238e4537a1703fdba"
+      "normalized_sha256": "af84946cad43a97a3dd6fdaef74afda983b25f474b3cc7c3181a354b960c8d46",
+      "bundle_sha256": "b5b3fc8fec4e4b22278a5d91e692e6c186e0d2f9fb459906ebd52be87ab0ee89"
     },
     {
       "id": "T60.continuation-long-path",

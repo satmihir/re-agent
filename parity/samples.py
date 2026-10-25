@@ -10,6 +10,44 @@ import tarfile
 
 
 SELECTIONS = {
+    'C01.unknown': 'Unknown-command help, stderr/stdout channels and exit code; mutation 1 catcher.',
+    'C02.version': 'Version prefix and narrowly certified build metadata.',
+    'C03.post-prompt': 'Post-prompt flag rejection; mutation 2 catcher.',
+    'C03.terminator': 'Explicit -- retains flag-looking prompt bytes.',
+    'C04.file-crlf': 'One-LF removal preserves the CR byte in a file prompt.',
+    'C05.agents-script': 'Invalid feature combination fails before external effects.',
+    'C06.anthropic-key': 'Credential requirement on the independently selected provider.',
+    'C07.grant-absolute': 'Launch grant and canonical root evidence.',
+    'C08.agents': 'Launch-feature declarations without invoking an agent.',
+    'C09.tool-recap': 'Reply-only stdout plus tool progress and recap on stderr.',
+    'C10.duplicate-next-step': 'Accepted-call ledger prevents duplicate effects across model steps.',
+    'C11.ambiguous': 'Piped input command-versus-submission behavior.',
+    'C12.context': 'Local context breakdown with no provider request.',
+    'C13.pin-same-model': 'Manual selection preserves pinning semantics on the following request.',
+    'C14.default': 'Compaction request, committed summary and ordinary following turn.',
+    'C15.uppercase-high': 'Case-sensitive review level validation.',
+    'C16.implement-here': 'Real plan picker and next-turn mode transition.',
+    'C16.refuse-edit_file-flag': 'Plan dispatch denial preserves independently read bytes; mutation 4 catcher.',
+    'C17.success': 'Human shell history, actual effects and independently matched request string.',
+    'C21.context-gc': 'Dim GC notice, restored terminal status and next turn.',
+    'C22.review-command': 'Review completion, invalid syntax and actual tool loop.',
+    'C26.exec-timeout-continues': 'Real exec timeout presentation and continued ordinary turn.',
+    'C27.model-retry': 'Retry-wait screen, successful retry and billing attempt accounting.',
+    'C28.auto-startup': 'Auto status before any router or model request.',
+    'C29.fresh-prompt': 'Prompt region immediately follows actual PTY reply output.',
+    'C30.wrap-and-edit': 'Exact wrapped input cells, cursor and Ctrl-U redraw.',
+    'C31.paste-and-submit': 'Multiline bracketed paste submitted as one turn.',
+    'C32.tool-turn': 'Tool progress, output, summary and restored prompt.',
+    'C33.long-reply-during-turn': 'All long-reply lines reach the PTY scrollback exactly once.',
+    'C34.typeahead-queue-long-reply': 'Queued input survives actual PTY reply pressure; mutation 6 catcher.',
+    'C35.resize-during-turn': 'Barrier-controlled SIGWINCH, resized rules and output preservation.',
+    'C36.edit-error-recovery': 'Editor failure recovers the real controlling terminal.',
+    'C37.interrupt-shell-command': 'Foreground process barrier and the narrowly witnessed signal alternatives.',
+    'C38.interrupt-running-command': 'Exec cancellation, uncertain effects and reset recovery.',
+    'C39.resize-while-typing': 'Resizing preserves edited input and cursor.',
+    'C40.narrow-terminal': 'Usable input without a full prompt region at 18 columns.',
+    'C41.effort-cancel-ctrl-c': 'Picker cancellation restores exact terminal state.',
+    'C42.markdown-color-48': 'Exact Markdown styled cells and wide/combining Unicode at narrow width.',
     'W01.catalog-gpt-6-sol-model': 'Catalog-backed model selection rather than an invalid-input-only sample.',
     'W02.chatgpt-explicit': 'Plan inference, stable session UUID and request-ID ownership.',
     'W03.live-key-userinfo': 'Proxy routing with credential-bearing input and redacted diagnostics.',
@@ -175,9 +213,9 @@ def refresh_samples(lane, suite):
     destination.mkdir(exist_ok=True)
     index = {'schema_version': 1, 'format': 'Deterministic gzip tar: case.json and artifacts/<logical path>; every normalized artifact is complete.',
              'review': 'tar -tzf parity/samples/<case>.tar.gz; tar -xOzf parity/samples/<case>.tar.gz artifacts/<path>. Opaque/binary artifacts are not converted to text.',
-             'pending_families': {
-                 'W13': 'All four fork cases depend on the later agents area; no expected output is fabricated.',
-                 'T37': 'All six concurrent exec observations require the controlled A20/A21 agent lifecycle fixtures.'},
+             'pending_families': {family: '; '.join(sorted({case['pending'] for case in cases.values()
+                                                          if case['id'].startswith(family + '.')}))
+                                  for family in sorted({case_id[:3] for case_id in cases} - implemented)},
              'cases': []}
     changed = []
     for case_id, reason in SELECTIONS.items():
@@ -190,6 +228,8 @@ def refresh_samples(lane, suite):
         if not path.exists() or path.read_bytes() != raw:
             if case_id.startswith('W') and path.exists():
                 raise HarnessError('area-1 sample identity violation: ' + case_id)
+            if case_id.startswith('T') and path.exists():
+                raise HarnessError('earlier-area sample identity violation: ' + case_id)
             changed.append(case_id)
         path.write_bytes(raw)
         index['cases'].append({'id': case_id, 'description': cases[case_id]['description'], 'why': reason,

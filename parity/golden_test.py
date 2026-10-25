@@ -133,6 +133,26 @@ class GoldenTest(unittest.TestCase):
             regenerate.assert_not_called()
             verify.assert_called_once()
 
+    def test_read_only_comparison_never_regenerates_or_stamps_a_cache(self):
+        lane = golden.cache_path(self.manifest)
+        identity = {'suite_digest': 'same', 'temp_root_width': 86}
+        with patch('parity.golden.read_lock', return_value={'cases': {}}), \
+             patch('parity.golden.identity', return_value=identity), \
+             patch('parity.golden.regenerate') as regenerate, \
+             patch('parity.golden.write_stamp') as stamp, \
+             patch('parity.golden.verify_cache', return_value=lane) as verify:
+            with self.assertRaisesRegex(run.HarnessError, 'reference cache absent'):
+                golden.ensure_cache(self.suite, self.manifest, [], read_only=True)
+            lane.mkdir(parents=True)
+            (lane / 'cache.json').write_text(json.dumps(dict(identity, suite_digest='old')))
+            with self.assertRaisesRegex(run.HarnessError, 'reference cache identity differs'):
+                golden.ensure_cache(self.suite, self.manifest, [], read_only=True)
+            (lane / 'cache.json').write_text(json.dumps(identity))
+            self.assertEqual(golden.ensure_cache(self.suite, self.manifest, [], full=True, read_only=True), lane)
+            verify.assert_called_once()
+            regenerate.assert_not_called()
+            stamp.assert_not_called()
+
     def test_verified_stamp_skips_replay_until_any_cached_file_changes(self):
         lane = golden.cache_path(self.manifest)
         (lane / "W01").mkdir(parents=True)
@@ -200,6 +220,35 @@ class GoldenTest(unittest.TestCase):
             self.assertEqual(golden.capture_case("W13.pending", "unused", "unused", self.root / "absent", "unused"), result)
         freeze.assert_not_called()
 
+    def test_capture_failure_preserves_successful_evidence_despite_workspace_fifos(self):
+        cases = [Case('W98', 'captured', None), Case('W99', 'failed', None)]
+
+        def build(suite, manifest, destination, update=False):
+            destination.write_bytes(b'binary')
+            return destination
+
+        def capture(case_id, binary, root, artifacts, destination):
+            root, artifacts, destination = Path(root), Path(artifacts), Path(destination)
+            root.mkdir()
+            os.mkfifo(root / 'fixture.fifo')
+            if case_id == 'W98':
+                destination.mkdir()
+                (destination / 'metadata.json').write_text('retained capture')
+                return {'id': case_id, 'status': 'passed'}
+            artifacts.mkdir(parents=True)
+            (artifacts / 'failure.txt').write_text('intended fixture failure')
+            return {'id': case_id, 'status': 'failed', 'reason': 'intended fixture failure'}
+
+        with patch('parity.golden.build_reference', side_effect=build), patch('parity.golden.capture_case', side_effect=capture), patch('parity.golden.ProcessPoolExecutor', ThreadPoolExecutor):
+            with self.assertRaisesRegex(run.HarnessError, 'intended fixture failure'):
+                golden.regenerate(self.suite, self.manifest, cases, None, jobs=2)
+        lane = golden.cache_path(self.manifest)
+        self.assertFalse(lane.exists())
+        failure, = lane.parent.glob('failed-*')
+        self.assertEqual((failure / 'captured/W98/metadata.json').read_text(), 'retained capture')
+        self.assertEqual((failure / 'artifacts/W99/failure.txt').read_text(), 'intended fixture failure')
+        self.assertIn('intended fixture failure', (failure / 'failure.txt').read_text())
+
     def test_regeneration_publishes_complete_replayed_cache_and_preserves_old_cache_on_failure(self):
         cases = [Case("W99", "fixture", lambda _: None), Case("W98", "dependency", lambda _: None, pending="later area")]
         expected = locks.case_lock({"exact": b"normalized"}, {"exact": "B"}, [])
@@ -252,12 +301,18 @@ class GoldenTest(unittest.TestCase):
             (self.suite / "mutations.json").write_text("{}")
             (self.suite / "samples").mkdir()
             (self.suite / "samples/index.json").write_text("{}")
+            acceptance = {"historical": True, "zero_exec_timing_migration": {"ledger_updates": [
+                dict(id='T31.start', old_ledger_sha256='old', new_ledger_sha256='new')]}}
+            (self.suite / 'cli-acceptance.json').write_text(json.dumps(acceptance))
             output = io.StringIO()
             with patch("parity.samples.refresh_samples", return_value=[]), redirect_stdout(output):
                 golden.regenerate(self.suite, self.manifest, cases, None, update=True)
             self.assertIn('"W99"', output.getvalue())
             updated = json.loads((self.suite / "manifest.json").read_bytes())
             self.assertEqual(updated["normalized_tree_sha256"], locks.tree_digest({"W99": expected}))
+            self.assertIs(updated["goldens_frozen"], True)
+            self.assertEqual(updated['freeze_status'], 'ready')
+            self.assertEqual(json.loads((self.suite / 'cli-acceptance.json').read_bytes()), acceptance)
             committed = golden.read_lock(self.suite, updated)
             self.assertEqual(committed["cases"], {"W99": expected})
             self.assertEqual(committed["reference_identity"], {key: self.manifest.get(key) for key in locks.REFERENCE_FIELDS})
@@ -283,6 +338,20 @@ class GoldenTest(unittest.TestCase):
             self.assertEqual(self.manifest, original_manifest)
             self.assertEqual({str(path.relative_to(self.suite)): path.read_bytes()
                               for path in self.suite.rglob("*") if path.is_file()}, originals)
+
+    def test_failed_update_does_not_mark_unfrozen_manifest_frozen(self):
+        (self.suite / 'mutations.json').write_text('{}')
+        manifest = dict(self.manifest, goldens_frozen=False)
+
+        def fail_verification(lane, suite, prepared, cases, lock, jobs):
+            self.assertIs(prepared['goldens_frozen'], True)
+            raise run.HarnessError('replay sentinel')
+
+        with patch('parity.locks.update_lock', return_value={}), patch('parity.golden.verify_cache', side_effect=fail_verification):
+            with self.assertRaisesRegex(run.HarnessError, 'replay sentinel'):
+                golden.update_oracle(self.suite, manifest, self.root / 'lane', [])
+        self.assertIs(manifest['goldens_frozen'], False)
+        self.assertFalse((self.suite / 'manifest.json').exists())
 
     def test_committed_lock_negative_controls_name_case_and_detect_suite_changes(self):
         expected = locks.case_lock({"stdout": b"expected"}, {"stdout": "B"}, [])

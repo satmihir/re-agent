@@ -57,6 +57,47 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual([row['kind'] for row in normal.ledger], ['git-do-jev-ms'])
         self.assertIn(b'"jev_tokens":17', actual)
 
+    def test_t59_timing_and_history_are_stable_without_changing_numeric_lexemes(self):
+        from parity.locks import case_lock
+
+        expected = None
+        for duration in (0, 1, 3, 25, 999):
+            with self.subTest(duration=duration):
+                items = evidence(jev=True)
+                result = items[1]['data']['outcome']['data']
+                result.update(jev_ms=duration, jev_tokens=9007199254740994,
+                              probabilities={'a': 0, 'b': 1e-7, 'c': 0.000001, 'd': 1e-8})
+                normal, tools = observer(items, 'T59.maps-numbers')
+                entry = {'kind': 'tool', 'tool': {'call_id': 'call_tool', 'name': 'git_do',
+                                                'outcome': items[1]['data']['outcome']}}
+                history = {'type': 'model.requested', 'run_id': 'a' * 16,
+                           'data': {'history': [entry], 'native': {'jev_ms': 321},
+                                    'text': 'literal jev_ms: 321'}}
+                lines = []
+                for event in (items[1], history):
+                    raw = (go_json(event).replace(b'"a":0', b'"a":-0')
+                           .replace(b'1e-07', b'1e-7').replace(b'1e-06', b'0.000001')
+                           .replace(b'1e-08', b'1e-8'))
+                    actual = tools.trace(raw, raw, 'trace-1.jsonl')
+                    self.assertEqual(actual, raw.replace(b'"jev_ms":' + str(duration).encode() + b',',
+                                                         b'"jev_ms":0,'))
+                    self.assertIn(b'"jev_tokens":9007199254740994', actual)
+                    self.assertIn(b'"a":-0', actual)
+                    self.assertIn(b'"b":1e-7', actual)
+                    self.assertIn(b'"c":0.000001', actual)
+                    self.assertIn(b'"d":1e-8', actual)
+                    lines.append(actual + b'\n')
+                self.assertEqual([row['kind'] for row in normal.ledger], ['git-do-jev-ms'] * 2)
+                lock = case_lock({'trace-1.jsonl': b''.join(lines)}, {'trace-1.jsonl': 'N'}, normal.ledger)
+                if expected is None:
+                    expected = lock
+                self.assertEqual(lock, expected)
+                entry['tool']['outcome'] = copy.deepcopy(entry['tool']['outcome'])
+                entry['tool']['outcome']['data']['jev_ms'] = duration + 1
+                forged = go_json(history)
+                with self.assertRaisesRegex(AssertionError, 'echo differs'):
+                    tools.trace(forged, forged, 'trace-1.jsonl')
+
     def test_jev_forged_or_missing_witness_is_rejected(self):
         def packet(items, **values):
             value = json.loads(items[2][0]['body'])
@@ -83,15 +124,17 @@ class ToolsTest(unittest.TestCase):
             lambda i: i[3][0].update(ended=1792497600),
             lambda i: i[3].append(copy.deepcopy(i[3][0])),
         ]
-        for index, mutate in enumerate(mutations):
-            with self.subTest(index=index):
-                items = evidence(jev=True)
-                mutate(items)
-                with self.assertRaises(AssertionError):
-                    observer(items)
+        for case in ('T48.commit_push.normal', 'T59.maps-numbers'):
+            for index, mutate in enumerate(mutations):
+                with self.subTest(case=case, index=index):
+                    items = evidence(jev=True)
+                    mutate(items)
+                    with self.assertRaises(AssertionError):
+                        observer(items, case)
 
     def test_unregistered_case_does_not_add_a_ledger_entry(self):
-        for case in ['W44.timeout-ack', 'W53.native.jev', 'T99.unknown', 'T48', '']:
+        for case in ['W44.timeout-ack', 'W53.native.jev', 'T99.unknown', 'T48', '',
+                     'T59', 'T59.other', 'T59.maps-numbers-extra']:
             with self.subTest(case=case):
                 items = evidence(jev=True, remote=True)
                 items[2].clear()

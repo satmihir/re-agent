@@ -3,6 +3,7 @@ import datetime as dt
 import json
 import re
 
+from parity.invocation_time import elapsed
 from parity.observe import child, go_json, go_string, lex, replace_spans, string_spans
 from parity.observe_tools_exec import Exec
 from parity.observe_tools_arguments import Arguments
@@ -34,7 +35,7 @@ class Tools:
         self.used_captures = set()
         self.remote = None
         self.enabled = bool(re.fullmatch(r'T(?:3[89]|4[0-9]|5[0-4])\..+', self.case_id)
-                            or self.case_id == 'W53.propagation.git-do')
+                            or self.case_id in ('W53.propagation.git-do', 'T59.maps-numbers'))
         if not self.enabled:
             return
         for finish in self.events:
@@ -72,7 +73,9 @@ class Tools:
 
     def jev(self, start, result, begin, end, invocation):
         duration, count = result['jev_ms'], result.get('jev_calls')
-        limit = min((end-begin)*1000 + 1, (invocation['ended']-invocation['started'])*1000)
+        limit = elapsed(invocation)*1000
+        if 'monotonic_started' not in invocation:
+            limit = min((end-begin)*1000 + 1, limit)
         if (result.get('chosen_by') != 'jev' or type(duration) is not int or not 0 <= duration <= limit
                 or type(count) is not int or not 1 <= count <= 2):
             raise AssertionError('git_do Jev timing escaped owned call bounds')

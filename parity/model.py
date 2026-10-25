@@ -15,6 +15,8 @@ class Case:
     slow: bool = False
     pending: str | None = None
     platforms: tuple[str, ...] = ("darwin", "linux")
+    # Initial schedule hint only; shared fixtures detect and promote actual workloads.
+    exclusive: bool = False
 
     @property
     def area(self):

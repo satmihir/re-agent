@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 import re
 
+from parity.invocation_time import elapsed
 from parity.observe import child, check_digest, go_json, go_string, lex, replace_spans, sha256
 
 
@@ -608,7 +609,8 @@ class Derived:
             if match['status'] != status or (match['stopped'] or '') != stopped:
                 continue
             duration = sum(step['duration_ms'] for step in steps)
-            if not 0 <= duration < min(60000, (end-begin)*1000+1):
+            bound = elapsed(invocation)*1000 if 'monotonic_started' in invocation else (end-begin)*1000+1
+            if not 0 <= duration < min(60000, bound):
                 continue
             candidates.append((identity, duration))
         if len(candidates) != 1:
@@ -660,7 +662,7 @@ class Derived:
             value = match['elapsed']
             seconds = (float(value[:-1]) if 'm' not in value else
                        int(value.split('m')[0])*60+int(value.split('m')[1][:-1]))
-            if not 0 <= seconds <= invocation['ended']-invocation['started']+2:
+            if not 0 <= seconds <= elapsed(invocation)+2:
                 raise AssertionError('footer elapsed outside invocation bounds')
             changes.append((match.start('elapsed'), match.end('elapsed'), '0.0s', 'footer-elapsed'))
         retry = re.compile(r'(?m)^(?:  · )?model attempt (?P<attempt>\d+) failed \((?P<reason>[^\n]+)\); retrying in (?P<delay>\d+(?:\.\d+)?(?:ms|s|m\d+(?:\.\d+)?s))$')

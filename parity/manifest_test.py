@@ -27,7 +27,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(manifest['pending'], {case.id: case.pending for case in cases if case.pending})
         self.assertTrue(all(callable(case.run) for case in cases if not case.pending))
         self.assertEqual(set(counts['by_family']), {f'W{i:02d}' for i in range(1, 55)} |
-                         {f'T{i:02d}' for i in range(1, 61)})
+                         {f'T{i:02d}' for i in range(1, 61)} | {f'C{i:02d}' for i in range(1, 45)})
         self.assertEqual(len(cases), len({case.id for case in cases}))
         self.assertEqual(len(cases), len({case.id.casefold() for case in cases}),
                          'case directories must not collide on case-insensitive filesystems')
@@ -36,7 +36,7 @@ class ManifestTests(unittest.TestCase):
         manifest = json.loads(Path(__file__).with_name('manifest.json').read_text())
         inventory = manifest['leaf_inventory']
         self.assertEqual(inventory['path'], 'inventory.json')
-        fields = ['id', 'description', 'comparison', 'slow', 'pending', 'platforms']
+        fields = ['id', 'description', 'comparison', 'slow', 'pending', 'platforms', 'exclusive']
         self.assertEqual(inventory['metadata_fields'], fields)
         metadata = [{field: list(case.platforms) if field == 'platforms' else getattr(case, field)
                      for field in fields} for case in sorted(collect(), key=lambda case: case.id)]
