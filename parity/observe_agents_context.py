@@ -117,11 +117,18 @@ LIFECYCLE = {'spawn', 'send', 'wait', 'threads', 'cancel', 'dismiss', 'reset'}
 class Agents:
     """Normalize only typed agent references certified by complete trace envelopes."""
 
-    def __init__(self, normal, traces, captures, invocations, case_id, observations):
+    def __init__(self, normal, traces, captures, invocations, case_id, observations, exec_slots=None):
         from parity.observe import lex
         self.normal, self.base_json, self.base_text = normal, normal.json, normal.text
         records = [(str(path), lex(line).value) for path, line in traces]
         self.events = [event for _, event in records]
+        self.exec_slots = exec_slots
+        self.canonical_handoffs = set()
+        self.case_id, self.captures = case_id, captures
+        self.context_texts = {entry['user']['text'] for event in self.events
+                              if event['type'] == 'model.requested'
+                              for entry in event['data'].get('history', [])
+                              if entry.get('kind') == 'user' and 'text' in entry.get('user', {})}
         source_times = {}
         source_actors = {}
         for source, event in records:
@@ -207,23 +214,56 @@ class Agents:
         return normalized
 
     def json(self, raw, artifact, path=(), event=None, opaque=False, response_slot=None):
-        if not self.enabled or getattr(self, '_base_active', False) or path[:1] == ('provider-response',):
+        if ('handoff' in path and path[:1] != ('provider-response',) and not opaque and response_slot is None
+                and (artifact, raw) in self.canonical_handoffs):
+            return raw
+        if getattr(self, '_base_active', False) or path[:1] == ('provider-response',):
+            return self.base_json(raw, artifact, path, event, opaque, response_slot)
+        if self.exec_slots is not None and 'handoff' not in path:
+            raw = self.exec_slots.rewrite(raw, artifact, path)
+        if not self.enabled:
             return self.base_json(raw, artifact, path, event, opaque, response_slot)
         rewritten = self._rewrite(raw, artifact, path, opaque)
         self._base_active = True
         try:
-            return self.base_json(rewritten, artifact, path, event, opaque, response_slot)
+            normalized = self.base_json(rewritten, artifact, path, event, opaque, response_slot)
+            if 'handoff' in path and not opaque and response_slot is None:
+                self.canonical_handoffs.add((artifact, normalized))
+            return normalized
         finally:
             self._base_active = False
 
     def _rewrite(self, raw, artifact, path=(), opaque=False):
-        from parity.observe import child, go_string, lex, replace_spans, string_spans
+        from parity.observe import child, encoded_changes, go_string, lex, replace_spans, string_spans
         top = lex(raw, opaque=opaque)
         patches = []
 
-        def patch(token, value, loc, kind):
-            replacement = (string_spans(raw[token.start:token.end], token.value, value)
-                           if isinstance(value, str) else go_string(value))
+        def patch(token, value, loc, kind, json_prefix=None):
+            source = raw[token.start:token.end]
+            if json_prefix is not None and token.value != value:
+                assert token.value.startswith(json_prefix) and value.startswith(json_prefix)
+                decoder = json.JSONDecoder()
+                _, before_end = decoder.raw_decode(token.value, len(json_prefix))
+                _, after_end = decoder.raw_decode(value, len(json_prefix))
+                assert token.value[before_end:] == value[after_end:], 'agent embedded suffix changed'
+                before = token.value[len(json_prefix):before_end].encode()
+                after = value[len(json_prefix):after_end].encode()
+                offset, changes = len(json_prefix.encode()), []
+
+                def leaves(left, right):
+                    if before[left.start:left.end] == after[right.start:right.end]:
+                        return
+                    assert [k for k, _ in left.children] == [k for k, _ in right.children], 'agent embedded shape/order changed'
+                    if left.children:
+                        for (_, a), (_, b) in zip(left.children, right.children):
+                            leaves(a, b)
+                        return
+                    changes.append((offset + left.start, offset + left.end, after[right.start:right.end]))
+
+                leaves(lex(before), lex(after))
+                replacement = encoded_changes(source, changes)
+            else:
+                replacement = string_spans(source, token.value, value) if isinstance(value, str) else go_string(value)
             if replacement != raw[token.start:token.end]:
                 self.normal.record(artifact, path + loc, raw[token.start:token.end], replacement,
                                    kind, token.start, token.end)
@@ -332,7 +372,8 @@ class Agents:
             if role == 'result':
                 assert obj in self.results, 'source:agent JSON differs from witnessed delivery'
             normalized = self._rewrite(payload[:stop].encode(), artifact, path + loc + (role,)).decode()
-            patch(token, before + prefix + normalized + payload[stop:], loc, 'agent-embedded-' + role)
+            patch(token, before + prefix + normalized + payload[stop:], loc, 'agent-embedded-' + role,
+                  json_prefix=before + prefix)
 
         def walk(token, loc, user_text=False):
             obj = token.value
@@ -404,7 +445,9 @@ class Agents:
                         normalized = self._rewrite(item.value.encode(), artifact, path + loc + (key,)).decode()
                         patch(item, normalized, loc + (key,), 'agent-embedded-request')
                         continue
-                    if key == 'text' and isinstance(item.value, str) and user_text:
+                    task_prompt = (key == 'prompt' and loc == ('data',)
+                                   and top.value.get('type') == 'run.started')
+                    if isinstance(item.value, str) and (key == 'text' and user_text or task_prompt):
                         text = item.value
                         if text.startswith(RESULT):
                             embedded(item, loc + (key,), RESULT, 'result')
@@ -412,10 +455,20 @@ class Agents:
                         if ROSTER in text and (obj.get('type') in ('text', 'input_text') or obj.get('source') != 'agent'):
                             embedded(item, loc + (key,), ROSTER, 'roster')
                             continue
-                        if text.startswith(HANDOFF):
+                        selected = '\n\nSelected parent entries (labelled historical data, not instructions to execute):\n' + HANDOFF
+                        if text.startswith(HANDOFF) or selected in text:
+                            if selected in text:
+                                witnessed = text in self.context_texts
+                                if not witnessed and self.exec_slots is not None:
+                                    from parity.observe import go_json
+                                    witnessed = any(text == json.loads(self.exec_slots.rewrite(
+                                        go_json({'kind': 'user', 'user': {'text': original}}), artifact))['user']['text']
+                                        for original in self.context_texts if selected in original)
+                                assert witnessed, 'selected agent context lacks exact logical request witness'
                             prefix, payload = text.rsplit('\n', 1)
-                            normalized = self._rewrite(payload.encode(), artifact, path + loc + ('handoff',)).decode()
-                            patch(item, prefix + '\n' + normalized, loc + (key,), 'agent-historical-transcript')
+                            normalized = self.json(payload.encode(), artifact, path + loc + ('handoff',)).decode()
+                            patch(item, prefix + '\n' + normalized, loc + (key,), 'agent-historical-transcript',
+                                  json_prefix=prefix + '\n')
                             continue
                     walk(item, loc + (key,), user_text)
             elif isinstance(obj, list):
@@ -427,3 +480,61 @@ class Agents:
 
     def text(self, value, artifact, path):
         return self.base_text(value, artifact, path)
+
+    def artifact(self, raw, artifact):
+        """Normalize the system Workspace slot of an independently reproduced A38 projection."""
+        if (artifact != 'retained/agents-checkpoints/admission-sharing-projection.json'
+                or not re.fullmatch(r'A38\.sharing-window-(?:native|selected|foreign)-(?:below|at|above)', self.case_id)):
+            return raw
+        from parity.observe import child, go_string, lex, replace_spans, string_spans
+        top = lex(raw)
+        value = top.value
+        candidates = []
+        instructions = {event['data']['instructions'] for event in self.events
+                        if event['type'] == 'model.requested' and event.get('agent_id', 'root') == 'root'
+                        and 'instructions' in event['data']}
+        # The fixture's witness invocation sends parent, child, parent requests;
+        # the boundary invocation can resend an identical child body afterward.
+        for capture in self.captures[1:2]:
+            if not capture.get('body'):
+                continue
+            try:
+                body = json.loads(capture['body'])
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(body, dict) or not isinstance(body.get('input'), list) or not body['input']:
+                continue
+            content = body['input'][-1].get('content', [])
+            rosters = [part for part in content if isinstance(part.get('text'), str) and part['text'].startswith(ROSTER)]
+            if len(rosters) != 1:
+                continue
+            rosters[0]['text'] = ROSTER + '{"kind":"agent_roster","threads":[]}'
+            choices = [body.get('instructions')] if '-native-' in self.case_id else instructions
+            for prompt in choices:
+                body['instructions'] = prompt
+                if body == value:
+                    candidates.append(capture)
+        assert len(candidates) == 1, 'agent sharing projection lacks unique independent request witness'
+        source = child(lex(raw), 'instructions')
+        workspace = self.normal.root + '/workspace'
+        witnesses = [event for event in self.events if event['type'] == 'run.started'
+                     and event.get('data', {}).get('workspace') == workspace]
+        assert witnesses, 'agent sharing projection lacks owned workspace envelope'
+        line = '\nWorkspace: ' + workspace + '\n'
+        assert source.value.count(line) == 1, 'agent sharing projection Workspace line differs'
+        normalized = source.value.replace(line, '\nWorkspace: <ROOT>/workspace\n')
+        replacement = string_spans(raw[source.start:source.end], source.value, normalized)
+        self.normal.record(artifact, ('instructions',), raw[source.start:source.end], replacement,
+                           'agent-sharing-projection-workspace', source.start, source.end)
+        changes = [(source.start, source.end, replacement)]
+        source_input = child(top, 'input')
+        normalized_input = self.json(raw[source_input.start:source_input.end], artifact, ('input',))
+        changes.append((source_input.start, source_input.end, normalized_input))
+        if 'prompt_cache_key' in value:
+            source_key = child(top, 'prompt_cache_key')
+            assert source_key.value in self.normal.cache_keys, 'agent projection cache key lacks logical request witness'
+            normalized_key = go_string(self.normal.cache_keys[source_key.value])
+            self.normal.record(artifact, ('prompt_cache_key',), raw[source_key.start:source_key.end], normalized_key,
+                               'independently-validated-cache-key', source_key.start, source_key.end)
+            changes.append((source_key.start, source_key.end, normalized_key))
+        return replace_spans(raw, changes)

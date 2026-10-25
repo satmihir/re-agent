@@ -44,7 +44,10 @@ SUBSTITUTION_KINDS = (
     "checkpoint-witnessed-session", "checkpoint-owned-workspace", "checkpoint-witnessed-trace",
     "checkpoint-runtime-workspace", "checkpoint-handoff-transcript", "checkpoint-gc-owned-path",
     "checkpoint-shell-duration-ms", "checkpoint-outcome-workspace", "checkpoint-derived-state-sha256",
-    "checkpoint-linkage-inverse",
+    "checkpoint-linkage-inverse", "fixture-owned-script-path", "fixture-owned-executable-path",
+    "checkpoint-agent-delivery",
+    "terminal-agent-recap-workspace", "exec-embedded-owned-outcome",
+    "agent-sharing-projection-workspace",
 )
 
 COMPARISON_POLICY = {

@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import re
 import select
 import sys
 import time
@@ -109,10 +110,43 @@ class TraceBarrier:
 
 def local_read_denied(outcome):
     """Require a local missing-read failure, not another incidental write error."""
-    assert not outcome['ok'] and outcome['code'] == 'invalid_arguments' and 'read the file before changing it' in outcome['message'], ('sibling missing_read authorization', outcome)
+    assert outcome['ok'] is False and outcome['code'] == 'invalid_arguments' and outcome['message'] == 'read the file before changing it (read_file records what you have seen)', ('sibling missing_read authorization', outcome)
+    assert outcome['effect'] == 'none' and outcome['data'] is None, ('sibling missing_read denial published effects', outcome)
 
 
 def finish_continuation(stdout):
     """Reject the premature answer even when a broken parent silently joins work."""
     assert b'premature root answer' not in stdout, 'premature root completion omitted finish-rule continuation'
     assert b'root final after data' in stdout, 'missing finish-rule continuation after descendant release'
+
+
+def recap_slots(ctx, invocation, prefix, text, traces):
+    """Bind C24's recap workspace cells to root, child and applied-tool evidence."""
+    if Path(ctx.root).name != 'C24.agents-write-recap':
+        return []
+    args = invocation.get('args', [])
+    workspace = str(ctx.root / 'workspace')
+    assert '--recap' in args and '--workspace' in args and args[args.index('--workspace') + 1] == workspace, 'agent recap lacks invocation owner'
+    events = [json.loads(line) for path, line in traces
+              if Path(path).relative_to(ctx.artifacts).parts[0] == prefix + '.traces']
+    roots = [event for event in events if event['type'] == 'run.finished'
+             and not event.get('agent_id') and event['data'].get('effects')]
+    assert len(roots) == 1 and len(roots[0]['data']['effects']) == 1, 'agent recap lacks unique root effect'
+    effect = roots[0]['data']['effects'][0]
+    assert (effect['agent_id'], effect['path'], effect['operation'], effect['effect'], effect['workspace'], effect['tool']) == ('t1', 'child-output.txt', 'create', 'applied', workspace, 'write_file'), 'agent recap root effect differs'
+    children = [event for event in events if event['type'] == 'run.finished'
+                and event.get('agent_id') == effect['agent_id'] and event.get('run_id') == effect['run_id']]
+    assert len(children) == 1 and children[0].get('parent_id') == 'root' and children[0]['data'].get('effects') == [effect], 'agent recap lacks child effect owner'
+    tools = [event for event in events if event['type'] == 'tool.finished'
+             and event.get('agent_id') == effect['agent_id'] and event.get('run_id') == effect['run_id']
+             and event.get('step') == effect['step'] and event['data']['call_id'] == effect['call_id']]
+    assert len(tools) == 1 and tools[0]['data']['name'] == effect['tool'], 'agent recap lacks applied tool owner'
+    outcome = tools[0]['data']['outcome']
+    assert outcome['ok'] is True and outcome['effect'] == 'applied' and outcome['workspace'] == workspace, 'agent recap tool effect differs'
+    assert (outcome['data']['path'], outcome['data']['operation'], outcome['data']['size_bytes'], outcome['data']['after_sha256']) == ('child-output.txt', 'create', 19, 'e874238f2fb80194d6515f461dff569277d5381e04784d8fcd54b78f35b98a9e'), 'agent recap tool publication differs'
+    matches = list(re.finditer(r'(?:^|\x1b\[[1-9][0-9]*;[1-9][0-9]*H)(?P<line>  agent [^\n\x1b]+)(?=$|\x1b)', text))
+    expected = '  agent t1: create child-output.txt (applied) [' + workspace + ']'
+    assert len(matches) == 1 and matches[0]['line'] == expected, 'agent recap display differs from owned effect'
+    root = str(ctx.root)
+    start = matches[0].start('line') + expected.index('[') + 1
+    return [(start, root, '<ROOT>', 'terminal-agent-recap-workspace')]

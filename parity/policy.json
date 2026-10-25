@@ -500,10 +500,46 @@
       "replacement": "Only registered typed references within those records and their containing-string escapes change. Preamble, ordinary user/assistant prose, record ordering and all unrelated lexemes remain exact; retain nested and enclosing span linkage"
     },
     {
+      "kind": "exec-embedded-owned-outcome",
+      "owner": "Complete exec ToolOutcome echoes in later requests, router state and historical handoff records",
+      "validation": "Match the complete original outcome to one independently retained tool.finished owner at its accepted call ID. Only its already-certified top-level workspace/executable/timeout slots are reused. Missing, ambiguous, altered or foreign outcomes do not authorize substitution; assistant/native prose remains opaque",
+      "replacement": "Only the same top-level typed leaves change inside the exact complete echo and its containing-string escapes. Preserve outcomes, payload values, order and all unrelated bytes; retain exact nested spans and original witness linkage"
+    },
+    {
+      "kind": "agent-sharing-projection-workspace",
+      "owner": "A38 native/selected/foreign sharing boundary retained projection, only system Runtime Workspace line",
+      "validation": "Reconstruct the entire authored projection from its unique fixture witness child HTTP exchange, independently traced instructions and original call/context evidence. Require exact full projection equality and the independently allocated case workspace. Later repeated boundary exchanges cannot replace or ambiguate the designated witness",
+      "replacement": "Only the system Runtime Workspace allocation changes; preserve all other projection bytes, model data, message order and numeric measurements. Raw artifact accounting changes from literal B to witnessed typed N for exactly this artifact"
+    },
+    {
+      "kind": "fixture-owned-executable-path",
+      "owner": "Only C20 persistence-barrier helper's completed exec command resolved_executable",
+      "validation": "Context.isolated_env unconditionally allocates HOME/.parity-bin/python3 and prepends its directory to PATH. These fixed C20 fixtures do not override that configuration. Reconstruct it from the independently retained case allocation, validated seeded checkpoint, exact accepted python3 helper argv/cwd and full matching completed command. Foreign executable paths or changed script/argv cannot authorize normalization; do not infer this allocation from returned text",
+      "replacement": "Only the exact allocated executable leaf uses the same ROOT token as its owning case; all other command fields and script bytes remain exact"
+    },
+    {
+      "kind": "fixture-owned-script-path",
+      "owner": "C20 persistence-barrier helper arguments and exact command echoes, including fixture model response bodies",
+      "validation": "Validate the authored canonical checkpoint and fixed session ID; derive its path from Context's independently allocated case-root HOME (retained in replay metadata). Require one matching accepted exec dispatch with the exact helper script/argv/cwd and matching finished command echoes. Foreign scripts, roots, calls and changed code cannot become witnesses",
+      "replacement": "Only the allocated case prefix inside that exact script Path literal changes, preserving Python code, JSON/SSE framing, arguments and other payload bytes. Retain leaf and containing-string spans and the independent dispatch linkage"
+    },
+    {
+      "kind": "checkpoint-agent-delivery",
+      "owner": "A34 and W10.source checkpoint history user turns whose source is agent; W10.source's exact agent-cache-anchor-1 history index zero fixture also omits source",
+      "validation": "Validate canonical raw checksum first. Require the entire decoded delivery to equal the independently witnessed agent.result payload from retained traces. Agent/run identities and trace directory ownership come only from the same Agents evidence used for top-level results; altered payloads, foreign scopes and unknown sources cannot authorize a substitution",
+      "replacement": "Only certified typed references in the matching complete delivery change, preserving surrounding text, payload values and ordering; retain nested substitutions, state checksum and exact checkpoint inverse proof"
+    },
+    {
+      "kind": "terminal-agent-recap-workspace",
+      "owner": "C24's exact terminal applied child-write recap workspace span",
+      "validation": "Require the recap invocation and allocated workspace; one root effect must exactly match the owning child's Run effect and successful write_file outcome, including call ID, step, path, operation, content size and digest. The complete recap line must match that evidence",
+      "replacement": "Only the allocated case-root prefix in the owned recap line becomes a padded canonical token. All remaining cells, styles, order, cursor positions and raw replay evidence remain exact"
+    },
+    {
       "kind": "checkpoint-roster-witnessed-trace",
       "owner": "trace_path on decoded checkpoint roster/thread objects carrying id, parent_id, state and task, including typed handoff records",
       "validation": "Validate the raw checkpoint envelope canonical bytes and state SHA before decoding eligible base64 fields. The original path must occur in independently retained root/child trace-source allocations or a matching run.finished reference; unbound checkpoint text cannot allocate a path or identity",
-      "replacement": "Only owned root and preregistered Session/Run path components become canonical tokens. Re-encode only the changed typed JSON/base64 container, preserving native Items and unrelated bytes; checkpoint-linkage-inverse proves complete raw reconstruction"
+      "replacement": "Only owned root, preregistered Session/Run path components and agent trace-directory allocations become canonical tokens. Agent directories additionally use the same actor/source-file correspondence as top-level agent paths, never checkpoint text. Re-encode only the changed typed JSON/base64 container, preserving native Items and unrelated bytes; checkpoint-linkage-inverse proves complete raw reconstruction"
     },
     {
       "kind": "checkpoint-legacy-exact-bytes",
@@ -533,7 +569,7 @@
       "kind": "checkpoint-witnessed-trace",
       "owner": "Checkpoint state.last_trace and structured trace_path leaves",
       "validation": "First validate original canonical envelope/state and checksum. Original trace path must be an independently retained trace source allocation or observed run.finished path, with replay source allocation correspondence checked when supplied; no path is learned from the checkpoint itself",
-      "replacement": "Only the witnessed root and preregistered Session/Run path components become canonical tokens. Unknown paths remain literal, and checksum substitution plus checkpoint-linkage-inverse retain full raw reconstruction"
+      "replacement": "Only the witnessed root, preregistered Session/Run components and independently actor-bound agent trace directory become canonical tokens. Agent paths use the same retained source-file correspondence as top-level slots. Unknown paths remain literal, and checksum substitution plus checkpoint-linkage-inverse retain full raw reconstruction"
     },
     {
       "kind": "checkpoint-runtime-workspace",

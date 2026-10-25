@@ -112,3 +112,45 @@ or observer/lock bytes changed. The suite and both cache identities were reseale
 without executing reference cases; `phase2-sample-reseal.json` records this.
 The subsequent full executable comparison failed 34 leaves; publication success
 is not a green parity gate. See `agents-area4.md` for all continuation failures.
+
+## Comparison-repair continuation
+
+The later #188 repair is recorded in `agents-comparison-repair.md`. It replayed
+all 4,111 retained cases to a new `phase3/replayed-lane/`, re-freezing only changed
+normalization/ledger output and asserting every frozen raw file equals its source.
+Only A10/A11 were freshly captured; ordered A07 source bytes came from the already
+retained `context-final-1/` probe. Original sources and failed reports remain.
+
+The one-time publication authorization used exact independently produced pairs:
+
+```python
+old = locks.unpack(json.loads((suite / 'expected/linux.json').read_bytes()))
+receipts = [json.loads(path.read_bytes()) for path in receipt_directory.glob('*.json')]
+approved = {row['id']: row['lock'] for row in receipts}
+assert set(old) == set(approved)
+assert {key for key in old if old[key] != approved[key]} == set(summary['changed'])
+
+def authorized_transition(previous, updated):
+    assert previous == old
+    assert updated == approved
+    assert {key for key in previous if previous[key] != updated[key]} == set(summary['changed'])
+```
+
+Within the publication process only, that guard replaced the ordinary expansion
+protection callbacks. Every unaffected lock remained identical, every authorized
+replacement had already passed raw replay, and `golden.update_oracle` performed
+its normal complete verification before atomic publication. Persistent lock and
+candidate comparison protections were not altered. The preparation step also
+regenerated the exact audited T37.same-root sample before invoking the unchanged
+sample guard; the first attempt had stopped there without publishing anything.
+Darwin lock/index/bundle hashes were independently checked unchanged.
+
+The old canonical cache was renamed to `phase3/canonical-before/` and retained;
+the new lane was copied, not moved, to the guarded canonical Linux path. The later
+A38 response barrier and C20 escaping regression changed source only: all twelve
+affected retained cases replayed against unchanged locks before resealing both
+cache identities. No reference executed during either replay or reseal.
+
+The ordered proof then passed: targeted34, one full comparison, mutations31/34,
+three requested repeat rounds. `phase3/full-report.json` is an unchanged copy of
+the actual runner report, not a reconstruction from separate targeted passes.

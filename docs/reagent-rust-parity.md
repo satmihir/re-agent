@@ -534,9 +534,11 @@ python3 -m unittest parity.manifest_test
 
 `--list` prints every stable leaf ID and its pending reason without a binary or
 network request. Area-4 retained raw replay published coherent manifest/inventory,
-Linux locks and samples; Darwin's existing bytes remain unchanged. The full Linux
-comparison nevertheless failed 34 leaves and mutations caught 6/8, not a green gate.
-See `parity/agents-area4.md` for exact proof results and retained raw evidence.
+Linux locks and samples; Darwin's existing bytes remain unchanged. The comparison
+repair passed 34/34 targeted leaves, one full Linux run (4,111 passed, 29 pending),
+mutations 31/34 and three requested repeat rounds at 12 jobs. See
+`parity/agents-comparison-repair.md` for exact proof, negative tests and retained
+raw evidence; this is not final whole-suite coverage approval.
 The live declarations' reproducible metadata SHA-256 is recorded in the manifest.
 The digest covers the ID-sorted array of `id`, `description`, `comparison`, `slow`,
 `pending`, `platforms` (in their declared order) and `exclusive`, serialized as UTF-8

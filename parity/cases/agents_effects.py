@@ -213,6 +213,10 @@ def digest_authority(ctx, mode):
     if mode == 'competing':
         unread = outcomes(ctx, 't2')['unread-b']
         local_read_denied(unread)
+        for agent, call in (('t1', 'read-a'), ('t2', 'read-b')):
+            read = outcomes(ctx, agent)[call]
+            assert read['ok'] and read['data']['sha256'] == hashlib.sha256(b'original').hexdigest(), ('sibling read prerequisite', agent, read)
+            assert read['data']['lines'] == [{'number': 1, 'text': 'original'}], ('sibling unread edit changed file', read)
         assert outcomes(ctx, 't1')['edit-a']['ok']
         assert outcomes(ctx, 't2')['edit-b']['code'] == 'stale_file', outcomes(ctx, 't2')
         assert (ctx.workspace / 'f').read_text() == 'winner'

@@ -336,6 +336,38 @@ class MutationTests(unittest.TestCase):
                          {"before_sha256": mutate.sha256(b"before"), "after_sha256": mutate.sha256(b"after")})
         self.assertEqual(result["patch_sha256"], mutate.sha256((self.root / "patch.json").read_bytes()[:-1]))
 
+    def test_mutation31_shares_observations_through_both_constructor_layers(self):
+        mutation = next(item for item in self.manifest['mutations'] if item['id'] == 31)
+        self.assertEqual(mutation['cases'], ['A20.competing'])
+        self.assertEqual([(item['path'], item['new']) for item in mutation['patches']], [
+            ('internal/reagent/agents.go', 'ws = s.workspace.active'),
+            ('internal/reagent/workspace_selection.go', 'active := ws'),
+        ])
+        _, archive = mutate.archive_reference(mutate.SUITE, self.root, 30)
+        # Either isolation layer alone defeats the old observation-sharing mutation.
+        for indices in ((), (0,), (1,), (0, 1)):
+            with self.subTest(patches=indices), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                mutate.extract_reference(archive, root)
+                if indices:
+                    selected = dict(mutation, patches=[mutation['patches'][index] for index in indices])
+                    mutate.apply_mutation(root, selected, root)
+                agents = (root / 'internal/reagent/agents.go').read_text()
+                session = (root / 'internal/reagent/session.go').read_text()
+                selection = (root / 'internal/reagent/workspace_selection.go').read_text()
+                self.assertIn('cfg.Registry, cfg.Workspace, cfg.WorkspacePath = registry, ws, ws.Root()', agents)
+                self.assertIn('child := NewSession(cfg, model, trace, io.Discard)', agents)
+                self.assertIn('s.workspace = newWorkspaceSelection(cfg.Workspace, cfg.approvedWorkspaces)', session)
+                self.assertIn('s.cfg.Registry = cfg.Registry.bindWorkspace(s, s.workspace.active)', session)
+                self.assertIn('launch: ws.Root(), active: active,', selection)
+                self.assertIn('handles: map[string]*Workspace{active.root: active}', selection)
+                shared_at_spawn = '\tws = s.workspace.active\n' in agents
+                shared_at_selection = '\tactive := ws\n' in selection
+                self.assertEqual((shared_at_spawn, shared_at_selection), (0 in indices, 1 in indices))
+                self.assertEqual(shared_at_spawn and shared_at_selection, indices == (0, 1))
+                if not shared_at_selection:
+                    self.assertIn('digests: make(map[string]map[string]bool), seen: make(map[string]string)', selection)
+
     def test_patch_refuses_traversal_symlink_and_duplicate_match(self):
         sentinel = self.root / "sentinel"
         sentinel.write_bytes(b"before before")
@@ -452,7 +484,7 @@ class MutationTests(unittest.TestCase):
             7: 'assert result.returncode == 2 and expected.encode() in result.stderr, "checksum rejection"',
             8: 'assert "recall" in names, "restored GC: recall schema missing after resume"',
             30: "assert len(child['history']) == len(parent['history'])",
-            31: "assert not unread['ok'], ('sibling missing_read authorization', unread)",
+            31: "assert outcome['ok'] is False and outcome['code'] == 'invalid_arguments' and outcome['message'] == 'read the file before changing it (read_file records what you have seen)', ('sibling missing_read authorization', outcome)",
             32: 'assert delivered == expected, "agent lexical delivery order"',
             33: 'assert continuation, "premature parent completion"',
             34: "assert effects['exec_unknown'] is True, 'bounded delivery preserved exec_unknown'",

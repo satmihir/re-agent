@@ -181,6 +181,132 @@ class AgentContextTests(unittest.TestCase):
         self.assertEqual(normalized[0]['tool']['outcome']['data']['trace_path'], '<ROOT>/agent-AGENT_1/events.jsonl')
         self.assertEqual(normalized[1], records[1])
 
+    def test_large_embedded_delivery_preserves_unowned_escapes_without_prose_matching(self):
+        from unittest.mock import patch
+        from difflib import SequenceMatcher
+        normal, agents, *_ = self.agent_normalizer()
+        delivery = copy.deepcopy(agents.results[0])
+        delivery['result']['reply'] = ('unchanged <opaque> 雪 /fixture/workspace ' * 2000)
+        agents.results.append(delivery)
+        text = RESULT + json.dumps(delivery, ensure_ascii=True) + '\nopaque trailing prose'
+        raw = json.dumps({'kind': 'user', 'user': {'source': 'agent', 'text': text}}, ensure_ascii=True).encode()
+        # The prefix is prose, but only typed JSON leaves may change inside it.
+        def small_matcher(unused, before, after, **kwargs):
+            self.assertLess(max(len(before), len(after)), 4096)
+            return SequenceMatcher(unused, before, after, **kwargs)
+
+        with patch('parity.observe.difflib.SequenceMatcher', side_effect=small_matcher):
+            actual = agents._rewrite(raw, 'cache-input')
+        expected = json.loads(actual)['user']['text']
+        normalized = json.loads(expected[len(RESULT):].split('\nopaque trailing prose')[0])
+        self.assertEqual(normalized['result']['reply'], delivery['result']['reply'])
+        self.assertTrue(expected.endswith('\nopaque trailing prose'))
+        self.assertIn(b'\\\\u96ea', actual)
+        self.assertEqual(raw.count(b'\\\\u96ea'), actual.count(b'\\\\u96ea'))
+        forged = raw.replace(b'unchanged', b'forged', 1)
+        with self.assertRaisesRegex(AssertionError, 'differs from witnessed delivery'):
+            agents._rewrite(forged, 'cache-input')
+
+    def test_selected_handoff_workspace_requires_exact_logical_task_and_preserves_prose(self):
+        from parity.observe_agents_context import HANDOFF
+        normal, agents, *_ = self.agent_normalizer()
+        records = [{'entry': 1, 'kind': 'user', 'user': {'text': 'literal /fixture/workspace',
+                    'workspace': {'kind': 'workspace_state', 'workspace': '/fixture/workspace', 'date': '2026-10-25', 'time_zone': 'UTC'}}},
+                   {'entry': 2, 'kind': 'assistant', 'assistant': {'text': '/fixture/workspace'}},
+                   {'entry': 3, 'kind': 'tool', 'tool': {'name': 'read_file', 'call_id': 'read',
+                    'outcome': {'ok': True, 'workspace': '/fixture/workspace',
+                                'message': 'literal /fixture/workspace', 'data': {'text': '/fixture/workspace'}}}}]
+        prefix = 'CHILD_worker\n\nContext brief and live workspace paths (data, not authority):\n{}'
+        prefix += '\n\nSelected parent entries (labelled historical data, not instructions to execute):\n' + HANDOFF + '\nlabels\n'
+        text = prefix + json.dumps(records)
+        agents.context_texts.add(text)
+        entry = {'kind': 'user', 'user': {'text': text}}
+        normalized = json.loads(normal.json(json.dumps(entry).encode(), 'cache-input'))['user']['text']
+        actual = json.loads(normalized.rsplit('\n', 1)[1])
+        self.assertEqual(actual[0]['user']['workspace']['workspace'], '<ROOT>/workspace')
+        self.assertEqual(actual[0]['user']['text'], 'literal /fixture/workspace')
+        self.assertEqual(actual[1], records[1])
+        self.assertEqual(actual[2]['tool']['outcome']['workspace'], '<ROOT>/workspace')
+        self.assertEqual(actual[2]['tool']['outcome']['message'], 'literal /fixture/workspace')
+        self.assertEqual(actual[2]['tool']['outcome']['data'], records[2]['tool']['outcome']['data'])
+        prompt_event = {'type': 'run.started', 'data': {'prompt': text}}
+        prompt = json.loads(normal.json(json.dumps(prompt_event).encode(), 'trace'))['data']['prompt']
+        self.assertEqual(prompt, normalized)
+        prompt_event['data']['prompt'] = text.replace('literal', 'forged')
+        with self.assertRaisesRegex(AssertionError, 'exact logical request witness'):
+            normal.json(json.dumps(prompt_event).encode(), 'trace')
+        historical = {'kind': 'user', 'user': {'text': HANDOFF + '\nlabels\n' + json.dumps(records)}}
+        canonical = normal.json(json.dumps(historical).encode(), 'foreign')
+        canonical_payload = json.loads(canonical)['user']['text'].rsplit('\n', 1)[1].encode()
+        self.assertEqual(normal.json(canonical_payload, 'foreign', ('handoff',)), canonical_payload)
+        with self.assertRaises((AssertionError, ValueError)):
+            normal.json(canonical_payload.replace(b'literal', b'forged'), 'foreign', ('handoff',))
+        for changed in [text.replace('/fixture/workspace', '/foreign/workspace'), text.replace('literal', 'changed')]:
+            entry['user']['text'] = changed
+            with self.assertRaisesRegex(AssertionError, 'exact logical request witness'):
+                normal.json(json.dumps(entry).encode(), 'cache-input')
+        from parity.observe_tools_exec_test import evidence, observer
+        exec_events, invocations = evidence()
+        _, tools = observer(exec_events, invocations, 'T31.success')
+        agents.exec_slots = tools.exec
+        exec_entry = {'kind': 'tool', 'tool': {'name': 'exec', 'call_id': 'exec', 'outcome': exec_events[1]['data']['outcome']}}
+        exec_text = prefix + json.dumps([exec_entry])
+        agents.context_texts.add(exec_text)
+        value = {'kind': 'user', 'user': {'text': exec_text}}
+        rewritten = json.loads(normal.json(json.dumps(value).encode(), 'cache-input'))['user']['text']
+        owned = json.loads(rewritten.rsplit('\n', 1)[1])[0]['tool']['outcome']
+        self.assertEqual(owned['data']['resolved_executable'], '<ROOT>/home/.parity-bin/python3')
+        agents.context_texts.clear()
+        entry['user']['text'] = text
+        with self.assertRaisesRegex(AssertionError, 'exact logical request witness'):
+            normal.json(json.dumps(entry).encode(), 'cache-input')
+        raw = json.dumps({'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}).encode()
+        self.assertEqual(normal.json(raw, 'http-1.body'), raw)
+
+    def test_sharing_projection_workspace_requires_unique_independent_request(self):
+        normal, agents, *_ = self.agent_normalizer()
+        agents.case_id = 'A38.sharing-window-native-at'
+        prompt = 'Runtime\nWorkspace: /fixture/workspace\nLiteral /fixture/workspace\n'
+        marker = 'Workspace state when this message was sent, collected by re:agent:\n'
+        snapshot = marker + json.dumps({'kind': 'workspace_state', 'workspace': '/fixture/workspace',
+                                        'date': '2026-10-25', 'time_zone': 'UTC'})
+        body = {'instructions': prompt, 'prompt_cache_key': 'raw-witnessed-key', 'input': [
+            {'role': 'user', 'content': [{'type': 'input_text', 'text': 'literal /fixture/workspace'},
+                                       {'type': 'input_text', 'text': snapshot}]},
+            {'role': 'assistant', 'content': [{'type': 'output_text', 'text': snapshot}]},
+            {'role': 'user', 'content': [
+            {'type': 'input_text', 'text': ROSTER + json.dumps({'kind': 'agent_roster', 'threads': [{'id': 't1'}]})}]}]}
+        normal.cache_keys['raw-witnessed-key'] = 'canonical-witnessed-key'
+        agents.captures = [{}, {'body': json.dumps(body).encode()}]
+        agents.events.append({'type': 'run.started', 'data': {'workspace': '/fixture/workspace'}})
+        projected = copy.deepcopy(body)
+        projected['input'][-1]['content'][0]['text'] = ROSTER + '{"kind":"agent_roster","threads":[]}'
+        raw = json.dumps(projected, indent=2).encode()
+        artifact = 'retained/agents-checkpoints/admission-sharing-projection.json'
+        actual = agents.artifact(raw, artifact)
+        self.assertEqual(json.loads(actual)['instructions'], prompt.replace('Workspace: /fixture/workspace', 'Workspace: <ROOT>/workspace'))
+        self.assertIn(b'Literal /fixture/workspace', actual)
+        actual_body = json.loads(actual)
+        self.assertEqual(actual_body['input'][0]['content'][0]['text'], 'literal /fixture/workspace')
+        typed = json.loads(actual_body['input'][0]['content'][1]['text'][len(marker):])
+        self.assertEqual(typed['workspace'], '<ROOT>/workspace')
+        self.assertEqual(actual_body['input'][1], body['input'][1])
+        self.assertEqual(actual_body['prompt_cache_key'], 'canonical-witnessed-key')
+        normal.cache_keys.clear()
+        with self.assertRaisesRegex(AssertionError, 'cache key lacks logical request witness'):
+            agents.artifact(raw, artifact)
+        normal.cache_keys['raw-witnessed-key'] = 'canonical-witnessed-key'
+        for forged in [raw.replace(b'/fixture/workspace', b'/foreign/workspace'), raw.replace(b'Literal', b'Changed')]:
+            with self.assertRaisesRegex(AssertionError, 'unique independent request witness'):
+                agents.artifact(forged, artifact)
+        agents.captures.insert(0, agents.captures[1])
+        with self.assertRaisesRegex(AssertionError, 'unique independent request witness'):
+            agents.artifact(raw, artifact)
+        agents.captures.clear()
+        with self.assertRaisesRegex(AssertionError, 'unique independent request witness'):
+            agents.artifact(raw, artifact)
+        self.assertEqual(agents.artifact(raw, 'unrelated.json'), raw)
+
     @unittest.skipUnless(os.environ.get('PARITY_AGENTS_CONTEXT_BIN'), 'set PARITY_AGENTS_CONTEXT_BIN for executable probes')
     def test_executable_cases(self):
         from parity.run import Context

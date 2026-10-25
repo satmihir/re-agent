@@ -24,9 +24,10 @@ def owns_artifact(name):
 
 
 class Checkpoints:
-    def __init__(self, normal, ctx, traces=()):
+    def __init__(self, normal, ctx, traces=(), agents=None):
         self.normal = normal
         self.case_id = {'C19.corrupt-checksum': 'A37.corrupt-checksum'}.get(Path(ctx.root).name, Path(ctx.root).name)
+        self.agents = agents if agents is not None and agents.enabled and (self.case_id.startswith('A34.') or self.case_id == 'W10.source') else None
         self.roots = {str(ctx.root): '<ROOT>'}
         workspace = str(getattr(ctx, 'workspace', ctx.root))
         if workspace != str(ctx.root):
@@ -86,6 +87,16 @@ class Checkpoints:
                     result = re.sub(r'(?<=/)' + re.escape(identity) + r'(?=/|\.|$)', replacement, result)
         return result
 
+    def _trace(self, value, name, path, who=None):
+        if self.agents is not None:
+            if who is not None:
+                return self.agents.trace_reference(who, value, name, path)
+            owners = [actor for actor, sources in self.agents.paths.items() if value in sources]
+            if owners:
+                assert len(owners) == 1, 'checkpoint trace has ambiguous source owner'
+                return self.agents.trace_reference(owners[0], value, name, path)
+        return self._path(value, trace=True)
+
     def _instructions(self, value):
         if not isinstance(value, str) or '\n# Runtime\n\n' not in value:
             return value
@@ -125,7 +136,8 @@ class Checkpoints:
         def roster(token, loc, parent=None):
             if (loc[-1:] == ('trace_path',) and isinstance(parent, dict)
                     and {'id', 'parent_id', 'state', 'task'} <= set(parent)):
-                after = self._path(token.value, trace=True)
+                after = self._trace(token.value, name, path + loc,
+                                    parent['id'] if token.value in self.trace_paths and self.agents is not None else None)
                 if after != token.value:
                     replacement = encode(after)
                     self.normal.record(name, path + loc, result[token.start:token.end], replacement,
@@ -224,7 +236,7 @@ class Checkpoints:
             if result != data:
                 patch(token, base64.b64encode(result).decode(), path, 'checkpoint-typed-base64')
 
-        def walk(token, path):
+        def walk(token, path, parent=None):
             value = token.value
             if path in (('state', 'id'), ('id',)):
                 if value != FIXED_ID and value in self.normal.ids['session']:
@@ -234,7 +246,18 @@ class Checkpoints:
                 patch(token, self._path(value), path, 'checkpoint-owned-workspace')
                 return
             if path == ('state', 'last_trace') or path[-1:] == ('trace_path',):
-                patch(token, self._path(value, trace=True), path, 'checkpoint-witnessed-trace')
+                who = parent['id'] if isinstance(parent, dict) and {'id', 'parent_id', 'state', 'task'} <= set(parent) else None
+                patch(token, self._trace(value, name, path, who), path, 'checkpoint-witnessed-trace')
+                return
+            if (self.agents is not None and len(path) == 5 and path[:2] == ('state', 'history')
+                    and type(path[2]) is int and path[-2:] == ('user', 'text')
+                    and (parent.get('source') == 'agent' or (self.case_id == 'W10.source'
+                         and name == 'agents-checkpoints/agent-cache-anchor-1.checkpoint.json' and path[2] == 0))):
+                # W10's second anchor intentionally omits source. Preserve its
+                # user Entry shape; both forms still require the exact delivery.
+                wrapper = encode({'kind': 'user', 'user': parent})
+                result = self._json(wrapper, name, path)
+                patch(token, lex(result).value['user']['text'], path, 'checkpoint-agent-delivery')
                 return
             if path == ('state', 'prompt', 'text'):
                 patch(token, self._instructions(value), path, 'checkpoint-runtime-workspace')
@@ -260,7 +283,7 @@ class Checkpoints:
             # Native.Items, user prose, summary text, and provider arguments are
             # intentionally not inferred to be path-bearing.
             for key, item in token.children:
-                walk(item, path + (key,))
+                walk(item, path + (key,), value)
 
         walk(child(top, 'id'), ('id',))
         walk(state_token, ('state',))

@@ -48,6 +48,21 @@ def observed(ctx):
 
 
 class RunnerTest(unittest.TestCase):
+    def test_sharing_projection_requires_typed_policy_and_does_not_cover_other_residuals(self):
+        name = 'agents-checkpoints/admission-sharing-projection.json'
+        target = 'retained/' + name
+        replay = dict(root='/case/A38.sharing-window-native-at', invocations=[], traces=[], requests=0)
+        raw = {name: b'original'}
+        for policy in ('B', 'S', None):
+            with self.subTest(policy=policy), self.assertRaisesRegex(HarnessError, 'typed Workspace certificate'):
+                run.account_raw(raw, {target: b'canonical'}, {target: policy}, replay)
+        result = run.account_raw(raw, {target: b'canonical'}, {target: 'N'}, replay)
+        self.assertEqual(result, {name: 'N'})
+        other = name.replace('sharing', 'foreign')
+        with self.assertRaisesRegex(HarnessError, 'retained artifact collision'):
+            run.account_raw({other: b'original'}, {'retained/' + other: b'canonical'},
+                            {'retained/' + other: 'N'}, replay)
+
     def setUp(self):
         environment = patch.dict(os.environ, {"HOME": str(Path.home()), "PATH": os.defpath}, clear=True)
         environment.start()

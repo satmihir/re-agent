@@ -262,7 +262,10 @@
       "cases": ["A20.competing"],
       "intended_assertion": "A sibling without a local read cannot overwrite a file read by another child",
       "failure_pattern": "sibling|authorization|read_required|unread",
-      "patches": [{"path": "internal/reagent/agents.go", "old": "ws.publishMu = s.workspace.active.publishMu", "new": "ws = s.workspace.active"}]
+      "patches": [
+        {"path": "internal/reagent/agents.go", "old": "ws.publishMu = s.workspace.active.publishMu", "new": "ws = s.workspace.active"},
+        {"path": "internal/reagent/workspace_selection.go", "old": "active := &Workspace{root: ws.root, rootInfo: ws.rootInfo, digests: make(map[string]map[string]bool), seen: make(map[string]string), publishMu: ws.publishMu}", "new": "active := ws"}
+      ]
     },
     {
       "id": 32,

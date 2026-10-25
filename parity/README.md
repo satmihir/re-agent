@@ -7,14 +7,15 @@ claim. The unchanged reference pin is `60fda0d3`; area 4 rebases onto #186/#187.
 
 ## Area 4 — agents and checkpoints
 
-**Linux evidence published, not a passing gate:** retained raw replay published
-locks, coherent inventory and 202 complete Linux samples. C23/C24/C25 each have
-one sample. Only changed A28 received targeted capture; its 31 healthy summaries
-follow intentional pinned behavior beyond eight and thirty.
-The full executable comparison returned **4,077 pass /34 fail /29 pending**;
-mutations caught **6/8** (31 survived, 34 baseline_failed). Both permitted narrow
-fixes are spent. Reports, timings and all evidence are retained; no green gate
-or repeatability claim is made.
+**Linux comparison passed: 4,111 runnable /0 failed /29 pending.** Retained raw
+replay published coherent locks and 202 complete Linux samples; C23/C24/C25 each
+have one sample. A28's 31 healthy summaries follow intentional pinned behavior
+beyond eight and thirty. The comparison repair adds independently witnessed
+nested slots and barriers, not looser comparisons or broad masks. Only A10/A11
+received fresh repair captures; all other evidence was replayed. Targeted 34/34,
+one full run, mutations 31/34 and three requested 17-case repeat rounds passed
+at 12 jobs. See [`agents-comparison-repair.md`](agents-comparison-repair.md) for
+the exact ordered proof, negative tests, reports and preserved prior failures.
 
 The live declarations have **4,140 leaves: 4,111 runnable /29 pending**, including
 321 A leaves (all runnable) and all 31 formerly pending agent/checkpoint

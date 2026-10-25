@@ -13,6 +13,7 @@ from parity.model import Case
 from parity.provider import Response
 from parity.cases.tools_files import failure, proof, put
 from parity.cases.wire_input import _anthropic, _call, _openai, _tool
+from parity.observe_agents_effects import TraceBarrier
 from parity.observe_agents_context import (actor, cache_points, check_delivery,
                                            check_native_prefix, outcomes, requests,
                                            trace_events)
@@ -185,11 +186,12 @@ def projected(ctx, target):
 
 
 def selected(ctx, entries):
+    release = threading.Event()
     put(ctx, 'prior', 'SELECTED_TOOL_CONTENT')
     queue(ctx, 'root', [[call('prior-read', 'read_file', {'path': 'prior'})],
                         [spawn(context={'entries': entries}, name='worker'), wait()], 'selection complete'])
-    queue(ctx, 'worker', ['selection child complete'])
-    run(ctx)
+    queue(ctx, 'worker', ['selection child complete'], barriers={0: release})
+    run(ctx, on_start=lambda _: finish_children_in_order(ctx, [('wait', release)]))
     child = requests(ctx, 't1')[0]
     assert len(child['history']) == 1
     text = child['history'][0]['user']['text']
@@ -225,18 +227,34 @@ def authority(ctx, mode, grant):
     assert (child['history'][-1]['user'].get('plan') == 'on') == (mode == 'plan')
 
 
+def finish_children_in_order(ctx, releases):
+    """Release each child only at its own wait; wait completion proves publication."""
+    with TraceBarrier(ctx.artifacts) as witness:
+        for call_id, release in releases:
+            for kind in ('tool.started', 'tool.finished'):
+                witness.wait(lambda records, kind=kind, call_id=call_id: any(
+                    record['type'] == kind and record.get('agent_id', 'root') == 'root'
+                    and record['data'].get('call_id') == call_id for record in records),
+                    call_id + ' ' + kind)
+                if kind == 'tool.started':
+                    release.set()
+
+
 def capacity(ctx):
+    releases = [threading.Event() for _ in range(9)]
     first = [spawn('spawn%d' % i, 'worker-%d' % i, name='worker-%d' % i) for i in range(8)]
-    # Wait in the spawn batch fixes delivery at its end. Idle named Sessions still count.
-    queue(ctx, 'root', [[*first, wait(tuple('worker-%d' % i for i in range(8)))],
+    # No child can finish during spawn dispatch; joins then fix notice order.
+    joins = [wait(('worker-%d' % i,), id='join-%d' % i) for i in range(8)]
+    queue(ctx, 'root', [[*first, *joins],
                         [spawn('ninth', 'ninth', name='ninth'),
                          call('dismiss', 'dismiss', {'name': 'worker-0'}),
-                         spawn('replacement', 'replacement', name='worker-0'), wait(('worker-0',), id='replacement-wait')],
+                         spawn('replacement', 'replacement', name='worker-0'), wait(('worker-0',), id='join-8')],
                         'capacity complete'])
     for i in range(8):
-        queue(ctx, 'worker-%d' % i, ['capacity child %d complete' % i])
-    queue(ctx, 'replacement', ['replacement child complete'])
-    run(ctx)
+        queue(ctx, 'worker-%d' % i, ['capacity child %d complete' % i], barriers={0: releases[i]})
+    queue(ctx, 'replacement', ['replacement child complete'], barriers={0: releases[8]})
+    run(ctx, on_start=lambda _: finish_children_in_order(ctx,
+        [('join-%d' % index, release) for index, release in enumerate(releases)]))
     out = outcomes(ctx)
     failure(ctx, out['ninth'], 'spawn_denied', 'at capacity: wait for or dismiss an agent')
     assert out['replacement']['ok'] and out['replacement']['data']['id'] == 't9'
@@ -406,19 +424,21 @@ def bindings(ctx):
 
 
 def concurrent(ctx):
-    release, root_release = threading.Event(), threading.Event()
+    releases = [threading.Event(), threading.Event()]
+    root_release = threading.Event()
     queue(ctx, 'root', [[spawn('one', 'one', name='one'), spawn('two', 'two', name='two')],
-                        [wait(('one', 'two'))], 'concurrent complete'], barriers={1: root_release})
-    queue(ctx, 'one', ['one complete'], barriers={0: release})
-    queue(ctx, 'two', ['two complete'], barriers={0: release})
+                        [wait(('one',), id='join-0'), wait(('two',), id='join-1')],
+                        'concurrent complete'], barriers={1: root_release})
+    queue(ctx, 'one', ['one complete'], barriers={0: releases[0]})
+    queue(ctx, 'two', ['two complete'], barriers={0: releases[1]})
     def control(_):
         ctx.server.wait(4)
         actors = [actor(request.body) for request in ctx.server.requests]
         assert actors.count('root') == 2 and actors.count('one') == actors.count('two') == 1, actors
         immutable = next(request.body for request in reversed(ctx.server.requests) if actor(request.body) == 'root')
         assert b'one complete' not in immutable and b'two complete' not in immutable
-        release.set()
         root_release.set()
+        finish_children_in_order(ctx, [('join-%d' % index, release) for index, release in enumerate(releases)])
     run(ctx, on_start=control)
     check_delivery(ctx, 2)
     proof(ctx, two_children_and_root_requests_in_flight=True, sent_root_request_immutable=True)

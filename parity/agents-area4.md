@@ -1,15 +1,20 @@
 # Parity area 4 — agents and checkpoints (#139)
 
-**Linux evidence published; ready for review with a failing comparison gate.**
+**Linux comparison repaired: 4,111 passed, zero failures, 29 pending.**
+
+Current proof: [`agents-comparison-repair.md`](agents-comparison-repair.md).
+The earlier publication failures below remain historical evidence.
 
 Darwin entries pending the Mac capture
 
 The approved continuation published retained raw evidence, adding one complete
 sample each for C23/C24/C25 and the minimal-policy certificate. Only changed A28
 received a targeted reference capture: 31 healthy summaries, 63 steps, one Run.
-The full executable comparison failed **34** leaves; mutations caught **6/8**.
-Both permitted narrow fixes are spent. No further implementation repair or full
-comparison repeat ran. Review readiness is not a passing gate or merge approval.
+That publication phase failed 34 comparisons and caught 6/8 mutations. The later
+approved repair replayed the retained raw evidence, added witnessed nested slots
+and deterministic barriers, and passed the requested ordered proof: targeted
+34/34, one full 4,111/4,111 runnable comparison, mutations 31/34 and three 17-case
+repeat rounds. No merge or final #139/85%-coverage approval is claimed.
 
 ## Scope and publication state
 
@@ -26,16 +31,17 @@ comparison repeat ran. Review readiness is not a passing gate or merge approval.
 - Branched from main after #186; rebased onto **`7d1373a`**, including #187
   `perf/parity-speed`, before the final proof.
 - Linux locks, shared inventory and **202 complete Linux sample bundles** are
-  published. All 306 pre-existing sample bundles and the Darwin lock are
-  byte-identical. A37 keeps three representative samples, not its earlier six.
-- All **4,111 runnable Linux cases are retained frozen**: the original 4,108,
-  two raw-replayed A36 leaves and the targeted A28 capture. Complete retained raw
-  replay passed before publication. The retained lane remains available beside
-  its verified canonical Linux cache. No full reference recapture ran.
+  published. Darwin's existing bytes are unchanged. Linux oracle/sample changes
+  are limited to exact audited raw-replay transitions; T37.same-root is the only
+  changed earlier-area sample. A37 keeps three representative samples.
+- All **4,111 runnable Linux cases are retained frozen**. The repair replayed
+  every case; only A10/A11 received new reference captures, with ordered A07
+  evidence reused from a retained probe. Prior capture/cache lanes remain intact.
+  No full reference recapture ran.
 - Simulated Darwin/arm64 fails with exactly `new leaves need a Darwin capture`.
   This is not a live Mac execution.
 
-## Remaining blockers and consequences
+## Prior publication blockers (superseded by comparison repair)
 
 1. Full comparison: **4,077 passed /34 failed /29 pending**; 4,111 clean leak
    checks, no surviving PIDs. The actual report includes every case duration.
@@ -392,5 +398,6 @@ continuation; only t3 was reused.
 | t8 final-review (read-only) | 1,727,323 | 1,587,200 | 4,371 |
 | **Total reported** | **39,309,808** | **37,029,888** | **228,083** |
 
-No merge or final #139/85%-coverage approval is requested. The PR is marked ready
-for review as instructed, with failing proof and the exhausted fix budget explicit.
+No merge or final #139/85%-coverage approval is requested. The PR remains ready
+for review. See `agents-comparison-repair.md` for the later passing ordered proof,
+remaining platform/dependency work and full 11-agent lifetime accounting.

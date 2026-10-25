@@ -20,7 +20,7 @@
       "go_version": "go version go1.23.3 linux/amd64",
       "python_version": "Python 3.11.5",
       "normalized_lock": "expected/linux.json",
-      "normalized_tree_sha256": "12d59a8ab4ec493acfcd9a61e8cb79f6b62e07bdc7638e40d17dab1f56da4642"
+      "normalized_tree_sha256": "88e037b842b3eb7f6a375e71f463bab0f5050136d1a3b6f00e45d1788d4d6e20"
     }
   },
   "exploratory_only": [
@@ -305,7 +305,7 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "122d1d753ae4a4f4020e3e775b0964bdddde9e634cbc8d24d8b05659995b4f84",
+  "suite_digest": "3a8fd8d0c2975f4a8864a59b64d1a6c9646211ab69b53962011eab1072d1d622",
   "verification_evidence": "agents-area4.md (area 4 and retained evidence); linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin entries pending the Mac capture",

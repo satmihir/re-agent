@@ -877,6 +877,11 @@ def account_raw(raw, normalized, policies, replay):
             if name not in normalized or policies.get(name) not in ('B', 'N'):
                 raise HarnessError('missing typed checkpoint artifact: ' + name)
             accounted[name] = policies[name]
+    projection = 'agents-checkpoints/admission-sharing-projection.json'
+    if projection in raw and 'retained/' + projection in normalized:
+        if policies.get('retained/' + projection) != 'N':
+            raise HarnessError('sharing projection lacks its typed Workspace certificate')
+        accounted[projection] = 'N'
     from parity.observe_tools import ARTIFACTS
     for name in ARTIFACTS & raw.keys() & normalized.keys():
         accounted[name] = policies[name]

@@ -1,4 +1,5 @@
 """Exec allocation slots certified by fixture inputs and configured invocation env."""
+import copy
 import datetime as dt
 import json
 import os
@@ -26,6 +27,11 @@ class Exec:
     def __init__(self, normal, events, invocations, case_id):
         self.normal = normal
         self.outcomes = {}
+        self.canonical = {}
+        self.sessions = {}
+        for event in events:
+            if event.get('run_id') and event.get('session_id'):
+                self.sessions.setdefault(event['run_id'], set()).add((event['session_id'], event.get('agent_id', 'root')))
         if not owns_exec(case_id):
             return
         for finish in events:
@@ -98,6 +104,19 @@ class Exec:
             if key in self.outcomes:
                 raise AssertionError('duplicate exec allocation owner')
             self.outcomes[key] = (outcome, changes)
+            canonical = copy.deepcopy(outcome)
+            for location, value, _ in changes:
+                target = canonical
+                for part in location[:-1]:
+                    target = target[part]
+                target[location[-1]] = json.loads(value) if isinstance(value, bytes) else value
+            self.canonical[id(outcome)] = canonical
+
+    def related_runs(self, run):
+        session = self.sessions.get(run, set())
+        if len(session) != 1:
+            return {run}
+        return {source for source, witnessed in self.sessions.items() if witnessed == session}
 
     @staticmethod
     def key(event):
@@ -107,13 +126,16 @@ class Exec:
         before, after = lex(raw), lex(normalized)
         for key in path:
             before, after = child(before, key), child(after, key)
-        if before.value != owner[0]:
+        if before.value not in (owner[0], self.canonical[id(owner[0])]):
             raise AssertionError('exec echo differs from owned raw outcome')
         changes = []
         for location, value, kind in owner[1]:
             left, right = before, after
             for key in location:
                 left, right = child(left, key), child(right, key)
+            expected = json.loads(value) if isinstance(value, bytes) else value
+            if right.value == expected:
+                continue
             if left.value != right.value:
                 raise AssertionError('exec allocation slot changed before witnessed normalization')
             replacement = value if isinstance(value, bytes) else string_spans(normalized[right.start:right.end], left.value, value)
@@ -126,17 +148,96 @@ class Exec:
         event = lex(raw).value
         if event.get('type') == 'tool.finished' and self.key(event) in self.outcomes:
             return self.outcome(raw, normalized, artifact, self.outcomes[self.key(event)], ('data', 'outcome'))
-        if event.get('type') != 'model.requested':
+        if event.get('type') not in ('model.requested', 'compaction.requested'):
             return normalized
         history = event.get('data', {}).get('history') or []
         for index in reversed(range(len(history))):
             entry = history[index]
             tool = entry.get('tool', {}) if entry.get('kind') == 'tool' else {}
             owners = [value for (run, _, call), value in self.outcomes.items()
-                      if run == event.get('run_id') and call == tool.get('call_id') and tool.get('name') == 'exec']
+                      if run in self.related_runs(event.get('run_id')) and call == tool.get('call_id') and tool.get('name') == 'exec']
             if not owners:
                 continue
             if len(owners) != 1:
                 raise AssertionError('ambiguous exec history owner')
             normalized = self.outcome(raw, normalized, artifact, owners[0], ('data', 'history', index, 'tool', 'outcome'))
         return normalized
+
+    def rewrite(self, raw, artifact, path=(), run_id=None):
+        """Normalize typed resent outcomes only against unique raw execution witnesses."""
+        from parity.observe_agents_context import HANDOFF
+        if not self.outcomes:
+            return raw
+        top = lex(raw)
+        patches = []
+
+        def patch(token, value, loc):
+            encoded = string_spans(raw[token.start:token.end], token.value, value)
+            if encoded != raw[token.start:token.end]:
+                self.normal.record(artifact, path + loc, raw[token.start:token.end], encoded,
+                                   'exec-embedded-owned-outcome', token.start, token.end)
+                patches.append((token.start, token.end, encoded))
+
+        def owner(call, actual, run):
+            candidates = [value for (source_run, _, source_call), value in self.outcomes.items()
+                          if source_call == call and (run is None or source_run in self.related_runs(run))]
+            if not candidates:
+                return None
+            if len(candidates) != 1:
+                raise AssertionError('ambiguous exec nested outcome owner')
+            source = candidates[0][0]
+            if actual not in (source, self.canonical[id(source)]):
+                raise AssertionError('exec echo differs from owned raw outcome')
+            return candidates[0]
+
+        def walk(token, loc, run, user=False):
+            obj = token.value
+            if isinstance(obj, list):
+                for key, item in token.children:
+                    walk(item, loc + (key,), run, user)
+                return
+            if not isinstance(obj, dict):
+                return
+            if obj.get('role') == 'assistant' or obj.get('kind') == 'assistant' or 'native' in loc:
+                return
+            user = user or obj.get('role') == 'user' or obj.get('kind') == 'user'
+            if obj.get('type') in ('model.requested', 'compaction.requested'):
+                run = obj.get('run_id')
+            if obj.get('kind') == 'tool' and obj.get('tool', {}).get('name') == 'exec':
+                tool = obj['tool']
+                owned = owner(tool.get('call_id'), tool.get('outcome'), run)
+                if owned:
+                    source = child(child(token, 'tool'), 'outcome')
+                    before = raw[source.start:source.end]
+                    after = self.outcome(before, before, artifact, owned, ())
+                    patches.append((source.start, source.end, after))
+                return
+            if obj.get('type') in ('function_call_output', 'tool_result'):
+                key = 'output' if obj['type'] == 'function_call_output' else 'content'
+                call = obj.get('call_id', obj.get('tool_use_id'))
+                if not any(call == source_call for _, _, source_call in self.outcomes):
+                    return
+                if not isinstance(obj.get(key), str):
+                    return
+                source = child(token, key)
+                owned = owner(call, lex(source.value.encode()).value, run)
+                if owned:
+                    before = source.value.encode()
+                    after = self.outcome(before, before, artifact, owned, ())
+                    patch(source, after.decode(), loc + (key,))
+                return
+            for key, item in token.children:
+                if isinstance(item.value, str):
+                    if (key == 'request_body' and obj.get('attempt') is not None
+                            or key == 'state' and 'questions' in obj and 'model' in obj):
+                        after = self.rewrite(item.value.encode(), artifact, path + loc + (key,), run)
+                        patch(item, after.decode(), loc + (key,))
+                    elif key == 'text' and user and HANDOFF in item.value:
+                        prefix, payload = item.value.rsplit('\n', 1)
+                        after = self.rewrite(payload.encode(), artifact, path + loc + (key, 'handoff'), None)
+                        patch(item, prefix + '\n' + after.decode(), loc + (key,))
+                    continue
+                walk(item, loc + (key,), run, user)
+
+        walk(top, (), run_id)
+        return replace_spans(raw, patches)

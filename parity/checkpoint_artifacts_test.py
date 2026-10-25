@@ -145,6 +145,110 @@ class CheckpointArtifactsTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             Checkpoints(normal, ctx, [('/temporary/replay/trace-001.jsonl', finished)])
 
+    def agent_capture(self, case='A34.live-crash-child-helper', witness=True):
+        from parity.agents_context_test import AgentContextTests
+        from parity.observe_agents_context import Agents
+        normal, agents, thread, delivery, _, events = AgentContextTests().agent_normalizer()
+        if not witness:
+            events = [(path, event) for path, event in events if event['type'] != 'agent.result']
+            normal = Normalizer('/fixture', '')
+            agents = Agents(normal, [(path, encode(event)) for path, event in events], [], [], case, {})
+            normal.json, normal.text = agents.json, agents.text
+        ctx = SimpleNamespace(root='/fixture/' + case, workspace='/fixture/' + case + '/workspace',
+                              artifact_root='/fixture', invocations=[])
+        traces = [(path, encode(event)) for path, event in events]
+        checkpoints = Checkpoints(normal, ctx, traces, agents=agents)
+        thread = {key: thread[key] for key in ('id', 'parent_id', 'state', 'task', 'steps', 'cost', 'trace_path')}
+        return ctx, normal, checkpoints, thread, delivery
+
+    def test_agent_source_paths_in_roster_subtree_and_typed_base64(self):
+        ctx, normal, checkpoints, thread, _ = self.agent_capture()
+        state = self.state(ctx)
+        state['agent_roster'] = [thread]
+        state['agent_subtree'] = {'threads': [dict(thread, depth=1)], 'total_agents': 1}
+        packed = base64.b64encode(encode(thread)).decode()
+        state['history'] = [{'kind': 'tool', 'tool': {'call_id': 'spawn', 'name': 'spawn',
+                            'outcome': {'ok': True, 'data': packed}}}]
+        from parity.observe_agents_checkpoints import STATE_FIELDS
+        state = {key: state[key] for key in STATE_FIELDS if key in state}
+        output = validate(checkpoints.artifact(NAME, envelope(state)))
+        expected = '<ROOT>/agent-AGENT_1/events.jsonl'
+        self.assertEqual(output['agent_roster'][0]['trace_path'], expected)
+        self.assertEqual(output['agent_subtree']['threads'][0]['trace_path'], expected)
+        decoded = lex(base64.b64decode(output['history'][0]['tool']['outcome']['data'])).value
+        self.assertEqual(decoded['trace_path'], expected)
+        self.assertEqual(decoded['task'], thread['task'])
+        self.assertTrue(normal.ledger[-1]['inverse_verified'])
+        self.assertTrue(normal.ledger[-1]['raw_checksum_valid'])
+
+    def test_agent_checkpoint_trace_requires_matching_actor_and_source(self):
+        import copy
+        for plane in ('roster', 'base64'):
+            for field, value in [('id', 'foreign'), ('trace_path', '/fixture/root/events.jsonl'),
+                                 ('trace_path', '/foreign/agent-eeeeeeeeeeeeeeee/events.jsonl')]:
+                with self.subTest(plane=plane, field=field, value=value):
+                    ctx, _, checkpoints, thread, _ = self.agent_capture()
+                    thread = copy.deepcopy(thread)
+                    thread[field] = value
+                    state = self.state(ctx)
+                    if plane == 'roster':
+                        state['agent_roster'] = [thread]
+                        from parity.observe_agents_checkpoints import STATE_FIELDS
+                        state = {key: state[key] for key in STATE_FIELDS if key in state}
+                    else:
+                        state['history'] = [{'kind': 'user', 'user': {'text': 'task', 'roster':
+                            base64.b64encode(encode({'kind': 'agent_roster', 'threads': [thread]})).decode()}}]
+                    with self.assertRaisesRegex(AssertionError, 'matching source file'):
+                        checkpoints.artifact(NAME, envelope(state))
+
+    def test_source_agent_history_requires_exact_delivery_and_run_witness(self):
+        import copy
+        from parity.observe_agents_context import RESULT
+        for case, name, source in [('W10.source', NAME, True),
+                                   ('A34.live-crash-child-helper', NAME, True),
+                                   ('W10.source', 'agents-checkpoints/agent-cache-anchor-1.checkpoint.json', False)]:
+            ctx, normal, checkpoints, _, delivery = self.agent_capture(case)
+            state = self.state(ctx)
+            text = RESULT + encode(delivery).decode()
+            user = {'text': text}
+            if source:
+                user['source'] = 'agent'
+            state['history'] = [{'kind': 'user', 'user': user}]
+            output = validate(checkpoints.artifact(name, envelope(state)))
+            saved = lex(output['history'][0]['user']['text'][len(RESULT):].encode()).value
+            self.assertEqual(saved['run_id'], 'RUN_2')
+            self.assertEqual(saved['result']['trace_path'], '<ROOT>/agent-AGENT_1/events.jsonl')
+            self.assertEqual(saved['result']['reply'], delivery['result']['reply'])
+            self.assertTrue(normal.ledger[-1]['inverse_verified'])
+            for field, value in [('run_id', 'f' * 16), ('run_id', 'b' * 16), ('id', 'foreign'),
+                                 ('reply', 'different'), ('trace_path', '/fixture/root/events.jsonl')]:
+                changed = copy.deepcopy(delivery)
+                target = changed['result'] if field in ('reply', 'trace_path') else changed
+                target[field] = value
+                state['history'][0]['user']['text'] = RESULT + encode(changed).decode()
+                with self.subTest(case=case, field=field, value=value), self.assertRaisesRegex(AssertionError, 'witnessed delivery'):
+                    checkpoints.artifact(name, envelope(state))
+            _, _, absent, _, _ = self.agent_capture(case, witness=False)
+            state['history'][0]['user']['text'] = text
+            with self.assertRaisesRegex(AssertionError, 'witnessed delivery'):
+                absent.artifact(name, envelope(state))
+
+    def test_agent_shaped_opaque_bytes_and_unwitnessed_paths_stay_literal(self):
+        from parity.observe_agents_context import RESULT
+        ctx, _, checkpoints, thread, delivery = self.agent_capture('W10.source')
+        state = self.state(ctx)
+        text = RESULT + encode(delivery).decode()
+        packed = base64.b64encode(encode({'text': text, 'source': 'agent'})).decode()
+        state['history'] = [{'kind': 'user', 'user': {'text': text}},
+                            {'kind': 'assistant', 'assistant': {'native': {'items': [packed]}}}]
+        output = validate(checkpoints.artifact(NAME, envelope(state)))
+        self.assertEqual(output['history'], state['history'])
+        ctx, _, absent = self.setup_capture('A34.live-crash-child-helper')
+        state = self.state(ctx)
+        state['last_trace'] = thread['trace_path']
+        output = validate(absent.artifact(NAME, envelope(state)))
+        self.assertEqual(output['last_trace'], thread['trace_path'])
+
     def test_other_declared_corruptions_keep_their_literals(self):
         for variant in ('version', 'envelope-id', 'raw-base64', 'json'):
             ctx, normal, checkpoints = self.setup_capture('A37.corrupt-' + variant)

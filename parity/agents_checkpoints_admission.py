@@ -6,18 +6,21 @@ it is never substituted for the retained raw request.
 """
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import json
 import math
 from pathlib import Path
 import re
 import tempfile
+import threading
 import time
 from urllib.parse import urlsplit
 
 from parity.model import Case
 from parity.provider import Response
 from parity.observe_agents_checkpoints import encode, opaque
+from parity.observe_agents_effects import TraceBarrier
 from parity.cases.agents_checkpoints import (
     USAGE, _install, _record, _response, _resume, _saved, _seed, events,
 )
@@ -147,14 +150,30 @@ def _sharing(ctx, state, mode, label):
     ctx.server.expect(path, Response(reply), marker=parent_start, model=SOL)
     # On refusal there is no child request, so no unconsumed successful script.
     admitted = state.get('_admitted', True)
+    release = threading.Event()
     if admitted:
-        ctx.server.expect(path, Response(_openai('child admission answer')), marker=child_start,
+        ctx.server.expect(path, Response(_openai('child admission answer'), barrier=release), marker=child_start,
                           model=LUNA if mode == 'foreign' else SOL)
     ctx.server.expect(path, Response(_openai('parent admission answer')), marker=parent_end, model=SOL)
     offset = len(ctx.server.requests)
     tool_offset = len(events(ctx, 'tool.finished'))
     try:
-        _resume(ctx, 'admission-parent\n/exit\n')
+        if admitted:
+            with TraceBarrier(ctx.artifacts) as witness, ThreadPoolExecutor(max_workers=1) as pool:
+                prior = {record['run_id'] for record in witness.wait(lambda records: True, 'prior admission runs')
+                         if record.get('run_id')}
+                future = pool.submit(_resume, ctx, 'admission-parent\n/exit\n')
+                try:
+                    # The root has displayed spawn success before starting its wait.
+                    witness.wait(lambda records: any(record['type'] == 'tool.started'
+                        and not record.get('agent_id') and record.get('run_id') not in prior
+                        and record.get('run_id') and record['data'].get('call_id') == 'admission-wait'
+                        for record in records), 'new root admission-wait')
+                finally:
+                    release.set()
+                    future.result()
+        else:
+            _resume(ctx, 'admission-parent\n/exit\n')
     except AssertionError:
         raise AssertionError([(request.json()['model'], request.json()['input'][-1])
                               for request in ctx.server.requests[offset:]]) from None

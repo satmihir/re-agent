@@ -235,8 +235,8 @@
       "path": "C24.agents-write-recap.tar.gz",
       "artifacts": 77,
       "normalized_bytes": 2687519,
-      "normalized_sha256": "c5911eb66784ada2b099c6506891aac92c43d635da34e6179da80f97b62c3ca9",
-      "bundle_sha256": "854e584ceb0b63e84e6fe0d6790a93838f7c6fdf763e398f84771eb08df1f9a8"
+      "normalized_sha256": "153cd4c7c86b29a877fbdf7e761170b39d3349adbafa5ae2745f658cff455856",
+      "bundle_sha256": "3f0af8b32720471bd7f6118ba0cc24c69bba6b8ae862213adbd2962dc12e7c79"
     },
     {
       "id": "C25.agents-tree-cost",
@@ -1584,9 +1584,9 @@
       "why": "Inclusive selected-entry limit with original numbering and trust.",
       "path": "A02.accept-entries128.tar.gz",
       "artifacts": 33,
-      "normalized_bytes": 1063817,
-      "normalized_sha256": "3c351dceb59f1974c2c75c618bc9de90534905d6f3cb09b81134814c47309b6d",
-      "bundle_sha256": "f0acaf4f4915dc64a25d985dba384001e5f84afea0da63de38b242105cd5392f"
+      "normalized_bytes": 1045057,
+      "normalized_sha256": "c2aac7aa680e92e582f9654a3cf112062e287373d3684a0fa373ae547ecc3b8f",
+      "bundle_sha256": "8c6d4187a3b64bc511ddf30406109857a7711f5a587a6d9d6f9aabd0a740a3b7"
     },
     {
       "id": "A03.fresh-live",
@@ -1634,9 +1634,9 @@
       "why": "Supplied selected-entry order and original numbering.",
       "path": "A07.selected-3-1.tar.gz",
       "artifacts": 33,
-      "normalized_bytes": 310386,
-      "normalized_sha256": "6b2102ced8ab2b31ef4d86fbe3279658d4de06de811606d2fc313e638c2bc77a",
-      "bundle_sha256": "0593c3f6c8d7c83d212ad4ecfe3345b69cd7307ea3aae8011c2d4fa786a58d0c"
+      "normalized_bytes": 310166,
+      "normalized_sha256": "5c1728526ab62dde1388a3308becb0fb39e3979f6e7562d3b4d5acd9340c0ffb",
+      "bundle_sha256": "5007f54aa00963540bbeeb225f9fe46845e6b1c57811742a23a9328bd1c0a6e5"
     },
     {
       "id": "A08.destination-window",
@@ -1664,9 +1664,9 @@
       "why": "Idle named capacity and dismissal/name release.",
       "path": "A10.capacity-idle-dismiss.tar.gz",
       "artifacts": 97,
-      "normalized_bytes": 930609,
-      "normalized_sha256": "7c8ab8b0a4952d16d815a7c6f4a22682f7affa1aa658e7dcffd5d07315614175",
-      "bundle_sha256": "ff3a15602ca1ae384b2d7e832fa67c14ed1a01785cf136ec748bca52a07c90c3"
+      "normalized_bytes": 954347,
+      "normalized_sha256": "e6467ad230fff3c50bf1ef3959961f18fa49c474c097d6b39e5497d8d303fd33",
+      "bundle_sha256": "5c12ac4f474b3037d894cfd0c38ce7b4efb3c503650c8ec381f455b8776078da"
     },
     {
       "id": "A11.concurrent-inflight",
@@ -1674,9 +1674,9 @@
       "why": "Independent held requests and immutable in-flight root input.",
       "path": "A11.concurrent-inflight.tar.gz",
       "artifacts": 42,
-      "normalized_bytes": 375671,
-      "normalized_sha256": "1f4674683b550cbd487e193ef47b7ab76c129dec6f749f54f36d79ffe7d7eb1d",
-      "bundle_sha256": "970c172031c48ba8ca500238c2d9a91d2dedb954dac3afb8d9fe435b944ed90f"
+      "normalized_bytes": 377914,
+      "normalized_sha256": "13224f20031ffadffdd02b414a59c7615d580a76b78174b6f45f88b3ac85575d",
+      "bundle_sha256": "ffd7122907cf554770cfce5b082743af0ecf74741feec0eb3e1aa505eaf7b7bb"
     },
     {
       "id": "A12.poll-0",
@@ -1774,9 +1774,9 @@
       "why": "Bounded escaped delivery keeps uncertainty and omitted counts; mutation 34.",
       "path": "A21.ledger.tar.gz",
       "artifacts": 96,
-      "normalized_bytes": 35658588,
-      "normalized_sha256": "d1608a946e427477299f16670b8b882ecdf67d08f6b51c6a1384a2edfb475dea",
-      "bundle_sha256": "e707668e94c666fa0451e621578a04b2934daa99f8b9c54ebd7f8e8c91828fdf"
+      "normalized_bytes": 35658538,
+      "normalized_sha256": "c46551d8170582880db55ac9d6d923b357e968db4d45eb816cfd0539735a6e9d",
+      "bundle_sha256": "e4713180ec58a4597d60a345c74d05a53567d5b530423f88cd19fe1fb38e920a"
     },
     {
       "id": "A22.timeout-continue",
@@ -1784,9 +1784,9 @@
       "why": "Timeout continuation differs from blocked cancellation/reset.",
       "path": "A22.timeout-continue.tar.gz",
       "artifacts": 68,
-      "normalized_bytes": 666112,
-      "normalized_sha256": "4e13afdc627a1e07e526e70d880a12010b24294d0f7197043e33bd764fade7d6",
-      "bundle_sha256": "ac83e4120b33388a31e8551bfda8870ab4b1ac8da82480ab9bfd01c45f6cfb8e"
+      "normalized_bytes": 665894,
+      "normalized_sha256": "49ad6886a8e340b418f78e1b91b4dfa7e9f4ab9771ee3759ffb6bc4288e1b46b",
+      "bundle_sha256": "6b52725a84b56dfe6b6158f280ff11476620b688ec2b4d22312d2810ab26a26a"
     },
     {
       "id": "A23.bounded-pages",
@@ -1824,9 +1824,9 @@
       "why": "Independent write probe, verification read and safe cleanup.",
       "path": "A26.probe-cleanup.tar.gz",
       "artifacts": 68,
-      "normalized_bytes": 925876,
-      "normalized_sha256": "a4c6a5b74eccab4f86ffec2539ac40648e16fa51fbc006111c857acb41ce8098",
-      "bundle_sha256": "e6d8bdf4a72d6457ffb72d94d69f0a1b35dbe65d72656d3a80b27914944d1f4f"
+      "normalized_bytes": 925684,
+      "normalized_sha256": "f0116c77006616f8a5976884337375fc490544ceeaae7e06ada00750730e156a",
+      "bundle_sha256": "4d27ca6a586824a5a24fc1c4ad792961aede7d86d257d8c74b8d13246ed41d0a"
     },
     {
       "id": "A27.manual-text",
@@ -1904,9 +1904,9 @@
       "why": "Live helper/child crash, repeated recovery and fresh name reuse.",
       "path": "A34.live-crash-child-helper.tar.gz",
       "artifacts": 55,
-      "normalized_bytes": 475894,
-      "normalized_sha256": "f1c15a52c9c72547174a52485fe0f90e3a135107fb87ab6b7224b76964de1ab9",
-      "bundle_sha256": "62e17ce30c750cfc8ba6bc6ec2de53956dff38d7efa6f1bba0ed176236b765b5"
+      "normalized_bytes": 475668,
+      "normalized_sha256": "33f7a17c90201137137220f562bd6ea4b70550a7b8e932d04014268abd1b9b09",
+      "bundle_sha256": "7322eed4bba082386f3834fbaf5c8cfea66485a1866a28beaa61305899f8da64"
     },
     {
       "id": "A35.schema-agents",
@@ -2004,9 +2004,9 @@
       "why": "Admitted helper sabotages pre-model checkpoint publication.",
       "path": "C20.persistence-barriers.tar.gz",
       "artifacts": 16,
-      "normalized_bytes": 74494,
-      "normalized_sha256": "58dcd57fe789f224e036029db696fa574705dff06eb7d1d473fac75da60246e2",
-      "bundle_sha256": "7068b67fb3c1f3f9a54c54dd67a91d784875b519b7fa83efa0f8637b519f5bb5"
+      "normalized_bytes": 74207,
+      "normalized_sha256": "a86611bdc0df060d278ae4e7499738eb07f0ee6eba7a817fde6b5ab6c7821697",
+      "bundle_sha256": "a6bd64e5154700b543db07d7174c35afef01d1e66066ff57d92c7f952e9bbad9"
     },
     {
       "id": "W13.native-fork",
@@ -2024,9 +2024,9 @@
       "why": "Independent overlap notice for canonical shared workspace execs.",
       "path": "T37.same-root.tar.gz",
       "artifacts": 54,
-      "normalized_bytes": 481779,
-      "normalized_sha256": "30539c8137e67d8dba089f4890f54d04631660bc3f6d750dd666e764afa975d8",
-      "bundle_sha256": "d0a1b708a2971d25cd50a0e246a6567af6ea892381ad79b1b3f06dc98ebb581c"
+      "normalized_bytes": 481611,
+      "normalized_sha256": "0449398aa9e00a6050f68dcb7272c11f2e7cb526b1c971f77d1e3b553927cdab",
+      "bundle_sha256": "9d8180e76417b468c097543bfcb4e7b3e6a69079e0f9c1600653acc11a785335"
     }
   ],
   "platform": "linux"

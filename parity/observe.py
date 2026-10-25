@@ -371,9 +371,23 @@ class Normalizer:
             return 'read tcp <CLIENT>-><SERVER>: read: connection reset by peer'
         return value
 
+    def startup_banner(self, text):
+        """Find only the startup banner or A34's exact witnessed recovery prelude."""
+        if text.startswith('re:agent chat · '):
+            return 0
+        note = ('interrupted session restored; no pending model request or tool was restarted; '
+                'send a new message; an in-flight tool has unknown effects; inspect them before further changes\n')
+        if (Path(self.root).name in ('A34.live-crash-child-helper', 'A34.finished-undelivered-receipt')
+                and text.startswith(note + 're:agent chat · ')):
+            return len(note)
+        return None
+
     def register_display_sessions(self, text):
         """Register new identities only inside the startup chat banner."""
-        lines = text.split('\n')
+        offset = self.startup_banner(text)
+        if offset is None:
+            return
+        lines = text[offset:].split('\n')
         if not lines[0].startswith('re:agent chat · '):
             return
         if lines[0] == 're:agent chat · scripted':
@@ -392,6 +406,8 @@ class Normalizer:
         match = re.fullmatch(r'session ID: ([0-9a-f]{16})', lines[1])
         if match is None:
             raise AssertionError('malformed startup stderr session identity')
+        if offset and match[1] not in self.ids['session']:
+            raise AssertionError('recovery banner lacks independently witnessed session')
         self.identity(match[1], 'session')
 
     def server_text(self, value, path=()):
@@ -425,7 +441,8 @@ class Normalizer:
                         end = value.find('\n', match.end())
                         line = value[start:end if end >= 0 else len(value)]
                         if line.lower().startswith('session id: '):
-                            startup = value.startswith('re:agent chat · ') and value.count('\n', 0, start) == 1
+                            offset = self.startup_banner(value)
+                            startup = offset is not None and value.count('\n', offset, start) == 1
                             footer = re.fullmatch(r'session ID: ([0-9a-f]{16}) · resume: reagent chat --resume \1', line)
                             if not startup and footer is None:
                                 return match[0]
@@ -855,11 +872,14 @@ def finish(ctx):
     tools.path_outcomes.update(cancelled_exec_executable(normal, traces, invocations, observations, case_id))
     normal.json = echoes.json
     events = [lex(line).value for _, line in traces]
+    from parity.observe_fixture_scripts import Scripts
+    scripts = Scripts(normal, events, case_id, observations)
+    normal.json = scripts.json
     normal.races = Races(normal, events, captures, invocations, case_id, observations)
     from parity.observe_agents_context import Agents
     source_root = Path(getattr(ctx, 'artifact_root', ctx.artifacts))
     source_traces = [(source_root / Path(path).relative_to(ctx.artifacts), line) for path, line in traces]
-    agents = Agents(normal, source_traces, captures, invocations, case_id, observations)
+    agents = Agents(normal, source_traces, captures, invocations, case_id, observations, exec_slots=tools.exec)
     normal.json, normal.text = agents.json, agents.text
     capture_order = list(range(len(captures)))
     if agents.enabled:
@@ -1109,10 +1129,14 @@ def finish(ctx):
     from parity.observe_checkpoint_artifacts import Checkpoints, owns_artifact as checkpoint_artifact
     checkpoint_traces = [(source_root / Path(path).relative_to(ctx.artifacts), line) for path, line in traces]
     if any(checkpoint_artifact(name) for name in observations):
-        checkpoints = Checkpoints(normal, ctx, checkpoint_traces)
+        checkpoints = Checkpoints(normal, ctx, checkpoint_traces, agents=agents)
         for name in sorted(observations):
             if checkpoint_artifact(name):
                 results[name] = checkpoints.artifact(name, observations[name])
+    projection = 'agents-checkpoints/admission-sharing-projection.json'
+    if projection in observations:
+        target = 'retained/' + projection
+        results[target] = agents.artifact(observations[projection], target)
     for name, raw in results.items():
         normal.ledger.append(dict(artifact=name, raw_normalized_sha256=sha256(raw), normalized_length=len(raw)))
     Path(ctx.artifacts, 'substitutions.json').write_text(json.dumps(normal.ledger, indent=2)+'\n')

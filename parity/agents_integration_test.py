@@ -1,12 +1,51 @@
 """Shared agent correspondence and checkpoint-derived observer boundaries."""
 
 import unittest
+import threading
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from parity import locks
 from parity.observe import Normalizer, go_json
 
 
 class AgentsIntegrationTests(unittest.TestCase):
+    def test_ordered_child_release_requires_own_root_wait_and_published_predecessor(self):
+        from parity.cases import agents_context
+        ctx = SimpleNamespace(artifacts='/owned/artifacts')
+        releases = [threading.Event(), threading.Event()]
+        seen = []
+
+        def wait(predicate, description):
+            index = len(seen) // 2
+            kind = 'tool.started' if len(seen) % 2 == 0 else 'tool.finished'
+            own = dict(type=kind, agent_id='root', data=dict(call_id='join-%d' % index))
+            self.assertFalse(predicate([dict(own, agent_id='t1')]))
+            self.assertFalse(predicate([dict(own, data=dict(call_id='foreign'))]))
+            self.assertFalse(predicate([dict(own, type='model.accepted')]))
+            self.assertTrue(predicate([own]))
+            self.assertEqual(description, 'join-%d %s' % (index, kind))
+            self.assertEqual([event.is_set() for event in releases],
+                             [offset < index or (offset == index and kind == 'tool.finished')
+                              for offset in range(2)])
+            seen.append(description)
+
+        with patch.object(agents_context, 'TraceBarrier') as barrier:
+            barrier.return_value.__enter__.return_value.wait.side_effect = wait
+            agents_context.finish_children_in_order(ctx, [('join-%d' % index, event) for index, event in enumerate(releases)])
+        self.assertTrue(all(event.is_set() for event in releases))
+        self.assertEqual(len(seen), 4)
+
+    def test_missing_child_publication_never_releases_next_child(self):
+        from parity.cases import agents_context
+        releases = [threading.Event(), threading.Event()]
+        with patch.object(agents_context, 'TraceBarrier') as barrier:
+            barrier.return_value.__enter__.return_value.wait.side_effect = [None, AssertionError('missing publication')]
+            with self.assertRaisesRegex(AssertionError, 'missing publication'):
+                agents_context.finish_children_in_order(SimpleNamespace(artifacts='/owned'), [('join-%d' % index, event) for index, event in enumerate(releases)])
+        self.assertTrue(releases[0].is_set())
+        self.assertFalse(releases[1].is_set())
+
     def certificate(self):
         return dict(artifact='agent-causal-correspondence', kind='agent-causal-correspondence',
                     classification='S', trace_sources=['/owned/root/events.jsonl', '/owned/child/events.jsonl'],

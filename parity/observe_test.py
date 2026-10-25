@@ -264,6 +264,29 @@ class IncidentalEvidenceTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 normal.register_display_sessions(f're:agent chat · model\nsession ID: {unknown}\nworkspace /unowned/root\n')
 
+    def test_recovery_banner_keeps_the_same_independent_identity_and_workspace_checks(self):
+        session = 'd' * 16
+        root = '/allocated/A34.live-crash-child-helper'
+        banner = f're:agent chat · model\nsession ID: {session}\nworkspace {root}/workspace\n'
+        note = ('interrupted session restored; no pending model request or tool was restarted; '
+                'send a new message; an in-flight tool has unknown effects; inspect them before further changes\n')
+        normal = Normalizer(root, '')
+        normal.identity(session, 'session')
+        normal.register_display_sessions(note + banner)
+        normalized = normal.text(note + banner, 'stderr', ('display',))
+        self.assertTrue(normalized.startswith(note + 're:agent chat · model\nsession ID: SESSION_1\n'))
+        for prefix in ('\n', 'provider error\n', note.replace('unknown effects', 'safe effects')):
+            empty = Normalizer(root, '')
+            empty.register_display_sessions(prefix + banner)
+            self.assertEqual(empty.ids['session'], {})
+        empty = Normalizer('/allocated/W01', '')
+        empty.register_display_sessions(note + banner)
+        self.assertEqual(empty.ids['session'], {})
+        with self.assertRaisesRegex(AssertionError, 'independently witnessed session'):
+            Normalizer(root, '').register_display_sessions(note + banner)
+        with self.assertRaisesRegex(AssertionError, 'workspace banner'):
+            normal.register_display_sessions(note + banner.replace(root, '/foreign'))
+
     def test_startup_proxy_banner_requires_allocated_authority_and_proxy_mode(self):
         normal = Normalizer('/allocated/root', '127.0.0.1:3000')
         header = 're:agent chat · model (openai · API proxy, effort low)\nsession ID: 0123456789abcdef\n'

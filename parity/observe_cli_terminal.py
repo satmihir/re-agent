@@ -261,6 +261,10 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
         assert text[start:start + len(value)] == value and len(positions) == len(value)
         slots.append((positions, value, padded, kind))
 
+    from parity.observe_agents_effects import recap_slots
+    for start, value, replacement, kind in recap_slots(ctx, invocation, prefix, text, traces):
+        slot(start, value, replacement, kind)
+
     def session(start, value):
         witnesses = [event for event in headers if event.get('session_id') == value]
         if headers:

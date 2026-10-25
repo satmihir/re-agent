@@ -1,5 +1,5 @@
 {
-  "status": "published_ready_for_review_with_failing_gate",
+  "status": "linux_comparison_passed_ready_for_review",
   "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
   "base_commit": "7d1373aa56d283798b4ffab37af613be6308e27d",
   "platform": "linux/amd64",
@@ -8,8 +8,36 @@
   "darwin_entries": "unchanged; pending the Mac capture",
   "linux_expected_and_samples_published": true,
   "full_comparison_report_available": true,
-  "full_comparison_report": "/tmp/reagent-parity-agents-proof/phase2-full-report.json",
-  "full_comparison_original_report": "/tmp/reagent-parity-cases-h333tj0u/artifacts/report.json",
+  "full_comparison_report": "/tmp/reagent-parity-agents-proof/phase3/full-report.json",
+  "full_comparison_original_report": "/tmp/reagent-parity-cases-hw230efu/artifacts/report.json",
+  "historical_failed_full_report": "/tmp/reagent-parity-agents-proof/phase2-full-report.json",
+  "comparison_repair": {
+    "proof_document": "agents-comparison-repair.md",
+    "fresh_reference_cases": ["A10.capacity-idle-dismiss", "A11.concurrent-inflight"],
+    "retained_alternate_sources": ["A07.selected-2", "A07.selected-3"],
+    "replayed_cases": 4111,
+    "changed_locks": 70,
+    "normalized_cases": 35,
+    "ledger_only_cases": 35,
+    "raw_evidence_preserved": true,
+    "full_reference_recapture": false,
+    "targeted_attempts": [
+      {"passed": 33, "failed": ["A38.sharing-window-foreign-above"], "seconds": 91.12, "report": "/tmp/reagent-parity-agents-proof/phase3/targeted34-1-report.json"},
+      {"passed": 34, "failed": [], "seconds": 91.13, "report": "/tmp/reagent-parity-agents-proof/phase3/targeted34-2-report.json"}
+    ],
+    "full": {"runs": 1, "jobs": 12, "passed": 4111, "failed": 0, "pending": 29, "gate_success": true, "clean_leak_checks": 4111, "seconds": 886.98},
+    "mutations": {"jobs": 12, "selected": [31, 34], "caught": [31, 34], "seconds": 119.36, "report": "/tmp/reagent-parity-agents-proof/phase3/mutations/report.json"},
+    "repeats": {"families": ["A10", "A11", "A21", "A15", "A20", "A39"], "jobs": 12, "runs": 3, "passed_per_run": [17, 17, 17], "failed_per_run": [0, 0, 0], "seconds": [90.57, 90.79, 90.99]},
+    "python_gate": {"tests": 670, "skipped": 14, "passed": true, "seconds": 76.476},
+    "go_gate": {"command": "go build ./... && go vet ./... && go test ./...", "exit_code": 0, "seconds": 36.57},
+    "suite_digest": "3a8fd8d0c2975f4a8864a59b64d1a6c9646211ab69b53962011eab1072d1d622",
+    "normalized_tree_sha256": "88e037b842b3eb7f6a375e71f463bab0f5050136d1a3b6f00e45d1788d4d6e20",
+    "ledger_and_artifact_audit": "/tmp/reagent-parity-agents-proof/phase3/replay-receipts",
+    "publication_receipt": "/tmp/reagent-parity-agents-proof/phase3/publication.json",
+    "darwin_files_unchanged": 155,
+    "agents_used_this_continuation": ["t9", "t10", "t11"],
+    "agent_lifetime_totals": {"agents": 11, "input_tokens": 48820393, "cached_input_tokens": 45936896, "output_tokens": 290893, "reasoning_tokens": 75620, "unreported_attempts": 1}
+  },
   "continuation": {
     "reference_captures": ["A28.inrun-eight-summary-bound"],
     "A28": {"summaries": 31, "steps": 63, "tool_calls": 31, "passed": true},
@@ -39,7 +67,9 @@
   ],
   "retained": {
     "initial_failed_capture": "/tmp/reagent-parity-agents-proof/cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/failed-1792915126312807276",
-    "all_4111_frozen_cases": "/tmp/reagent-parity-agents-proof/recovered-lane",
+    "all_4111_frozen_cases": "/tmp/reagent-parity-agents-proof/phase3/replayed-lane",
+    "prior_retained_lane": "/tmp/reagent-parity-agents-proof/recovered-lane",
+    "prior_canonical_cache": "/tmp/reagent-parity-agents-proof/phase3/canonical-before",
     "A36_replayed_raw_sources": "/tmp/reagent-parity-agents-proof/replayed-A36",
     "plain_archived_pin_source": "/tmp/reagent-parity-agents-proof/plain-pin",
     "plain_archived_pin_binary": "/tmp/reagent-parity-agents-proof/plain-reference",
@@ -47,14 +77,11 @@
     "pagination_probe": "/tmp/reagent-parity-agents-proof/pagination-final"
   },
   "remaining_blockers": [
-    "34 full executable comparisons fail on retained identity/path and activity/display differences; no green gate",
-    "mutation 31 survived; mutation 34 baseline_failed on A21.ledger; 6/8 catches, not 8/8",
-    "two narrow failure-driven fixes exhausted; no additional observer/fixture repairs authorized",
     "Darwin new leaves need real Mac capture; C18/C43/C44 remain on #185; T36.before-start needs its exact pre-dispatch barrier"
   ],
   "production_go_changed": false,
   "new_dependencies": false,
   "live_provider_calls": false,
   "tty_check": "not run: terminal production code was not changed",
-  "agent_concurrency_deviation": "Nested delegation briefly exceeded the requested global limit of four before parent detection; further subdelegation was prohibited. Full eight-agent accounting is in agents-area4.md."
+  "agent_concurrency_deviation": "Nested delegation briefly exceeded the requested global limit of four before parent detection; further subdelegation was prohibited. Historical eight-agent accounting is in agents-area4.md; current 11-agent lifetime accounting is in agents-comparison-repair.md. No nested delegation occurred during comparison repair."
 }
