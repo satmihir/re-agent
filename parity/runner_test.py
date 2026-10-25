@@ -22,6 +22,7 @@ from urllib.error import HTTPError
 from urllib.request import Request as HTTPRequest, urlopen
 
 from parity import golden, run
+from parity.identity_test import fixture_manifest
 from parity.model import Case
 from parity.provider import Provider, Response
 from parity.run import Context, HarnessError, execute_case, extend_capture, freeze_case, guard_artifacts, guard_private, load_capture, load_golden, leaf_inventory, main, read_frozen_case, read_metadata, repack_lane, revise_normalization, storage_row_span, replay_case, report_counts, run_case, select_cases, suite_digest, validate_capture
@@ -66,8 +67,9 @@ print('stderr sentinel', file=sys.stderr)
         self.binary.chmod(0o755)
 
     def seal_suite(self, suite, manifest):
-        (suite / "samples").mkdir(exist_ok=True)
-        (suite / "samples/index.json").write_text('{"cases":[]}\n')
+        from parity.samples import sample_directory
+        sample_directory(suite).mkdir(parents=True, exist_ok=True)
+        (sample_directory(suite) / "index.json").write_text(json.dumps({"cases": [], "platform": sys.platform}) + '\n')
         (suite / "manifest.json").write_text(json.dumps(manifest))
         manifest["suite_digest"] = suite_digest(suite)
         (suite / "manifest.json").write_text(json.dumps(manifest))
@@ -300,10 +302,10 @@ while True: time.sleep(1)
 
     def test_capture_requires_matching_reference_and_empty_goldens(self):
         golden = self.root / "golden"
-        manifest = {"freeze_status": "ready", "reference_commit": "frozen", "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
+        manifest = fixture_manifest(freeze_status="ready", reference_commit="frozen", reference_binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
         validate_capture(self.binary, manifest, golden)
         with self.assertRaises(HarnessError):
-            validate_capture(self.binary, {**manifest, "reference_binary_sha256": "wrong"}, golden)
+            validate_capture(self.binary, fixture_manifest(**{**manifest, "reference_binary_sha256": "0" * 64}), golden)
         for status in (None, "blocked", "draft", "READY"):
             with self.subTest(freeze_status=status), self.assertRaisesRegex(HarnessError, "freeze_status"):
                 validate_capture(self.binary, {**manifest, "freeze_status": status}, golden)
@@ -532,7 +534,7 @@ while True: time.sleep(1)
         reordered = dict(reversed(list(policies.items())))
         self.update_document_bytes(golden, "artifact-policies.json", (" \n" + json.dumps(reordered, separators=(" , ", " : ")) + "\r\n").encode())
         inventory = leaf_inventory([Case("W01", "raw replay fixture", lambda _: None, exclusive=True),
-                                    Case("W98", "pending dependency", lambda _: None, pending="later area", exclusive=True)], {"reference_commit": "fixture"})
+                                    Case("W98", "pending dependency", lambda _: None, pending="later area", exclusive=True)], fixture_manifest(reference_commit="fixture"))
         (golden.parent / "inventory.json").write_bytes((" \n" + json.dumps(inventory, indent=2) + "\r\n").encode())
         return golden.parent
 
@@ -546,7 +548,7 @@ while True: time.sleep(1)
         added = Case("W99.addition", "new executable vector", lambda ctx: ctx.invoke(["help"]), exclusive=False)
         cases = [Case("W01", "raw replay fixture", lambda _: None, exclusive=True),
                  Case("W98", "pending dependency", lambda _: None, pending="later area", exclusive=True), added]
-        manifest = {"freeze_status": "ready", "reference_commit": "fixture", "reference_binary_sha256": digest}
+        manifest = fixture_manifest(freeze_status="ready", reference_commit="fixture", reference_binary_sha256=digest)
         reviewed = leaf_inventory(cases, manifest)
         manifest["leaf_inventory"] = {"metadata_fields": reviewed["metadata_fields"], "metadata_sha256": reviewed["metadata_sha256"]}
         artifacts = self.root / "new-vector-artifacts"
@@ -1203,8 +1205,7 @@ while True: time.sleep(1)
     def test_regenerated_fixture_then_candidate_checks_inventory_replay_and_policies(self):
         suite = self.root / "fixture-repository/parity"
         suite.mkdir(parents=True)
-        manifest = {"reference_commit": "a" * 40,
-                    "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
+        manifest = fixture_manifest(reference_binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
         self.seal_suite(suite, manifest)
         case = Case("W99", "fixture capture", lambda ctx: ctx.invoke(["help"]), exclusive=False)
         cases = [case] + [Case("W98.later-%02d" % index, "declared dependency", lambda _: self.fail("pending executed"), pending="requires later area", exclusive=True) for index in range(15)]
@@ -1289,8 +1290,7 @@ while True: time.sleep(1)
         suite = self.root / "fixture-repository/parity"
         suite.mkdir(parents=True)
         cases = [Case("W99", "fixture metadata", lambda _: None)]
-        manifest = {"freeze_status": "ready", "reference_commit": "fixture",
-                    "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
+        manifest = fixture_manifest(freeze_status="ready", reference_commit="fixture", reference_binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
         reviewed = leaf_inventory(cases, manifest)
         for mutation in ("hash", "fields", "description"):
             with self.subTest(mutation=mutation):
@@ -1334,8 +1334,7 @@ while True: time.sleep(1)
     def test_golden_update_cli_regenerates_explicitly_without_reading_old_lock(self):
         suite = self.root / "fixture-repository/parity"
         suite.mkdir(parents=True)
-        manifest = {"reference_commit": "a" * 40,
-                    "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
+        manifest = fixture_manifest(reference_binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
         self.seal_suite(suite, manifest)
         cases = [Case("W99", "explicit oracle update", lambda _: self.fail("candidate must not run"))]
         lane = self.root / "cache/reagent-parity" / manifest["reference_commit"] / sys.platform
@@ -1349,8 +1348,7 @@ while True: time.sleep(1)
     def test_regeneration_freeze_failure_never_publishes_a_partial_lane(self):
         suite = self.root / "fixture-repository/parity"
         suite.mkdir(parents=True)
-        manifest = {"reference_commit": "a" * 40,
-                    "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
+        manifest = fixture_manifest(reference_binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
         cases = [Case("W99.first", "first", lambda ctx: ctx.invoke(["help"])),
                  Case("W99.second", "second", lambda ctx: ctx.invoke(["help"])),
                  Case("W98", "dependency", lambda _: None, pending="later area")]
@@ -1383,8 +1381,7 @@ while True: time.sleep(1)
     def test_regeneration_never_waives_runtime_skips_failures_or_changed_dependency_reasons(self):
         suite = self.root / "fixture-repository/parity"
         suite.mkdir(parents=True)
-        manifest = {"reference_commit": "a" * 40,
-                    "reference_binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
+        manifest = fixture_manifest(reference_binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
         cases = [Case("W99", "executable", lambda _: None),
                  Case("W98", "declared pending", lambda _: None, pending="later area")]
         for failed_id, status in (("W99", "pending"), ("W99", "unavailable"), ("W99", "failed"), ("W99", "not_executed"), ("W98", "failed"), ("W98", "pending"), ("W98", "passed")):
@@ -1557,10 +1554,10 @@ while True: time.sleep(1)
         artifacts = self.root / "missing-golden-report"
         suite = self.root / "missing-golden-repository/parity"
         suite.mkdir(parents=True)
-        (suite / "manifest.json").write_text("{}")
+        (suite / "manifest.json").write_text(json.dumps(fixture_manifest()))
         lane = self.root / "cache/reagent-parity" / ("a" * 40) / sys.platform
         lane.mkdir(parents=True)
-        (lane / "inventory.json").write_text(json.dumps(leaf_inventory([case], {})))
+        (lane / "inventory.json").write_text(json.dumps(leaf_inventory([case], fixture_manifest())))
         with patch("parity.run.__file__", str(suite / "run.py")), patch("parity.run.collect_cases", return_value=[case]), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=observed), patch("parity.golden.ensure_cache", autospec=True, return_value=lane):
             status = main(["--bin", str(self.binary), "--artifacts", str(artifacts)])
         report = json.loads((artifacts / "report.json").read_bytes())

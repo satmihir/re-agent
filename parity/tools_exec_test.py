@@ -50,6 +50,16 @@ class ExecFixtureTest(unittest.TestCase):
                 opened.assert_not_called()
                 killed.assert_not_called()
 
+    def test_linux_start_identity_is_exact_and_darwin_validation_is_unchanged(self):
+        with patch.object(tools_exec.sys, 'platform', 'linux'):
+            tools_exec._start_identity([303])
+            for start in ([], [0], [True], [-1], [1.5], [100, 1, 2], [100, 1000000], [303, 0]):
+                with self.subTest(start=start), self.assertRaises(AssertionError):
+                    tools_exec._start_identity(start)
+        with patch.object(tools_exec.sys, 'platform', 'darwin'):
+            for start in ([303], [100, 999999], [100, 1, 2]):
+                tools_exec._start_identity(start)
+
     def test_linux_start_identity_parser_handles_parentheses_and_disappearance(self):
         fields = ['S', '101', '202', *(['0'] * 16), '303']
         stat = '42 (name ) with spaces) ' + ' '.join(fields)
@@ -126,6 +136,23 @@ class ExecFixtureTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             tools_exec._assert_stream('left\ufffd\ufffdend', b'left\xff\xfeend', False)
 
+    def test_signal_expectation_is_exact_on_linux_and_darwin(self):
+        for platform in ('linux', 'darwin'):
+            for exit_code, signal_name in ((None, 'terminated'), (-15, None), (None, 'SIGTERM'),
+                                           (None, 15), (0, 'terminated')):
+                with self.subTest(platform=platform, exit_code=exit_code, signal=signal_name), tempfile.TemporaryDirectory() as root:
+                    ctx = SimpleNamespace(workspace=Path(root))
+                    out = {'code': 'command_failed', 'effect': 'applied', 'data': {
+                        'exit_code': exit_code, 'signal': signal_name, 'termination_reason': None,
+                        'output_may_be_incomplete': False}}
+                    with patch.object(tools_exec.sys, 'platform', platform), patch.object(
+                            tools_exec, '_one', return_value=out):
+                        if (exit_code, signal_name) == (None, 'terminated'):
+                            tools_exec._status(ctx, 'signal')
+                        else:
+                            with self.assertRaises(AssertionError):
+                                tools_exec._status(ctx, 'signal')
+
     def test_chain_catcher_checks_files_not_only_reported_not_run(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root)
@@ -146,7 +173,8 @@ class ExecFixtureTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root)
             fake = SimpleNamespace(root=workspace, workspace=workspace)
-            records = [dict(role=role, pid=900000+index, pgid=900000, start=[100 + index])
+            records = [dict(role=role, pid=900000+index, pgid=900000,
+                            start=[100 + index] + ([0] if sys.platform == 'darwin' else []))
                        for index, role in enumerate(('leader', 'child', 'grandchild'))]
 
             def run(**options):
@@ -163,7 +191,7 @@ class ExecFixtureTest(unittest.TestCase):
             fake.run = run
             with patch.object(tools_exec, 'events', return_value=[{'outcome': {'data': {}}}]), \
                     patch.object(tools_exec, '_snapshot', return_value={900001: {
-                        'state': 'S', 'pgid': 900000, 'start': [101]}}), \
+                        'state': 'S', 'pgid': 900000, 'start': records[1]['start']}}), \
                     patch.object(tools_exec, 'process_state', return_value=None):
                 with self.assertRaisesRegex(AssertionError, 'descendants still executing'):
                     tools_exec._tree(fake, 'timeout', 'redirected', True)

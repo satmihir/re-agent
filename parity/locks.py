@@ -10,6 +10,8 @@ import shutil
 import sys
 import tempfile
 
+from parity import identity
+
 
 SUBSTITUTION_KINDS = (
     "allocated-fixture-authority", "allocated-path-or-reference", "allocated-retry-date",
@@ -24,7 +26,8 @@ SUBSTITUTION_KINDS = (
     "retry-display-delay", "snapshot-date", "trace-time", "typed-identity",
     "typed-scope-identity", "validated-auth-refresh-expiry", "validated-derived-digest",
     "validated-derived-length", "exec-effective-timeout-elapsed", "git-do-jev-ms",
-    "git-do-allocated-remote", "exec-allocated-executable", "exec-literal-environment",
+    "git-do-allocated-remote", "git-do-failed-display-remote-prefix",
+    "exec-allocated-executable", "exec-literal-environment",
     "exec-fixture-cwd", "exec-fixture-stdout-length", "tool-allocated-path-argument",
     "git-fixture-workspace", "tool-workspace-refusal", "tool-approved-workspace-path",
     "git-index-stat-cache", "exec-owned-elapsed", "cli-version-build-metadata", "cli-validated-preview-request-length",
@@ -251,17 +254,15 @@ def validate_policy(policy):
         raise AssertionError("comparison policy ledger contract differs")
 
 
-REFERENCE_FIELDS = ("reference_commit", "reference_binary_sha256", "reference_platform",
-                    "reference_build_flags", "go_version", "python_version")
+REFERENCE_FIELDS = identity.REFERENCE_FIELDS
 
 
 def read_lock(suite, manifest):
     """Load committed normalized locks and bind their inventory, policy and pinned identity."""
-    from parity.run import HarnessError
+    from parity.run import HarnessError, verify_shared_inventory
     suite = Path(suite)
-    relative = "expected/" + sys.platform + ".json"
-    if manifest.get("normalized_lock", relative) != relative:
-        raise HarnessError("normalized lock must name " + relative)
+    selected = identity.select(manifest)
+    relative = selected["normalized_lock"]
     try:
         document = json.loads((suite / relative).read_bytes())
         inventory = json.loads((suite / "inventory.json").read_bytes())
@@ -272,12 +273,13 @@ def read_lock(suite, manifest):
         verify_inventory(expected, document["cases"])
         cases = unpack(document)
         validate_policy(json.loads((suite / "policy.json").read_bytes()))
-        identity = {key: manifest.get(key) for key in REFERENCE_FIELDS}
-        if document.get("reference_identity") != identity:
+        if document.get("reference_identity") != identity.reference(manifest):
             raise AssertionError("normalized lock pinned reference identity differs from manifest")
-        if inventory.get("reference_commit") != identity["reference_commit"] or inventory.get("reference_binary_sha256") != identity["reference_binary_sha256"]:
-            raise AssertionError("normalized lock inventory reference identity differs from manifest")
-        if manifest.get("normalized_tree_sha256", document["normalized_tree_sha256"]) != document["normalized_tree_sha256"]:
+        verify_shared_inventory(inventory, manifest)
+        declared = manifest.get("leaf_inventory")
+        if declared is not None and any(inventory.get(key) != declared.get(key) for key in ("metadata_fields", "metadata_sha256")):
+            raise AssertionError("shared inventory metadata differs from manifest")
+        if selected.get("normalized_tree_sha256") != document["normalized_tree_sha256"]:
             raise AssertionError("normalized lock tree differs from manifest")
         return {**document, "cases": cases}
     except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
@@ -293,7 +295,8 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     # The verification stamp is cache metadata, never a case.
     actual = {path.name for path in staging.iterdir()} - {"inventory.json", "cache.json", "reference", "verified.json"}
     verify_inventory(executable, actual)
-    relative = "expected/" + sys.platform + ".json"
+    selected = identity.select(manifest)
+    relative = selected["normalized_lock"]
     path = suite / relative
     old_cases = unpack(json.loads(path.read_bytes())) if path.exists() else {}
     policy = json.loads((suite / "policy.json").read_bytes())
@@ -308,7 +311,7 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
     protect_wire_locks(protected_cases, new_cases)
     protect_previous_locks(protected_cases, new_cases)
-    document = {**pack(new_cases), "reference_identity": {key: manifest.get(key) for key in REFERENCE_FIELDS}}
+    document = {**pack(new_cases), "reference_identity": identity.reference(manifest)}
     changed = sorted(case_id for case_id in old_cases.keys() & new_cases.keys() if old_cases[case_id] != new_cases[case_id])
     report = {"changed_case_digests": [{"id": case_id,
                "before": {key: old_cases[case_id][key] for key in ("normalized_sha256", "ledger_sha256")},
@@ -321,7 +324,12 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
         (prepared / "expected").mkdir()
         if (suite / "samples").exists():
             shutil.copytree(suite / "samples", prepared / "samples")
-        shutil.copyfile(staging / "inventory.json", prepared / "inventory.json")
+        inventory = json.loads((staging / "inventory.json").read_bytes())
+        if (suite / "inventory.json").exists():
+            previous = json.loads((suite / "inventory.json").read_bytes())
+            run.verify_shared_inventory(previous, manifest)
+            inventory.update({key: previous[key] for key in ("platform", "reference_binary_sha256")})
+        (prepared / "inventory.json").write_text(json.dumps(inventory, ensure_ascii=False, indent=2) + "\n")
         sample_changes = samples.refresh_samples(staging, prepared)
         for original in (suite / "samples").glob("*.tar.gz"):
             replacement = prepared / "samples" / original.name
@@ -330,13 +338,12 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
         (prepared / relative).write_bytes(canonical(document) + b"\n")
         (prepared / "policy.json").write_text(json.dumps(policy, ensure_ascii=False, indent=2) + "\n")
         generated = ["inventory.json", "policy.json",
-                     *["samples/" + entry.name for entry in (prepared / "samples").iterdir()], relative]
+                     *samples.generated_paths(prepared), relative]
         for name in generated:
             destination = suite / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(prepared / name, destination)
-    manifest["normalized_lock"] = relative
-    manifest["normalized_tree_sha256"] = document["normalized_tree_sha256"]
+    manifest["platforms"][selected["reference_platform"]]["normalized_tree_sha256"] = document["normalized_tree_sha256"]
     print(json.dumps({**report, "changed_sample_cases": sample_changes,
                       "approved_zero_exec_timing_updates": timing_updates,
                       "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))

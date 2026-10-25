@@ -1180,10 +1180,23 @@ def leaf_inventory(cases, manifest):
     declared = manifest.get("leaf_inventory")
     if declared is not None and (not isinstance(declared, dict) or declared.get("metadata_fields") != fields or declared.get("metadata_sha256") != digest):
         raise HarnessError("manifest leaf inventory fields or metadata SHA-256 differ from current cases")
-    return {"platform": sys.platform, "reference_commit": manifest.get("reference_commit"),
-            "reference_binary_sha256": manifest.get("reference_binary_sha256"),
+    from parity.identity import select
+    selected = select(manifest)
+    return {"platform": sys.platform, "reference_commit": selected["reference_commit"],
+            "reference_binary_sha256": selected["reference_binary_sha256"],
             "metadata_fields": fields, "metadata_sha256": digest,
             "cases": [dict(item, status="pending" if item["pending"] else "implemented") for item in metadata]}
+
+
+def verify_shared_inventory(inventory, manifest):
+    """Bind shared metadata's historical capture to its own platform, not the active lane."""
+    from parity.identity import SUPPORTED
+    captured = inventory.get("platform")
+    names = [name for name in SUPPORTED if name.split("/")[0] == captured]
+    entry = manifest.get("platforms", {}).get(names[0]) if len(names) == 1 else None
+    if (not isinstance(entry, dict) or inventory.get("reference_commit") != manifest.get("reference_commit")
+            or inventory.get("reference_binary_sha256") != entry.get("reference_binary_sha256")):
+        raise HarnessError("shared inventory capture reference identity differs from manifest")
 
 
 def verify_inventory(golden, cases, manifest):
@@ -1302,8 +1315,10 @@ def validate_capture(binary, manifest, golden):
     """Require the protected reference digest and a never-created golden lane."""
     if manifest.get("freeze_status") != "ready":
         raise HarnessError("capture blocked: manifest freeze_status must be ready")
+    from parity.identity import select
+    selected = select(manifest)
     digest = hashlib.sha256(Path(binary).read_bytes()).hexdigest()
-    if not manifest.get("reference_commit") or manifest.get("reference_binary_sha256") != digest:
+    if not selected["reference_commit"] or selected["reference_binary_sha256"] != digest:
         raise HarnessError("capture requires the protected reference manifest and matching binary SHA-256")
     if golden.exists() or golden.is_symlink():
         raise HarnessError("capture refuses an existing golden lane, even when empty")
@@ -1349,6 +1364,8 @@ def _main(argv=None):
             raise HarnessError("requires Linux or Darwin, Python and Git")
         suite = Path(__file__).resolve().parent
         manifest = json.loads((suite / "manifest.json").read_bytes())
+        from parity.identity import select
+        selected_identity = select(manifest)
         from parity import golden as reference
         golden = None
         # Match reference artifact-path widths as well as case-root widths.
@@ -1403,7 +1420,7 @@ def _main(argv=None):
                   "platform": sys.platform, "selected": [case.id for case in selected],
                   "omitted": [case.id for case in cases if case not in selected],
                   "reference_commit": manifest.get("reference_commit"),
-                  "reference_binary_sha256": manifest.get("reference_binary_sha256"),
+                  "reference_binary_sha256": selected_identity["reference_binary_sha256"],
                   "accepted_gaps": manifest.get("accepted_gaps", []), "results": results,
                   "counts": counts, "coverage_counts": coverage_counts,
                   "leak_checks": {"clean": sum(result.get('leak_check') == 'clean' for result in results),

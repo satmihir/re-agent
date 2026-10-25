@@ -245,9 +245,11 @@ def classify(process, report, rows, mutation, directory, baseline=False):
     if report.get("report_error") or not rows or any(not isinstance(row, dict) for row in rows):
         return "unmapped", []
     ids = [row.get("id", row.get("case", "")) for row in rows]
-    if len(ids) != len(set(ids)) or set(ids) != set(mutation["cases"]):
+    if any(not isinstance(id, str) for id in ids) or len(ids) != len(set(ids)) or set(ids) != set(mutation["cases"]):
         return "unmapped", []
-    if report.get("selected") is not None and set(report["selected"]) != set(ids):
+    selected = report.get("selected")
+    if selected is not None and (not isinstance(selected, list) or any(not isinstance(id, str) for id in selected)
+                                 or len(selected) != len(set(selected)) or set(selected) != set(ids)):
         return "unmapped", []
     if has_panic(directory):
         return "panic", []
@@ -308,6 +310,7 @@ def validate_manifest(manifest):
 
 
 def check_mutation(mutation, reference, archive, artifacts, timeout, jobs=1, all_catchers=True):
+    from parity.run import collect_cases, HarnessError
     started = time.monotonic()
     result = {key: mutation[key] for key in ("id", "description", "cases", "intended_assertion")}
     result["selectors"] = mutation.get("selectors", mutation["cases"])
@@ -318,8 +321,11 @@ def check_mutation(mutation, reference, archive, artifacts, timeout, jobs=1, all
                                  ensure_ascii=False, separators=(",", ":")).encode()
         result["patch_sha256"] = sha256(patch_bytes)
         (directory / "patch.json").write_bytes(patch_bytes + b"\n")
+        inventory = collect_cases()
+        baseline = resolve_cases(mutation, inventory)
+        result["cases"] = baseline["cases"]
         process, report, rows = run_cases(reference, mutation["cases"], directory / "baseline", timeout, jobs)
-        status, _ = classify(process, report, rows, mutation, directory / "baseline", baseline=True)
+        status, _ = classify(process, report, rows, baseline, directory / "baseline", baseline=True)
         result["baseline_status"] = status
         if status != "passed":
             result["status"] = status
@@ -341,19 +347,20 @@ def check_mutation(mutation, reference, archive, artifacts, timeout, jobs=1, all
             rounds = [cases] if all_catchers or len(cases) == 1 else [cases[:1], cases[1:]]
             ran = []
             for index, subset in enumerate(rounds):
-                round_mutation = dict(mutation, cases=subset)
+                # A leaf selector can also select declared -proxy or .parameter siblings.
+                round_mutation = resolve_cases(dict(mutation, cases=subset), inventory)
                 process, report, rows = run_cases(binary, subset, directory / ("mutant" if index == 0 else "mutant-rest"),
                                                   timeout, jobs)
                 status, assertions = classify(process, report, rows, round_mutation,
                                               directory / ("mutant" if index == 0 else "mutant-rest"))
-                ran.extend(subset)
+                ran.extend(round_mutation["cases"])
                 if status != "survived":
                     break
             result.update(status=status, assertions=assertions, mutant_cases_run=ran)
             save_json(directory / "assertions.json", {"intended": mutation["intended_assertion"],
                                                       "status": status, "matched": assertions, "cases": rows,
                                                       "cases_run": ran})
-    except (OSError, ValueError, tarfile.TarError) as error:
+    except (OSError, ValueError, tarfile.TarError, HarnessError) as error:
         result.update(status="harness_failure", error=str(error))
     finally:
         result["duration_seconds"] = round(time.monotonic() - started, 6)
@@ -382,12 +389,13 @@ def main(argv=None):
     manifest_bytes = MANIFEST.read_bytes()
     manifest = json.loads(manifest_bytes)
     from parity.run import HarnessError
+    from parity.identity import select
     try:
         validate_manifest(manifest)
         oracle = json.loads(MANIFEST.with_name("manifest.json").read_bytes())
         if oracle.get("goldens_frozen") is not True:
             raise ValueError("mutation execution blocked: goldens are not frozen")
-        if oracle.get("reference_commit") != REF_COMMIT or oracle.get("reference_binary_sha256") != sha256(reference.read_bytes()):
+        if oracle.get("reference_commit") != REF_COMMIT or select(oracle)["reference_binary_sha256"] != sha256(reference.read_bytes()):
             raise ValueError("reference binary/commit does not match frozen oracle")
         selected = manifest["mutations"]
         known = {mutation["id"] for mutation in selected}

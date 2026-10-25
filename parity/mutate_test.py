@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +24,8 @@ class MutationTests(unittest.TestCase):
         self.mutation = {"id": 99, "description": "test", "cases": ["W99.exact"],
                          "intended_assertion": "intended marker", "failure_pattern": "intended marker",
                          "patches": [{"path": "internal/reagent/test.go", "old": "before", "new": "after"}]}
+        self.inventory = [SimpleNamespace(id=id, pending="", platforms=(sys.platform,))
+                          for id in ("W99.exact", "W99.a", "W99.b", "W99.c")]
 
     def classify(self, rows, process=None, baseline=False):
         return mutate.classify(process or {"exit_code": 1}, {}, rows,
@@ -143,7 +146,8 @@ class MutationTests(unittest.TestCase):
 
     def test_baseline_must_pass_before_any_mutation_or_build(self):
         baseline = ({"exit_code": 1}, {}, [{"id": "W99.exact", "status": "failed", "reason": "missing golden"}])
-        with patch.object(mutate, "run_cases", return_value=baseline), patch.object(mutate, "apply_mutation") as apply:
+        with patch.object(mutate, "run_cases", return_value=baseline), patch.object(mutate, "apply_mutation") as apply, \
+             patch("parity.run.collect_cases", return_value=self.inventory):
             result = mutate.check_mutation(self.mutation, Path(sys.executable), b"", self.root, 1)
         apply.assert_not_called()
         self.assertEqual(result["status"], "baseline_failed")
@@ -152,6 +156,7 @@ class MutationTests(unittest.TestCase):
     def test_build_failure_is_not_a_kill(self):
         baseline = ({"exit_code": 0}, {}, [{"id": "W99.exact", "status": "passed"}])
         with patch.object(mutate, "run_cases", return_value=baseline) as run, \
+             patch("parity.run.collect_cases", return_value=self.inventory), \
              patch.object(mutate, "extract_reference"), patch.object(mutate, "apply_mutation", return_value={}), \
              patch.object(mutate, "command", return_value=({"exit_code": 1}, b"")):
             result = mutate.check_mutation(self.mutation, Path(sys.executable), b"", self.root, 1)
@@ -185,6 +190,7 @@ class MutationTests(unittest.TestCase):
                 root = self.root / ("survives" if first_survives else "killed")
                 root.mkdir()
                 with patch.object(mutate, "run_cases", side_effect=run), patch.object(mutate, "extract_reference"), \
+                     patch("parity.run.collect_cases", return_value=self.inventory), \
                      patch.object(mutate, "apply_mutation", return_value={}), patch.object(mutate, "command", side_effect=build):
                     result = mutate.check_mutation(mutation, Path(sys.executable), b"", root, 1, jobs=6, all_catchers=False)
                 self.assertEqual(result["status"], "caught")
@@ -195,6 +201,119 @@ class MutationTests(unittest.TestCase):
                 else:
                     self.assertEqual([c for c, _ in calls[1:]], [["W99.a"]])
                     self.assertEqual(result["mutant_cases_run"], ["W99.a"])
+
+    def test_real_prefix_collisions_plan_baseline_fast_and_remaining_rows(self):
+        from parity.run import collect_cases, select_cases
+        inventory = collect_cases()
+        assertions = {3: 'assert _parts(body)[0]["text"] == expected.decode()',
+                      9: 'assert escape in result.stdout',
+                      11: 'assert body["prompt_cache_key"] == digest.hexdigest()[:32]'}
+
+        def build(argv, cwd, artifacts, name, timeout, env=None):
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"mutant")
+            return {"exit_code": 0}, b""
+
+        for platform in ("linux", "darwin"):
+            for identity in (3, 9, 11):
+                for mode in ("fast", "remaining", "all"):
+                    with self.subTest(platform=platform, id=identity, mode=mode), patch.object(mutate.sys, "platform", platform):
+                        original = next(item for item in self.manifest["mutations"] if item["id"] == identity)
+                        mutation = mutate.resolve_cases(original, inventory)
+                        first = mutation["cases"][0]
+                        self.assertEqual([case.id for case in select_cases(inventory, [first])], [first, first + "-proxy"])
+                        calls = []
+
+                        def run(binary, cases, directory, timeout, jobs=1):
+                            selected = [case.id for case in select_cases(inventory, cases)]
+                            calls.append((list(cases), selected, jobs))
+                            passed = len(calls) == 1 or (mode == "remaining" and len(calls) == 2)
+                            rows = [{"id": id, "status": "passed" if passed else "failed",
+                                     "reason": "" if passed else 'Traceback (most recent call last):\n    ' + assertions[identity] + '\nAssertionError\n'}
+                                    for id in selected]
+                            return {"exit_code": 0 if passed else 1}, {"selected": selected}, rows
+
+                        root = self.root / f"{platform}-{identity}-{mode}"
+                        root.mkdir()
+                        with patch.object(mutate, "run_cases", side_effect=run), patch.object(mutate, "extract_reference"), \
+                             patch.object(mutate, "apply_mutation", return_value={}), patch.object(mutate, "command", side_effect=build):
+                            result = mutate.check_mutation(mutation, Path(sys.executable), b"", root, 300,
+                                                           jobs=6, all_catchers=mode == "all")
+                        self.assertEqual(result["baseline_status"], "passed")
+                        self.assertEqual(result["status"], "caught")
+                        self.assertEqual(result["selectors"], original["cases"])
+                        self.assertCountEqual(result["cases"], calls[0][1])
+                        self.assertTrue(all(jobs == 6 for _, _, jobs in calls))
+                        expected = [id for _, selected, _ in calls[1:] for id in selected]
+                        self.assertCountEqual(result["mutant_cases_run"], expected)
+                        self.assertEqual(calls[1][0], mutation["cases"] if mode == "all" else [first])
+                        self.assertEqual(len(calls), 3 if mode == "remaining" else 2)
+                        if mode == "remaining":
+                            self.assertEqual(calls[2][0], mutation["cases"][1:])
+                        receipt = json.loads((root / f"mutation-{identity:02d}/assertions.json").read_bytes())
+                        self.assertCountEqual(receipt["cases_run"], expected)
+                        self.assertEqual({row["id"] for row in receipt["cases"]}, set(calls[-1][1]))
+                        self.assertEqual({item["case"] for item in result["assertions"]}, set(calls[-1][1]))
+
+    def test_baseline_selectors_are_expanded_before_report_validation(self):
+        from parity.run import collect_cases, select_cases
+        inventory = collect_cases()
+        mutation = dict(self.mutation, cases=["W10.base"])
+        selected = [case.id for case in select_cases(inventory, mutation["cases"])]
+        baseline = ({"exit_code": 0}, {"selected": selected},
+                    [{"id": id, "status": "passed"} for id in selected])
+        with patch.object(mutate, "run_cases", return_value=baseline), patch.object(mutate, "extract_reference"), \
+             patch.object(mutate, "apply_mutation", return_value={}), \
+             patch.object(mutate, "command", return_value=({"exit_code": 1}, b"")):
+            result = mutate.check_mutation(mutation, Path(sys.executable), b"", self.root, 300)
+        self.assertEqual(result["baseline_status"], "passed")
+        self.assertEqual(result["status"], "build_failed")
+        self.assertEqual(result["cases"], selected)
+        self.assertEqual(result["selectors"], ["W10.base"])
+
+    def test_planned_prefix_rows_reject_extra_missing_duplicate_or_wrong_selected_ids(self):
+        from parity.run import collect_cases
+        self.mutation = mutate.resolve_cases(dict(self.mutation, cases=["W10.base"]), collect_cases())
+        ids = ["W10.base", "W10.base-proxy"]
+        rows = [{"id": id, "status": "failed", "assertion_failures": ["intended marker"]} for id in ids]
+        for reported, selected in ((rows + [dict(rows[0], id="W10.base-undeclared")], ids + ["W10.base-undeclared"]),
+                                   (rows + [dict(rows[0], id="W11.turns")], ids + ["W11.turns"]),
+                                   (rows[:1], ids[:1]), (rows + rows[:1], ids),
+                                   (rows, ids[:1]), (rows, ids + ["W11.turns"]),
+                                   (rows, ids + ids[:1]), (rows, "W10.base")):
+            with self.subTest(reported=reported, selected=selected):
+                status, _ = mutate.classify({"exit_code": 1}, {"selected": selected}, reported, self.mutation, self.root)
+                self.assertEqual(status, "unmapped")
+        self.assertEqual(mutate.classify({"exit_code": 1}, {"selected": list(reversed(ids))},
+                                         list(reversed(rows)), self.mutation, self.root)[0], "caught")
+        # A runner's self-reported selection cannot authorize an undeclared sibling.
+        self.mutation = dict(self.mutation, cases=ids[:1])
+        self.assertEqual(mutate.classify({"exit_code": 1}, {"selected": ids}, rows, self.mutation, self.root)[0], "unmapped")
+
+    def test_prefix_expansion_still_rejects_pending_and_unsupported_siblings(self):
+        inventory = [SimpleNamespace(id="W99.exact", pending="", platforms=(sys.platform,)),
+                     SimpleNamespace(id="W99.exact-proxy", pending="", platforms=(sys.platform,))]
+        for pending, platforms in (("not implemented", (sys.platform,)), ("", ("unsupported",))):
+            with self.subTest(pending=pending, platforms=platforms):
+                inventory[1].pending, inventory[1].platforms = pending, platforms
+                with self.assertRaisesRegex(ValueError, "pending/unsupported"):
+                    mutate.resolve_cases(self.mutation, inventory)
+
+    def test_expanded_rows_do_not_hide_unrelated_assertions_or_process_failures(self):
+        from parity.run import collect_cases
+        self.mutation = mutate.resolve_cases(dict(self.mutation, cases=["W10.base"]), collect_cases())
+        rows = [{"id": id, "status": "failed", "assertion_failures": ["intended marker"]}
+                for id in self.mutation["cases"]]
+        self.assertEqual(self.classify(rows)[0], "caught")
+        self.assertEqual(self.classify([rows[0], dict(rows[1], assertion_failures=["unrelated"])])[0], "unrelated_assertion")
+        self.assertEqual(self.classify([rows[0], dict(rows[1], status="pending")])[0], "unmapped")
+        self.assertEqual(self.classify(rows, {"exit_code": 0})[0], "harness_failure")
+        self.assertEqual(self.classify(rows, {"exit_code": 1, "timeout": True})[0], "harness_failure")
+        proxy = self.root / "W10.base-proxy"
+        proxy.mkdir()
+        (proxy / "invoke-001.status").write_text("-15")
+        self.assertEqual(self.classify(rows)[0], "harness_failure")
+        (proxy / "invoke-001.stderr").write_text("panic: intended marker\n")
+        self.assertEqual(self.classify(rows)[0], "panic")
 
     def test_case_runs_pass_jobs_to_the_runner(self):
         with patch.object(mutate, "command", return_value=({"exit_code": 0}, b"")) as command, patch.object(mutate, "load_report", return_value=({}, [])):
@@ -270,6 +389,36 @@ class MutationTests(unittest.TestCase):
         archive.assert_not_called()
         check.assert_not_called()
         self.assertFalse((self.root / "not-created").exists())
+
+    def test_reference_binary_must_match_selected_lane_not_the_other_platform(self):
+        digest = mutate.sha256(Path(sys.executable).resolve().read_bytes())
+        for matches in (False, True):
+            with self.subTest(matches=matches):
+                lane = {"reference_binary_sha256": digest if matches else "0" * 64,
+                        "go_version": "go version go1.23.3 linux/amd64",
+                        "python_version": "Python 3.11.5", "normalized_lock": "expected/linux.json"}
+                oracle = {"goldens_frozen": True, "reference_commit": mutate.REF_COMMIT,
+                          "platforms": {"linux/amd64": lane,
+                                        "darwin/arm64": {**lane, "reference_binary_sha256": digest}}}
+                destination = self.root / ("matches" if matches else "wrong-lane")
+                with patch.object(mutate.json, "loads", side_effect=[self.manifest, oracle]), \
+                     patch("parity.identity.current_platform", return_value="linux/amd64"), \
+                     patch("parity.identity.sys.platform", "linux"), \
+                     patch.object(mutate, "archive_reference", side_effect=ValueError("stop before build")) as archive, \
+                     patch("sys.stderr", new_callable=io.StringIO) as stderr, \
+                     patch("sys.stdout", new_callable=io.StringIO):
+                    argv = ["--bin", sys.executable, "--reference-tree", str(mutate.SUITE),
+                            "--artifacts", str(destination), "--mutation", "3"]
+                    if matches:
+                        self.assertEqual(mutate.main(argv), 1)
+                        archive.assert_called_once()
+                    else:
+                        with self.assertRaises(SystemExit) as result:
+                            mutate.main(argv)
+                        self.assertEqual(result.exception.code, 2)
+                        self.assertIn("reference binary/commit does not match", stderr.getvalue())
+                        archive.assert_not_called()
+                        self.assertFalse(destination.exists())
 
     def test_definition_patterns_target_current_intended_assertion_expressions(self):
         examples = {

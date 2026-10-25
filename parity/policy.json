@@ -176,6 +176,12 @@
       "replacement": 0
     },
     {
+      "kind": "git-do-failed-display-remote-prefix",
+      "owner": "Linux T52.conflict-lease.lease nonterminal invocation stderr failed lease-push activity only",
+      "validation": "Unique matching accepted/start/finish call in the owning invocation, exact rebase_push arguments and final lease-push argv/exit 1, exact independent recorder stdout/stderr, unique successful bare-init/remote-add allocation, original sanitized ASCII 120-cell clipping and ellipsis, and complete literal activity line",
+      "replacement": "Only the witnessed visible allocated-root prefix becomes <ROOT>; keep the original ellipsis and every nonpath byte, never normalize then reclip"
+    },
+    {
       "kind": "git-do-allocated-remote",
       "owner": "Registered fixture Git command argv (local remote, clone and hostile helper paths), witnessed remote diagnostics, and exact owned failed-push message echoes",
       "validation": "Exact allocated root/origin.git, successful independent bare-init plus remote-add witnesses, exact independent command output for diagnostic substitutions; no arbitrary Git prose",

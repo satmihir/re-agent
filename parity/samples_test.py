@@ -10,6 +10,7 @@ import tarfile
 import unittest
 
 from parity.locks import unpack
+from parity.identity import current_platform
 from parity.observe_delivery import _PLANS
 from parity.samples import SELECTIONS, bundle, normalized_digest
 
@@ -70,10 +71,65 @@ class SampleTests(unittest.TestCase):
                 self.assertEqual(len(artifacts), row['artifacts'])
                 self.assertEqual(sum(map(len, artifacts.values())), row['normalized_bytes'])
                 self.assertEqual(normalized_digest(artifacts), row['normalized_sha256'])
-                self.assertEqual(raw, bundle(row['id'], artifacts, metadata['artifact_policies']))
+                rebuilt = bundle(row['id'], artifacts, metadata['artifact_policies'])
+                # RFC 1952's OS byte describes the encoder, not normalized artifacts.
+                # Python 3.11.5's mtime=0 fast path inherits zlib's platform byte.
+                headers = {'darwin': b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x13',
+                           'linux': b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03'}
+                self.assertEqual(raw[:10], headers['darwin'])
+                self.assertEqual(rebuilt[:10], headers[current_platform().split('/')[0]])
+                self.assertEqual(raw, headers['darwin'] + rebuilt[10:])
                 self.assertEqual(locks[row['id']]['artifacts'], [
                     [name, len(data), hashlib.sha256(data).hexdigest(), metadata['artifact_policies'][name]]
                     for name, data in sorted(artifacts.items())])
+
+    def test_linux_refresh_and_verification_are_isolated_from_darwin_bytes(self):
+        import tempfile
+        from unittest.mock import patch
+        from parity import samples, run
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lane, suite = root / 'lane', root / 'suite'
+            lane.mkdir()
+            (suite / 'samples').mkdir(parents=True)
+            (suite / 'samples/index.json').write_bytes(b'Darwin index sentinel')
+            (suite / 'samples/W00.test.tar.gz').write_bytes(b'Darwin bundle sentinel')
+            inventory = {'platform': 'linux', 'cases': [{'id': 'W00.test', 'description': 'fixture', 'status': 'implemented'}]}
+            (lane / 'inventory.json').write_text(json.dumps(inventory))
+            documents = {'artifact-policies.json': b'{"stdout":"B"}'}
+            capture = {'normalized': {'stdout': b'Linux bytes'}}
+            with patch('sys.platform', 'linux'), patch('platform.machine', return_value='x86_64'), \
+                 patch.object(samples, 'SELECTIONS', {'W00.test': 'fixture'}), \
+                 patch('parity.run.read_frozen_case', return_value=(documents, [], capture)), \
+                 patch('parity.run.read_metadata', return_value=documents), \
+                 patch('parity.run.load_golden', return_value=capture['normalized']):
+                self.assertEqual(samples.refresh_samples(lane, suite), ['W00.test'])
+                samples.verify_samples(lane, suite)
+                self.assertEqual(samples.generated_paths(suite), ['samples/linux/W00.test.tar.gz', 'samples/linux/index.json'])
+                index_path = suite / 'samples/linux/index.json'
+                index = json.loads(index_path.read_bytes())
+                index['platform'] = 'darwin'
+                index_path.write_text(json.dumps(index))
+                with self.assertRaisesRegex(run.HarnessError, 'sample index platform'):
+                    samples.verify_samples(lane, suite)
+            self.assertEqual((suite / 'samples/index.json').read_bytes(), b'Darwin index sentinel')
+            self.assertEqual((suite / 'samples/W00.test.tar.gz').read_bytes(), b'Darwin bundle sentinel')
+            with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'):
+                self.assertNotIn('linux', samples.sample_files(suite / 'samples'))
+            with patch('sys.platform', 'linux'), patch('platform.machine', return_value='x86_64'):
+                (suite / 'samples/linux').rename(suite / 'linux-backup')
+                (suite / 'samples/linux').symlink_to(suite / 'samples', target_is_directory=True)
+                with self.assertRaisesRegex(run.HarnessError, 'sample directory must not be a symlink'):
+                    samples.sample_directory(suite)
+
+    def test_linux_standalone_inventory_migration_cannot_replace_shared_capture(self):
+        from unittest.mock import patch
+        from parity import samples, run
+        with patch('sys.platform', 'linux'), patch('platform.machine', return_value='x86_64'), \
+             patch('parity.run.read_lane_inventory') as read:
+            with self.assertRaisesRegex(run.HarnessError, 'inventory migration is Darwin-only'):
+                samples.refresh_inventory(Path('unused-lane'), Path('unused-suite'))
+            read.assert_not_called()
 
     def test_semantic_policy_enumerates_only_the_registered_delivery_cases(self):
         policy = json.loads(Path(__file__).with_name('policy.json').read_bytes())
