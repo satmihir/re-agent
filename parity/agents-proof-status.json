@@ -1,16 +1,39 @@
 {
-  "status": "matcher_lock_race_fixed_linux_three_repeats_passed_awaiting_mac_recapture",
+  "status": "earlier_area_migrations_permanently_guarded_linux_republished_ready_for_darwin_publication",
   "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
   "base_commit": "7d1373aa56d283798b4ffab37af613be6308e27d",
   "platform": "linux/amd64",
   "declared": {"total": 4140, "runnable": 4111, "pending": 29, "agents": 321},
   "publication_completed": true,
-  "darwin_entries": "unchanged; pending the Mac capture",
+  "darwin_entries": "unchanged locally; user reports all cases passed; local Mac publication must run the permanent guards",
   "linux_expected_and_samples_published": true,
   "full_comparison_report_available": true,
   "full_comparison_report": "/tmp/reagent-parity-agents-proof/phase3/full-report.json",
   "full_comparison_original_report": "/tmp/reagent-parity-cases-hw230efu/artifacts/report.json",
   "historical_failed_full_report": "/tmp/reagent-parity-agents-proof/phase2-full-report.json",
+  "earlier_area_oracle_migrations": {
+    "proof_root": "/tmp/reagent-parity-agents-proof/phase6-exec-ledger",
+    "platforms": ["linux/amd64", "darwin/arm64"],
+    "guard": "approved_exec_ledger_updates",
+    "exec_case_count": 32,
+    "shell_case_count": 5,
+    "reference_captures": 0,
+    "normalized_artifacts_unchanged": true,
+    "exec_delta": {"added_row_occurrences": 342, "removed_row_occurrences": 171, "added_site_multiplicity": 358, "removed_site_multiplicity": 179, "unique_inverse_mask": 7, "masks_per_case": 8},
+    "unit_fixture": "fixtures/exec-ledger-migration.json",
+    "fixture_sha256": "dc70570afa36fac57f4e1a8057f56641f4d7f2cd4146ffb0be1fb226396e4fda",
+    "guard_tests": 11,
+    "python_gate": {"tests": 683, "skipped": 14, "passed": true, "seconds": 77.157},
+    "go_gate": {"command": "go build ./... && go vet ./... && go test ./...", "exit_code": 0, "go_test_cached": true, "seconds": 1.98},
+    "publication": {"jobs": 12, "replayed_cases": 4111, "seconds": 502.117, "old_baselines_restored_in_external_preparation": 37, "permanent_exec_approvals": 32, "permanent_shell_approvals": 5, "process_local_approval_callbacks": false, "linux_lock_bytes_unchanged": true, "samples_unchanged": true, "receipt": "/tmp/reagent-parity-agents-proof/phase6-exec-ledger/publication.json"},
+    "suite_digest": "1a43407ad988d77c4bee4c31cf677f87a93ae2f806c72f3dbe44f49cdbcb753d",
+    "normalized_tree_sha256": "c8cab1ef43c1c2e71e4b7966928daec7d25cb67133bf7894ed7e6abd9a782ff8",
+    "user_reported_darwin_execution": "all cases passed at c61b919; publication refused 32 unapproved earlier-area T ledger changes",
+    "local_mac_execution_or_publication": false,
+    "full_candidate_comparison_rerun": false,
+    "agents_used": ["t13 exec-ledger-evidence", "t14 exec-ledger-tests"],
+    "lifetime_agent_accounting": {"total_agents": 14, "input_tokens": 52216582, "cached_input_tokens": 49051136, "output_tokens": 339293, "reasoning_tokens": 83321, "unreported_attempts": 1, "parent_excluded": true}
+  },
   "matcher_lock_repair": {
     "proof_root": "/tmp/reagent-parity-agents-proof/phase5-matcher-race",
     "fresh_reference_cases": ["A12.poll-0", "A12.poll-1", "T27.filter-tripwire"],
@@ -108,7 +131,9 @@
   ],
   "retained": {
     "initial_failed_capture": "/tmp/reagent-parity-agents-proof/cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/failed-1792915126312807276",
-    "all_4111_frozen_cases": "/tmp/reagent-parity-agents-proof/phase5-matcher-race/replayed-lane",
+    "all_4111_frozen_cases": "/tmp/reagent-parity-agents-proof/phase6-exec-ledger/replayed-lane",
+    "prior_phase5_frozen_cases": "/tmp/reagent-parity-agents-proof/phase5-matcher-race/replayed-lane",
+    "prior_phase5_canonical_cache": "/tmp/reagent-parity-agents-proof/phase6-exec-ledger/canonical-before",
     "prior_phase4_frozen_cases": "/tmp/reagent-parity-agents-proof/phase4-darwin-fixes/replayed-lane",
     "prior_phase4_canonical_cache": "/tmp/reagent-parity-agents-proof/phase5-matcher-race/canonical-before",
     "prior_phase3_frozen_cases": "/tmp/reagent-parity-agents-proof/phase3/replayed-lane",
@@ -122,11 +147,11 @@
     "pagination_probe": "/tmp/reagent-parity-agents-proof/pagination-final"
   },
   "remaining_blockers": [
-    "Darwin new leaves need real Mac capture; C18/C43/C44 remain on #185; T36.before-start needs its exact pre-dispatch barrier"
+    "User's Darwin capture passed all cases; guarded publication must complete on the Mac. C18/C43/C44 remain on #185; T36.before-start needs its exact pre-dispatch barrier"
   ],
   "production_go_changed": false,
   "new_dependencies": false,
   "live_provider_calls": false,
   "tty_check": "not run: terminal production code was not changed",
-  "agent_concurrency_deviation": "Nested delegation briefly exceeded the requested global limit of four before parent detection; further subdelegation was prohibited. Historical eight-agent accounting is in agents-area4.md; current 12-agent lifetime accounting is in agents-comparison-repair.md. No nested delegation occurred during comparison repair or matcher audit."
+  "agent_concurrency_deviation": "Nested delegation briefly exceeded the requested global limit of four before parent detection; further subdelegation was prohibited. Historical eight-agent accounting is in agents-area4.md; current 14-agent lifetime accounting is in agents-comparison-repair.md. No nested delegation occurred during comparison repair, matcher audit or ledger migration."
 }

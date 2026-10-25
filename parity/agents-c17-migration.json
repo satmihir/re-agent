@@ -1,5 +1,5 @@
 {
-  "status": "inverse-proven Linux migration published from retained raw replay; Darwin migration remains pending Mac capture",
+  "status": "inverse-proven Linux migration republished through permanent guards; user reports Darwin execution passed, with local Mac publication still required",
   "evidence": "/tmp/reagent-parity-agents-proof/recovered-lane",
   "method": "approved_shell_timing_updates replay-validates raw evidence, requires identical normalized artifact descriptors and normalized_sha256, and finds exactly one omission mask among the eight masks of the three approved duration-ms sites that reconstructs the exact old canonical case hash",
   "sites": [
@@ -57,5 +57,5 @@
     "C17.success": "9842d47932b2859f68e163bdfdc0bee2de8b26d37d0e41bac798c53a4dbb3fb1"
   },
   "all_eight_normalized_artifacts_unchanged": true,
-  "darwin": "unchanged; approved C17 migration will be measured during the Mac capture"
+  "darwin": "unchanged locally; user's c61b919 capture passed every case; the permanent shell and exec guards must complete the Mac publication"
 }

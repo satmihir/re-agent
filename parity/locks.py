@@ -357,6 +357,7 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
             new_cases = {case_id: future.result() for case_id, future in futures.items()}
     protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
     protected_cases, shell_updates = approved_shell_timing_updates(protected_cases, new_cases, staging)
+    protected_cases, exec_updates = approved_exec_ledger_updates(protected_cases, new_cases, staging)
     protect_wire_locks(protected_cases, new_cases)
     protect_previous_locks(protected_cases, new_cases)
     document = {**pack(new_cases), "reference_identity": identity.reference(manifest)}
@@ -395,9 +396,10 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     print(json.dumps({**report, "changed_sample_cases": sample_changes,
                       "approved_zero_exec_timing_updates": timing_updates,
                       "approved_shell_timing_updates": shell_updates,
+                      "approved_exec_ledger_updates": exec_updates,
                       "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))
     return {**document, "cases": new_cases, "approved_zero_exec_timing_updates": timing_updates,
-            "approved_shell_timing_updates": shell_updates}
+            "approved_shell_timing_updates": shell_updates, "approved_exec_ledger_updates": exec_updates}
 
 
 def approved_zero_exec_timing_updates(old_cases, new_cases, staging):
@@ -471,6 +473,82 @@ def approved_shell_timing_updates(old_cases, new_cases, staging):
                             old_ledger_sha256=previous['ledger_sha256'], new_ledger_sha256=actual['ledger_sha256'],
                             inverse_case_sha256=digest(reconstructed), added_sites=omitted,
                             normalized_sha256=actual['normalized_sha256']))
+    return protected, updates
+
+
+EXEC_LEDGER_CASES = {
+    **dict.fromkeys(('T24.create', 'T24.parent-redirect', 'T24.parent-swap', 'T24.symlink'), (0, None, 4, 3)),
+    'T29.literal-environment': (0, 'exec-literal-environment', 2, 1),
+    **dict.fromkeys(('T30.timeout-1', 'T30.timeout-omitted', 'T31.nonzero', 'T31.signal', 'T31.success',
+                     'T33.exact', 'T33.interleaved', 'T33.invalid', 'T33.large', 'T33.multibyte'), (0, None, 2, 1)),
+    **{'T32.success-' + str(n): (n if n > 1 else 0, 'exec-fixture-cwd', 2, 1) for n in range(1, 9)},
+    **{'T32.failure-' + str(n): (n, 'exec-fixture-cwd', 2, 1) for n in (1, 4, 8)},
+    **dict.fromkeys(('T32.timeout', 'T34.redirected-escape', 'T34.redirected-group',
+                     'T34.retained-escape', 'T34.retained-group'), (1, None, 2, 1)),
+    'T35.redirected': (2, None, 2, 1),
+}
+
+
+def exec_ledger_sites(case_id):
+    """Expand the exact relative echo and legacy history sites for the approved exec cases."""
+    steps, output_kind, history, count = EXEC_LEDGER_CASES[case_id]
+    fields = [('resolved_executable', 'exec-allocated-executable')]
+    if output_kind:
+        fields.extend([('stdout', output_kind), ('stdout_bytes_seen', 'exec-fixture-stdout-length')])
+    relative = [(['data', 'steps', step, field] if steps else ['data', field], kind)
+                for step in range(steps or 1) for field, kind in fields]
+    added = [[artifact, path, kind, count] for artifact in ('cache-input', 'trace-1.jsonl') for path, kind in relative]
+    removed = [['trace-1.jsonl', ['data', 'history', history, 'tool', 'outcome'] + path, kind, count]
+               for path, kind in relative]
+    return added, removed
+
+
+def approved_exec_ledger_updates(old_cases, new_cases, staging):
+    """Allow only 32 replay-proven exec ledger migrations with one exact inverse mask."""
+    from parity import run
+
+    protected, updates = dict(old_cases), []
+    for case_id, previous in sorted(old_cases.items()):
+        actual = new_cases.get(case_id)
+        if (case_id not in EXEC_LEDGER_CASES or actual is None or actual == previous
+                or actual != dict(previous, ledger_sha256=actual['ledger_sha256'])):
+            continue
+        documents, ledger, captured = run.read_frozen_case(Path(staging) / case_id)
+        policies = json.loads(documents['artifact-policies.json'])
+        run.validate_replay(captured['raw'], json.loads(documents['replay.json']),
+                            captured['normalized'], policies, ledger[:-1])
+        if case_lock(captured['normalized'], policies, ledger) != actual:
+            raise AssertionError('exec ledger migration evidence differs: ' + case_id)
+        contract = ledger_contract(ledger, captured['normalized'])
+        added, removed = exec_ledger_sites(case_id)
+        if (any(contract['sites'].count(site) != 1 for site in added)
+                or any(site in contract['sites'] for site in removed)):
+            raise AssertionError('exec ledger migration lacks exact sites: ' + case_id)
+        # Only the complete, identified echo relocation is approved; never a partial mask.
+        groups = [(False, [site for site in added if site[0] == 'cache-input']),
+                  (False, [site for site in added if site[0] == 'trace-1.jsonl']), (True, removed)]
+        matches = []
+        for mask in range(1 << len(groups)):
+            sites = list(contract['sites'])
+            for index, (restore, rows) in enumerate(groups):
+                if mask & (1 << index):
+                    sites = sites + rows if restore else [site for site in sites if site not in rows]
+            inverse = dict(contract, sites=sorted(sites, key=canonical))
+            reconstructed = dict(actual, ledger_sha256=digest(inverse))
+            if reconstructed == previous:
+                matches.append((mask, reconstructed))
+        if len(matches) != 1 or matches[0][0] != 7:
+            raise AssertionError('exec ledger migration cannot reconstruct unique old lock with mask 7: ' + case_id)
+        mask, reconstructed = matches[0]
+        protected[case_id] = actual
+        updates.append(dict(id=case_id, old_case_sha256=digest(previous), new_case_sha256=digest(actual),
+                            old_ledger_sha256=previous['ledger_sha256'], new_ledger_sha256=actual['ledger_sha256'],
+                            inverse_case_sha256=digest(reconstructed), normalized_sha256=actual['normalized_sha256'],
+                            inverse_mask=mask, mask_count=1 << len(groups),
+                            omitted_sites=[site for index, (restore, rows) in enumerate(groups)
+                                           if not restore and mask & (1 << index) for site in rows],
+                            restored_sites=[site for index, (restore, rows) in enumerate(groups)
+                                            if restore and mask & (1 << index) for site in rows]))
     return protected, updates
 
 
