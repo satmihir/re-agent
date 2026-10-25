@@ -143,6 +143,23 @@ class SchedulingTest(unittest.TestCase):
         self.assertEqual(seen, [cases[index].id for index in (1, 3, 0, 2)])
         self.assertEqual(results, [case.id for case in cases])
 
+    def test_slow_leaves_start_first_within_each_phase_and_results_keep_input_order(self):
+        seen = []
+        cases = [Case('W90.fast', '', None), Case('W91.slow', '', None, slow=True),
+                 Case('W92.exclusive-fast', '', None, exclusive=True),
+                 Case('W93.exclusive-slow', '', None, slow=True, exclusive=True), Case('W94.slow', '', None, slow=True)]
+        results = run.schedule_cases(cases, lambda case_id: seen.append(case_id) or case_id,
+                                    lambda case: (case.id,), 1, ThreadPoolExecutor)
+        self.assertEqual(seen, ['W91.slow', 'W94.slow', 'W90.fast', 'W93.exclusive-slow', 'W92.exclusive-fast'])
+        self.assertEqual(results, [case.id for case in cases])
+
+    def test_job_defaults_scale_comparisons_but_keep_captures_at_six(self):
+        for cpus, comparison, capture, replay in ((None, 1, 1, 1), (2, 1, 1, 1), (8, 6, 6, 6),
+                                                  (14, 12, 6, 12), (32, 12, 6, 30)):
+            with self.subTest(cpus=cpus), patch.object(run.os, 'cpu_count', return_value=cpus):
+                self.assertEqual((run.default_jobs(), run.capture_jobs(), run.replay_jobs()),
+                                 (comparison, capture, replay))
+
     def test_candidate_worker_errors_continue_both_phases_but_capture_errors_propagate(self):
         for failed_index in (0, 1):
             for on_error in (None, run.worker_failure):

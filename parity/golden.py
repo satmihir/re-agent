@@ -201,7 +201,7 @@ def verify_cache(lane, suite, manifest, cases, lock, jobs=4, only=None):
     actual = {path.name for path in lane.iterdir()} - {"inventory.json", "cache.json", "reference", STAMP}
     check_ids(actual, expected)
     selected = sorted(expected) if only is None else sorted(set(only) & set(expected))
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
+    with ProcessPoolExecutor(max_workers=max(jobs, run.replay_jobs())) as pool:
         futures = [pool.submit(verify_case, case_id, lane / case_id, expected[case_id]) for case_id in selected]
         for future in futures:
             future.result()
@@ -377,7 +377,7 @@ def ensure_cache(suite, manifest, cases, jobs=4, selected=None, full=False, read
 def _main(argv=None):
     """Regenerate the pinned reference while the CLI holds the capture lock."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--jobs", type=int, default=run.default_jobs())
+    parser.add_argument("--jobs", type=int, default=run.capture_jobs())
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args(argv)
     started = time.monotonic()

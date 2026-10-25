@@ -40,8 +40,18 @@ class HarnessError(Exception):
 
 
 def default_jobs():
-    """Leave two cores for the system and the candidate's own threads; barriers hold at six."""
-    return max(1, min(6, (os.cpu_count() or 2) - 2))
+    """Leave two cores for the system and the candidate's own threads; comparisons hold at twelve."""
+    return max(1, min(12, (os.cpu_count() or 2) - 2))
+
+
+def capture_jobs():
+    """Reference captures publish protected locks, so they keep the proven limit of six."""
+    return min(6, default_jobs())
+
+
+def replay_jobs():
+    """Raw replay and lock derivation run no binaries or barriers, so they may use every spare core."""
+    return max(1, (os.cpu_count() or 2) - 2)
 
 
 def private_roots():
@@ -452,6 +462,8 @@ def schedule_cases(cases, worker, arguments, jobs, executor, on_error=None):
     results = [None] * len(cases)
     for exclusive in (False, True):
         phase = [(index, case) for index, case in enumerate(cases) if case.exclusive == exclusive]
+        # Start slow leaves first so none of them is the last case running; results keep input order.
+        phase.sort(key=lambda item: not getattr(item[1], 'slow', False))
         if not phase:
             continue
         # Closing the first executor also joins its workers before exclusive startup.
@@ -1330,7 +1342,7 @@ def _main(argv=None):
     parser.add_argument("--bin", default=os.environ.get("BIN"))
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--area", action="append", default=[])
-    parser.add_argument("--jobs", type=int, default=default_jobs())
+    parser.add_argument("--jobs", type=int, help="parallel cases (default: default_jobs(); capture_jobs() with --golden-update)")
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--keep-artifacts", action="store_true", help="retain passing cases too; failures and the report are always kept")
     parser.add_argument("--skip-slow", action="store_true", help="leave out slow leaves for a faster inner loop; never a gate")
@@ -1342,12 +1354,16 @@ def _main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.golden_update:
+            if args.jobs is None:
+                args.jobs = capture_jobs()
             if args.jobs < 1:
                 raise HarnessError("--jobs must be positive")
             if args.bin or args.case or args.area or args.artifacts or args.keep_artifacts or args.skip_slow or args.list:
                 raise HarnessError("--golden-update cannot be combined with candidate or selection arguments")
             from parity import golden as reference
             return reference.main(["--update", "--jobs", str(args.jobs)])
+        if args.jobs is None:
+            args.jobs = default_jobs()
         cases = collect_cases()
         selected = select_cases(cases, args.case, args.area)
         if args.skip_slow:
