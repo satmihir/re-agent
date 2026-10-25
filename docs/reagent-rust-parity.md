@@ -533,11 +533,10 @@ python3 -m unittest parity.manifest_test
 ```
 
 `--list` prints every stable leaf ID and its pending reason without a binary or
-network request. In the area-4 draft, `parity/manifest.json` describes the new
-live declarations but `parity/inventory.json` remains the old published inventory:
-atomic publication stopped on missing C23/C24/C25 sample families after the allowed
-A36 observer repair. The mismatch fails closed and is not an accepted gate.
-See `parity/agents-area4.md` for the exact failed proofs and retained raw evidence.
+network request. Area-4 retained raw replay published coherent manifest/inventory,
+Linux locks and samples; Darwin's existing bytes remain unchanged. The full Linux
+comparison nevertheless failed 34 leaves and mutations caught 6/8, not a green gate.
+See `parity/agents-area4.md` for exact proof results and retained raw evidence.
 The live declarations' reproducible metadata SHA-256 is recorded in the manifest.
 The digest covers the ID-sorted array of `id`, `description`, `comparison`, `slow`,
 `pending`, `platforms` (in their declared order) and `exclusive`, serialized as UTF-8
@@ -795,7 +794,7 @@ Evidence: `tool_agents.go:65–181`, `agent_context.go:27–130`,
 | A25 | /review levels/default/bad/blocked/agents off | Prompt injection as ordinary turn, invalid no I/O; complete embedded prompt bytes N |
 | A26 | Script fresh finders/verifier/paging/probe lifecycle, read-only/plan | Harness can carry policy; prompt independence/budgets/disclosure/cleanup bytes, tool effects N/S; no judgment claim |
 | A27 | Manual summary text/tool/refusal/empty/large/provider failure/cancel | Transactional history, block/read-digest/GC clearing only on success; retained call IDs; following turn; N/S |
-| A28 | Chat60% warning/80% preturn and in-run40%; estimate versus measured input | Summary extra step/usage, original task+Summary, spare-step/8-summary/reserve16k/size skip, failure fallback/cancel; N/S |
+| A28 | Chat60% warning/80% preturn and in-run40%; estimate versus measured input | Summary extra step/usage, original task+Summary, spare-step/healthy summaries beyond eight and thirty/reserve16k/size skip, failure fallback/cancel; N/S |
 | A29 | GC off/on; redundant/stale reads/repeated exec; recent3 steps/errors/unknown/agent results | Eligible original IDs only, protected records untouched, before compaction; N/S |
 | A30 | Floor6.25%/share15%/interval16, break-even/near-compaction, request count16–48 | Independent arithmetic and trigger/event bytes, full next-request rebuild minus fixed values, pass prevents compaction where applicable; N/S |
 | A31 | Later request placeholders, earlier traces/history intact; recall unchanged/stale/missing | Request-view-only GC, recorded original returned/effect none, stale digest note/no authorization; N/B original |
@@ -809,12 +808,12 @@ Evidence: `tool_agents.go:65–181`, `agent_context.go:27–130`,
 | A39 | Reverse child release order then root wait for both; independently ready boundaries; terminal no background wake | After wait publication witness, lexical child-ID delivery order and per-child queue order exactly once N; truly unconstrained ready subsets causal S (§4) |
 | A40 | Fork/reset/compact/resume call IDs plus file mutation and recalled outcomes | No replay after compact/switch/resume; reset's deliberate ledger clearing; histories/digests/GC restrictions consistent; N/S |
 
-The executable inventory currently has 321 A leaves (320 runnable). The named
-`A28.inrun-eight-summary-bound` remains pending: this table's eight-transition
-bound conflicts with the pin's intentionally unbounded healthy summaries
-(`context_gc_policy_test.go:96–97`). Do not freeze nine summaries as the required
-behavior; reconcile the contract first. This is a specification/reference
-question, not a proven new Go defect. See `parity/agents-area4.md` for evidence.
+`A28.inrun-eight-summary-bound` retains its historical ID but follows the Go
+pin: healthy in-run summaries have no count-only ceiling. The executable fixture
+schedules 31 successful summaries in one Run, including continuation after eight
+and thirty, with controlled usage and a pre-pinned step limit. This matches the
+intentional policy cases in `context_gc_policy_test.go:96–97`; step, admission,
+reserve and failure guards still apply (`run_compact.go:23–67,119–156`).
 
 `/review` budgets/independence are embedded instructions, **not runtime enforced**
 (`review.txt:77–87`). Compare the complete prompt by level and executable

@@ -1,14 +1,15 @@
 # Parity area 4 — agents and checkpoints (#139)
 
-**Draft: implementation and retained Linux capture, not a passing parity gate.**
+**Linux evidence published; ready for review with a failing comparison gate.**
 
 Darwin entries pending the Mac capture
 
-The requested stop rule was reached: the single empty-cache capture failed on
-two A36 observer paths; one narrow observer/replay repair recovered those leaves
-from retained raw evidence; publication then failed on missing sample selections
-for **C23/C24/C25**. No second implementation fix, fresh reference capture or
-full-suite stress round was attempted afterward. This PR must remain a draft.
+The approved continuation published retained raw evidence, adding one complete
+sample each for C23/C24/C25 and the minimal-policy certificate. Only changed A28
+received a targeted reference capture: 31 healthy summaries, 63 steps, one Run.
+The full executable comparison failed **34** leaves; mutations caught **6/8**.
+Both permitted narrow fixes are spent. No further implementation repair or full
+comparison repeat ran. Review readiness is not a passing gate or merge approval.
 
 ## Scope and publication state
 
@@ -24,49 +25,45 @@ full-suite stress round was attempted afterward. This PR must remain a draft.
   calls. `REAGENT_WORKSPACE_GIT_TIMEOUT=60` remains in every case environment.
 - Branched from main after #186; rebased onto **`7d1373a`**, including #187
   `perf/parity-speed`, before the final proof.
-- **Neither platform lock, any sample bundle nor the shared published inventory
-  changed.** The manifest describes the new executable declarations, while the
-  published inventory/locks intentionally remain unmodified after failed atomic
-  publication. This mismatch fails closed; the draft is not runnable as a green
-  candidate gate. No Linux expected-results/sample publication is claimed.
-- All **4,110 runnable Linux cases are retained frozen** under the unpublished
-  recovery lane: 4,108 from the single capture, plus the two raw-replayed A36 leaves.
-  This is not a second capture or a completed cache verification/publication.
+- Linux locks, shared inventory and **202 complete Linux sample bundles** are
+  published. All 306 pre-existing sample bundles and the Darwin lock are
+  byte-identical. A37 keeps three representative samples, not its earlier six.
+- All **4,111 runnable Linux cases are retained frozen**: the original 4,108,
+  two raw-replayed A36 leaves and the targeted A28 capture. Complete retained raw
+  replay passed before publication. The retained lane remains available beside
+  its verified canonical Linux cache. No full reference recapture ran.
+- Simulated Darwin/arm64 fails with exactly `new leaves need a Darwin capture`.
+  This is not a live Mac execution.
 
 ## Remaining blockers and consequences
 
-1. `samples.SELECTIONS` omits C23/C24/C25. `refresh_samples()` rejects the missing
-   families before publishing the prepared oracle. No bypass or partial lock was
-   committed. The requested Linux expected results and new samples remain undone.
-2. `golden_test.py`'s minimal policy fixture omits the newly required
-   `agent-causal-correspondence` certificate; two golden tests error.
-3. Published metadata is old. The intended Darwin message
-   `new leaves need a Darwin capture` has a focused regression, but the current
-   draft instead fails earlier with `shared inventory metadata differs from
-   manifest`. The actual required Darwin diagnostic remains blocked on coherent
-   publication; it is not claimed satisfied here.
-4. `make parity` stopped in its Python unit prerequisite. **No full executable
-   comparison, full comparison `report.json`, or full per-case timing report was
-   produced.** Do not mistake unit-test fixture reports for full-suite evidence.
-5. All eight requested mutation controls stopped with harness failures; **0/8
-   intended catches are proved**. No mutant was built after those failed controls.
+1. Full comparison: **4,077 passed /34 failed /29 pending**; 4,111 clean leak
+   checks, no surviving PIDs. The actual report includes every case duration.
+   Failure messages expose retained roots/IDs in embedded exec/history/checkpoint
+   and A38 projection evidence, plus A10/A11 activity ordering and C24 display
+   differences. These are observations, not a completed root-cause audit.
+2. Mutation **31 survived**. Mutation **34 failed its A21.ledger baseline** on
+   an embedded executable path; no mutant was built for it. Neither is a catch.
+3. One targeted JOBS=12 repeat: **11 passed /1 failed** (A21.ledger), clean leaks.
+   No additional repeats or failure-driven fixes were made.
 
 No new Go defect was demonstrated. C18/C43/C44 retain the previously identified
-#185 defects. A28's eight-summary discrepancy below is a specification/reference
-question, not a definitive new Go defect. Synthetic phase imports do not claim
-power-loss/fsync exhaustiveness, and no Rust executable or Darwin live run was used.
+#185 defects; T36.before-start still needs its exact CLI-inaccessible barrier.
+A28 follows intentional pinned healthy-summary behavior past eight and thirty.
+Synthetic phase imports do not claim power-loss/fsync exhaustiveness, and no
+Rust executable or Darwin live run was used.
 
 ## Counts: declared total / runnable / pending
 
-These are from `parity.run.collect_cases()`, not the older published inventory.
+`parity.run.collect_cases()`, the manifest and published inventory agree.
 
 | Area | Total | Runnable | Pending |
 | --- | ---: | ---: | ---: |
 | Wire | 2,761 | 2,761 | 0 |
 | Tools/workspace | 683 | 682 | 1 |
 | CLI/terminal | 375 | 347 | 28 |
-| Agents/checkpoints | 321 | 320 | 1 |
-| **Total** | **4,140** | **4,110** | **30** |
+| Agents/checkpoints | 321 | 321 | 0 |
+| **Total** | **4,140** | **4,111** | **29** |
 
 <details><summary>Every family: total/runnable/pending</summary>
 
@@ -76,7 +73,7 @@ A06 2/2/0   A07 8/8/0   A08 1/1/0   A09 7/7/0   A10 4/4/0
 A11 1/1/0   A12 9/9/0   A13 1/1/0   A14 3/3/0   A15 3/3/0
 A16 15/15/0 A17 3/3/0   A18 4/4/0   A19 7/7/0   A20 4/4/0
 A21 3/3/0   A22 4/4/0   A23 4/4/0   A24 3/3/0   A25 8/8/0
-A26 4/4/0   A27 6/6/0   A28 9/8/1   A29 2/2/0   A30 4/4/0
+A26 4/4/0   A27 6/6/0   A28 9/9/0   A29 2/2/0   A30 4/4/0
 A31 1/1/0   A32 8/8/0   A33 36/36/0 A34 7/7/0   A35 5/5/0
 A36 3/3/0   A37 33/33/0 A38 22/22/0 A39 2/2/0   A40 3/3/0
 
@@ -119,7 +116,7 @@ W51 7/7/0   W52 20/20/0 W53 414/414/0 W54 213/213/0
 
 ### Formerly pending leaves now executable (31)
 
-These are fixture completions, not published golden-comparison passes:
+These are fixture completions, not a claim that every comparison passed:
 
 - `T14.deleted`, `T14.recreate`, `T27.agent-bindings`,
   `T36.child-cancel-reset`, `T37.same-root`, `T37.overlapping-root`,
@@ -140,7 +137,6 @@ These are fixture completions, not published golden-comparison passes:
 | `C43.clear-screen`, `C43.clear-start`, `C43.history`, `C43.home-end`, `C43.kill-end`, `C43.kill-word`, `C43.unicode`, `C43.unknown-escape` | satmihir/re-agent#185: Ctrl-L produces no redraw; editor decodes clear but apply has no clear handler; stopped C43 fixtures remain stopped. |
 | `C44.idle-clear`, `C44.idle-eof`, `C44.idle-twice`, `C44.typeahead-cancellation`, `C44.workspace-allow`, `C44.workspace-ctrl-c`, `C44.workspace-ctrl-d`, `C44.workspace-deny`, `C44.workspace-escape` | satmihir/re-agent#185: stopped after queued input survived a trace-confirmed cancelled Run; reproduction `cli_pty_races._cancel_typeahead`; follow-up handling remains deferred to that issue. |
 | `T36.before-start` | A CLI-accessible handshake after model acceptance but before `loop.go:369` dispatch's `ctx.Err()`. `chat.go:939` installs signal context before provider I/O; provider readiness is too early and `tool.started` at `loop.go:408` is already after admission. `--scripted` exposes no intervening barrier. |
-| `A28.inrun-eight-summary-bound` | Reconcile specification A28's eight-transition bound with the pin's absence of a healthy-summary count guard; `context_gc_policy_test.go:96–97` intentionally permits near-compaction GC after eight and thirty summaries. Do not freeze nine summaries as the normative requirement. |
 
 ## Typed normalization slots and independent evidence
 
@@ -203,7 +199,7 @@ locks. These are targeted development observations, not a full comparison proof.
 
 ## C17 migration hashes and inverse proof
 
-**Proposed from retained Linux evidence, not published.**
+**Published from inverse-proven retained Linux evidence.**
 `agents-c17-migration.json` contains full old/new/inverse and normalized hashes.
 All eight C17 cases retain identical normalized artifacts. Five ledger hashes
 change; the other three canonical case hashes remain unchanged.
@@ -232,7 +228,7 @@ New ledger SHA: `241335583185118f78e7b5e0fc1c27344ea676f2f52846abda51678e378c5d4
 No Darwin C17 entry changed; the pre-approved Darwin migration still requires
 actual Mac capture.
 
-## Exact proof commands, outcomes and timings
+## Proof environment
 
 Commands ran from `/home/mihir/src/re-agent-parity-agents` with:
 
@@ -242,8 +238,49 @@ export XDG_CACHE_HOME=/tmp/reagent-parity-agents-proof/cache
 export PYTHONDONTWRITEBYTECODE=1 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
 ```
 
-Go is 1.23.3; Python is 3.11.5. Each formal command ran once, timed with
-`/usr/bin/time -p`, with complete stdout/stderr retained.
+Go is 1.23.3; Python is 3.11.5. Complete stdout/stderr and prior failures remain
+retained. The continuation used no full reference capture.
+
+### Approved continuation (2026-10-25)
+
+| Command / operation | Actual result | Wall seconds |
+| --- | --- | ---: |
+| Targeted `run.run_case` + `freeze_case` for changed A28 only | Passed, 31 summaries, 63 steps, 31 tools; clean leaks. | 21.39 |
+| `golden.update_oracle(... recovered-lane ..., jobs=12)` | Complete raw replay/publication passed; original sample/Darwin bytes preserved. | 525.28 |
+| Simulated Darwin/arm64 `locks.read_lock` | Exactly `new leaves need a Darwin capture`. Confirmed again after reseal. | — |
+| `make parity BIN=/tmp/reagent-parity-agents-proof/plain-reference JOBS=12 KEEP_ARTIFACTS=1` | Exit 2: 643 unit tests, one sample test failure, 14 skipped; executable comparison not started. | 72.62 |
+| `python3 -m unittest parity.samples_test parity.manifest_test` after two narrow fixes | 11 tests, OK. | 4.526 |
+| `python3 -m parity.run --bin /tmp/reagent-parity-agents-proof/plain-reference --jobs 12 --keep-artifacts` | Previously unstarted executable stage only, once: exit 1; 4,077 pass /34 fail /29 pending. | 877.98 |
+| `python3 -m parity.mutate --bin /tmp/reagent-parity-agents-proof/cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/linux/reference --reference-tree . --artifacts /tmp/reagent-parity-agents-proof/phase2-mutations --jobs 12 --mutation 7 --mutation 8 --mutation 30 --mutation 31 --mutation 32 --mutation 33 --mutation 34 --mutation 35` | Exit 1; 6/8 caught, 31 survived, 34 baseline_failed. Default first-catcher behavior. | 169.04 |
+| `python3 -m parity.run --bin /tmp/reagent-parity-agents-proof/plain-reference --jobs 12 --keep-artifacts --case A15 --case A20 --case A21 --case A39` | One repeat only: exit 1; 11 pass /1 fail, clean leaks. | 96.94 |
+| `go build ./... && go vet ./... && go test ./...` | Exit 0. | 2.16 |
+
+The **two narrow failure-driven fixes** were (1) checking each platform's samples
+against its own frozen coverage instead of requiring Linux additions on Darwin,
+and (2) reducing A37's six selections to three. No normalizer, observer or lock
+changed in either fix. The focused sample run exposed the second issue; it
+passed after both fixes. Sample regeneration first exceeded a 120-second tool
+deadline; inspection showed the old index still present. Deterministic generation
+then completed (279.45 s), with no changed selected bundle bytes, and caches were
+resealed for the changed test/selection source only. No reference ran for reseal.
+The full make command was not repeated, nor was the entire unit suite rerun;
+only affected sample/manifest tests and the previously unstarted executable stage
+ran. A28 fixture unit tests passed 15, one skipped; minimal golden tests passed 22.
+
+Fresh Go output:
+
+```text
+?   github.com/satmihir/re-agent/cmd/reagent [no test files]
+ok  github.com/satmihir/re-agent/internal/reagent (cached)
+real 2.16
+user 6.36
+sys 2.11
+```
+
+Final suite digest: `122d1d753ae4a4f4020e3e775b0964bdddde9e634cbc8d24d8b05659995b4f84`.
+Linux normalized tree: `12d59a8ab4ec493acfcd9a61e8cb79f6b62e07bdc7638e40d17dab1f56da4642`.
+
+### Original failed proof (historical; not reclassified)
 
 | Exact command | Actual result | Wall seconds |
 | --- | --- | ---: |
@@ -272,21 +309,21 @@ The three repair unit tests then passed. The subsequent formal raw-only recovery
 above was the one post-repair publication attempt; after its sample blocker,
 implementation work stopped as requested.
 
-### Mutation assertions: configured, not proven catches
+### Continuation mutation assertions: 6/8 catches
 
-Every row below ended **harness_failure before a valid control**, not an intended
-assertion failure. This is explicitly **not 8/8 catches**.
+All except 34 had passing controls; 34 stopped before building its mutant.
+Complete assertion text and per-case reports are in `phase2-mutations/`.
 
 | Mutation | Intended first catcher/assertion | Actual catch |
 | --- | --- | --- |
-| 7 | C19.corrupt-checksum: exit 2 + exact checksum mismatch/no request; failure names checksum rejection. | None |
-| 8 | A32.recall-resume-unchanged: restored GC still declares recall and serves the original. | None |
-| 30 | A04.native-prebatch: child native prefix has exactly the pre-batch parent history. | None |
-| 31 | A20.competing: unread sibling cannot gain another child's local digest authority. | None |
-| 32 | A39.reverse-release: settled delivery IDs are exactly lexical t1,t2, once each. | None |
-| 33 | A15.root-finish, then child-finish only if needed: no premature completion and required continuation/result. | None |
-| 34 | A21.ledger: oversized delivery retains exec_unknown and exact omitted/root effects. | None |
-| 35 | A29.gc-on-redundant-recent-three: protected third-latest result is not dropped. | None |
+| 7 | C19.corrupt-checksum: exit 2 + exact checksum mismatch/no request; failure names checksum rejection. | Caught: checksum rejection assertion; mutant returned 0. |
+| 8 | A32.recall-resume-unchanged: restored GC still declares recall and serves the original. | Caught: one restored `context_gc` output required. |
+| 30 | A04.native-prebatch: child native prefix has exactly the pre-batch parent history. | Caught: `len(child['history']) == boundary + 1`. |
+| 31 | A20.competing: unread sibling cannot gain another child's local digest authority. | Survived; no intended assertion. |
+| 32 | A39.reverse-release: settled delivery IDs are exactly lexical t1,t2, once each. | Caught: lexical delivery order expected t1,t2; got t2,t1. |
+| 33 | A15.root-finish, then child-finish only if needed: no premature completion and required continuation/result. | Caught by root-finish: premature answer omitted finish-rule continuation. |
+| 34 | A21.ledger: oversized delivery retains exec_unknown and exact omitted/root effects. | baseline_failed: embedded executable root differs. |
+| 35 | A29.gc-on-redundant-recent-three: protected third-latest result is not dropped. | Caught: protected `gc-read-13` was dropped. |
 
 ## Retained evidence (not deleted)
 
@@ -294,8 +331,9 @@ Root: **`/tmp/reagent-parity-agents-proof`**.
 
 - Original reference cache failure, with untouched raw capture and frozen passes:
   `cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/failed-1792915126312807276`.
-- All 4,110 frozen runnable cases plus reference binary and current capture
-  inventory: `recovered-lane/` (**unpublished, no cache stamp**).
+- All 4,111 frozen runnable cases plus reference binary and current capture
+  inventory: `recovered-lane/`, preserved beside the stamped canonical lane
+  `cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/linux/`.
 - Raw-only A36 replay sources: `replayed-A36/`.
 - Plain archived pin source: `plain-pin/`; binary: `plain-reference`.
   SHA-256 `9423757c6e3980e08d077471522ade40317f34aba184ce6429ef429174d3814d`.
@@ -307,20 +345,28 @@ Root: **`/tmp/reagent-parity-agents-proof`**.
   Pagination: `pagination-final/` (observed, 58.398 s).
   Their combined 13-case replay/lock validation took 82.184 s.
 - Final dependency context captures: `context-final-current/`, `context-final-limit/`.
-- **Missing:** full-comparison report.json/per-case full-suite timing. The command
-  never entered executable comparison, and no replacement report was fabricated.
+- Full actual report: `/tmp/reagent-parity-cases-h333tj0u/artifacts/report.json`,
+  copied unchanged to `phase2-full-report.json`; all evidence retained (5,971,489,040
+  bytes). Includes per-case durations and all 34 failure messages.
+- Continuation logs: `phase2-{a28-capture,publication,darwin,comparison,full-executable,mutations,targeted-repeat1,go-gate}.log`.
+  Receipts: `phase2-publication.json`, `phase2-sample-reseal.json`,
+  `phase2-a28-capture.json`, `phase2-mutations/report.json`.
+- Targeted comparison: `/tmp/reagent-parity-cases-7dgmbjxt/artifacts/report.json`,
+  copied unchanged to `phase2-targeted-repeat1-report.json`.
+- The three surplus newly generated A37 samples remain in
+  `phase2-surplus-samples/`, not the published selection. Original bundles remain
+  untouched.
 
 `agents-proof-status.json` is a small status receipt, not a comparison report.
-The C17 receipt is proposed evidence, not a changed committed oracle.
+The C17 receipt records the now-published Linux migration.
 
 ## Review and agent token accounting
 
 One read-only reviewer examined the source/final raw diff. Its v1 producer-to-lock
-contract finding was fixed and regression-tested before the formal proof. Final
-review confirms the publication/policy-fixture/metadata blockers, not a passing
-suite, and verifies no changes to production Go/dependencies, either platform
-lock, samples or shared inventory. External execution receipts were not
-independently audited by that reviewer.
+contract finding was fixed and regression-tested before the original proof.
+That historical review confirmed the draft's publication blockers. The approved
+continuation reused t3 for A28 only; it ran no reference capture. External proof
+receipts and the continuation were not independently audited by that reviewer.
 
 Fresh complete briefs were used; no forks. **Process deviation:** nested child
 writers briefly exceeded the requested global four-agent concurrency cap before
@@ -330,19 +376,21 @@ not concealed by reporting only direct children.
 Reported harness tokens below exclude the parent; cached input is a subset of
 input, not additional input. One attempt lacks reported usage, so this is not
 complete billing accounting or a dollar estimate. Resumed tasks retain lifetime
-accounting. All eight agents, including dismissed descendants, are listed.
+accounting. All eight agents, including dismissed descendants, are listed;
+reported reasoning tokens total 54,851. No new agents were spawned during the
+continuation; only t3 was reused.
 
 | Agent | Input | Cached input | Output |
 | --- | ---: | ---: | ---: |
 | t1 agent-context | 6,795,046 | 6,341,888 | 48,887 |
 | t2 agent-effects | 7,646,904 | 7,227,776 | 49,838 |
-| t3 agent-checkpoints | 10,821,335 | 10,286,592 | 59,311 |
+| t3 agent-checkpoints | 11,902,242 | 11,271,552 | 65,756 |
 | t4 v1-import (child of t3) | 1,368,338 | 1,286,016 | 9,785 |
 | t5 admission (child of t3) | 1,937,637 | 1,851,136 | 8,545 |
 | t6 checkpoint-normalization | 6,004,294 | 5,624,064 | 31,177 |
 | t7 probe-finish (child of t1) | 1,928,024 | 1,840,256 | 9,724 |
 | t8 final-review (read-only) | 1,727,323 | 1,587,200 | 4,371 |
-| **Total reported** | **38,228,901** | **36,044,928** | **221,638** |
+| **Total reported** | **39,309,808** | **37,029,888** | **228,083** |
 
-No merge or final #139/85%-coverage approval is requested. The draft preserves
-work and evidence at the mandated second-blocker stop boundary.
+No merge or final #139/85%-coverage approval is requested. The PR is marked ready
+for review as instructed, with failing proof and the exhausted fix budget explicit.

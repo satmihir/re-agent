@@ -11,8 +11,4181 @@
     "platforms",
     "exclusive"
   ],
-  "metadata_sha256": "7ce958b339349bb9d739447683cefb1bc63a9c41967f9548217a88a0e08bf5bb",
+  "metadata_sha256": "0e5a02d4f621ff3edbe8ece2e29ee1a3c440c31dffba2b5e37fd5baa78d23da7",
   "cases": [
+    {
+      "id": "A01.off",
+      "description": "Lifecycle declaration and dispatch gate",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A01.on",
+      "description": "Lifecycle declaration and dispatch gate",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A01.scripted",
+      "description": "Agents plus scripted is rejected before I/O",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.accept-brief32768",
+      "description": "Inclusive valid spawn byte/path/name boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.accept-entries128",
+      "description": "Inclusive valid spawn byte/path/name boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.accept-name64",
+      "description": "Inclusive valid spawn byte/path/name boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.accept-paths20",
+      "description": "Inclusive valid spawn byte/path/name boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.accept-task8192",
+      "description": "Inclusive valid spawn byte/path/name boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-array",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-incomplete",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-null",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-scalar",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-target-both",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-target-none",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-trailing",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.cancel-unknown",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-array",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-incomplete",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-null",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-scalar",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-target-both",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-target-none",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-trailing",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.dismiss-unknown",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.entries-null",
+      "description": "Explicit null is not omission",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.fork-null",
+      "description": "Explicit null is not omission",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-array",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-incomplete",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-null",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-scalar",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-target-both",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-target-none",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-trailing",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.reset-unknown",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-array",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-incomplete",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-null",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-scalar",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-target-both",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-target-none",
+      "description": "Exclusive local child target validation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-trailing",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.send-unknown",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-array",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-authority",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-brief-32769",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-entries-129",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-fork-xor-entries",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-incomplete",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-name-2d6c656164696e67",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-name-5570706572",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-name-65",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-name-747261696c696e672d",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-name-74776f2d2d7061727473",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-name-776974685f7370616365",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-name-c3a9",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-null",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-paths-21",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-scalar",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-task-8193",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-task-empty",
+      "description": "Spawn field byte limits and authority/name syntax",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-trailing",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.spawn-unknown",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.threads-array",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.threads-incomplete",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.threads-null",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.threads-scalar",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.threads-trailing",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.threads-unknown",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-601",
+      "description": "Wait list and timeout limits",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-array",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-incomplete",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-nine",
+      "description": "Wait list and timeout limits",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-no-ids",
+      "description": "Wait list and timeout limits",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-null",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-scalar",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-trailing",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A02.wait-unknown",
+      "description": "Lifecycle strict object decoder without child publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A03.fresh-live",
+      "description": "Fresh labelled brief and live paths without parent history",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A04.native-prebatch",
+      "description": "Native prefix excludes every tool in current batch",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A05.duplicate-inherited-id",
+      "description": "Accepted inherited call ID cannot execute again",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A05.fixed-history",
+      "description": "Held native fork does not acquire later parent Entries on following request",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A05.read-dispatch",
+      "description": "Cached declarations preserved but read child cannot dispatch writes",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A06.claude-haiku-4-5",
+      "description": "Different model/provider projects labelled historical records without replay",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A06.gpt-6-luna",
+      "description": "Different model/provider projects labelled historical records without replay",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.current-batch",
+      "description": "Invalid selected boundary rejects before publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.duplicate",
+      "description": "Invalid selected boundary rejects before publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.empty-fresh",
+      "description": "Explicit empty selection starts fresh",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.outside",
+      "description": "Invalid selected boundary rejects before publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.selected-2",
+      "description": "Selection retains original numbering and supplied order",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.selected-3",
+      "description": "Selection retains original numbering and supplied order",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.selected-3-1",
+      "description": "Selection retains original numbering and supplied order",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A07.zero",
+      "description": "Invalid selected boundary rejects before publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A08.destination-window",
+      "description": "Oversized shared projection denied before child publication/request",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A09.later-plan-send",
+      "description": "Entering plan later refuses new work for an existing non-planning writer",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A09.ordinary-read",
+      "description": "Authority narrowing, root-only tools and inherited plan",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A09.ordinary-write",
+      "description": "Authority narrowing, root-only tools and inherited plan",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A09.plan-read",
+      "description": "Authority narrowing, root-only tools and inherited plan",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A09.plan-write",
+      "description": "Authority narrowing, root-only tools and inherited plan",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A09.read-only-read",
+      "description": "Authority narrowing, root-only tools and inherited plan",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A09.read-only-write",
+      "description": "Authority narrowing, root-only tools and inherited plan",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A10.capacity-idle-dismiss",
+      "description": "Eight idle named children reserve capacity until dismissal",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A10.depth-three-four",
+      "description": "Depth three admitted, fourth child denied immediately",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A10.duplicate-local-name",
+      "description": "Parent-local live name cannot be admitted twice",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A10.foreign-control",
+      "description": "Every lifecycle target remains parent-local even for known foreign IDs",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A11.concurrent-inflight",
+      "description": "Two child requests and root request progress concurrently with immutable sent history",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.poll-0",
+      "description": "Polling does not cancel; later wait joins and repeated wait returns receipt",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.poll-1",
+      "description": "Polling does not cancel; later wait joins and repeated wait returns receipt",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.timeout-600",
+      "description": "Inclusive maximum wait timeout joins an already idle child immediately",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.timeout-bool",
+      "description": "Wait timeout uses strict integer numeric forms before child lookup",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.timeout-float-integral",
+      "description": "Wait timeout uses strict integer numeric forms before child lookup",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.timeout-fraction",
+      "description": "Wait timeout uses strict integer numeric forms before child lookup",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.timeout-negative",
+      "description": "Wait timeout uses strict integer numeric forms before child lookup",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.timeout-null",
+      "description": "Wait timeout uses strict integer numeric forms before child lookup",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A12.timeout-string",
+      "description": "Wait timeout uses strict integer numeric forms before child lookup",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A13.batch-delivery",
+      "description": "All batch results precede once-only source:agent delivery",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A14.anonymous-named",
+      "description": "Anonymous delivery ends Session while named child can resume its original Session",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A14.named-queued",
+      "description": "Busy sends retain ordered history and distinct task Runs; later named reuse",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A14.queue-eight-nine",
+      "description": "Eight queued messages admitted while held; ninth refused without dropping admitted work",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A15.child-finish",
+      "description": "Text-only finish consumes descendant results before final completion",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A15.ready-finish",
+      "description": "Text-only finish consumes descendant results before final completion",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A15.root-finish",
+      "description": "Text-only finish consumes descendant results before final completion",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.cancel-blocked",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.cancel-foreign",
+      "description": "Sibling controls cannot target a foreign child",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.cancel-idle",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.cancel-running",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.cancel-stopped",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.dismiss-blocked",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.dismiss-foreign",
+      "description": "Sibling controls cannot target a foreign child",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.dismiss-idle",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.dismiss-running",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.dismiss-stopped",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.reset-blocked",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.reset-foreign",
+      "description": "Sibling controls cannot target a foreign child",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.reset-idle",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.reset-running",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A16.reset-stopped",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A17.budget",
+      "description": "Root failure synchronously cancels and joins a held child",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A17.exec-inflight",
+      "description": "Root failure synchronously cancels and joins a held child",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A17.protocol",
+      "description": "Root failure synchronously cancels and joins a held child",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A18.batch",
+      "description": "Per-task step/call reservation and next task counters",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A18.calls",
+      "description": "Per-task step/call reservation and next task counters",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A18.malformed",
+      "description": "Per-task step/call reservation and next task counters",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A18.steps",
+      "description": "Per-task step/call reservation and next task counters",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A19.cached",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A19.cached-over-input",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A19.output",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A19.reasoning",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A19.terminal",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A19.uncached",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A19.unknown",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A20.child-read",
+      "description": "Read digests authorize only their owning independent workspace handle",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A20.competing",
+      "description": "Read digests authorize only their owning independent workspace handle",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A20.fork-read",
+      "description": "Read digests authorize only their owning independent workspace handle",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A20.parent-read",
+      "description": "Read digests authorize only their owning independent workspace handle",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A21.ledger",
+      "description": "Bounded delivery retains deduplicated effects and full root-origin records",
+      "comparison": "N/S",
+      "slow": true,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A21.recursive",
+      "description": "Bounded delivery retains deduplicated effects and full root-origin records",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A21.reply",
+      "description": "Bounded delivery retains deduplicated effects and full root-origin records",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A22.cancel-reset",
+      "description": "Unknown exec effects survive cancellation, block send, and require reset",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A22.overlap",
+      "description": "Concurrent exec is advisory and does not prevent either command",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A22.sibling-overlap",
+      "description": "Sibling exec receives the held sibling identity without blocking",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A22.timeout-continue",
+      "description": "Timed-out child exec skips its batch tail, preserves uncertainty, never retries and allows next task",
+      "comparison": "N/S",
+      "slow": true,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A23.bounded-pages",
+      "description": "Retired lifetime subtree pages retain exact lexical records and complete cost",
+      "comparison": "N/S",
+      "slow": true,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A23.idle",
+      "description": "Direct versus lifetime subtree records and stable empty-offset totals",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A23.nested-offset",
+      "description": "Nested direct and subtree records bind parent depth and stable offset totals",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A23.retired",
+      "description": "Direct versus lifetime subtree records and stable empty-offset totals",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A24.cross-chat-reuse",
+      "description": "Named Session history, trace and lifetime cost survive another user turn",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A24.idle",
+      "description": "Own lifetime cost versus latest steps and root-inclusive tree cost",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A24.retired",
+      "description": "Own lifetime cost versus latest steps and root-inclusive tree cost",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.agents-off",
+      "description": "Review prompt works without lifecycle declarations",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.blocked-review",
+      "description": "Review child protocol failure is disclosed, reset and retired",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.default",
+      "description": "Review command injects complete embedded prompt as ordinary turn",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.high",
+      "description": "Review command injects complete embedded prompt as ordinary turn",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.invalid",
+      "description": "Invalid review level has no provider I/O and next turn works",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.low",
+      "description": "Review command injects complete embedded prompt as ordinary turn",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.max",
+      "description": "Review command injects complete embedded prompt as ordinary turn",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A25.medium",
+      "description": "Review command injects complete embedded prompt as ordinary turn",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A26.normal",
+      "description": "Fresh finder/verifier, bounded paging and cleanup transport without quality claim",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A26.plan",
+      "description": "Fresh finder/verifier, bounded paging and cleanup transport without quality claim",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A26.probe-cleanup",
+      "description": "Write-authority verifier probe effects are read and safely cleaned",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A26.read-only",
+      "description": "Fresh finder/verifier, bounded paging and cleanup transport without quality claim",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A27.manual-cancel",
+      "description": "Cancel summary request without committing history or GC state",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A27.manual-empty",
+      "description": "Transactional summary and following omitted-digest edit",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A27.manual-large",
+      "description": "Transactional summary and following omitted-digest edit",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A27.manual-refusal",
+      "description": "Transactional summary and following omitted-digest edit",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A27.manual-text",
+      "description": "Transactional summary and following omitted-digest edit",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A27.manual-tool",
+      "description": "Transactional summary and following omitted-digest edit",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.inrun-at",
+      "description": "Measured/estimated 40 percent, spare-step and reserve boundaries",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.inrun-below",
+      "description": "Measured/estimated 40 percent, spare-step and reserve boundaries",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.inrun-eight-summary-bound",
+      "description": "Pinned healthy compaction continues past eight and thirty summaries in one Run",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.inrun-reserve",
+      "description": "Measured/estimated 40 percent, spare-step and reserve boundaries",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.inrun-spare-step",
+      "description": "Measured/estimated 40 percent, spare-step and reserve boundaries",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.preturn-79999",
+      "description": "Measured 80 percent preturn compaction boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.preturn-80000",
+      "description": "Measured 80 percent preturn compaction boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.preturn-80001",
+      "description": "Measured 80 percent preturn compaction boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A28.preturn-failure-fallback",
+      "description": "Failed preturn summary retains history and sends next task",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A29.gc-off",
+      "description": "Repeated reads remain intact with GC disabled",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A29.gc-on-redundant-recent-three",
+      "description": "Actual GC preserves original trace and protects recent three steps",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A30.gc-break-even-arithmetic",
+      "description": "Actual GC request-count clamp and positive cache economics",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A30.gc-floor-at",
+      "description": "Measured input exactly 6.25 percent admits pass",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A30.gc-floor-below",
+      "description": "Measured input below 6.25 percent disables pass",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A30.gc-interval-fifteen",
+      "description": "No GC before sixteenth settled result",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A31.request-view-original-recall",
+      "description": "Placeholder request with unchanged original recalled as data",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-compact-stale",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-compact-unchanged",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-inherited-stale",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-inherited-unchanged",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-reset-stale",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-reset-unchanged",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-resume-stale",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A32.recall-resume-unchanged",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-cancelled-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-cancelled-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-cancelled-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-completed-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-completed-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-completed-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-incomplete-response-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-incomplete-response-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-incomplete-response-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-limit-exceeded-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-limit-exceeded-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-limit-exceeded-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-protocol-error-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-protocol-error-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-protocol-error-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-provider-error-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-provider-error-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-provider-error-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-refused-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-refused-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-refused-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-step-limit-compact",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-step-limit-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.actual-step-limit-reset",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-budget-exceeded-compact",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-budget-exceeded-ordinary",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-budget-exceeded-reset",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-limit-exceeded-compact",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-limit-exceeded-ordinary",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-limit-exceeded-reset",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-persistence-error-compact",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-persistence-error-ordinary",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-persistence-error-reset",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-protocol-error-compact",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-protocol-error-ordinary",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A33.blocked-protocol-error-reset",
+      "description": "Restored blocked status rejects ordinary turn until compact/reset",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A34.finished-undelivered-receipt",
+      "description": "Finished child receipt survives crash with no tool or result replay",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A34.live-crash-child-helper",
+      "description": "Kill at live helper start with running child; recover twice and reuse name",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A34.recovery-accepted",
+      "description": "Synthetic phase recovery twice, no replay, ordinary next turn",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A34.recovery-idle",
+      "description": "Synthetic phase recovery twice, no replay, ordinary next turn",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A34.recovery-model",
+      "description": "Synthetic phase recovery twice, no replay, ordinary next turn",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A34.recovery-terminal",
+      "description": "Synthetic phase recovery twice, no replay, ordinary next turn",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A34.recovery-tool",
+      "description": "Synthetic phase recovery twice, no replay, ordinary next turn",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A35.root-event-envelope",
+      "description": "Private root trace envelope and sequence",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A35.schema-agents",
+      "description": "Typed event schema, request scopes, acceptance and batch-before-delivery ordering",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A35.schema-gc",
+      "description": "Typed event schema, request scopes, acceptance and batch-before-delivery ordering",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A35.schema-summary",
+      "description": "Typed event schema, request scopes, acceptance and batch-before-delivery ordering",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A35.schema-switch",
+      "description": "Typed event schema, request scopes, acceptance and batch-before-delivery ordering",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A36.trace-existing-restore",
+      "description": "Exclusive trace failure is nonfatal; following invocation restores trace",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A36.trace-private",
+      "description": "Private trace mode at executable boundary",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A36.trace-unwritable-parent-restore",
+      "description": "Uncreatable trace parent is nonfatal and restores on next invocation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-checksum",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-context-window-tokens",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-duplicate-call",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-entry",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-envelope-id",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-json",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-launch",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-max-steps",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-max-tool-calls",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-missing-inflight",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-model",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-model-retry-window",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-phase",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-provider",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-raw-base64",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-state-version",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-unexpected-inflight",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-unmatched-result",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-unresolved-call",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-unseen-call",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.corrupt-version",
+      "description": "Owned corrupt checkpoint rejection without replay or rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.cross-candidate-self",
+      "description": "Canonical fixed v2 writer/import bytes and ordinary recalled continuation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.cross-candidate-to-go",
+      "description": "Canonical fixed v2 writer/import bytes and ordinary recalled continuation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.cross-go-to-candidate",
+      "description": "Canonical fixed v2 writer/import bytes and ordinary recalled continuation",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.fixed-v2-opaque-shapes",
+      "description": "Fixed nil/empty/null/non-UTF8 opaque byte roundtrip",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.fixed-v2-roundtrip",
+      "description": "Fixed canonical v2 exact-byte rewrite twice",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.legacy-omission-agent-subtree",
+      "description": "Legacy v2 optional field admission",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.legacy-omission-context-gc-age-steps",
+      "description": "Legacy v2 optional field admission",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.legacy-omission-context-gc-consolidate",
+      "description": "Legacy v2 optional field admission",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.legacy-omission-gc-requests",
+      "description": "Legacy v2 optional field admission",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.legacy-omission-prompt",
+      "description": "Legacy v2 optional field admission",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.v1-go-migration-import",
+      "description": "Frozen Go v1 migration, stable v2 save and candidate next request",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A37.v2-restored-settings",
+      "description": "Canonical v2 settings, summary, ledger, GC and agent restore",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.opaque-nonreasoning-calibration",
+      "description": "Large opaque bytes do not dilute actual measured admission",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-foreign-above",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-foreign-at",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-foreign-below",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-native-above",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-native-at",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-native-below",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-selected-above",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-selected-at",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.sharing-window-selected-below",
+      "description": "Exact projected child window with no publication on refusal",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-encoded-above",
+      "description": "Exact encoded request ceiling before window admission",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-encoded-at",
+      "description": "Exact encoded request ceiling before window admission",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-encoded-below",
+      "description": "Exact encoded request ceiling before window admission",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-calibrated-above",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-calibrated-at",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-calibrated-below",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-fallback-above",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-fallback-at",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-fallback-below",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-floor-above",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-floor-at",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A38.switch-window-floor-below",
+      "description": "Ceil, nonreasoning calibration and 16000-token reserve at the exact window",
+      "comparison": "S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A39.queued-order",
+      "description": "A held named task and two queued tasks deliver FIFO exactly once",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A39.reverse-release",
+      "description": "Wait publication witnesses lexical once-only delivery independent of release order",
+      "comparison": "N/S",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A40.call-ledger-compact",
+      "description": "Accepted call IDs are retained except deliberate reset clearing",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A40.call-ledger-reset",
+      "description": "Accepted call IDs are retained except deliberate reset clearing",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "A40.call-ledger-resume",
+      "description": "Accepted call IDs are retained except deliberate reset clearing",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
     {
       "id": "C01.bad-target",
       "description": "Invalid help target",
@@ -3018,16 +7191,16 @@
     },
     {
       "id": "C14.cancel",
-      "description": "area 4: compaction cancellation needs trace-ready signal coordination and checkpoint rollback proof",
+      "description": "Cancelled summary retains history and accepts ordinary next turn",
       "comparison": "N",
       "slow": false,
-      "pending": "area 4: compaction cancellation needs trace-ready signal coordination and checkpoint rollback proof",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C14.default",
@@ -3174,16 +7347,16 @@
     },
     {
       "id": "C15.agents",
-      "description": "area 4: review with --agents needs agent controller and child lifecycle assertions (A25–A26)",
-      "comparison": "N",
+      "description": "Actual agent lifecycle with root/child evidence and next-turn assertions",
+      "comparison": "N/S",
       "slow": false,
-      "pending": "area 4: review with --agents needs agent controller and child lifecycle assertions (A25–A26)",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C15.bad",
@@ -3837,29 +8010,68 @@
     },
     {
       "id": "C19.checkpoints",
-      "description": "Canonical checkpoints and resume across processes",
+      "description": "Canonical v2 restore with settings and next request",
       "comparison": "N",
       "slow": false,
-      "pending": "area 4: canonical v2 fixtures, cross-import, shared-HOME identity and persisted-field crosswalk",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
+    },
+    {
+      "id": "C19.corrupt-checksum",
+      "description": "Checksum rejection without provider replay or checkpoint rewrite",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
     },
     {
       "id": "C20.persistence-barriers",
-      "description": "Trace warnings and checkpoint publication barriers",
+      "description": "Checkpoint publication barrier before tool effect",
       "comparison": "N",
       "slow": false,
-      "pending": "area 4: checkpoint save-failure fixtures before model/tool publication; trace warning alone cannot prove persistence barriers",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
+    },
+    {
+      "id": "C20.pre-model-save",
+      "description": "Failed checkpoint before next model request forbids publication",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
+    },
+    {
+      "id": "C20.pre-tool-save",
+      "description": "Failed checkpoint before second tool forbids its effect",
+      "comparison": "N",
+      "slow": false,
+      "pending": null,
+      "platforms": [
+        "darwin",
+        "linux"
+      ],
+      "exclusive": false,
+      "status": "implemented"
     },
     {
       "id": "C21.context-gc",
@@ -3889,42 +8101,42 @@
     },
     {
       "id": "C23.agents-live-wait",
-      "description": "Nested live wait, finish and delivery notices",
+      "description": "Actual agent lifecycle with root/child evidence and next-turn assertions",
       "comparison": "P",
       "slow": false,
-      "pending": "area 4 agent scheduler/barrier fixtures: nested live counts, elapsed-slot binding, finish/delivery and private reply assertions",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C24.agents-write-recap",
-      "description": "Child file effects appear only in root recap",
+      "description": "Actual agent lifecycle with root/child evidence and next-turn assertions",
       "comparison": "P",
       "slow": false,
-      "pending": "area 4 writing-agent fixture: bind child applied effects and root recap without leaking private reply",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C25.agents-tree-cost",
-      "description": "Parallel tree cost and named-agent reuse",
+      "description": "Actual agent lifecycle with root/child evidence and next-turn assertions",
       "comparison": "P",
       "slow": false,
-      "pending": "area 4 A24: controlled agent admission, correlated tree usage and cross-turn named-session reuse",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C26.exec-timeout-continues",
@@ -9323,16 +13535,16 @@
     },
     {
       "id": "T14.deleted",
-      "description": "missing-file observation with agents enabled",
-      "comparison": "N",
+      "description": "Agents-enabled absence observation and safe recreation",
+      "comparison": "N/S",
       "slow": false,
-      "pending": "A20 authorization driver dependency: missing-file reread/recreation authorization requires agents enabled; --agents cannot be combined with --scripted",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T14.exec-created",
@@ -9375,16 +13587,16 @@
     },
     {
       "id": "T14.recreate",
-      "description": "missing-file observation with agents enabled",
-      "comparison": "N",
+      "description": "Agents-enabled absence observation and safe recreation",
+      "comparison": "N/S",
       "slow": false,
-      "pending": "A20 authorization driver dependency: missing-file reread/recreation authorization requires agents enabled; --agents cannot be combined with --scripted",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T15.limit",
@@ -10454,16 +14666,16 @@
     },
     {
       "id": "T27.agent-bindings",
-      "description": "A20/A21 concurrent agent workspace bindings driver",
+      "description": "Fixed child workspace and independent parent/child file authorization",
       "comparison": "N",
       "slow": false,
-      "pending": "A20/A21 concurrent agent workspace bindings driver",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T27.filter-tripwire",
@@ -11195,16 +15407,16 @@
     },
     {
       "id": "T36.child-cancel-reset",
-      "description": "Child cancellation, blocked session reset and next ordinary turn",
+      "description": "Cancel a genuinely started child exec, reject send, reset and continue",
       "comparison": "N/S",
       "slow": false,
-      "pending": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T36.started-sigint",
@@ -11221,81 +15433,81 @@
     },
     {
       "id": "T37.bounds",
-      "description": "Advisory concurrent_exec identities, canonical roots and bounded records",
+      "description": "Canonical overlapping workspace exec notices, per-step and bounded records",
       "comparison": "N/S",
       "slow": false,
-      "pending": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T37.canonical-alias",
-      "description": "Advisory concurrent_exec identities, canonical roots and bounded records",
+      "description": "Canonical overlapping workspace exec notices, per-step and bounded records",
       "comparison": "N/S",
       "slow": false,
-      "pending": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T37.nonoverlapping-root",
-      "description": "Advisory concurrent_exec identities, canonical roots and bounded records",
+      "description": "Canonical overlapping workspace exec notices, per-step and bounded records",
       "comparison": "N/S",
       "slow": false,
-      "pending": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T37.overlapping-root",
-      "description": "Advisory concurrent_exec identities, canonical roots and bounded records",
+      "description": "Canonical overlapping workspace exec notices, per-step and bounded records",
       "comparison": "N/S",
       "slow": false,
-      "pending": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T37.per-chain-step",
-      "description": "Advisory concurrent_exec identities, canonical roots and bounded records",
+      "description": "Canonical overlapping workspace exec notices, per-step and bounded records",
       "comparison": "N/S",
       "slow": false,
-      "pending": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T37.same-root",
-      "description": "Advisory concurrent_exec identities, canonical roots and bounded records",
+      "description": "Canonical overlapping workspace exec notices, per-step and bounded records",
       "comparison": "N/S",
       "slow": false,
-      "pending": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T38.bounds.distance-at",
@@ -13158,16 +17370,16 @@
     },
     {
       "id": "T56.dropped-inherited-compact-reset",
-      "description": "A31/A32 actual GC drop/inheritance and compaction/reset fixtures",
+      "description": "Dropped inherited recall across compaction/reset",
       "comparison": "N",
       "slow": false,
-      "pending": "A31/A32 actual GC drop/inheritance and compaction/reset fixtures",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T56.off",
@@ -28836,16 +33048,16 @@
     },
     {
       "id": "W10.source",
-      "description": "Cache hash retains synthetic agent Entry source",
+      "description": "Actual agent result source retained in resumed cache anchor",
       "comparison": "N",
       "slow": false,
-      "pending": "Later agents area: synthetic agent-source Entry in a native child prefix",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W11.compaction",
@@ -29005,16 +33217,16 @@
     },
     {
       "id": "W11.roster-change",
-      "description": "Cache identity with actual changing agent roster",
+      "description": "Actual changing roster retained in resumed cache anchor",
       "comparison": "N",
       "slow": false,
-      "pending": "Later agents area: deterministic admitted-child roster lifecycle",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W11.snapshot",
@@ -29200,55 +33412,55 @@
     },
     {
       "id": "W13.four-point-ceiling",
-      "description": "Anthropic inherited cache boundaries: four-point-ceiling",
+      "description": "Native Anthropic fork cache boundaries: four-point-ceiling",
       "comparison": "N",
       "slow": false,
-      "pending": "Later agents area: native/nested fork admission and controlled child requests",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W13.native-fork",
-      "description": "Anthropic inherited cache boundaries: native-fork",
+      "description": "Native Anthropic fork cache boundaries: native-fork",
       "comparison": "N",
       "slow": false,
-      "pending": "Later agents area: native/nested fork admission and controlled child requests",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W13.nested-fork",
-      "description": "Anthropic inherited cache boundaries: nested-fork",
+      "description": "Native Anthropic fork cache boundaries: nested-fork",
       "comparison": "N",
       "slow": false,
-      "pending": "Later agents area: native/nested fork admission and controlled child requests",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W13.subsequent-child",
-      "description": "Anthropic inherited cache boundaries: subsequent-child",
+      "description": "Native Anthropic fork cache boundaries: subsequent-child",
       "comparison": "N",
       "slow": false,
-      "pending": "Later agents area: native/nested fork admission and controlled child requests",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W14.native",
@@ -31748,16 +35960,16 @@
     },
     {
       "id": "W24.subscription-checkpoint-resume",
-      "description": "Usage limit leaves resumable session",
+      "description": "Usage-limit session persists and completes next turn",
       "comparison": "N",
       "slow": false,
-      "pending": "Checkpoint-area fixture must restore usage-limit session and complete next turn",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W24.subscription-invalid_user.error",
@@ -38274,16 +42486,16 @@
     },
     {
       "id": "W39.agent",
-      "description": "Router agent-result trust and roster provenance",
+      "description": "Actual router packet labels agent evidence and preserves roster provenance",
       "comparison": "N",
       "slow": false,
-      "pending": "later-area dependency: agent lifecycle fixtures (A03–A14)",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W39.assistant-preview-511",
@@ -40861,16 +45073,16 @@
     },
     {
       "id": "W47.agent",
-      "description": "Agent-labelled Entries in model handoff",
+      "description": "Actual model handoff labels delivered agent Entries",
       "comparison": "N",
       "slow": false,
-      "pending": "later-area dependency: agent lifecycle fixtures (A03–A14)",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W47.projection",
@@ -41368,16 +45580,16 @@
     },
     {
       "id": "W52.gc",
-      "description": "Model handoff after request-view GC",
+      "description": "Model switch projects dropped placeholders, not original data",
       "comparison": "N",
       "slow": false,
-      "pending": "later-area dependency: GC fixtures (A29–A32)",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W52.plan",
@@ -41407,16 +45619,16 @@
     },
     {
       "id": "W52.resume",
-      "description": "Restore switched pinned prefix from checkpoint",
+      "description": "Switched handoff and pinned prompt survive another resume",
       "comparison": "N",
       "slow": false,
-      "pending": "later-area dependency: checkpoint fixtures (A34–A37)",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W52.workspace-compact",
@@ -46425,16 +50637,16 @@
     },
     {
       "id": "W53.propagation.child",
-      "description": "Endpoint propagation into child",
+      "description": "Prefixed endpoint reaches child client",
       "comparison": "N",
       "slow": false,
-      "pending": "agents area: explicit child client exchange",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W53.propagation.compaction",
@@ -46477,16 +50689,16 @@
     },
     {
       "id": "W53.propagation.nested-child",
-      "description": "Endpoint propagation into nested-child",
+      "description": "Prefixed endpoint reaches nested child client",
       "comparison": "N",
       "slow": false,
-      "pending": "agents area: explicit nested-child client exchange",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "W53.proxy.anthropic",

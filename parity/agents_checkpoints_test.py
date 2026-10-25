@@ -76,7 +76,7 @@ class CheckpointsTest(unittest.TestCase):
                           'T56.dropped-inherited-compact-reset', 'W24.subscription-checkpoint-resume', 'C14.cancel'})
 
     def test_inrun_max_steps_is_set_before_seed_pins_prompt(self):
-        for variant, limit in (('at', '40'), ('spare-step', '2')):
+        for variant, limit in (('at', '40'), ('spare-step', '2'), ('eight-summary-bound', '64')):
             with self.subTest(variant=variant):
                 ctx = object()
                 with patch.object(cases, '_seed', side_effect=RuntimeError('seed captured')) as seed, \
@@ -84,13 +84,56 @@ class CheckpointsTest(unittest.TestCase):
                     cases.inrun_compact(ctx, variant)
                 seed.assert_called_once_with(ctx, ('--in-run-compact', '--max-steps', limit))
 
-    def test_eight_summary_contract_discrepancy_is_pending_not_nine_normative(self):
+    def test_healthy_summary_fixture_requires_31_transitions_in_one_run(self):
         selected = {case.id: case for case in cases.collect()}
         self.assertNotIn('A28.inrun-nine-summaries', selected)
-        pending = selected['A28.inrun-eight-summary-bound'].pending
-        self.assertIn('specification/reference discrepancy', pending)
-        self.assertIn('eight summary transitions', pending)
-        self.assertIn('thirty summaries', pending)
+        fixture = selected['A28.inrun-eight-summary-bound']
+        self.assertIsNone(fixture.pending)
+        for completed in (8, 30, 31):
+            with self.subTest(completed=completed):
+                ctx = SimpleNamespace(server=SimpleNamespace(requests=[]))
+                program = []
+                trace = {
+                    'compaction.finished': [dict(summary='stage summary %d' % index) for index in range(completed)],
+                    'compaction.requested': [{} for _ in range(completed)],
+                    'compaction.failed': [], 'compaction.skipped': [],
+                    'run.finished': [dict(status='completed', steps=63, tool_calls=31)],
+                }
+
+                def expect(context, text='command reply', **kwargs):
+                    self.assertIs(context, ctx)
+                    program.append(kwargs['body'] if 'body' in kwargs else cases._openai(text))
+
+                def resume(context, stdin):
+                    self.assertEqual(stdin, 'inrun original task\n/exit\n')
+                    for index in range(len(program)):
+                        parts = ['inrun original task']
+                        if index > 0 and index % 2 == 0:
+                            parts.append(cases.SUMMARY + 'stage summary %d' % (index // 2 - 1))
+                        body = dict(input=[dict(role='user', content=[dict(type='input_text', text=part) for part in parts])])
+                        context.server.requests.append(SimpleNamespace(json=lambda body=body: body))
+
+                with patch.object(cases, '_seed', return_value=dict(max_steps=64)) as seed, \
+                     patch.object(cases, '_install') as install, \
+                     patch.object(cases, 'expect', side_effect=expect), \
+                     patch.object(cases, '_resume', side_effect=resume), \
+                     patch.object(cases, 'events', side_effect=lambda context, kind: trace[kind]):
+                    if completed == 31:
+                        fixture.run(ctx)
+                    else:
+                        with self.assertRaises(AssertionError):
+                            fixture.run(ctx)
+                seed.assert_called_once_with(ctx, ('--in-run-compact', '--max-steps', '64'))
+                self.assertEqual(install.call_args.args[1]['max_steps'], 64)
+                self.assertEqual(len(program), 63)
+                ordinary = program[:-1:2]
+                self.assertEqual([reply['usage']['input_tokens'] for reply in ordinary], [40000] + [5000] * 30)
+                self.assertEqual([reply['output'][-1]['call_id'] for reply in ordinary],
+                                 ['inrun-call-%d' % index for index in range(31)])
+                self.assertTrue(all(len(reply['output'][0]['content'][0]['text']) > 80000 for reply in ordinary))
+                self.assertEqual([reply['output'][0]['content'][0]['text'] for reply in program[1::2]],
+                                 ['stage summary %d' % index for index in range(31)])
+                self.assertEqual(program[-1]['output'][0]['content'][0]['text'], 'inrun final answer')
 
     def test_checksum_mutant_failure_names_checksum_rejection(self):
         with tempfile.TemporaryDirectory() as temporary:

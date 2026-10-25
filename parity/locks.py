@@ -313,7 +313,7 @@ def read_lock(suite, manifest):
         if len(expected) != len(set(expected)):
             raise AssertionError("duplicate executable case in committed inventory")
         if sys.platform == 'darwin' and set(expected) - document['cases'].keys():
-            raise HarnessError('new leaves need a Darwin capture; run make parity-golden UPDATE=1 on the Mac')
+            raise HarnessError('new leaves need a Darwin capture')
         verify_inventory(expected, document["cases"])
         cases = unpack(document)
         validate_policy(json.loads((suite / "policy.json").read_bytes()))

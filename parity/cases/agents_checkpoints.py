@@ -609,7 +609,8 @@ def live_crash(ctx, finished=False):
 
 
 def inrun_compact(ctx, variant):
-    max_steps = 2 if variant == 'spare-step' else 40
+    rounds = 31 if variant == 'eight-summary-bound' else 1
+    max_steps = 64 if rounds > 1 else 2 if variant == 'spare-step' else 40
     state = _seed(ctx, ('--in-run-compact', '--max-steps', str(max_steps)))
     state['context_window_tokens'] = 100000
     assert state['max_steps'] == max_steps
@@ -622,26 +623,37 @@ def inrun_compact(ctx, variant):
     tokens = 10000 if variant == 'below' else 40000
     # Use a low measured rate on the first large retained request, so only the
     # measured 40% boundary (not its estimate) can trigger the first summary.
-    reply = _openai(items=[{'type': 'message', 'role': 'assistant', 'content': [
-        {'type': 'output_text', 'text': 'stage evidence ' + 'h' * (0 if variant == 'below' else 80000)}]},
-        _call('list_files', {'path': '.'}, 'inrun-call-0')])
-    reply['usage']['input_tokens'] = tokens
-    expect(ctx, body=reply)
-    if variant not in ('below', 'spare-step', 'reserve'):
-        expect(ctx, 'stage summary 0')
+    for index in range(rounds):
+        reply = _openai(items=[{'type': 'message', 'role': 'assistant', 'content': [
+            {'type': 'output_text', 'text': 'stage evidence ' + 'h' * (0 if variant == 'below' else 80000)}]},
+            _call('list_files', {'path': '.'}, 'inrun-call-%d' % index)])
+        # After a summary the smaller request needs a lower measured usage:
+        # its calibrated estimate must trigger compaction without exhausting
+        # the summary request's 16k reserve or the projected handoff budget.
+        reply['usage']['input_tokens'] = tokens if index == 0 else 5000
+        expect(ctx, body=reply)
+        if variant not in ('below', 'spare-step', 'reserve'):
+            expect(ctx, 'stage summary %d' % index)
     expect(ctx, 'inrun final answer')
+    request_offset = len(ctx.server.requests)
     _resume(ctx, 'inrun original task\n/exit\n')
     summaries = events(ctx, 'compaction.finished')
-    wanted = 0 if variant in ('below', 'spare-step', 'reserve') else 1
+    wanted = 0 if variant in ('below', 'spare-step', 'reserve') else rounds
     assert len(summaries) == wanted, (variant, summaries, events(ctx, 'compaction.skipped'))
     final = events(ctx, 'run.finished')[-1]
-    assert final['status'] == 'completed' and final['steps'] == wanted + 2, final
-    assert final['tool_calls'] == 1
+    assert final['status'] == 'completed' and final['steps'] == rounds + wanted + 1, final
+    assert final['tool_calls'] == rounds
+    requests = ctx.server.requests[request_offset:]
+    assert len(requests) == rounds + wanted + 1, (variant, len(requests))
     if wanted:
-        body = ctx.server.requests[-1].json()
-        assert 'inrun original task' in texts(body)
-        assert SUMMARY + 'stage summary 0' in texts(body)
-        assert 'old evidence ' + 'x' * 200000 not in texts(body)
+        assert [item['summary'] for item in summaries] == ['stage summary %d' % index for index in range(rounds)]
+        assert len(events(ctx, 'compaction.requested')) == rounds
+        assert not events(ctx, 'compaction.failed') and not events(ctx, 'compaction.skipped')
+        for index in range(rounds):
+            following = texts(requests[2 * index + 2].json())
+            assert 'inrun original task' in following
+            assert SUMMARY + 'stage summary %d' % index in following
+            assert 'old evidence ' + 'x' * 200000 not in following
     if variant in ('spare-step', 'reserve'):
         skipped = events(ctx, 'compaction.skipped')
         assert len(skipped) == 1 and skipped[0]['disabled'] is True
@@ -761,11 +773,8 @@ def collect():
         add('A28.preturn-' + str(tokens), 'Measured 80 percent preturn compaction boundary', auto_compact, tokens=tokens)
     for variant in ('below', 'at', 'spare-step', 'reserve'):
         add('A28.inrun-' + variant, 'Measured/estimated 40 percent, spare-step and reserve boundaries', inrun_compact, variant=variant)
-    cases.append(Case('A28.inrun-eight-summary-bound', 'Specification/reference discrepancy at eight in-run summary transitions',
-        lambda ctx: None, pending=('A28 specification/reference discrepancy: specification bounds a Run at eight summary '
-            'transitions; pinned reference has no healthy-summary count guard and '
-            'internal/reagent/context_gc_policy_test.go:96-97 explicitly permits GC near compaction after eight and thirty summaries. '
-            'Resolve the contract before freezing a normative eight-transition oracle.')))
+    add('A28.inrun-eight-summary-bound', 'Pinned healthy compaction continues past eight and thirty summaries in one Run',
+        inrun_compact, variant='eight-summary-bound')
     for status in ('completed', 'refused', 'provider_error', 'cancelled', 'protocol_error', 'step-limit', 'limit_exceeded', 'incomplete_response'):
         for transition in ('ordinary', 'compact', 'reset'):
             add('A33.actual-' + status.replace('_', '-') + '-' + transition,

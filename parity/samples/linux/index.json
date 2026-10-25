@@ -4,15 +4,8 @@
   "review": "tar -tzf parity/samples/linux/<case>.tar.gz; tar -xOzf parity/samples/linux/<case>.tar.gz artifacts/<path>. Opaque/binary artifacts are not converted to text.",
   "pending_families": {
     "C18": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C19": "area 4: canonical v2 fixtures, cross-import, shared-HOME identity and persisted-field crosswalk",
-    "C20": "area 4: checkpoint save-failure fixtures before model/tool publication; trace warning alone cannot prove persistence barriers",
-    "C23": "area 4 agent scheduler/barrier fixtures: nested live counts, elapsed-slot binding, finish/delivery and private reply assertions",
-    "C24": "area 4 writing-agent fixture: bind child applied effects and root recap without leaking private reply",
-    "C25": "area 4 A24: controlled agent admission, correlated tree usage and cross-turn named-session reuse",
     "C43": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C44": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "T37": "Requires A20/A21 controlled agent lifecycle; no standalone child block/reset or canonical concurrent-root roster driver yet",
-    "W13": "Later agents area: native/nested fork admission and controlled child requests"
+    "C44": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules"
   },
   "cases": [
     {
@@ -224,6 +217,36 @@
       "normalized_bytes": 1401809,
       "normalized_sha256": "907ee5e62962713781603f5e5fc7c694bd1b597d10f611cf755b501edaf582c6",
       "bundle_sha256": "d63f9c581a487cf93b39c7430afdc45443dfe31b28523ffbf1cd58642e7c1913"
+    },
+    {
+      "id": "C23.agents-live-wait",
+      "description": "Actual agent lifecycle with root/child evidence and next-turn assertions",
+      "why": "Live child wait and root continuation with exact delivery evidence.",
+      "path": "C23.agents-live-wait.tar.gz",
+      "artifacts": 92,
+      "normalized_bytes": 2673492,
+      "normalized_sha256": "5d221b37dcf77d7a6d98dc53cd1f8b74beaf8e1d0884d3bda3677ba5c124398d",
+      "bundle_sha256": "1e58e0553bf58bf5f2ac1f715406b941257b4b3882ad117a45354742fa6af44f"
+    },
+    {
+      "id": "C24.agents-write-recap",
+      "description": "Actual agent lifecycle with root/child evidence and next-turn assertions",
+      "why": "Child write effects and the root write recap.",
+      "path": "C24.agents-write-recap.tar.gz",
+      "artifacts": 77,
+      "normalized_bytes": 2687519,
+      "normalized_sha256": "c5911eb66784ada2b099c6506891aac92c43d635da34e6179da80f97b62c3ca9",
+      "bundle_sha256": "854e584ceb0b63e84e6fe0d6790a93838f7c6fdf763e398f84771eb08df1f9a8"
+    },
+    {
+      "id": "C25.agents-tree-cost",
+      "description": "Actual agent lifecycle with root/child evidence and next-turn assertions",
+      "why": "Subtree cost accounting across retained child lifetimes.",
+      "path": "C25.agents-tree-cost.tar.gz",
+      "artifacts": 70,
+      "normalized_bytes": 2481441,
+      "normalized_sha256": "06b1f431cd4e034c8ad11fcd28212f55f862bd41e6ec92ac6cf9f6d4710a6d52",
+      "bundle_sha256": "24ba0befdfcf274812f3bf4413e29eedb00eb8f8cc867eb6bd485a3090f6126c"
     },
     {
       "id": "C26.exec-timeout-continues",
@@ -1544,6 +1567,466 @@
       "normalized_bytes": 230065,
       "normalized_sha256": "d7a54d09c3f811708d315930e925986799bfa7a7e6851bd8d6b81f687c4ab162",
       "bundle_sha256": "2b4024d7f2df15127882a8b55453585bdb7ef9a0905e407f802e4adbd582beda"
+    },
+    {
+      "id": "A01.off",
+      "description": "Lifecycle declaration and dispatch gate",
+      "why": "Lifecycle declarations and dispatch gates reject without child I/O.",
+      "path": "A01.off.tar.gz",
+      "artifacts": 18,
+      "normalized_bytes": 118291,
+      "normalized_sha256": "fb9887059ed3a34b805fc2e03e304754aa45057db66da7d43cf86e058b3dacd5",
+      "bundle_sha256": "97b8aabe7455d2d3604a6494c9c8fe23b7953159f5b31a3b0d278d0b828a850b"
+    },
+    {
+      "id": "A02.accept-entries128",
+      "description": "Inclusive valid spawn byte/path/name boundary",
+      "why": "Inclusive selected-entry limit with original numbering and trust.",
+      "path": "A02.accept-entries128.tar.gz",
+      "artifacts": 33,
+      "normalized_bytes": 1063817,
+      "normalized_sha256": "3c351dceb59f1974c2c75c618bc9de90534905d6f3cb09b81134814c47309b6d",
+      "bundle_sha256": "f0acaf4f4915dc64a25d985dba384001e5f84afea0da63de38b242105cd5392f"
+    },
+    {
+      "id": "A03.fresh-live",
+      "description": "Fresh labelled brief and live paths without parent history",
+      "why": "Fresh labelled context reads live files without parent history.",
+      "path": "A03.fresh-live.tar.gz",
+      "artifacts": 41,
+      "normalized_bytes": 357358,
+      "normalized_sha256": "bcab7931f69e0337e64502a87b9a7cbc38704f5d73dd889966bf4b1fe57db6c5",
+      "bundle_sha256": "b727ab66cd184b429ebb4f8ad65cd48dd0e501a18e808d83302cafe3531f731c"
+    },
+    {
+      "id": "A04.native-prebatch",
+      "description": "Native prefix excludes every tool in current batch",
+      "why": "Complete-batch native history boundary; mutation 30 catcher.",
+      "path": "A04.native-prebatch.tar.gz",
+      "artifacts": 40,
+      "normalized_bytes": 431820,
+      "normalized_sha256": "c9b3cbe55562fcf182797c572e0ed99d848287a6891be8c26fb7b0d466418716",
+      "bundle_sha256": "f7b2ff8d69a4e67512e5b914deb2be337754ef5365e1dd071845e09d216e393d"
+    },
+    {
+      "id": "A05.fixed-history",
+      "description": "Held native fork does not acquire later parent Entries on following request",
+      "why": "Held fork remains fixed after the parent advances.",
+      "path": "A05.fixed-history.tar.gz",
+      "artifacts": 54,
+      "normalized_bytes": 581401,
+      "normalized_sha256": "1e24cdb290a3be43dfbf18377565bd610f8fe26773e581c3c493c8c841f2eb76",
+      "bundle_sha256": "aba3d02b51ad7a31f3777f86d55e6b7e9bdeba52832cbd7ace16a23a6c6a07ba"
+    },
+    {
+      "id": "A06.claude-haiku-4-5",
+      "description": "Different model/provider projects labelled historical records without replay",
+      "why": "Cross-provider labelled history and opaque native omission.",
+      "path": "A06.claude-haiku-4-5.tar.gz",
+      "artifacts": 33,
+      "normalized_bytes": 310605,
+      "normalized_sha256": "3a0fc6f2bc719ca0e45004b87b4c1722cbb7ae10f0eb7d3c3c7a8eaa226f3239",
+      "bundle_sha256": "0db8e24c6a66dc3a811045b0780e3d43db6e3074b616d1ed32264fcbc04f2bad"
+    },
+    {
+      "id": "A07.selected-3-1",
+      "description": "Selection retains original numbering and supplied order",
+      "why": "Supplied selected-entry order and original numbering.",
+      "path": "A07.selected-3-1.tar.gz",
+      "artifacts": 33,
+      "normalized_bytes": 310386,
+      "normalized_sha256": "6b2102ced8ab2b31ef4d86fbe3279658d4de06de811606d2fc313e638c2bc77a",
+      "bundle_sha256": "0593c3f6c8d7c83d212ad4ecfe3345b69cd7307ea3aae8011c2d4fa786a58d0c"
+    },
+    {
+      "id": "A08.destination-window",
+      "description": "Oversized shared projection denied before child publication/request",
+      "why": "Admission precedes child publication and request.",
+      "path": "A08.destination-window.tar.gz",
+      "artifacts": 18,
+      "normalized_bytes": 14161338,
+      "normalized_sha256": "1e3e2e46196d996b98b5b5e42d6985f8e037dfefb96c63e576a938f18c516025",
+      "bundle_sha256": "9f8b80e3d7deab8ade19ae688c770014181f8b88a7ad68a786dd5b874db6f31b"
+    },
+    {
+      "id": "A09.later-plan-send",
+      "description": "Entering plan later refuses new work for an existing non-planning writer",
+      "why": "Later root plan mode refuses work for a nonplanning writer.",
+      "path": "A09.later-plan-send.tar.gz",
+      "artifacts": 63,
+      "normalized_bytes": 738355,
+      "normalized_sha256": "79f341cb030fb9471e88317a02be74e0a2508ecbd8484a4ec02322f9a0ee7819",
+      "bundle_sha256": "2560330b567365a4a9bd453a8a439eb947b75414008f8665741276e56e9c965b"
+    },
+    {
+      "id": "A10.capacity-idle-dismiss",
+      "description": "Eight idle named children reserve capacity until dismissal",
+      "why": "Idle named capacity and dismissal/name release.",
+      "path": "A10.capacity-idle-dismiss.tar.gz",
+      "artifacts": 97,
+      "normalized_bytes": 930609,
+      "normalized_sha256": "7c8ab8b0a4952d16d815a7c6f4a22682f7affa1aa658e7dcffd5d07315614175",
+      "bundle_sha256": "ff3a15602ca1ae384b2d7e832fa67c14ed1a01785cf136ec748bca52a07c90c3"
+    },
+    {
+      "id": "A11.concurrent-inflight",
+      "description": "Two child requests and root request progress concurrently with immutable sent history",
+      "why": "Independent held requests and immutable in-flight root input.",
+      "path": "A11.concurrent-inflight.tar.gz",
+      "artifacts": 42,
+      "normalized_bytes": 375671,
+      "normalized_sha256": "1f4674683b550cbd487e193ef47b7ab76c129dec6f749f54f36d79ffe7d7eb1d",
+      "bundle_sha256": "970c172031c48ba8ca500238c2d9a91d2dedb954dac3afb8d9fe435b944ed90f"
+    },
+    {
+      "id": "A12.poll-0",
+      "description": "Polling does not cancel; later wait joins and repeated wait returns receipt",
+      "why": "Polling, later join, and once-only delivery receipts.",
+      "path": "A12.poll-0.tar.gz",
+      "artifacts": 47,
+      "normalized_bytes": 457075,
+      "normalized_sha256": "e3ce35a5e678cfef846b36f733ea08ae1cae63e85d1d510c7baacd4fc5b1a8b2",
+      "bundle_sha256": "8657bd14781d9f29adec8a238107753426cd1f6190ff3e0c0b7bf2009c3dc4a2"
+    },
+    {
+      "id": "A13.batch-delivery",
+      "description": "All batch results precede once-only source:agent delivery",
+      "why": "All current-batch outcomes precede delivery.",
+      "path": "A13.batch-delivery.tar.gz",
+      "artifacts": 33,
+      "normalized_bytes": 311767,
+      "normalized_sha256": "7f44e3b4cd4ad9ba3e6bac06ea2109931b54558c0236bc6916f203bfc62e05e1",
+      "bundle_sha256": "49768656cfa8675ff7d06c932bb53b6f580f3d9338090b84489a228fbad13951"
+    },
+    {
+      "id": "A14.anonymous-named",
+      "description": "Anonymous delivery ends Session while named child can resume its original Session",
+      "why": "Named Session reuse versus anonymous collection.",
+      "path": "A14.anonymous-named.tar.gz",
+      "artifacts": 48,
+      "normalized_bytes": 461648,
+      "normalized_sha256": "43c43e547d281a1814a5c2e655c3031f930063c62b5e0767f684aadad76eed59",
+      "bundle_sha256": "eaaf8dcc72c01dd4b21a8b7934a95d7f7ec192773e53d44dd115ecf95e01850d"
+    },
+    {
+      "id": "A15.root-finish",
+      "description": "Text-only finish consumes descendant results before final completion",
+      "why": "Held descendant prevents premature final completion; mutation 33.",
+      "path": "A15.root-finish.tar.gz",
+      "artifacts": 34,
+      "normalized_bytes": 671673,
+      "normalized_sha256": "8cc98a73ee09f16b7330b57213006c8849769d803a8b8579b222763062e10fd6",
+      "bundle_sha256": "7cc965006e3ee9d5ff1a1edc07dc095a7da4384f0b4fff269a83a48e3a99a3a3"
+    },
+    {
+      "id": "A16.cancel-running",
+      "description": "Lifecycle control preserves identity/effects and distinguishes blocked reset",
+      "why": "Distinct lifecycle history, capacity, and retained-effect rules.",
+      "path": "A16.cancel-running.tar.gz",
+      "artifacts": 61,
+      "normalized_bytes": 651939,
+      "normalized_sha256": "df9d1114a157d960d2b145b03194de4bf0ba6e7759973594527fe5f48c45bbd9",
+      "bundle_sha256": "2fd5acd57386db5c63dc21ae55200713566129f2a1a572b8817cbc1b4bd21f88"
+    },
+    {
+      "id": "A17.exec-inflight",
+      "description": "Root failure synchronously cancels and joins a held child",
+      "why": "Root failure joins an actually started child exec.",
+      "path": "A17.exec-inflight.tar.gz",
+      "artifacts": 33,
+      "normalized_bytes": 254290,
+      "normalized_sha256": "9b3ee033387043b515716439aa7984303c9bed8f3dde502565e7ac33d0662cd2",
+      "bundle_sha256": "356cbadd407aec231c85adf9a374e76fcf58dd2f725db24dd3b6f1e0551742c1"
+    },
+    {
+      "id": "A18.batch",
+      "description": "Per-task step/call reservation and next task counters",
+      "why": "Whole-batch call reservation and next-task counters.",
+      "path": "A18.batch.tar.gz",
+      "artifacts": 89,
+      "normalized_bytes": 1446978,
+      "normalized_sha256": "c796efe8994707fee82958c9c459782a2241fd37c66486f1b4b9f4c20225fcd8",
+      "bundle_sha256": "cfde8de10adf4b7d014a7c9335628bb22d62d9be464bbabf18a01d8e4efa45ca"
+    },
+    {
+      "id": "A19.cached-over-input",
+      "description": "Reported uncached input plus output cap, not reasoning or cached input",
+      "why": "Cached input above inclusive input cannot produce negative charge.",
+      "path": "A19.cached-over-input.tar.gz",
+      "artifacts": 40,
+      "normalized_bytes": 355855,
+      "normalized_sha256": "993348c5f7b366a411b300668cdf01ad50ea470df6d167c33fe446ff8f8036fc",
+      "bundle_sha256": "d00d6d57b8c04ed11e69c780f5953a71d86e5cd1d3a8544a59a23686d3e06e8b"
+    },
+    {
+      "id": "A20.competing",
+      "description": "Read digests authorize only their owning independent workspace handle",
+      "why": "Independent sibling observations and stale edits; mutation 31.",
+      "path": "A20.competing.tar.gz",
+      "artifacts": 84,
+      "normalized_bytes": 862178,
+      "normalized_sha256": "0f979f76b835d3028f1956120ce73e6dbfcb3ed48072d29f1253c6b93bdc4b9b",
+      "bundle_sha256": "a25f50464af48cf286a10e82b887cd52374cdda545f6f40fd2de3ca9d5e14329"
+    },
+    {
+      "id": "A21.ledger",
+      "description": "Bounded delivery retains deduplicated effects and full root-origin records",
+      "why": "Bounded escaped delivery keeps uncertainty and omitted counts; mutation 34.",
+      "path": "A21.ledger.tar.gz",
+      "artifacts": 96,
+      "normalized_bytes": 35658588,
+      "normalized_sha256": "d1608a946e427477299f16670b8b882ecdf67d08f6b51c6a1384a2edfb475dea",
+      "bundle_sha256": "e707668e94c666fa0451e621578a04b2934daa99f8b9c54ebd7f8e8c91828fdf"
+    },
+    {
+      "id": "A22.timeout-continue",
+      "description": "Timed-out child exec skips its batch tail, preserves uncertainty, never retries and allows next task",
+      "why": "Timeout continuation differs from blocked cancellation/reset.",
+      "path": "A22.timeout-continue.tar.gz",
+      "artifacts": 68,
+      "normalized_bytes": 666112,
+      "normalized_sha256": "4e13afdc627a1e07e526e70d880a12010b24294d0f7197043e33bd764fade7d6",
+      "bundle_sha256": "ac83e4120b33388a31e8551bfda8870ab4b1ac8da82480ab9bfd01c45f6cfb8e"
+    },
+    {
+      "id": "A23.bounded-pages",
+      "description": "Retired lifetime subtree pages retain exact lexical records and complete cost",
+      "why": "Lifetime subtree pages preserve full lexical records and totals.",
+      "path": "A23.bounded-pages.tar.gz",
+      "artifacts": 482,
+      "normalized_bytes": 14584684,
+      "normalized_sha256": "a48d9496bf3be3040fc7f28649611db984ccc56f0a92b8ef79f98e5629ac9bdd",
+      "bundle_sha256": "64979131974099b1717d8360edc00e4e9e5b711bd415b53702eb381c54a8be44"
+    },
+    {
+      "id": "A24.cross-chat-reuse",
+      "description": "Named Session history, trace and lifetime cost survive another user turn",
+      "why": "Named lifetime cost and root tree cost across user turns.",
+      "path": "A24.cross-chat-reuse.tar.gz",
+      "artifacts": 70,
+      "normalized_bytes": 2481441,
+      "normalized_sha256": "06b1f431cd4e034c8ad11fcd28212f55f862bd41e6ec92ac6cf9f6d4710a6d52",
+      "bundle_sha256": "793285fd891eb4da23c1aae3cfbd317f2b7925be01b5e6b71c52ad13f25de63b"
+    },
+    {
+      "id": "A25.default",
+      "description": "Review command injects complete embedded prompt as ordinary turn",
+      "why": "Complete review prompt transport, without a judgment-quality claim.",
+      "path": "A25.default.tar.gz",
+      "artifacts": 20,
+      "normalized_bytes": 328976,
+      "normalized_sha256": "5e94bc79d5257abc7d46aebd89c76438cb9f39fa80805ead55ba85622acf879a",
+      "bundle_sha256": "3f037ada90d718e0684a30966d597b743fef5af9571842e3679a03db21c4f3dd"
+    },
+    {
+      "id": "A26.probe-cleanup",
+      "description": "Write-authority verifier probe effects are read and safely cleaned",
+      "why": "Independent write probe, verification read and safe cleanup.",
+      "path": "A26.probe-cleanup.tar.gz",
+      "artifacts": 68,
+      "normalized_bytes": 925876,
+      "normalized_sha256": "a4c6a5b74eccab4f86ffec2539ac40648e16fa51fbc006111c857acb41ce8098",
+      "bundle_sha256": "e6d8bdf4a72d6457ffb72d94d69f0a1b35dbe65d72656d3a80b27914944d1f4f"
+    },
+    {
+      "id": "A27.manual-text",
+      "description": "Transactional summary and following omitted-digest edit",
+      "why": "Transactional compaction and following write authorization.",
+      "path": "A27.manual-text.tar.gz",
+      "artifacts": 41,
+      "normalized_bytes": 303385,
+      "normalized_sha256": "b7436be9bf8452363a1a7f59630da8e22355837fddcb4eb5fcc7469bdf3858a3",
+      "bundle_sha256": "46d62e5e4ec28aaf657067c8ad5d2ec6387de366bb8df6cade278551e183c8c1"
+    },
+    {
+      "id": "A28.inrun-at",
+      "description": "Measured/estimated 40 percent, spare-step and reserve boundaries",
+      "why": "Measured 40-percent trigger, summary accounting and continuation.",
+      "path": "A28.inrun-at.tar.gz",
+      "artifacts": 29,
+      "normalized_bytes": 2498969,
+      "normalized_sha256": "b68de8bc4bb6e164a25ae40329139aa741c32ff5f9bce954721c8010e8253e0a",
+      "bundle_sha256": "97753f86e88e5a6a1b502f768ebd1220f64c371208a251a905d3bd9c733aa693"
+    },
+    {
+      "id": "A29.gc-on-redundant-recent-three",
+      "description": "Actual GC preserves original trace and protects recent three steps",
+      "why": "Original trace plus protected third-latest result; mutation 35.",
+      "path": "A29.gc-on-redundant-recent-three.tar.gz",
+      "artifacts": 130,
+      "normalized_bytes": 6855778,
+      "normalized_sha256": "d013a4e37bb0081c0a90114001a447ca8ca1af59ce6435bc0b0894cd2f53db5c",
+      "bundle_sha256": "f5e886b32ecdb16b14bb225d1b114687de29993d1a215dea21853e8f0e674c64"
+    },
+    {
+      "id": "A30.gc-break-even-arithmetic",
+      "description": "Actual GC request-count clamp and positive cache economics",
+      "why": "Independent GC cache-economics arithmetic.",
+      "path": "A30.gc-break-even-arithmetic.tar.gz",
+      "artifacts": 130,
+      "normalized_bytes": 6855779,
+      "normalized_sha256": "d511967e3417c1ecea740e2a2611695bf6417b29143b2e4e62d8bb97bcb55462",
+      "bundle_sha256": "a51f61ffb61ed895131b25c13f71b766b6a97bb125d13cafc198858a50fae231"
+    },
+    {
+      "id": "A31.request-view-original-recall",
+      "description": "Placeholder request with unchanged original recalled as data",
+      "why": "GC only changes request view; original recall grants no authority.",
+      "path": "A31.request-view-original-recall.tar.gz",
+      "artifacts": 30,
+      "normalized_bytes": 199525,
+      "normalized_sha256": "7cbdd6cc8cd7805316e237bbfd223a7d39c0d64b7d8e254245631860925c9ded",
+      "bundle_sha256": "d73bdf8beff639880d9e5078a7cdca7b53024443b5d5e565e8a45f55aad32729"
+    },
+    {
+      "id": "A32.recall-resume-unchanged",
+      "description": "Restored request placeholders, original recall, counter and no write authority",
+      "why": "Restored GC setting and recall registration; mutation 8.",
+      "path": "A32.recall-resume-unchanged.tar.gz",
+      "artifacts": 30,
+      "normalized_bytes": 199525,
+      "normalized_sha256": "a3c116269841ec9e087d6f4dd8bcf6253b3969006ed11100fc0aa83ee62e8366",
+      "bundle_sha256": "3eb341b9983729998807d69489282044ddcf0ae9f0f6b6f0b2cfa8b4adcb0d26"
+    },
+    {
+      "id": "A33.actual-completed-ordinary",
+      "description": "Actual terminal Run status followed by ordinary turn/compact/reset",
+      "why": "Actual terminal status and ordinary following action.",
+      "path": "A33.actual-completed-ordinary.tar.gz",
+      "artifacts": 27,
+      "normalized_bytes": 144822,
+      "normalized_sha256": "95d7a9d15f2f88374bf7b8db47e3340387d394c6d89dcba688a2777452d5296d",
+      "bundle_sha256": "a32abf66d7a177afabb15238f9ea07ff1f1b94877a13b60477d2b9bac05d3c23"
+    },
+    {
+      "id": "A34.live-crash-child-helper",
+      "description": "Kill at live helper start with running child; recover twice and reuse name",
+      "why": "Live helper/child crash, repeated recovery and fresh name reuse.",
+      "path": "A34.live-crash-child-helper.tar.gz",
+      "artifacts": 55,
+      "normalized_bytes": 475894,
+      "normalized_sha256": "f1c15a52c9c72547174a52485fe0f90e3a135107fb87ab6b7224b76964de1ab9",
+      "bundle_sha256": "62e17ce30c750cfc8ba6bc6ec2de53956dff38d7efa6f1bba0ed176236b765b5"
+    },
+    {
+      "id": "A35.schema-agents",
+      "description": "Typed event schema, request scopes, acceptance and batch-before-delivery ordering",
+      "why": "Event/schema/scope and accepted/batch/delivery ordering.",
+      "path": "A35.schema-agents.tar.gz",
+      "artifacts": 40,
+      "normalized_bytes": 390843,
+      "normalized_sha256": "63db920984e1dce7a80cd151a8ff6e86a84d054aa3897b2e5c041bc2893750ce",
+      "bundle_sha256": "e54db631e5870586848883ee7ec970daf538bf4dc2ce186d8ec89566c4109969"
+    },
+    {
+      "id": "A36.trace-existing-restore",
+      "description": "Exclusive trace failure is nonfatal; following invocation restores trace",
+      "why": "Exclusive trace failure is nonfatal and later trace recovers.",
+      "path": "A36.trace-existing-restore.tar.gz",
+      "artifacts": 22,
+      "normalized_bytes": 83124,
+      "normalized_sha256": "dca70db51aa57b5e0f5900d4e1485428ec916a998e2e65f20e0bbac67409a066",
+      "bundle_sha256": "76b9c6b6fb11f15f0dca797c6709e770112e1dc8f8afc54c73b118f7f318cc75"
+    },
+    {
+      "id": "A37.fixed-v2-roundtrip",
+      "description": "Fixed canonical v2 exact-byte rewrite twice",
+      "why": "Fixed authored v2 canonical bytes before and after import.",
+      "path": "A37.fixed-v2-roundtrip.tar.gz",
+      "artifacts": 10,
+      "normalized_bytes": 11064,
+      "normalized_sha256": "9109c29ac5d3b49035593b7dde81ba485af6607b544214c6d04eb597458556b5",
+      "bundle_sha256": "a237b6eedaec7e2447091ce58443f6b940077f07b0ef80462156b72cbd467801"
+    },
+    {
+      "id": "A37.cross-candidate-to-go",
+      "description": "Canonical fixed v2 writer/import bytes and ordinary recalled continuation",
+      "why": "Candidate-written checkpoint imported by protected Go.",
+      "path": "A37.cross-candidate-to-go.tar.gz",
+      "artifacts": 29,
+      "normalized_bytes": 134364,
+      "normalized_sha256": "bb61923fa5024cb7d1790887ce2a747c895c2ef6b11c3ab26181927425e45de5",
+      "bundle_sha256": "5597daa93b785dc43c0e2c9cf04380bcf3e016643950a3a1f742b20ea93d6339"
+    },
+    {
+      "id": "A37.v1-go-migration-import",
+      "description": "Frozen Go v1 migration, stable v2 save and candidate next request",
+      "why": "Fixed root-independent Go-only v1 migration and v2 import.",
+      "path": "A37.v1-go-migration-import.tar.gz",
+      "artifacts": 23,
+      "normalized_bytes": 92111,
+      "normalized_sha256": "062f791e3ebfe39ce1b207f5855eff00bc3efd1aa6b35959900945d048dee476",
+      "bundle_sha256": "29bada4fa7f6b876c427e584dd2e0f3fac20e129aa09cedb44e3e2a9df277c0d"
+    },
+    {
+      "id": "A38.switch-encoded-above",
+      "description": "Exact encoded request ceiling before window admission",
+      "why": "Independent encoded-byte guard at exactly limit plus one.",
+      "path": "A38.switch-encoded-above.tar.gz",
+      "artifacts": 43,
+      "normalized_bytes": 21103660,
+      "normalized_sha256": "f4536bc5fa7f4784717010fae4a5ec5c34d837a61b3558c389b19b76766fb97a",
+      "bundle_sha256": "6dd579091d9260c0eef5875f0ab55ee08956a8d1ca6269b93ec001b8c8a50405"
+    },
+    {
+      "id": "A39.reverse-release",
+      "description": "Wait publication witnesses lexical once-only delivery independent of release order",
+      "why": "Settled lexical delivery despite reverse completion; mutation 32.",
+      "path": "A39.reverse-release.tar.gz",
+      "artifacts": 48,
+      "normalized_bytes": 462094,
+      "normalized_sha256": "770ada86ed8dfff4c3805c93ff36946c17d94874bde9f65ea438175d0e7946ca",
+      "bundle_sha256": "d0841a82ddf8b711640c2904842e6c71d9794dc19b8e31d9e9668a9a0f96a924"
+    },
+    {
+      "id": "A40.call-ledger-compact",
+      "description": "Accepted call IDs are retained except deliberate reset clearing",
+      "why": "Compaction retains accepted call IDs and prevents replay.",
+      "path": "A40.call-ledger-compact.tar.gz",
+      "artifacts": 34,
+      "normalized_bytes": 242221,
+      "normalized_sha256": "4eefda9081e73e1d11bc550542f7c9eec264e82da37afb7d12b92d083947d6bb",
+      "bundle_sha256": "a1b2d6edfad0a999dcb8f626859a13368068f862fcb8b990e2646d6121bdcb27"
+    },
+    {
+      "id": "C19.corrupt-checksum",
+      "description": "Checksum rejection without provider replay or checkpoint rewrite",
+      "why": "Changed state with old checksum refuses before request; mutation 7.",
+      "path": "C19.corrupt-checksum.tar.gz",
+      "artifacts": 7,
+      "normalized_bytes": 4731,
+      "normalized_sha256": "e32da0a4fe4703ad5bdf7fe8895c1e47c5841fab92422bae7a7eb124d7929fa6",
+      "bundle_sha256": "e85e29357812473b0f965dfd4b32b4dfeac0175363b96e5e5bc8b26be9f8388c"
+    },
+    {
+      "id": "C20.persistence-barriers",
+      "description": "Checkpoint publication barrier before tool effect",
+      "why": "Admitted helper sabotages pre-model checkpoint publication.",
+      "path": "C20.persistence-barriers.tar.gz",
+      "artifacts": 16,
+      "normalized_bytes": 74494,
+      "normalized_sha256": "58dcd57fe789f224e036029db696fa574705dff06eb7d1d473fac75da60246e2",
+      "bundle_sha256": "7068b67fb3c1f3f9a54c54dd67a91d784875b519b7fa83efa0f8637b519f5bb5"
+    },
+    {
+      "id": "W13.native-fork",
+      "description": "Native Anthropic fork cache boundaries: native-fork",
+      "why": "Actual native Anthropic fork cache prefix.",
+      "path": "W13.native-fork.tar.gz",
+      "artifacts": 33,
+      "normalized_bytes": 342735,
+      "normalized_sha256": "84e77e758442964c2e917b929ec770795d548305eb2e68987c52e7c313808f84",
+      "bundle_sha256": "a9f7853299d9ede179afad8a7e6bc9831e32a41f413d6f0bcac5728261b454a0"
+    },
+    {
+      "id": "T37.same-root",
+      "description": "Canonical overlapping workspace exec notices, per-step and bounded records",
+      "why": "Independent overlap notice for canonical shared workspace execs.",
+      "path": "T37.same-root.tar.gz",
+      "artifacts": 54,
+      "normalized_bytes": 481779,
+      "normalized_sha256": "30539c8137e67d8dba089f4890f54d04631660bc3f6d750dd666e764afa975d8",
+      "bundle_sha256": "d0a1b708a2971d25cd50a0e246a6567af6ea892381ad79b1b3f06dc98ebb581c"
     }
   ],
   "platform": "linux"

@@ -1,5 +1,5 @@
 {
-  "status": "inverse-proven proposed Linux migration; not published because sample-family coverage blocked",
+  "status": "inverse-proven Linux migration published from retained raw replay; Darwin migration remains pending Mac capture",
   "evidence": "/tmp/reagent-parity-agents-proof/recovered-lane",
   "method": "approved_shell_timing_updates replay-validates raw evidence, requires identical normalized artifact descriptors and normalized_sha256, and finds exactly one omission mask among the eight masks of the three approved duration-ms sites that reconstructs the exact old canonical case hash",
   "sites": [

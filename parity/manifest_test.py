@@ -49,7 +49,7 @@ class ManifestTests(unittest.TestCase):
         with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'):
             if missing:
                 from parity.run import HarnessError
-                with self.assertRaisesRegex(HarnessError, 'new leaves need a Darwin capture'):
+                with self.assertRaisesRegex(HarnessError, '^new leaves need a Darwin capture$'):
                     locks.read_lock(suite, manifest)
             else:
                 locks.read_lock(suite, manifest)

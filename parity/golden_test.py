@@ -27,7 +27,8 @@ class GoldenTest(unittest.TestCase):
         self.suite.mkdir()
         self.policy = {"schema_version": 1, "comparison": {"default": "preserve detailed policy"},
                        "typed_allowlist": [{"kind": kind} for kind in (*locks.SUBSTITUTION_KINDS,
-                           "registered-fixture-cancel-delivery", "independently-validated-failed-admission-guard")]}
+                           "registered-fixture-cancel-delivery", "independently-validated-failed-admission-guard",
+                           "agent-causal-correspondence")]}
         (self.suite / "policy.json").write_text(json.dumps(self.policy))
         self.manifest = fixture_manifest(reference_binary_sha256=hashlib.sha256(b"binary").hexdigest())
         environment = patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.root / "cache")})

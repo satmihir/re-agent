@@ -20,7 +20,7 @@
       "go_version": "go version go1.23.3 linux/amd64",
       "python_version": "Python 3.11.5",
       "normalized_lock": "expected/linux.json",
-      "normalized_tree_sha256": "c74fb21179ff1eb23db3841a5bdda0f05f69572a5d2c945cbc729b5ada510834"
+      "normalized_tree_sha256": "12d59a8ab4ec493acfcd9a61e8cb79f6b62e07bdc7638e40d17dab1f56da4642"
     }
   },
   "exploratory_only": [
@@ -29,10 +29,10 @@
   ],
   "goldens_frozen": true,
   "inventory_status": "audited",
-  "inventory_scope": "Named W01-W54, T01-T60, C01-C44 and A01-A40 executable clauses against the unchanged pin. Pending: C18/C43/C44 (#185), T36.before-start's unavailable dispatch barrier, and A28 eight-summary contract reconciliation. Darwin entries pending the Mac capture.",
+  "inventory_scope": "Named W01-W54, T01-T60, C01-C44 and A01-A40 executable clauses against the unchanged pin. Pending: C18/C43/C44 (#185) and T36.before-start's unavailable dispatch barrier. Darwin entries pending the Mac capture.",
   "leaf_inventory": {
     "path": "inventory.json",
-    "metadata_sha256": "db1f0b85988a0b9e297ce46968eba972ca5232f90794a8ab2fdd748a278ee18a",
+    "metadata_sha256": "0e5a02d4f621ff3edbe8ece2e29ee1a3c440c31dffba2b5e37fd5baa78d23da7",
     "metadata_fields": [
       "id",
       "description",
@@ -46,8 +46,8 @@
   },
   "counts": {
     "total": 4140,
-    "runnable": 4110,
-    "pending": 30,
+    "runnable": 4111,
+    "pending": 29,
     "slow": 106,
     "by_area": {
       "wire": 2761,
@@ -298,15 +298,14 @@
     "C44.workspace-ctrl-d": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
     "C44.workspace-deny": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
     "C44.workspace-escape": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "T36.before-start": "Area 4 agent/dispatch barrier required: chat.go:939 installs signal.NotifyContext before provider I/O, so CLI/provider readiness proves handler installation but cannot stop between model acceptance and loop.go:369 dispatch ctx.Err(); tool.started at loop.go:408 is already after admission. --scripted exposes no earlier handshake",
-    "A28.inrun-eight-summary-bound": "A28 specification/reference discrepancy: specification bounds a Run at eight summary transitions; pinned reference has no healthy-summary count guard and internal/reagent/context_gc_policy_test.go:96-97 explicitly permits GC near compaction after eight and thirty summaries. Resolve the contract before freezing a normative eight-transition oracle."
+    "T36.before-start": "Area 4 agent/dispatch barrier required: chat.go:939 installs signal.NotifyContext before provider I/O, so CLI/provider readiness proves handler installation but cannot stop between model acceptance and loop.go:369 dispatch ctx.Err(); tool.started at loop.go:408 is already after admission. --scripted exposes no earlier handshake"
   },
   "reference_blockers": {},
   "accepted_gaps": [],
   "known_limitations": [
-    "A28 eight-summary contract discrepancy is pending, not a frozen contrary reference behavior; T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier."
+    "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "b12e26bdfa396a38e741c828240143f807d4c148039ed9368b07b34863cae383",
+  "suite_digest": "122d1d753ae4a4f4020e3e775b0964bdddde9e634cbc8d24d8b05659995b4f84",
   "verification_evidence": "agents-area4.md (area 4 and retained evidence); linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin entries pending the Mac capture",
