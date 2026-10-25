@@ -1774,9 +1774,9 @@
       "why": "Bounded escaped delivery keeps uncertainty and omitted counts; mutation 34.",
       "path": "A21.ledger.tar.gz",
       "artifacts": 96,
-      "normalized_bytes": 35658538,
-      "normalized_sha256": "c46551d8170582880db55ac9d6d923b357e968db4d45eb816cfd0539735a6e9d",
-      "bundle_sha256": "e4713180ec58a4597d60a345c74d05a53567d5b530423f88cd19fe1fb38e920a"
+      "normalized_bytes": 11268020,
+      "normalized_sha256": "909403b95911aafadac3ff311211f6677d608aecaae547ca18f45e1621c0abab",
+      "bundle_sha256": "e10ebe64038dc8937e0ac0a1e387c2eaf2c8f77e82b73064e33ad992b1366bc5"
     },
     {
       "id": "A22.timeout-continue",

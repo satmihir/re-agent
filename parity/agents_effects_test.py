@@ -105,30 +105,39 @@ class AgentEffectsTests(unittest.TestCase):
         delivery_ids([results[0], {'id': 't1', 'run_id': 'next'}], ['t1', 't1'])
 
     def test_mutation34_truncation_must_not_clear_exec_unknown_or_counts(self):
-        summary = {'files': [{'workspace': '/root', 'path': ledger_paths()[0], 'operation': 'create'}],
-                   'omitted': 100, 'exec_unknown': True}
-        ledger_summary(summary, 100, '/root', ledger_paths()[0])
-        for field, value in [('exec_unknown', False), ('omitted', 99), ('files', [])]:
+        paths = ledger_paths()
+        summary = {'files': [{'workspace': '/root', 'path': path, 'operation': 'create'} for path in paths[:5]],
+                   'omitted': 96, 'exec_unknown': True}
+        ledger_summary(summary, '/root', paths)
+        for field, value in [('exec_unknown', False), ('omitted', 95), ('files', []),
+                             ('files', list(reversed(summary['files']))),
+                             ('files', summary['files'][:-1])]:
             changed = copy.deepcopy(summary)
             changed[field] = value
             with self.subTest(field=field), self.assertRaises(AssertionError):
-                ledger_summary(changed, 100, '/root', ledger_paths()[0])
+                ledger_summary(changed, '/root', paths)
 
-    def test_ledger_paths_keep_exact_single_record_away_from_root_width_boundary(self):
+    def test_ledger_paths_fit_darwin_110_character_root_and_still_overflow_delivery(self):
         paths = ledger_paths()
         self.assertEqual(len(paths), 100)
         self.assertEqual(len(set(paths)), 100)
+        root = '/' + 'r' * 109
+        self.assertEqual(len(root), 110)
         for path in paths:
-            self.assertLess(len(path.encode()), 3500)
+            self.assertLess(len((root + '/workspace/' + path).encode()), 950)
             self.assertTrue(all(len(part.encode()) < 255 for part in path.split('/')))
-        # Production budgets the JSON string of each serialized record. Both
-        # short and long isolated roots must retain exactly one record, not two.
-        for width in (1, 80, 200, 400):
-            record = {'workspace': '/' + 'r' * width, 'path': paths[0], 'operation': 'create'}
-            raw = json.dumps(record, ensure_ascii=False, separators=(',', ':'))
+        # Production budgets each record through both JSON escaping layers.
+        for width, kept in ((1, 5), (80, 5), (110, 5), (200, 4), (400, 4)):
+            workspace = '/' + 'r' * (width - 1)
+            records = [dict(workspace=workspace, path=path, operation='create') for path in paths]
+            unbounded = dict(files=records, exec_unknown=True)
+            self.assertGreater(len(json.dumps(unbounded).encode()), 8192)
+            raw = json.dumps(records[0], ensure_ascii=False, separators=(',', ':'))
             cost = len(json.dumps(raw, ensure_ascii=False).encode()) + 1
-            self.assertLess(128 + cost, 8192)
-            self.assertGreater(128 + cost * 2, 8192)
+            self.assertLessEqual(128 + cost * kept, 8192)
+            self.assertGreater(128 + cost * (kept + 1), 8192)
+            summary = dict(files=records[:kept], omitted=101 - kept, exec_unknown=True)
+            ledger_summary(summary, workspace, paths)
 
     def test_trace_barrier_waits_for_both_complete_records_without_sleep(self):
         with tempfile.TemporaryDirectory() as temporary:

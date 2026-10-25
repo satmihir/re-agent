@@ -2,7 +2,9 @@
 
 import copy
 import json
+import sys
 import unittest
+from unittest.mock import patch
 
 from parity.observe import Normalizer, go_json
 from parity.observe_agents_checkpoints import envelope
@@ -12,7 +14,8 @@ from parity.observe_fixture_scripts import Scripts
 class FixtureScriptsTests(unittest.TestCase):
     def setUp(self):
         self.normal = Normalizer('/owned/C20.pre-model-save', None)
-        self.source = "from pathlib import Path; p=Path('/owned/C20.pre-model-save/home/.cache/reagent/sessions/0123456789abcdef/checkpoint.json'); p.unlink(); p.mkdir()"
+        cache = 'Library/Caches' if sys.platform == 'darwin' else '.cache'
+        self.source = "from pathlib import Path; p=Path('/owned/C20.pre-model-save/home/%s/reagent/sessions/0123456789abcdef/checkpoint.json'); p.unlink(); p.mkdir()" % cache
         self.arguments = dict(argv=['python3', '-c', self.source], cwd='.')
         self.call = dict(type='function_call', call_id='barrier-helper', name='exec', arguments=json.dumps(self.arguments))
         self.events = [dict(type='tool.started', run_id='a' * 16,
@@ -34,6 +37,19 @@ class FixtureScriptsTests(unittest.TestCase):
         self.assertEqual(arguments['argv'][2], self.source.replace(self.normal.root, '<ROOT>'))
         self.assertTrue(all(row['kind'] == 'fixture-owned-script-path' for row in self.normal.ledger))
         self.assertEqual(len(self.normal.ledger), 1)
+
+    def test_simulated_darwin_requires_its_independently_allocated_cache_path(self):
+        with patch('sys.platform', 'darwin'):
+            self.setUp()
+            self.assertIn('/home/Library/Caches/reagent/sessions/', self.source)
+            raw = go_json(dict(output=[self.call]))
+            result = self.scripts().json(raw, 'response', ('provider-response',))
+            self.assertEqual(json.loads(json.loads(result)['output'][0]['arguments'])['argv'][2],
+                             self.source.replace(self.normal.root, '<ROOT>'))
+            events = copy.deepcopy(self.events)
+            events[0]['data']['arguments'] = self.call['arguments'].replace('Library/Caches', '.cache')
+            with self.assertRaisesRegex(AssertionError, 'authored helper'):
+                self.scripts(events=events)
 
     def test_dispatch_witness_cannot_be_invented_or_changed(self):
         for change in ('missing', 'duplicate', 'code', 'path', 'cwd', 'workspace'):

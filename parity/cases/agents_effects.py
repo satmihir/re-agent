@@ -407,8 +407,8 @@ def token_cap(ctx, mode):
 
 
 def ledger_paths():
-    """Keep one record far inside the 8 KiB budget regardless of root-path width."""
-    prefix = '/'.join('segment-' + 'x' * 140 + '\\' * 50 for _ in range(16))
+    """Overflow delivery's 8 KiB budget without exceeding Darwin's path limit."""
+    prefix = '/'.join('segment-' + 'x' * 140 + '\\' * 50 for _ in range(4))
     return [prefix + '/effect-' + str(i).zfill(3) for i in range(100)]
 
 
@@ -447,7 +447,7 @@ def effects(ctx, mode):
     assert len(json.dumps(summary, ensure_ascii=False, separators=(',', ':')).encode()) <= 8192
     if mode == 'ledger':
         assert summary['omitted'] > 0 and delivery['truncated'], delivery
-        ledger_summary(summary, count, ctx.workspace, paths[0])
+        ledger_summary(summary, ctx.workspace, paths)
         assert outcomes(ctx, 't1')['uncertain-exec']['code'] == 'timeout'
     if mode in ('reply', 'ledger'):
         assert delivery['truncated'] and len(delivery['result']['reply']) < len(reply), delivery

@@ -1,6 +1,9 @@
 """Exact fixture-authored script paths certified by checkpoint and dispatch evidence."""
 
 import json
+from types import SimpleNamespace
+
+from parity.cases.agents_checkpoints import _cache
 
 from parity.observe import child, encoded_changes, lex, replace_spans
 from parity.observe_agents_checkpoints import validate
@@ -18,8 +21,9 @@ class Scripts:
         # Context owns this fixed HOME allocation; replay retains its case root.
         # Do not infer allocations from the script that is about to be rewritten.
         home = normal.root + '/home'
-        self.source = "from pathlib import Path; p=Path(%r); p.unlink(); p.mkdir()" % (
-            home + '/.cache/reagent/sessions/' + state['id'] + '/checkpoint.json')
+        sessions = _cache(SimpleNamespace(env=dict(HOME=home, XDG_CACHE_HOME=home + '/.cache')))
+        self.source = "from pathlib import Path; p=Path(%r); p.unlink(); p.mkdir()" % str(
+            sessions / state['id'] / 'checkpoint.json')
         self.arguments = dict(argv=['python3', '-c', self.source], cwd='.')
         self.program = normal.root + '/home/.parity-bin/python3'
         starts = [event for event in events if event['type'] == 'tool.started'

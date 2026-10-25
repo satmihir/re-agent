@@ -17,10 +17,22 @@ def delivery_ids(results, expected):
     assert len(identities) == len(set(identities)), ('duplicate task delivery', identities)
 
 
-def ledger_summary(summary, count, workspace, first_path):
+def ledger_summary(summary, workspace, paths):
     """Bind the bounded ledger to exact effects, including uncertainty after truncation."""
-    assert summary['files'] == [{'workspace': str(workspace), 'path': first_path, 'operation': 'create'}], summary
-    assert summary['omitted'] == count, summary
+    records = [dict(workspace=str(workspace), path=path, operation='create') for path in paths]
+    records.append(dict(workspace=str(workspace), path=paths[0], operation='update'))
+    retained, omitted, used = [], 0, 128
+    for record in records:
+        raw = json.dumps(record, ensure_ascii=False, separators=(',', ':'))
+        cost = len(json.dumps(raw, ensure_ascii=False).encode()) + 1
+        if used + cost > 8192:
+            omitted += 1
+        else:
+            retained.append(record)
+            used += cost
+    assert retained and omitted > 0, 'fixture must retain and omit effects'
+    assert summary['files'] == retained, summary
+    assert summary['omitted'] == omitted, summary
     assert summary['exec_unknown'] is True, ('exec_unknown lost from bounded effects', summary)
 
 

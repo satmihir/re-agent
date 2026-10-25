@@ -1,12 +1,46 @@
 # #188 — comparison repair and ordered proof
 
-**Linux comparison passed: 4,111 runnable leaves, zero failures, 29 pending.**
+**Darwin fixture fixes ready for Mac recapture. Latest Linux targeted comparison: 6/6 passed; mutation 34 caught.**
+
+The preceding full Linux comparison passed 4,111 runnable leaves, zero failures, 29 pending. It was not repeated for this narrow fixture repair.
 
 Darwin entries pending the Mac capture
 
 The pin remains `60fda0d3f3eabc76fa11deed72aed7850532c97e`. This continuation changes only Python harness/fixtures, policy, Linux evidence and documentation. No production Go, dependencies, comparison tolerances, broad masks, CI or tooling were added. Providers remain scripted loopback fakes; every case retains `REAGENT_WORKSPACE_GIT_TIMEOUT=60`. No merge or final #139/85%-coverage approval is requested.
 
-## Repairs and independent evidence
+## Darwin fixture repair (2026-10-25)
+
+The Mac capture stopped at 4,107/4,111 on two fixture bugs, not production Go behavior:
+
+- C20's script observer now reuses the checkpoint fixture's platform cache helper: `home/Library/Caches/reagent/sessions` on Darwin, unchanged `home/.cache/reagent/sessions` on Linux. The simulated-Darwin regression accepts the independently authored Darwin script and rejects a Linux-cache dispatch. Existing exact script/escaping/witness checks remain intact.
+- A21.ledger uses four prefix segments instead of sixteen: relative paths are **806 bytes**, full paths **927 bytes** for a 110-character case root plus `/workspace/`, with every component below 255 bytes. The unbounded summary still exceeds 8 KiB. Exact budget accounting checks the complete retained ordered prefix and omitted count; ordinary Linux/Darwin-width roots retain five records and omit 96, including the distinct update. Negatives reject changed counts, missing/reordered records and lost `exec_unknown`.
+
+Only **A21.ledger** received a fresh protected-reference Linux capture (**33.423 s**, clean leak check). The three C20 leaves replayed retained Linux raw evidence with byte-identical normalized artifacts, policies and substitution ledgers; no C20 reference recapture ran. Complete publication replay/verification passed in **466.523 s**, authorizing only A21.ledger's exact old/new lock pair in the publication process. Only its Linux sample bundle/index entry changed. All other case locks and **155 Darwin lock/index/bundle files** remained byte-identical. Persistent guards/comparison behavior were not changed.
+
+Latest seal: `ba33c9055415ae42ccd69555c43d4cdf969ab72ccf2de05a99ab95e9b91c3a71`; Linux tree: `c8cab1ef43c1c2e71e4b7966928daec7d25cb67133bf7894ed7e6abd9a782ff8`.
+
+Proof root `P=/tmp/reagent-parity-agents-proof/phase4-darwin-fixes`; pinned environment unchanged:
+
+| Command / check | Actual result |
+| --- | --- |
+| `python3 -m parity.run --bin /tmp/reagent-parity-agents-proof/plain-reference --jobs 12 --case C20 --case A21 --keep-artifacts --artifacts $P/targeted` | **6 passed, 0 failed**, six clean leak checks; 45.64 s. Targeted only (`gate_success=false`, not a whole-suite gate). |
+| `python3 -m parity.mutate --bin $R --reference-tree . --artifacts $P/mutations --jobs 12 --mutation 34` (`R` is the protected canonical reference below) | **1/1 caught**, A21.ledger unmodified control passed; intended `exec_unknown must survive bounded delivery` assertion, mutant `exec_unknown:false`; 62.12 s. |
+| `python3 -m unittest discover -s parity -p '*test.py'` | **671 tests, OK, 14 skipped**, 76.636 s. Printed runner failures are intentional negative-test fixtures. |
+
+Actual fresh Go gate output (`go-gate.log`; test result reused Go's cache):
+
+```text
+$ go build ./... && go vet ./... && go test ./...
+?   github.com/satmihir/re-agent/cmd/reagent [no test files]
+ok  github.com/satmihir/re-agent/internal/reagent (cached)
+real 1.99
+user 5.36
+sys 1.86
+```
+
+Receipts: `capture-result.json`, `c20-replay.json`, `a21-transition.json`, `publication.json`; real reports: `targeted/report.json`, `mutations/report.json`. The first replay diagnostic stopped before capture because it compared observer output before `account_raw` adds literal residuals; the corrected diagnostic used the normal accounting API and all retained C20 bytes matched. No oracle changed for that diagnostic. Old lanes/reports remain; the complete new lane is `replayed-lane/`, and the prior canonical cache is retained as `canonical-before/`. No agents, full recapture, full comparison, production changes, live provider calls or Mac execution were used for this repair. No terminal production behavior changed, so `make tty-check` was not run. The user will rerun Darwin; **do not merge**.
+
+## Previous repairs and independent evidence
 
 - **Nested outcomes/context:** `observe_tools_exec.py` and `observe_agents_context.py` reuse the original accepted call, complete `tool.finished` outcome, configured executable allocation and logical task witnesses. Resent wire/router/handoff outcomes must equal the complete raw witness or its independently computed complete canonical form; partial normalization, changed payloads, foreign paths and ambiguous ownership fail. Session/agent ownership constrains cross-Run echoes. Selected context in the child startup prompt uses the exact logical request witness. Assistant/native prose is not recursively treated as a tool outcome.
 - **A38 projections:** reconstruct the entire retained projection from the designated witness HTTP exchange and traced instructions before applying existing typed input, Runtime Workspace and cache-key slots. Only this exact residual artifact changes B→N; other residuals remain literal. Reentry recognizes only complete canonical handoffs previously produced by successful normalization, not arbitrary `<DATE>` strings.
@@ -29,9 +63,9 @@ Fresh reference capture was restricted to **A10 and A11**. A10's first capture w
 
 The first prepared publication stopped on T37's earlier-area sample guard (**239.75 s**, no publication); the retry explicitly authorized that exact sample pair and completed in **484.00 s**. Neither ordinary lock/sample protection nor candidate comparison code was loosened on disk. The former canonical cache is retained as `canonical-before/`; the new complete frozen lane is `replayed-lane/` and is copied to the canonical Linux cache. After the A38 barrier and escaping regression, all 12 affected retained cases replayed against unchanged locks before source-only reseal.
 
-Suite digest: `3a8fd8d0c2975f4a8864a59b64d1a6c9646211ab69b53962011eab1072d1d622`.
+Previous proof's suite digest: `3a8fd8d0c2975f4a8864a59b64d1a6c9646211ab69b53962011eab1072d1d622`.
 
-Linux normalized tree: `88e037b842b3eb7f6a375e71f463bab0f5050136d1a3b6f00e45d1788d4d6e20`.
+Previous proof's Linux normalized tree: `88e037b842b3eb7f6a375e71f463bab0f5050136d1a3b6f00e45d1788d4d6e20`.
 
 ## Requested proof, in order
 
