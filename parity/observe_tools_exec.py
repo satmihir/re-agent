@@ -15,11 +15,18 @@ LITERAL_ARGV = ['python3', '-c', LITERAL_SOURCE, '*.txt', '$HOME', 'a;b', 'x&&y'
 ALLOW_ENV = ('PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'GOROOT', 'GOPATH', 'GOCACHE', 'GOMODCACHE')
 
 
+def owns_exec(case_id):
+    """Identify fixtures whose helper executable has an independently recorded PATH."""
+    return (bool(re.fullmatch(r'(?:T\d{2}|A(?:1[5-9]|2[0-6]|39))\..+', case_id))
+            or case_id in ('C15.agents', 'C23.agents-live-wait',
+                           'C24.agents-write-recap', 'C25.agents-tree-cost'))
+
+
 class Exec:
     def __init__(self, normal, events, invocations, case_id):
         self.normal = normal
         self.outcomes = {}
-        if not re.fullmatch(r'T\d{2}\..+', case_id):
+        if not owns_exec(case_id):
             return
         for finish in events:
             data = finish.get('data', {})

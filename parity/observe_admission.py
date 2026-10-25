@@ -46,8 +46,14 @@ def failed_admission_source(event, traces, *, codec='direct'):
     raise AssertionError('failed admission lacks its unchanged-source follow-up request')
 
 
-def failed_admission_fields(event, traces, *, codec='direct'):
+def failed_admission_fields(event, traces, *, codec='direct', captures=(), observations=None):
     """Return validated source/handoff bytes, or an independently proven early guard."""
+    reason = event['data'].get('reason')
+    if isinstance(reason, str) and reason.startswith('validate destination request: request is '):
+        if codec != 'direct':
+            raise AssertionError('unsupported encoded admission codec')
+        from parity.observe_agents_admission import encoded_guard
+        return encoded_guard(event, traces, captures, observations or {})
     if event['data'].get('reason') in REASONS:
         source = failed_admission_source(event, traces, codec=codec)
         request = lex(source).value

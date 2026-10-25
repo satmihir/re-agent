@@ -1,17 +1,8 @@
 {
   "version": 2,
   "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
-  "scope": "All 36 design section 6 IDs: 25 applicable wire/tool mutations, including cross-area catchers 3, 4, 5 and 36; 11 explicit later-pending mutations. Each applicable patch independently targets git archive REF_COMMIT, never HEAD or the working tree. Later-pending is not a kill, waiver or completed 36/36 gate.",
-  "later_pending": [
-    {"id": 7, "owner": "checkpoint", "catchers": ["C19"], "reason": "Resume checksum corruption needs protected checkpoint fixtures."},
-    {"id": 8, "owner": "checkpoint/agents", "catchers": ["C19", "A32"], "reason": "Restored GC setting needs checkpoint and next recall/request fixtures; W52.gc/resume remain dependent."},
-    {"id": 30, "owner": "agents", "catchers": ["A04"], "reason": "Fork complete-batch boundary requires controlled child history fixtures; W13 native fork is dependent."},
-    {"id": 31, "owner": "agents/tools", "catchers": ["A20"], "reason": "Sibling observation authority requires local stale/write authorization fixtures."},
-    {"id": 32, "owner": "agents", "catchers": ["A39"], "reason": "Settled ready-batch delivery order requires controlled publication barriers."},
-    {"id": 33, "owner": "agents", "catchers": ["A15"], "reason": "Parent finish refusal requires held live descendant fixtures."},
-    {"id": 34, "owner": "agents/tools", "catchers": ["A21", "A22"], "reason": "Preserved exec_unknown requires oversized delivery and controlled effect fixtures."},
-    {"id": 35, "owner": "agents", "catchers": ["A29"], "reason": "GC latest-third-step preservation requires deterministic protected-record fixtures; W52.gc is dependent."}
-  ],
+  "scope": "All 36 design section 6 mutations are applicable. Each patch independently targets git archive REF_COMMIT, never HEAD or the working tree. Historical catches and current area-4 evidence are reported separately; this manifest does not claim a completed 36/36 campaign.",
+  "later_pending": [],
   "mutations": [
     {
       "id": 1,
@@ -240,6 +231,70 @@
       "intended_assertion": "An absent edit anchor retains the exact edit_not_found diagnostic wording",
       "failure_pattern": "assert out == expected|edit_not_found wording",
       "patches": [{"path": "internal/reagent/tool_edit_file.go", "old": "message := \"old_text does not occur in the file\"", "new": "message := \"old_text does not appear in the file\""}]
+    },
+    {
+      "id": 7,
+      "description": "Skip checkpoint envelope checksum validation during resume",
+      "cases": ["C19.corrupt-checksum"],
+      "intended_assertion": "A changed state with the old checksum is refused with the exact checksum diagnostic before any request",
+      "failure_pattern": "checkpoint checksum mismatch|checksum rejection",
+      "patches": [{"path": "internal/reagent/session_store.go", "old": "if envelope.Digest != fmt.Sprintf(\"%x\", sha256.Sum256(state)) {", "new": "if envelope.Digest != fmt.Sprintf(\"%x\", sha256.Sum256(state)) && false {"}]
+    },
+    {
+      "id": 8,
+      "description": "Forget the GC setting on checkpoint restore",
+      "cases": ["A32.recall-resume-unchanged"],
+      "intended_assertion": "Restored GC stays enabled in the next request and recall registration",
+      "failure_pattern": "restored GC|GC setting|context_gc|recall",
+      "patches": [{"path": "internal/reagent/session.go", "old": "s.cfg.ContextGC, s.gc, s.gcRequests = cp.ContextGC, cp.GC, cp.GCRequests", "new": "s.cfg.ContextGC, s.gc, s.gcRequests = false, cp.GC, cp.GCRequests"}]
+    },
+    {
+      "id": 30,
+      "description": "Fork history at the current tool position rather than the complete-batch boundary",
+      "cases": ["A04.native-prebatch"],
+      "intended_assertion": "The native fork contains no current-batch assistant, read or write outcome",
+      "failure_pattern": "current.batch|native.prefix|len\\(child\\['history'\\]\\)|child\\['history'\\]",
+      "patches": [{"path": "internal/reagent/agent_context.go", "old": "return s.gcHistory()[:boundary], records[:boundary], nil", "new": "_ = boundary\n\treturn s.gcHistory(), records, nil"}]
+    },
+    {
+      "id": 31,
+      "description": "Share child file observations with sibling and parent workspaces",
+      "cases": ["A20.competing"],
+      "intended_assertion": "A sibling without a local read cannot overwrite a file read by another child",
+      "failure_pattern": "sibling|authorization|read_required|unread",
+      "patches": [{"path": "internal/reagent/agents.go", "old": "ws.publishMu = s.workspace.active.publishMu", "new": "ws = s.workspace.active"}]
+    },
+    {
+      "id": 32,
+      "description": "Deliver the settled ready child batch in reverse lexical ID order",
+      "cases": ["A39.reverse-release"],
+      "intended_assertion": "After the wait publication witness, deliveries are lexical child-ID order exactly once",
+      "failure_pattern": "delivery order|lexical|sorted",
+      "patches": [{"path": "internal/reagent/agents.go", "old": "delivered := false\n\tfor _, n := range t.childrenLocked(s.agentParent()) {", "new": "delivered := false\n\tnodes := t.childrenLocked(s.agentParent())\n\tfor i := len(nodes)-1; i >= 0; i-- {\n\t\tn := nodes[i]"}]
+    },
+    {
+      "id": 33,
+      "description": "Allow a parent final reply despite a running descendant",
+      "cases": ["A15.root-finish", "A15.child-finish"],
+      "intended_assertion": "A held child prevents premature parent completion and its data precedes the later final reply",
+      "failure_pattern": "premature|finish.rule|still running|continuation",
+      "patches": [{"path": "internal/reagent/loop.go", "old": "ids := s.runningAgents()\n\t\t\tif len(ids) > 0 {", "new": "ids := s.runningAgents()\n\t\t\tif len(ids) > 0 && false {"}]
+    },
+    {
+      "id": 34,
+      "description": "Lose exec_unknown while truncating a large agent delivery",
+      "cases": ["A21.ledger"],
+      "intended_assertion": "Oversized delivered replies retain exec_unknown and full root effects",
+      "failure_pattern": "exec_unknown|unknown.*effect",
+      "patches": [{"path": "internal/reagent/agents.go", "old": "result.Truncated = true\n\t\tresult.Result.Reply =", "new": "result.Truncated = true\n\t\tresult.Effects.ExecUnknown = false\n\t\tresult.Result.Reply ="}]
+    },
+    {
+      "id": 35,
+      "description": "Drop the latest-third-step outcome through a GC off-by-one",
+      "cases": ["A29.gc-on-redundant-recent-three"],
+      "intended_assertion": "The latest three steps' outcomes remain unmodified in the next request",
+      "failure_pattern": "third|recent|protected",
+      "patches": [{"path": "internal/reagent/context_gc.go", "old": "old.step > steps-contextGCRecentSteps", "new": "old.step > steps-contextGCRecentSteps+1"}]
     },
     {
       "id": 36,

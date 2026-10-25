@@ -75,7 +75,9 @@ class ExecSlotsTest(unittest.TestCase):
         self.assertEqual(normal.ledger, [])
 
     def test_executable_slot_covers_file_workspace_and_git_t_families(self):
-        for case in ('T03.absolute', 'T04.replaced-root', 'T21.digest', 'T24.create', 'T40.hostile-programs.clean'):
+        for case in ('T03.absolute', 'T04.replaced-root', 'T21.digest', 'T24.create', 'T40.hostile-programs.clean',
+                     'A17.exec-shutdown', 'A21.ledger', 'A22.cancel-reset', 'A39.reverse-release',
+                     'C24.agents-write-recap'):
             with self.subTest(case=case):
                 events, invocations = evidence()
                 normal, tools = observer(events, invocations, case)

@@ -33,13 +33,13 @@ class MutationTests(unittest.TestCase):
 
     def test_all_36_have_unique_applicable_or_later_pending_classification(self):
         mutate.validate_manifest(self.manifest)
-        self.assertEqual({m["id"] for m in self.manifest["mutations"]}, {1, 2, 3, 4, 5, 6, *range(9, 30), 36})
+        self.assertEqual({m["id"] for m in self.manifest["mutations"]}, set(range(1, 37)))
         broken = copy.deepcopy(self.manifest)
-        broken["later_pending"].pop()
+        broken["mutations"].pop()
         with self.assertRaisesRegex(ValueError, "all 36"):
             mutate.validate_manifest(broken)
         broken = copy.deepcopy(self.manifest)
-        broken["later_pending"].append(broken["later_pending"][0])
+        broken["mutations"].append(broken["mutations"][0])
         with self.assertRaisesRegex(ValueError, "all 36"):
             mutate.validate_manifest(broken)
 
@@ -54,7 +54,7 @@ class MutationTests(unittest.TestCase):
         with self.assertRaises(Exception):
             mutate.resolve_cases(dict(self.mutation, cases=["W99.stale"]), inventory)
         with self.assertRaisesRegex(ValueError, "pending/unsupported"):
-            mutate.resolve_cases(dict(self.mutation, cases=["W47.agent"]), inventory)
+            mutate.resolve_cases(dict(self.mutation, cases=["T36.before-start"]), inventory)
 
     def test_exact_report_ids_not_prefixes_or_missing_duplicate_cases(self):
         for ids in (["W99.exact-extra"], ["W99.exact", "W99.exact"], ["W99.other"], []):
@@ -449,6 +449,14 @@ class MutationTests(unittest.TestCase):
             27: "assert not any(alive.values()), ('descendants still executing', states)",
             28: "assert outcome['code'] == code, outcome",
             29: 'assert out == expected, (out, expected)',
+            7: 'assert result.returncode == 2 and expected.encode() in result.stderr, "checksum rejection"',
+            8: 'assert "recall" in names, "restored GC: recall schema missing after resume"',
+            30: "assert len(child['history']) == len(parent['history'])",
+            31: "assert not unread['ok'], ('sibling missing_read authorization', unread)",
+            32: 'assert delivered == expected, "agent lexical delivery order"',
+            33: 'assert continuation, "premature parent completion"',
+            34: "assert effects['exec_unknown'] is True, 'bounded delivery preserved exec_unknown'",
+            35: 'assert not dropped, "protected third-latest completed step was dropped"',
             36: 'assert recent[2]["assistant"]["blocks"][0]["text"] == "é" * 255',
         }
         for mutation in self.manifest["mutations"]:

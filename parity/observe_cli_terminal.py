@@ -240,9 +240,9 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
         events.append(event)
         owned_traces.append((path, line))
         trace_paths.add(str(artifact_root / relative))
-        if event.get('type') == 'run.started':
+        if event.get('type') == 'run.started' and not event.get('agent_id'):
             headers.append(event)
-        elif event.get('type') == 'run.finished':
+        elif event.get('type') == 'run.finished' and not event.get('agent_id'):
             finished.append(event)
     if len(finished) > 1:
         def utc(event):

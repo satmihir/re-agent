@@ -79,6 +79,40 @@ print('stderr sentinel', file=sys.stderr)
         self.addCleanup(context.close)
         return context
 
+    def test_case_timing_includes_comparison_and_probe_without_entering_oracle_bytes(self):
+        from parity.run import execute_case
+        for golden in (None, '/verified-lane'):
+            captured = dict(id='C19.checkpoints', status='passed', artifacts={}, artifact_policies={})
+            with self.subTest(golden=golden), patch('parity.run.run_case', return_value=captured), \
+                    patch('parity.run.load_golden', return_value={}), \
+                    patch('parity.run.time.monotonic', side_effect=[10., 12.25]):
+                result = execute_case('C19.checkpoints', '/candidate', '/case', '/evidence', golden=golden)
+            self.assertEqual(result['duration_seconds'], 2.25)
+            self.assertNotIn('duration_seconds', result['artifact_policies'])
+            if golden is not None:
+                self.assertNotIn('artifacts', result)
+
+    def test_candidate_checkpoint_imports_receive_the_verified_reference_path(self):
+        from parity.run import execute_case
+        result = dict(id='C19.checkpoints', status='pending', artifacts={})
+        with patch('parity.run.run_case', return_value=result) as boundary:
+            execute_case('C19.checkpoints', '/candidate', '/case', '/evidence', golden='/verified-lane')
+        self.assertEqual(boundary.call_args.args,
+                         ('C19.checkpoints', '/candidate', '/case', '/evidence', None, '/verified-lane/reference'))
+
+    def test_resume_omits_workspace_but_other_overrides_still_fail(self):
+        context = self.context()
+        result = context.invoke(['chat', '--resume', '0123456789abcdef'], cli_workspace=None)
+        args = json.loads(result.stdout)['args']
+        self.assertNotIn('--workspace', args)
+        self.assertIn('--trace-dir', args)
+        for arguments in (['chat'], ['run', '--resume', '0123456789abcdef'],
+                          ['chat', '--resume', '../outside']):
+            with self.subTest(arguments=arguments), self.assertRaisesRegex(HarnessError, 'workspace overrides'):
+                context.invoke(arguments, cli_workspace=None)
+        with self.assertRaisesRegex(HarnessError, 'workspace overrides'):
+            context.invoke(['chat', '--resume', '0123456789abcdef'], cli_workspace='/')
+
     def test_invocation_keeps_backwards_wall_anchors_and_monotonic_elapsed(self):
         from parity.invocation_time import elapsed
         context = self.context()

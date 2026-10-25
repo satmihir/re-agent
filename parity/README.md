@@ -1,11 +1,43 @@
-# Executable parity — runner, wire, tools, workspace, CLI and terminal
+# Executable parity — wire, tools, CLI, agents and checkpoints
 
 Python 3.11+ standard library only; the supplied executable is the boundary. Tests use
 loopback providers and fake credentials, never live APIs or Go internals.
-This implements the first three of four areas, not overall-suite approval or an
-85% claim. Area 3 is re-pinned to #183; its earlier targeted stress gate passed.
+All four areas have executable fixtures, not overall-suite approval or an 85%
+claim. The unchanged reference pin is `60fda0d3`; area 4 rebases onto #186/#187.
 
-## Linux lane status
+## Area 4 — agents and checkpoints
+
+**Draft publication blocker:** the final capture failed on A36 observers; the
+one raw-only repair recovered those leaves, but publication then stopped on
+missing C23/C24/C25 sample selections. Per the proof budget, no further fix or
+capture ran. Python golden tests also expose a stale minimal-policy fixture.
+Locks, samples and published inventory remain old, so the manifest mismatch
+fails closed before candidate comparison. No passing full comparison or mutation
+catches are claimed; all 4,110 frozen runnable cases are retained externally.
+
+The live declarations have **4,140 leaves: 4,110 runnable /30 pending**, including
+321 A leaves (320 runnable) and all 31 formerly pending agent/checkpoint
+cross-area leaves. Native/text/selected context, authority, budgets, effects,
+delivery, GC/recall/compaction, canonical v2 fixed/live imports and recovery, and
+protected-Go v1 migration use executable boundary evidence. Cross-imports run
+the supplied executable and independently verified protected Go reference in
+both directions. The root-independent v1 gob is fixed, never regenerated per lane.
+
+**Darwin entries pending the Mac capture.** Existing Darwin lock entries and
+sample bundles remain byte-identical. A new-leaf capture diagnostic is implemented,
+but the current unpublished metadata mismatch fails earlier; the intended
+`new leaves need a Darwin capture` message is not yet available in this draft's
+ordinary gate. After coherent Linux publication, the Mac still needs its own
+`make parity-golden UPDATE=1`. Linux cannot manufacture that evidence.
+
+Remaining exact dependencies: C18/C43/C44 (#185), T36.before-start's unavailable
+pre-dispatch CLI barrier, and A28's eight-summary specification/reference
+reconciliation. None is a green skip. No production Go changes or new dependencies.
+See [`agents-area4.md`](agents-area4.md) for counts, slots, the C17 inverse-proven
+ledger migration, actual proof commands/results/timings, limitations and retained
+raw evidence. All later sections describe historical captures unless dated there.
+
+## Historical Linux lane status
 
 The linux/amd64 lane shares pin `60fda0d3` with Darwin and has its own lock and
 153 sample bundles. After three approved narrow harness repairs, its fresh
@@ -17,8 +49,8 @@ pre-existing samples are unchanged; no Mac execution is claimed.
 
 See [`linux-lane.md`](linux-lane.md) for exact identities, full platform audit,
 proof numbers, prior failed measurements and cleanup. [`linux-blockers.md`](linux-blockers.md)
-records the repairs and the separate, unmodified C17 zero/nonzero shell-duration
-ledger limitation. The single passing full comparison is not repeatability
+records the repairs and the historical C17 zero/nonzero shell-duration
+ledger limitation (narrowly migrated in area 4). The single passing full comparison is not repeatability
 proof. The extensive Darwin evidence below is historical platform evidence.
 
 ## Current startup-order repair

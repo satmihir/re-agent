@@ -448,6 +448,21 @@ class TerminalProjectionTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'summary differs'):
             self.project(ctx, traces)
 
+    def test_agent_lifetime_finish_is_not_a_root_terminal_footer_witness(self):
+        ctx, traces = self.capture(extra='footer / low\x1b[3;1H✓ completed · 1 step · 0 tool calls · tokens unknown · 0.1s\x1b[r\r\n')
+        root = {'type': 'run.finished', 'time': '2026-10-21T12:00:01Z',
+                'data': {'status': 'completed', 'steps': 1, 'tool_calls': 0}}
+        child = {'type': 'run.finished', 'agent_id': 't1', 'time': '2026-10-21T12:00:00Z',
+                 'data': {'status': 'cancelled', 'steps': 9, 'tool_calls': 8}}
+        traces += [(ctx.artifacts / 'invoke-001.traces/agent-aaaa/events.jsonl', encoded(child)),
+                   (ctx.artifacts / 'invoke-001.traces/zzzz/events.jsonl', encoded(root))]
+        _, normal = self.project(ctx, traces)
+        self.assertEqual(sum(row['kind'] == 'footer-elapsed' for row in normal.ledger), 1)
+        root['data']['steps'] = 2
+        traces[-1] = (traces[-1][0], encoded(root))
+        with self.assertRaisesRegex(AssertionError, 'summary differs'):
+            self.project(ctx, traces)
+
     def test_changed_raw_style_and_cursor_are_not_normalized_away(self):
         left, lt = self.capture(redraw=b'\x1b[31m')
         right, rt = self.capture(redraw=b'\x1b[32m')

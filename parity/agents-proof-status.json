@@ -1,0 +1,40 @@
+{
+  "status": "draft_blocked",
+  "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
+  "base_commit": "7d1373aa56d283798b4ffab37af613be6308e27d",
+  "platform": "linux/amd64",
+  "declared": {"total": 4140, "runnable": 4110, "pending": 30, "agents": 321},
+  "publication_completed": false,
+  "darwin_entries": "unchanged; pending the Mac capture",
+  "linux_expected_and_samples_published": false,
+  "full_comparison_report_available": false,
+  "full_comparison_report_reason": "make parity stopped in Python unit tests before executable comparison; no full report.json or full per-case timing evidence was produced",
+  "proofs": [
+    {"command": "make parity-golden UPDATE=1 JOBS=6", "exit_code": 2, "seconds": 998.80, "result": "4108 runnable cases captured/frozen; two A36 observer failures; 30 declared pending", "log": "/tmp/reagent-parity-agents-proof/golden.log"},
+    {"command": "raw-only recovery command recorded in parity/agents-recovery-command.md", "exit_code": 1, "seconds": 137.71, "result": "both A36 leaves replayed and froze from retained raw; publication failed on missing sample families C23/C24/C25; no further implementation fixes", "log": "/tmp/reagent-parity-agents-proof/recovery.log"},
+    {"command": "make parity BIN=/tmp/reagent-parity-agents-proof/plain-reference JOBS=12 KEEP_ARTIFACTS=1", "exit_code": 2, "seconds": 72.33, "result": "643 Python tests: 3 failures, 2 errors, 14 skipped; executable comparison did not start", "log": "/tmp/reagent-parity-agents-proof/comparison.log"},
+    {"command": "python3 -m parity.mutate --bin /tmp/reagent-parity-agents-proof/recovered-lane/reference --reference-tree . --artifacts /tmp/reagent-parity-agents-proof/mutations --jobs 12 --mutation 7 --mutation 8 --mutation 30 --mutation 31 --mutation 32 --mutation 33 --mutation 34 --mutation 35", "exit_code": 1, "seconds": 1.27, "result": "0/8 catches: every control was harness_failure on shared inventory metadata mismatch; no mutant build or intended kill proven", "report": "/tmp/reagent-parity-agents-proof/mutations/report.json"},
+    {"command": "make check", "exit_code": 0, "seconds": 49.53, "result": "gofmt gate, go vet and go test passed; internal/reagent 42.123s", "log": "/tmp/reagent-parity-agents-proof/check.log"},
+    {"command": "go build ./...", "exit_code": 0, "seconds": 0.34, "result": "passed", "log": "/tmp/reagent-parity-agents-proof/build.log"}
+  ],
+  "retained": {
+    "initial_failed_capture": "/tmp/reagent-parity-agents-proof/cache/reagent-parity/60fda0d3f3eabc76fa11deed72aed7850532c97e/failed-1792915126312807276",
+    "all_4110_frozen_cases_unpublished": "/tmp/reagent-parity-agents-proof/recovered-lane",
+    "A36_replayed_raw_sources": "/tmp/reagent-parity-agents-proof/replayed-A36",
+    "plain_archived_pin_source": "/tmp/reagent-parity-agents-proof/plain-pin",
+    "plain_archived_pin_binary": "/tmp/reagent-parity-agents-proof/plain-reference",
+    "barrier_probe": "/tmp/reagent-parity-agents-proof/barriers-jobs12-once",
+    "pagination_probe": "/tmp/reagent-parity-agents-proof/pagination-final"
+  },
+  "remaining_blockers": [
+    "C23/C24/C25 missing sample selections prevent atomic oracle publication",
+    "golden_test.py minimal policy builder lacks agent-causal-correspondence",
+    "published inventory/locks remain old: manifest mismatch fails closed before the intended Darwin new-leaf diagnostic",
+    "full executable comparison, per-case full comparison timings, all requested intended mutation catches and Linux sample publication remain unproved"
+  ],
+  "production_go_changed": false,
+  "new_dependencies": false,
+  "live_provider_calls": false,
+  "tty_check": "not run: terminal production code was not changed",
+  "agent_concurrency_deviation": "Nested delegation briefly exceeded the requested global limit of four before parent detection; further subdelegation was prohibited. Full eight-agent accounting is in agents-area4.md."
+}

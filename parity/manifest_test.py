@@ -27,12 +27,13 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(manifest['pending'], {case.id: case.pending for case in cases if case.pending})
         self.assertTrue(all(callable(case.run) for case in cases if not case.pending))
         self.assertEqual(set(counts['by_family']), {f'W{i:02d}' for i in range(1, 55)} |
-                         {f'T{i:02d}' for i in range(1, 61)} | {f'C{i:02d}' for i in range(1, 45)})
+                         {f'T{i:02d}' for i in range(1, 61)} | {f'C{i:02d}' for i in range(1, 45)} |
+                         {f'A{i:02d}' for i in range(1, 41)})
         self.assertEqual(len(cases), len({case.id for case in cases}))
         self.assertEqual(len(cases), len({case.id.casefold() for case in cases}),
                          'case directories must not collide on case-insensitive filesystems')
 
-    def test_darwin_identity_still_loads_the_unchanged_committed_lock(self):
+    def test_darwin_missing_leaves_require_capture_without_changing_old_identity(self):
         from unittest.mock import patch
         from parity import locks
         suite = Path(__file__).resolve().parent
@@ -43,8 +44,15 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(entry['go_version'], 'go version go1.23.3 ' + name)
             self.assertEqual(entry['python_version'], 'Python 3.11.5')
             self.assertNotIn('reference_commit', entry)
+        document = json.loads((suite / 'expected/darwin.json').read_bytes())
+        missing = {case.id for case in collect() if not case.pending} - document['cases'].keys()
         with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'):
-            document = locks.read_lock(suite, manifest)
+            if missing:
+                from parity.run import HarnessError
+                with self.assertRaisesRegex(HarnessError, 'new leaves need a Darwin capture'):
+                    locks.read_lock(suite, manifest)
+            else:
+                locks.read_lock(suite, manifest)
         self.assertEqual(document['reference_identity']['reference_commit'], manifest['reference_commit'])
         self.assertEqual(document['normalized_tree_sha256'],
                          manifest['platforms']['darwin/arm64']['normalized_tree_sha256'])

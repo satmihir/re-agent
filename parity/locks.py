@@ -36,6 +36,15 @@ SUBSTITUTION_KINDS = (
     "terminal-startup-session", "terminal-startup-path", "terminal-artifact-path",
     "terminal-state-projection", "terminal-workspace-path", "cli-shell-termination", "cli-shell-status",
     "cli-reset-checkpoint", "cli-exec-executable", "terminal-exec-timeout-elapsed", "terminal-progress-spinner",
+    "agent-envelope-run-reference", "agent-source-trace-path", "agent-result-source-trace-path",
+    "agent-delivered-effect-workspace", "agent-exact-delivery-preview", "agent-embedded-result",
+    "agent-embedded-roster", "agent-run-source-trace-path", "agent-exact-tool-preview",
+    "agent-embedded-tool-outcome", "agent-router-state", "agent-embedded-request", "agent-historical-transcript",
+    "checkpoint-roster-witnessed-trace", "checkpoint-legacy-exact-bytes", "checkpoint-typed-base64",
+    "checkpoint-witnessed-session", "checkpoint-owned-workspace", "checkpoint-witnessed-trace",
+    "checkpoint-runtime-workspace", "checkpoint-handoff-transcript", "checkpoint-gc-owned-path",
+    "checkpoint-shell-duration-ms", "checkpoint-outcome-workspace", "checkpoint-derived-state-sha256",
+    "checkpoint-linkage-inverse",
 )
 
 COMPARISON_POLICY = {
@@ -117,6 +126,24 @@ def ledger_contract(ledger, artifacts):
             certificate["request"] = {key: request[key] for key in ("method", "path")}
             certificates.append(certificate)
             continue
+        if kind == 'agent-causal-correspondence':
+            expected = {'artifact', 'kind', 'classification', 'trace_sources', 'http_source_order', 'logical_slots'}
+            order, slots, sources = row.get('http_source_order'), row.get('logical_slots'), row.get('trace_sources')
+            if (set(row) != expected or row.get('classification') != 'S'
+                    or not isinstance(order, list) or sorted(order) != list(range(len(order)))
+                    or not isinstance(slots, list) or len(slots) != len(order)
+                    or not isinstance(sources, list) or len(set(sources)) != len(sources)
+                    or any(not isinstance(source, str) for source in sources)):
+                raise AssertionError('invalid agent causal correspondence certificate')
+            for slot in slots:
+                if (slot is not None and (not isinstance(slot, (list, tuple)) or len(slot) != 4
+                        or type(slot[0]) is not int or slot[0] < 0 or not isinstance(slot[1], str)
+                        or not re.fullmatch('RUN_[1-9][0-9]*', slot[1])
+                        or type(slot[2]) is not int or slot[2] < 1 or type(slot[3]) is not int or slot[3] < 1)):
+                    raise AssertionError('invalid agent logical request slot')
+            certificates.append(dict(artifact=artifact, kind=kind, classification='S',
+                                     trace_count=len(sources), logical_slots=slots))
+            continue
         if kind == "independently-validated-failed-admission-guard":
             if row.get("classification") != "S" or not isinstance(row.get("guard"), dict) or not isinstance(row.get("reason"), str):
                 raise AssertionError("invalid failed-admission certificate")
@@ -128,6 +155,21 @@ def ledger_contract(ledger, artifacts):
         required = {"artifact", "kind", "path", "start", "end", "before", "after",
                     "before_sha256", "after_sha256", "before_length", "after_length"}
         optional = {"case", "classification"}
+        if kind == 'checkpoint-linkage-inverse':
+            proof = {'raw_state_sha256', 'substituted_state_sha256', 'raw_checksum_valid',
+                     'corruption_delta', 'inverse_verified'}
+            required |= proof
+            if not required <= row.keys() or row.keys() - required - optional:
+                raise AssertionError('invalid substitution row fields')
+            if (row.get('inverse_verified') is not True
+                    or row.get('corruption_delta') not in (None, 'checksum-prefix-zero',
+                        'envelope-version-99', 'envelope-id-fedcba9876543210')
+                    or row.get('raw_checksum_valid') is not (row.get('corruption_delta') != 'checksum-prefix-zero')
+                    or any(not isinstance(row.get(key), str) or not re.fullmatch('[0-9a-f]{64}', row[key])
+                           for key in ('raw_state_sha256', 'substituted_state_sha256'))):
+                raise AssertionError('invalid checkpoint inverse linkage proof')
+            certificates.append(dict(artifact=artifact, kind=kind, inverse_verified=True,
+                raw_checksum_valid=row['raw_checksum_valid'], corruption_delta=row['corruption_delta']))
         if kind == "terminal-state-projection":
             required |= {"classification", "certificate"}
             optional = set()
@@ -239,7 +281,7 @@ def verify_inventory(expected, actual):
 def validate_policy(policy):
     """Bind the detailed reviewable allowlist to every supported substitution and certificate kind."""
     expected = set(SUBSTITUTION_KINDS) | {"registered-fixture-cancel-delivery",
-                                        "independently-validated-failed-admission-guard"}
+                                        "independently-validated-failed-admission-guard", "agent-causal-correspondence"}
     if not isinstance(policy, dict) or policy.get("schema_version") != 1:
         raise AssertionError("unsupported comparison policy version")
     rows = policy.get("typed_allowlist")
@@ -270,6 +312,8 @@ def read_lock(suite, manifest):
                     if case["status"] == "implemented" and sys.platform in case["platforms"]]
         if len(expected) != len(set(expected)):
             raise AssertionError("duplicate executable case in committed inventory")
+        if sys.platform == 'darwin' and set(expected) - document['cases'].keys():
+            raise HarnessError('new leaves need a Darwin capture; run make parity-golden UPDATE=1 on the Mac')
         verify_inventory(expected, document["cases"])
         cases = unpack(document)
         validate_policy(json.loads((suite / "policy.json").read_bytes()))
@@ -309,6 +353,7 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
             futures = {case_id: pool.submit(frozen_lock, staging / case_id) for case_id in executable}
             new_cases = {case_id: future.result() for case_id, future in futures.items()}
     protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
+    protected_cases, shell_updates = approved_shell_timing_updates(protected_cases, new_cases, staging)
     protect_wire_locks(protected_cases, new_cases)
     protect_previous_locks(protected_cases, new_cases)
     document = {**pack(new_cases), "reference_identity": identity.reference(manifest)}
@@ -346,8 +391,10 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     manifest["platforms"][selected["reference_platform"]]["normalized_tree_sha256"] = document["normalized_tree_sha256"]
     print(json.dumps({**report, "changed_sample_cases": sample_changes,
                       "approved_zero_exec_timing_updates": timing_updates,
+                      "approved_shell_timing_updates": shell_updates,
                       "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))
-    return {**document, "cases": new_cases, "approved_zero_exec_timing_updates": timing_updates}
+    return {**document, "cases": new_cases, "approved_zero_exec_timing_updates": timing_updates,
+            "approved_shell_timing_updates": shell_updates}
 
 
 def approved_zero_exec_timing_updates(old_cases, new_cases, staging):
@@ -380,6 +427,50 @@ def approved_zero_exec_timing_updates(old_cases, new_cases, staging):
     return protected, updates
 
 
+SHELL_TIMING_SITES = (
+    ['cache-input', ['history', 0, 'shell', 'duration_ms'], 'duration-ms', 1],
+    ['trace-1.jsonl', ['data', 'history', 0, 'shell', 'duration_ms'], 'duration-ms', 1],
+    ['trace-1.jsonl', ['data', 'initial_history', 0, 'shell', 'duration_ms'], 'duration-ms', 1],
+)
+
+
+def approved_shell_timing_updates(old_cases, new_cases, staging):
+    """Allow only C17 ledger changes whose exact old lock reconstructs by site omission."""
+    from parity import run
+
+    protected, updates = dict(old_cases), []
+    for case_id, previous in sorted(old_cases.items()):
+        actual = new_cases.get(case_id)
+        if (not case_id.startswith('C17.') or actual is None or actual == previous
+                or actual != dict(previous, ledger_sha256=actual['ledger_sha256'])):
+            continue
+        documents, ledger, captured = run.read_frozen_case(Path(staging) / case_id)
+        policies = json.loads(documents['artifact-policies.json'])
+        run.validate_replay(captured['raw'], json.loads(documents['replay.json']),
+                            captured['normalized'], policies, ledger[:-1])
+        if case_lock(captured['normalized'], policies, ledger) != actual:
+            raise AssertionError('shell timing migration evidence differs: ' + case_id)
+        contract = ledger_contract(ledger, captured['normalized'])
+        if any(contract['sites'].count(site) != 1 for site in SHELL_TIMING_SITES):
+            raise AssertionError('shell timing migration lacks its three sites: ' + case_id)
+        matches = []
+        for mask in range(8):
+            omitted = [site for index, site in enumerate(SHELL_TIMING_SITES) if mask & (1 << index)]
+            inverse = dict(contract, sites=[site for site in contract['sites'] if site not in omitted])
+            reconstructed = dict(actual, ledger_sha256=digest(inverse))
+            if reconstructed == previous:
+                matches.append((omitted, reconstructed))
+        if len(matches) != 1:
+            raise AssertionError('shell timing migration cannot reconstruct unique old lock: ' + case_id)
+        omitted, reconstructed = matches[0]
+        protected[case_id] = actual
+        updates.append(dict(id=case_id, old_case_sha256=digest(previous), new_case_sha256=digest(actual),
+                            old_ledger_sha256=previous['ledger_sha256'], new_ledger_sha256=actual['ledger_sha256'],
+                            inverse_case_sha256=digest(reconstructed), added_sites=omitted,
+                            normalized_sha256=actual['normalized_sha256']))
+    return protected, updates
+
+
 def protect_wire_locks(old_cases, new_cases):
     """Stop area expansion before publishing any unapproved area-1 oracle change."""
     allowed = {'W28.window-cutoff-items'}
@@ -391,8 +482,8 @@ def protect_wire_locks(old_cases, new_cases):
 
 
 def protect_previous_locks(old_cases, new_cases):
-    """Area 3 can add leaves but cannot refresh any existing wire or tool oracle."""
+    """Area expansion cannot refresh existing results outside proved migrations."""
     changed = sorted(case_id for case_id, previous in old_cases.items()
-                     if case_id.startswith(('W', 'T')) and new_cases.get(case_id) != previous)
+                     if new_cases.get(case_id) != previous)
     if changed:
         raise AssertionError('earlier-area lock identity violation: ' + ', '.join(changed))

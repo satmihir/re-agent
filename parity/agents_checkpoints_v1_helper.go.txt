@@ -1,0 +1,52 @@
+package reagent
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/gob"
+	"encoding/json"
+	"fmt"
+	"os"
+	"testing"
+)
+
+// Run once in an isolated frozen-source archive to generate the checked-in fixture.
+func TestAgentsCheckpointImportsFreezeV1(t *testing.T) {
+	raw, err := os.ReadFile("testdata/checkpoint-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Version int    `json:"version"`
+		ID      string `json:"id"`
+		State   []byte `json:"state"`
+		Digest  string `json:"sha256"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Version != 1 || envelope.Digest != fmt.Sprintf("%x", sha256.Sum256(envelope.State)) {
+		t.Fatal("frozen legacy envelope changed")
+	}
+	var cp chatCheckpoint
+	if err := gob.NewDecoder(bytes.NewReader(envelope.State)).Decode(&cp); err != nil {
+		t.Fatal(err)
+	}
+	if cp.Launch != "/fixture/workspace" || cp.Active != cp.Launch || len(cp.History) != 2 {
+		t.Fatal("frozen legacy state changed")
+	}
+	cp.Launch, cp.Active = ".", "."
+	var state bytes.Buffer
+	if err := gob.NewEncoder(&state).Encode(cp); err != nil {
+		t.Fatal(err)
+	}
+	envelope.State = state.Bytes()
+	envelope.Digest = fmt.Sprintf("%x", sha256.Sum256(envelope.State))
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("AGENTS_CHECKPOINTS_OUTPUT"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

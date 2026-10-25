@@ -549,6 +549,12 @@ class Normalizer:
             replacement = None
             rule = None
             exec_echo = False
+            shell_timing = ((artifact == 'cache-input' and loc == ('history', 0, 'shell', 'duration_ms'))
+                            or (re.fullmatch(r'trace-[1-9][0-9]*\.jsonl', artifact) and loc in (
+                                ('data', 'history', 0, 'shell', 'duration_ms'),
+                                ('data', 'initial_history', 0, 'shell', 'duration_ms'))))
+            shell_timing = (shell_timing and Path(self.root).name.startswith('C17.')
+                            and isinstance(parent, dict) and 'command' in parent)
             exec_timing = ((event == 'tool.finished' and top.value.get('data', {}).get('name') == 'exec'
                             and loc == ('data', 'outcome', 'data', 'duration_ms'))
                            or (not native(loc) and last == 'duration_ms' and isinstance(parent, dict)
@@ -661,13 +667,14 @@ class Normalizer:
                         if marker in new:
                             prefix, snapshot = new.split(marker, 1)
                             decoder = json.JSONDecoder()
-                            _, stop = decoder.raw_decode(snapshot)
+                            start = len(snapshot) - len(snapshot.lstrip(' \t\r\n'))
+                            _, stop = decoder.raw_decode(snapshot, start)
                             normalized = self.json(snapshot[:stop].encode(), artifact, path+loc+('snapshot',)).decode()
                             new = prefix + marker + normalized + snapshot[stop:]
                     rule = rule or 'registered-text-span'
                 if new != value or exec_echo:
                     replacement = string_spans(raw[token.start:token.end], value, new)
-            if replacement is not None and (replacement != raw[token.start:token.end] or exec_timing or exec_echo):
+            if replacement is not None and (replacement != raw[token.start:token.end] or exec_timing or exec_echo or shell_timing):
                 self.record(artifact, path+loc, raw[token.start:token.end], replacement, rule, token.start, token.end)
                 if replacement != raw[token.start:token.end]:
                     changes.append((token.start, token.end, replacement))
@@ -811,8 +818,12 @@ def finish(ctx):
     traces = []
     requests = []
     cache_inputs = []
+    from parity.observe_trace_failures import existing_literal, restore_exchange
     for path in trace_files:
         raw = Path(path).read_bytes()
+        if existing_literal(ctx, path, raw):
+            results[str(Path(path).relative_to(ctx.artifacts))] = raw
+            continue
         lines = raw.splitlines(keepends=True)
         seq = 0
         for line in lines:
@@ -845,6 +856,19 @@ def finish(ctx):
     normal.json = echoes.json
     events = [lex(line).value for _, line in traces]
     normal.races = Races(normal, events, captures, invocations, case_id, observations)
+    from parity.observe_agents_context import Agents
+    source_root = Path(getattr(ctx, 'artifact_root', ctx.artifacts))
+    source_traces = [(source_root / Path(path).relative_to(ctx.artifacts), line) for path, line in traces]
+    agents = Agents(normal, source_traces, captures, invocations, case_id, observations)
+    normal.json, normal.text = agents.json, agents.text
+    capture_order = list(range(len(captures)))
+    if agents.enabled:
+        source_order = {path: index for index, path in enumerate(agents.trace_paths)}
+        traces.sort(key=lambda item: source_order[str(source_root / Path(item[0]).relative_to(ctx.artifacts))])
+        capture_order.sort(key=lambda index: agents.capture_slots.get(index, (len(agents.actor_slots), str(index))))
+        normal.ledger.append(dict(artifact='agent-causal-correspondence', kind='agent-causal-correspondence',
+            classification='S', trace_sources=agents.trace_paths, http_source_order=capture_order,
+            logical_slots=[agents.capture_slots.get(index) for index in capture_order]))
     for requestspec in cache_inputs:
         raw_key = cache_key(requestspec)
         canonical_spec = normal.json(requestspec, 'cache-input')
@@ -886,6 +910,8 @@ def finish(ctx):
         key = parsed.get('prompt_cache_key')
         if key and key not in normal.cache_keys:
             raise AssertionError('wire cache key is not independently derived from logical request')
+    restored, remaining = restore_exchange(ctx, normal, traces, captures, remaining)
+    results.update(restored)
     if remaining:
         raise AssertionError('HTTP capture has no corresponding traced attempt')
     # Previews intentionally have no model.requested trace. Reconstruct their
@@ -905,7 +931,7 @@ def finish(ctx):
             canonical = normal.json(prefix, 'preview-cache-input')
             normal.cache_keys[key] = cache_key(canonical)
     from parity.observe_derived import Derived
-    derived = Derived(normal, traces, captures, invocations=invocations)
+    derived = Derived(normal, traces, captures, invocations=invocations, observations=observations)
     # Validate all identities before processing references in stdout/stderr.
     for _, line in traces:
         ev = json.loads(line)
@@ -989,7 +1015,8 @@ def finish(ctx):
             normalized = tools.trace(line, normalized, name)
             parts.append(normalized)
         results[name] = b''.join(parts)
-    for i, request in enumerate(captures):
+    for i, capture_index in enumerate(capture_order):
+        request = captures[capture_index]
         prefix = f'http-{i+1}'
         content_type = next((v for k,v in request['headers'].items() if k.lower() == 'content-type'), '')
         if 'application/json' in content_type and request['body']:
@@ -1079,6 +1106,13 @@ def finish(ctx):
     for name in sorted(ARTIFACTS):
         if name in observations:
             results[name] = tools.artifact(observations[name], name)
+    from parity.observe_checkpoint_artifacts import Checkpoints, owns_artifact as checkpoint_artifact
+    checkpoint_traces = [(source_root / Path(path).relative_to(ctx.artifacts), line) for path, line in traces]
+    if any(checkpoint_artifact(name) for name in observations):
+        checkpoints = Checkpoints(normal, ctx, checkpoint_traces)
+        for name in sorted(observations):
+            if checkpoint_artifact(name):
+                results[name] = checkpoints.artifact(name, observations[name])
     for name, raw in results.items():
         normal.ledger.append(dict(artifact=name, raw_normalized_sha256=sha256(raw), normalized_length=len(raw)))
     Path(ctx.artifacts, 'substitutions.json').write_text(json.dumps(normal.ledger, indent=2)+'\n')
