@@ -2,6 +2,7 @@
 import datetime as dt
 import json
 import re
+import sys
 
 from parity.invocation_time import elapsed
 from parity.observe import child, go_json, go_string, lex, replace_spans, string_spans
@@ -34,6 +35,9 @@ class Tools:
         self.path_outcomes = self.workspace_outcomes()
         self.used_captures = set()
         self.remote = None
+        self.original_text = normal.text
+        if sys.platform == 'linux' and self.case_id == 'T52.conflict-lease.lease':
+            normal.text = self.failed_display
         self.enabled = bool(re.fullmatch(r'T(?:3[89]|4[0-9]|5[0-4])\..+', self.case_id)
                             or self.case_id in ('W53.propagation.git-do', 'T59.maps-numbers'))
         if not self.enabled:
@@ -66,6 +70,97 @@ class Tools:
             substitutions.extend(self.remote_spans(result))
             substitutions.extend(self.failure_message(outcome, substitutions))
             self.outcomes[key] = (outcome, substitutions)
+
+    def failed_display(self, value, artifact, path):
+        normalized = self.original_text(value, artifact, path)
+        match = re.fullmatch(r'invocation-([1-9][0-9]*)\.stderr', artifact)
+        if path or match is None:
+            return normalized
+        number = int(match[1])
+        if number > len(self.invocations):
+            raise AssertionError('failed Git display lacks invocation')
+        invocation = self.invocations[number - 1]
+        if value.encode('utf-8', 'surrogateescape') != invocation['stderr']:
+            raise AssertionError('failed Git display differs from raw invocation')
+        finishes = [e for e in self.events if e.get('type') == 'tool.finished'
+                    and e.get('data', {}).get('name') == 'git_do'
+                    and e['data'].get('outcome', {}).get('code') == 'step_failed']
+        if not finishes:
+            return normalized
+        if len(finishes) != 1:
+            raise AssertionError('failed Git display lacks unique finish')
+        finish = finishes[0]
+        starts = [e for e in self.events if e.get('type') == 'tool.started'
+                  and self.key(e) == self.key(finish) and e['data'].get('name') == 'git_do']
+        accepted = [e for e in self.events if e.get('type') == 'model.accepted'
+                    and (e.get('run_id'), e.get('step')) == self.key(finish)[:2]]
+        if len(starts) != 1 or len(accepted) != 1:
+            raise AssertionError('failed Git display lacks accepted call ownership')
+        start, accept = starts[0], accepted[0]
+        call = {key: start['data'].get(key) for key in ('call_id', 'name', 'arguments')}
+        stamps = [dt.datetime.fromisoformat(e['time'].replace('Z', '+00:00')).timestamp()
+                  for e in (accept, start, finish)]
+        owners = [i for i in self.invocations if i['started'] <= stamps[0] <= stamps[1] <= stamps[2] <= i['ended']]
+        if len(owners) != 1:
+            raise AssertionError('failed Git display lacks unique invocation ownership')
+        if owners[0] is not invocation:
+            return normalized
+        if (not accept['seq'] < start['seq'] < finish['seq']
+                or not accept.get('session_id') == start.get('session_id') == finish.get('session_id')
+                or accept.get('data', {}).get('blocks') != [{'kind': 'tool_call', 'call': call}]
+                or json.loads(call['arguments']) != {'recipe': 'rebase_push'}
+                or start['data'].get('workspace') != self.normal.root + '/workspace'
+                or 'terminal' in invocation):
+            raise AssertionError('failed Git display call differs from lease fixture')
+        outcome = finish['data']['outcome']
+        result = outcome['data']
+        steps = result.get('steps') or []
+        failed = [step for step in steps if step.get('exit_code') != 0]
+        argv = ['git', 'push', '-q', '--force-with-lease', 'origin', 'feature/parity']
+        if (len(failed) != 1 or failed[0] is not steps[-1] or failed[0].get('argv') != argv
+                or type(failed[0].get('exit_code')) is not int or failed[0]['exit_code'] != 1):
+            raise AssertionError('failed Git display lacks exact final lease push')
+        output = failed[0].get('output')
+        records = [json.loads(line) for line in self.observations.get('git/git-commands.jsonl', b'').splitlines()]
+        witnesses = [r for r in records if r.get('argv') == argv and 'barrier' not in r]
+        expected = dict(argv=argv, exit_code=1, stdout='', stderr=output)
+        if len(witnesses) != 1 or witnesses[0] != expected or type(witnesses[0]['exit_code']) is not int:
+            raise AssertionError('failed Git display lacks exact independent recorder result')
+        remote = self.remote_allocation()
+        allocations = json.loads(self.observations.get('git/independent-commands.json', b'[]'))
+        for wanted in (['git', 'init', '-q', '--bare', '-b', 'main', remote],
+                       ['git', 'remote', 'add', 'origin', remote]):
+            owned = [r for r in allocations if r.get('argv') == wanted]
+            if len(owned) != 1 or type(owned[0].get('exit_code')) is not int or owned[0]['exit_code'] != 0:
+                raise AssertionError('failed Git display lacks unique remote allocation')
+        message = ' '.join(argv) + ' exited 1: ' + output.strip()
+        if (outcome.get('ok') is not False or result.get('status') != 'failed'
+                or outcome.get('message') != message or result.get('reason') != message
+                or not output.startswith('To ' + remote + '\n')):
+            raise AssertionError('failed Git display output or failure template differs')
+        full = 'step_failed: ' + message
+        safe = ''.join('\\x%02x' % ord(ch) if ch not in '\n\t' and
+                       (ord(ch) < 32 or 127 <= ord(ch) <= 159) else ch for ch in full)
+        root = self.normal.root
+        offset = len('step_failed: ' + ' '.join(argv) + ' exited 1: To ')
+        # This fixture clips inside an ASCII allocation, before any Git prose or controls.
+        if (not root.isascii() or not root.isprintable() or not root.endswith('/' + self.case_id)
+                or not safe[:121].isascii() or not safe[:121].isprintable()
+                or not offset < 119 < offset + len(root) or len(safe) <= 120):
+            raise AssertionError('failed Git display is not the witnessed 120-cell clipped allocation')
+        line = '  ✗ git_do recipe=rebase_push → ' + safe[:119] + '…\n'
+        if (value.splitlines(keepends=True).count(line) != 1
+                or normalized.splitlines(keepends=True).count(line) != 1
+                or value.count(line) != 1 or normalized.count(line) != 1):
+            raise AssertionError('failed Git display differs from exact clipped activity')
+        start_at = normalized.index(line)
+        # Replace only what was visible; never shorten the full message and reclip it.
+        after = line[:len('  ✗ git_do recipe=rebase_push → ') + offset] + '<ROOT>…\n'
+        before_bytes, after_bytes = line.encode(), after.encode()
+        begin = len(normalized[:start_at].encode('utf-8', 'surrogateescape'))
+        self.normal.record(artifact, ('git-do-failed-display',), before_bytes, after_bytes,
+                           'git-do-failed-display-remote-prefix', begin, begin + len(before_bytes))
+        return normalized[:start_at] + after + normalized[start_at + len(line):]
 
     @staticmethod
     def key(event):

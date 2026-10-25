@@ -5,6 +5,22 @@ loopback providers and fake credentials, never live APIs or Go internals.
 This implements the first three of four areas, not overall-suite approval or an
 85% claim. Area 3 is re-pinned to #183; its earlier targeted stress gate passed.
 
+## Linux lane status
+
+The linux/amd64 lane shares pin `60fda0d3` with Darwin and has its own lock and
+153 sample bundles. After three approved narrow harness repairs, its fresh
+golden capture and full comparison passed: **3,756 passed /60 declared pending**,
+zero failures/leaks. Mutations **3/9/11** now catch with passing controls; the
+earlier 22 catches remain separate evidence. No additional stress round ran.
+C18/C43/C44 remain pending on both platforms for #185. Darwin's lock and all
+pre-existing samples are unchanged; no Mac execution is claimed.
+
+See [`linux-lane.md`](linux-lane.md) for exact identities, full platform audit,
+proof numbers, prior failed measurements and cleanup. [`linux-blockers.md`](linux-blockers.md)
+records the repairs and the separate, unmodified C17 zero/nonzero shell-duration
+ledger limitation. The single passing full comparison is not repeatability
+proof. The extensive Darwin evidence below is historical platform evidence.
+
 ## Current startup-order repair
 
 The approved fixture repair starts the PTY reader and acknowledges readiness
@@ -141,6 +157,12 @@ and exact evidence. Historical acceptance below is not current proof.
 
 ## Reference
 
+The table below records the unchanged Darwin reference. `manifest.json` selects
+an exact identity by `darwin/arm64` or `linux/amd64`, sharing one commit and build
+recipe. Linux locks/samples and the authorized full proof passed after the
+area-3 merge/re-pin and narrow harness repairs. See
+[`linux-lane.md`](linux-lane.md) for toolchain paths, audits and actual results.
+
 | Item | Value |
 |---|---|
 | Commit | `60fda0d3f3eabc76fa11deed72aed7850532c97e` (#183 merge: configurable workspace-snapshot Git timeout) |
@@ -244,8 +266,10 @@ unreachable objects or historical GitHub caches have been purged.
 
 ## Storage and integrity
 
-Git keeps `inventory.json`, `expected/darwin.json`, `policy.json`, the reference
-identity and suite seal in `manifest.json`, and `samples/`. The plain JSON lock
+Git keeps `inventory.json`, per-platform `expected/<os>.json`, `policy.json`,
+platform reference identities and a shared suite seal in `manifest.json`, and
+`samples/`. Existing Darwin samples stay at its root; Linux bundles/index use
+`samples/linux/` and are published independently. The plain JSON lock
 interns repeated `(length, normalized SHA-256, comparison policy)` triples; every
 case still names every artifact, its descriptor, its aggregate normalized digest
 and its substitution-ledger contract digest. No raw observation hashes are locked.
@@ -356,8 +380,10 @@ approved typed slot changes only the numeric duration in `W44.timeout-ack` and
 family counts are in `docs/reagent-rust-parity.md`; `manifest_test.py` checks
 counts, pending reasons and the exact metadata digest. Every leaf is listed in
 `inventory.json`, including its description, class, platform,
-implemented/pending status and reason. Darwin was executed; Linux is declared
-but not verified and has no golden lane.
+implemented/pending status and reason. Linux's post-area-3 measurements and
+current passing counts are in `linux-lane.md`. Audits for
+W01–W54, T01–T60 and C01–C44 are in `linux-platform-wire.md`,
+`linux-platform-tools.md` and `linux-platform-cli.md`.
 
 | Pending IDs | Later dependency |
 |---|---|
@@ -708,7 +734,8 @@ agent accounting, and cleanup. The earlier sections above retain area-1 history.
 
 No production Go changes or confirmed Go defects. No live model APIs, real `gh`
 inside fixtures, coverage, `VERIFY=1`, serial instrumented runs, or production
-terminal changes. Linux is declared but **not executed**. APFS rejects invalid
+terminal changes. In that historical area-2 proof Linux was declared but **not executed**;
+current Linux measurements are recorded separately in `linux-lane.md`. APFS rejects invalid
 UTF-8 filenames with EILSEQ; Darwin records that limitation instead of claiming
 Linux's invalid-name behavior was exercised. The broader existing `difflib`
 performance issue exposed by a synthetic oversized index layout remains outside
@@ -778,7 +805,9 @@ with their IDs. `processes.py` retains ancestry and case environment/cwd evidenc
 with PID/start-identity checks, including detached and double-fork descendants.
 This is not absolute containment: a descendant clearing its environment and
 leaving case directories before observation can evade attribution. macOS has an
-identity-check-to-signal race without pidfds. Linux implementation is unexecuted.
+identity-check-to-signal race without pidfds. The earlier campaign here did not
+execute Linux; its later full process-guard and `/proc` syscall proofs are in
+`linux-lane.md`.
 Unit tests cover detached children, PID reuse, unrelated-process exclusion and
 parallel checks; proof reports must state actual leak-check counts separately.
 

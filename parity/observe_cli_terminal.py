@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import sys
 
 from parity.vt import Terminal
 
@@ -166,6 +167,61 @@ _FLASK = ('      ●      ', '  ▗▄▖   ▗▄▖  ', '   █  •  █   ',
           '  ▟▘     ▝▙  ', ' ▟▘       ▝▙ ', '▐▌    ❯    ▐▌', '▝▙▄▄▄▄▄▄▄▄▄▟▘')
 
 
+def _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origins, owned_traces, headers, owner, announcements):
+    """Admit only C38's owned synchronized insertion above the restored prompt."""
+    restores = list(re.finditer(r'(?m)(?:^|\x1b\[(?:[0-9;]*H|\?2026h))trace: ([^\n\x1b]+)(?=\x1b(?!\[r))', text))
+    if not restores:
+        return []
+    assert len(restores) + len(announcements) == 1, 'duplicate cancellation trace announcement'
+    match = restores[0]
+    assert match[1] == owner['data']['trace_path'], 'cancellation trace announcement differs from cancelled owner'
+    run = owner.get('run_id', '')
+    assert re.fullmatch(r'[0-9a-f]{16}', run), 'cancellation trace Run identity differs'
+    relative = Path(prefix + '.traces') / run / 'events.jsonl'
+    artifact_root = getattr(ctx, 'artifact_root', ctx.artifacts)
+    assert match[1] == str(artifact_root / relative), 'cancellation trace path differs from Run allocation'
+    starts = [event for event in headers if event.get('run_id') == run]
+    assert len(starts) == 1, 'cancellation trace lacks unique run.started owner'
+    start = starts[0]
+    assert start.get('session_id') == owner.get('session_id') and start.get('session_id'), 'cancellation trace Session differs'
+    for event in (start, owner):
+        paths = [Path(path).relative_to(ctx.artifacts) for path, line in owned_traces if json.loads(line) == event]
+        assert paths == [relative], 'cancellation trace raw owner differs'
+    assert start['data']['workspace'] == str(ctx.root / 'workspace'), 'cancellation trace workspace differs'
+    assert all(type(owner['data'][key]) is int and owner['data'][key] == 1 for key in ('steps', 'tool_calls')), 'cancellation trace run counts differ'
+    stamps = [datetime.fromisoformat(event['time'].replace('Z', '+00:00')) for event in (start, owner)]
+    assert all(stamp.tzinfo is not None for stamp in stamps), 'cancellation trace owner lacks timezone'
+    begin, end = [stamp.timestamp() for stamp in stamps]
+    invocations = [item for item in ctx.invocations if item['started'] <= begin <= end <= item['ended']]
+    assert len(invocations) == 1 and invocations[0] is invocation and start['seq'] < owner['seq'], 'cancellation trace invocation owner differs'
+
+    position = origins[match.start()]
+    sync = b'\x1b[?2026h'
+    frame_start = position - len(sync)
+    frame = re.match(rb'\x1b\[\?2026h\x1b\[([1-9][0-9]*);1Htrace: ' + re.escape(match[1].encode()) +
+                     rb'\x1b\[([1-9][0-9]*);([1-9][0-9]*)H\x1b\[\?2026l', raw[max(0, frame_start):])
+    assert frame_start >= 0 and frame, 'cancellation trace lacks exact synchronized restore frame'
+    screen = Terminal(*metadata['initial_size'])
+    offset = 0
+    frame_end = frame_start + frame.end()
+    for event in metadata['events']:
+        if event['kind'] != 'resize':
+            continue
+        assert not frame_start < event['offset'] < frame_end, 'cancellation trace frame crosses resize'
+        if event['offset'] <= frame_start:
+            screen.feed(raw[offset:event['offset']])
+            screen.resize(event['rows'], event['cols'])
+            offset = event['offset']
+    screen.feed(raw[offset:frame_start])
+    row, restore_row, restore_col = [int(value) for value in frame.groups()]
+    assert not screen.modes[2026] and not screen.pending_wrap, 'cancellation trace starts inside an update'
+    assert (restore_row, restore_col) == (screen.row + 1, screen.col + 1), 'cancellation trace restore differs from captured caret'
+    assert screen.col == 2 and screen.line(screen.row) == '❯', 'cancellation trace lacks restored input prompt'
+    needed = (len('trace: ') + len(match[1]) + screen.cols - 1) // screen.cols
+    assert 1 <= row and row + needed < restore_row <= screen.rows, 'cancellation trace insertion overlaps restored prompt'
+    return restores
+
+
 def _slots(ctx, normal, invocation, index, raw, metadata, traces):
     """Bind startup and terminal exit fields to this invocation's raw headers."""
     text, origins = _printed(raw)
@@ -308,6 +364,9 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
         announcements = list(re.finditer(r'(?m)(?:^|\x1b\[[1-9][0-9]*;[1-9][0-9]*H)trace: ([^\n\x1b]+)(?=$|\x1b\[r)', text))
         assert len(announcements) <= 1, 'duplicate cancellation trace announcement'
         assert all(match[1] == blocked[0][1] for match in announcements), 'cancellation trace announcement differs from cancelled owner'
+        if sys.platform == 'linux':
+            announcements += _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origins,
+                                                      owned_traces, headers, owners[0], announcements)
         paths = list({match.start(1): match for match in paths + announcements + blocked
                       if '\x1b' not in match[1]}.values())
     for match in paths:

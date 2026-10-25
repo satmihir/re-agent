@@ -155,8 +155,12 @@ def optional(ctx, tool, field, least, variant):
 def paths(ctx, variant):
     setup(ctx)
     if variant in ('.git', '.GiT', '.env', '.ENV', '.env.local', '.EnV.SECRET'):
+        if sys.platform == 'linux':
+            put(ctx, variant + '/sentinel', b'SECRET')
         failure(ctx, one(ctx, 'read_file', {'path': variant + '/sentinel'}),
                 'invalid_path', variant + ' is not readable')
+        if sys.platform == 'linux':
+            assert (ctx.workspace / variant / 'sentinel').read_bytes() == b'SECRET'
     elif variant == 'parent':
         failure(ctx, one(ctx, 'read_file', {'path': 'd/../f'}),
                 'invalid_path', 'path must not contain a .. component')
@@ -263,9 +267,16 @@ def listing(ctx, variant):
     (root / 'c').symlink_to(root / 'a')
     os.mkfifo(root / 'e')
     put(ctx, 'd/é', b'utf8')
-    for name in ('.git', '.env', '.ENV.local'):
+    withheld = ('.git', '.env', '.ENV.local')
+    if sys.platform == 'linux':
+        # These are distinct directory entries, not aliases of the lowercase names.
+        withheld += ('.GiT', '.ENV')
+    for name in withheld:
         put(ctx, 'd/' + name, b'withheld')
-    skipped = 3
+    if sys.platform == 'linux':
+        assert (root / '.git').stat().st_ino != (root / '.GiT').stat().st_ino
+        assert (root / '.env').stat().st_ino != (root / '.ENV').stat().st_ino
+    skipped = len(withheld)
     if variant == 'invalid-name':
         certificate = invalid_name_vector(root)
         skipped += int(certificate['raw_name_created'])

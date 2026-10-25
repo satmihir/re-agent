@@ -16,6 +16,7 @@ from unittest.mock import patch
 from parity import golden, run
 from parity.cases import tools_git
 from parity.model import Case
+from parity.identity_test import fixture_manifest
 
 
 class SchedulingTest(unittest.TestCase):
@@ -236,8 +237,8 @@ class SchedulingTest(unittest.TestCase):
 
     def test_scheduling_metadata_is_part_of_inventory_identity(self):
         case = Case('W90', '', None)
-        before = run.leaf_inventory([case], {})
-        after = run.leaf_inventory([replace(case, exclusive=True)], {})
+        before = run.leaf_inventory([case], fixture_manifest())
+        after = run.leaf_inventory([replace(case, exclusive=True)], fixture_manifest())
         self.assertIn('exclusive', before['metadata_fields'])
         self.assertNotEqual(before['metadata_sha256'], after['metadata_sha256'])
 
@@ -283,7 +284,7 @@ class SchedulingTest(unittest.TestCase):
                     stack.enter_context(patch('parity.golden.build_reference', side_effect=build))
                     stack.enter_context(patch('parity.golden.capture_case', side_effect=worker))
                     stack.enter_context(patch('parity.golden.ProcessPoolExecutor', ThreadPoolExecutor))
-                    return golden.regenerate(root, {}, cases, {}, jobs=2)
+                    return golden.regenerate(root, fixture_manifest(), cases, {}, jobs=2)
             self.assertEqual(self.exercise_phases(invoke), lane)
             inventory = json.loads((lane / 'inventory.json').read_bytes())
             self.assertEqual([item['exclusive'] for item in inventory['cases']], [True, False, True, False])

@@ -7,12 +7,14 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from parity import golden, locks, run
+from parity import golden, identity, locks, run
+from parity.identity_test import fixture_manifest
 from parity.model import Case
 
 
@@ -27,7 +29,7 @@ class GoldenTest(unittest.TestCase):
                        "typed_allowlist": [{"kind": kind} for kind in (*locks.SUBSTITUTION_KINDS,
                            "registered-fixture-cancel-delivery", "independently-validated-failed-admission-guard")]}
         (self.suite / "policy.json").write_text(json.dumps(self.policy))
-        self.manifest = {"reference_commit": "a" * 40, "reference_binary_sha256": hashlib.sha256(b"binary").hexdigest()}
+        self.manifest = fixture_manifest(reference_binary_sha256=hashlib.sha256(b"binary").hexdigest())
         environment = patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.root / "cache")})
         environment.start()
         self.addCleanup(environment.stop)
@@ -68,7 +70,7 @@ class GoldenTest(unittest.TestCase):
             entry.size = 7
             stream.addfile(entry, io.BytesIO(b"fixture"))
         binary = self.root / "reference"
-        manifest = dict(self.manifest, go_version="go test version", python_version="Python test", reference_platform="darwin/arm64")
+        manifest = fixture_manifest(**dict(self.manifest, go_version="go test version", python_version="Python test", reference_platform="darwin/arm64"))
         calls = []
 
         def command(argv, cwd):
@@ -86,7 +88,7 @@ class GoldenTest(unittest.TestCase):
                 original = dict(manifest)
                 self.assertEqual(golden.build_reference(self.suite, manifest, binary, update=update), binary)
                 self.assertEqual(manifest, original)
-                wrong = {**manifest, "reference_binary_sha256": "0" * 64}
+                wrong = fixture_manifest(**{**manifest, "reference_binary_sha256": "0" * 64})
                 with self.assertRaisesRegex(run.HarnessError, "SHA-256 mismatch"):
                     golden.build_reference(self.suite, wrong, binary, update=update)
                 self.assertEqual(wrong["reference_binary_sha256"], "0" * 64)
@@ -299,23 +301,36 @@ class GoldenTest(unittest.TestCase):
             self.assertEqual(golden.verify_cache(lane, self.suite, self.manifest, cases, lock), lane)
             self.assertFalse(any(path.name.startswith(".parity-golden-") for path in lane.parent.iterdir()))
             (self.suite / "mutations.json").write_text("{}")
+            other = "darwin/arm64" if sys.platform == "linux" else "linux/amd64"
+            self.manifest["platforms"][other]["reference_binary_sha256"] = "d" * 64
+            shared = run.leaf_inventory(cases, self.manifest)
+            shared.update(platform=other.split("/")[0], reference_binary_sha256="d" * 64)
+            (self.suite / "inventory.json").write_text(json.dumps(shared))
+            other_lock = self.suite / "expected" / (other.split("/")[0] + ".json")
+            other_lock.parent.mkdir(exist_ok=True)
+            other_lock.write_bytes(b"other platform lock sentinel")
             (self.suite / "samples").mkdir()
             (self.suite / "samples/index.json").write_text("{}")
             acceptance = {"historical": True, "zero_exec_timing_migration": {"ledger_updates": [
                 dict(id='T31.start', old_ledger_sha256='old', new_ledger_sha256='new')]}}
-            (self.suite / 'cli-acceptance.json').write_text(json.dumps(acceptance))
+            acceptance_raw = (json.dumps(acceptance, indent=1) + '\n').encode()
+            (self.suite / 'cli-acceptance.json').write_bytes(acceptance_raw)
             output = io.StringIO()
             with patch("parity.samples.refresh_samples", return_value=[]), redirect_stdout(output):
                 golden.regenerate(self.suite, self.manifest, cases, None, update=True)
             self.assertIn('"W99"', output.getvalue())
+            self.assertEqual(json.loads((self.suite / "inventory.json").read_bytes()), shared)
+            self.assertEqual(other_lock.read_bytes(), b"other platform lock sentinel")
             updated = json.loads((self.suite / "manifest.json").read_bytes())
-            self.assertEqual(updated["normalized_tree_sha256"], locks.tree_digest({"W99": expected}))
+            self.assertEqual(identity.select(updated)["normalized_tree_sha256"], locks.tree_digest({"W99": expected}))
             self.assertIs(updated["goldens_frozen"], True)
             self.assertEqual(updated['freeze_status'], 'ready')
             self.assertEqual(json.loads((self.suite / 'cli-acceptance.json').read_bytes()), acceptance)
+            if sys.platform == 'linux':
+                self.assertEqual((self.suite / 'cli-acceptance.json').read_bytes(), acceptance_raw)
             committed = golden.read_lock(self.suite, updated)
             self.assertEqual(committed["cases"], {"W99": expected})
-            self.assertEqual(committed["reference_identity"], {key: self.manifest.get(key) for key in locks.REFERENCE_FIELDS})
+            self.assertEqual(committed["reference_identity"], identity.reference(self.manifest))
             policy = json.loads((self.suite / "policy.json").read_bytes())
             self.assertEqual(policy, {**self.policy, "ledger_contract": locks.COMPARISON_POLICY["ledger_contract"]})
             originals = {str(path.relative_to(self.suite)): path.read_bytes()
@@ -356,13 +371,14 @@ class GoldenTest(unittest.TestCase):
     def test_committed_lock_negative_controls_name_case_and_detect_suite_changes(self):
         expected = locks.case_lock({"stdout": b"expected"}, {"stdout": "B"}, [])
         packed = {**locks.pack({"W99": expected}),
-                  "reference_identity": {key: self.manifest.get(key) for key in locks.REFERENCE_FIELDS}}
+                  "reference_identity": identity.reference(self.manifest)}
         (self.suite / "expected").mkdir()
         path = self.suite / "expected" / (golden.sys.platform + ".json")
         path.write_text(json.dumps(packed))
-        (self.suite / "inventory.json").write_text(json.dumps({**self.manifest,
+        (self.suite / "inventory.json").write_text(json.dumps({**self.manifest, "platform": golden.sys.platform,
             "cases": [{"id": "W99", "status": "implemented", "platforms": [golden.sys.platform]}]}))
         (self.suite / "policy.json").write_text(json.dumps(self.policy))
+        self.manifest["platforms"][identity.current_platform()]["normalized_tree_sha256"] = packed["normalized_tree_sha256"]
         manifest = {**self.manifest, "suite_digest": run.suite_digest(self.suite)}
         self.assertEqual(golden.read_lock(self.suite, manifest)["cases"], {"W99": expected})
         for change, message in (("missing", "missing: W99"), ("extra", "extra: W98"), ("digest", "invalid normalized lock for W99")):

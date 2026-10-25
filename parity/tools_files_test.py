@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -62,10 +63,62 @@ class ToolsFilesTest(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         tools_files.invalid_name_vector(root)
             certificate = tools_files.invalid_name_vector(root)
-            self.assertEqual(certificate['raw_name_created'],
-                             certificate['invalid_utf8_tool_branch_verified'])
+            self.assertEqual(certificate['raw_name_created'], sys.platform == 'linux')
+            self.assertEqual(certificate['invalid_utf8_tool_branch_verified'], sys.platform == 'linux')
             self.assertIn(sys.platform, next(case for case in tools_files.collect()
                                             if case.id == 'T05.invalid-name').platforms)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'requires case-distinct Linux filesystem')
+    def test_listing_requires_exact_platform_withheld_count_and_no_case_leaks(self):
+        for platform, variant, skipped in [('linux', 'default', 5), ('darwin', 'default', 3),
+                                           ('linux', 'invalid-name', 6)]:
+            for defect in ('none', 'lowercase-only', 'leak'):
+                with self.subTest(platform=platform, variant=variant, defect=defect), tempfile.TemporaryDirectory() as folder:
+                    workspace = Path(folder)
+                    ctx = SimpleNamespace(workspace=workspace, _record=lambda *_: None)
+
+                    def listing(context, tool, args):
+                        entries = [{'path': 'd/' + name, 'name': name, 'kind': kind} for name, kind in
+                                   [('a', 'file'), ('b', 'dir'), ('c', 'symlink'), ('e', 'file'), ('é', 'file')]]
+                        if platform == 'linux':
+                            self.assertEqual({'.git', '.GiT', '.env', '.ENV', '.ENV.local'} &
+                                             {path.name for path in (workspace / 'd').iterdir()},
+                                             {'.git', '.GiT', '.env', '.ENV', '.ENV.local'})
+                        if defect == 'leak':
+                            entries.insert(0, {'path': 'd/.ENV', 'name': '.ENV', 'kind': 'file'})
+                        return {'workspace': str(workspace), 'ok': True, 'code': 'ok', 'message': '',
+                                'data': {'path': 'd', 'entries': entries, 'next_offset': None,
+                                         'skipped_entries': 2 if defect == 'lowercase-only' else skipped,
+                                         'complete': True}, 'truncated': False, 'effect': 'none'}
+
+                    with patch.object(tools_files.sys, 'platform', platform), patch.object(
+                            tools_files, 'one', side_effect=listing):
+                        if defect == 'none':
+                            tools_files.listing(ctx, variant)
+                        else:
+                            with self.assertRaises(AssertionError):
+                                tools_files.listing(ctx, variant)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'requires case-distinct Linux filesystem')
+    def test_withheld_read_checks_existing_linux_case_variant_sentinels(self):
+        for name in ('.git', '.GiT', '.env', '.ENV', '.env.local', '.EnV.SECRET'):
+            for code in ('invalid_path', 'not_found'):
+                with self.subTest(name=name, code=code), tempfile.TemporaryDirectory() as folder:
+                    ctx = SimpleNamespace(workspace=Path(folder))
+
+                    def read(context, tool, args):
+                        self.assertEqual((context.workspace / args['path']).read_bytes(), b'SECRET')
+                        return {'workspace': str(context.workspace), 'ok': False, 'code': code,
+                                'message': name + ' is not readable', 'data': None,
+                                'truncated': False, 'effect': 'none'}
+
+                    with patch.object(tools_files.sys, 'platform', 'linux'), patch.object(
+                            tools_files, 'one', side_effect=read):
+                        if code == 'invalid_path':
+                            tools_files.paths(ctx, name)
+                        else:
+                            with self.assertRaises(AssertionError):
+                                tools_files.paths(ctx, name)
 
     def test_outside_ancestor_checks_external_bytes_and_publication(self):
         for effect in ('none', 'publish', 'sentinel'):

@@ -17,7 +17,7 @@ import tarfile
 import tempfile
 import time
 
-from parity import run
+from parity import identity as reference_identity, run
 
 
 def cache_path(manifest):
@@ -70,6 +70,7 @@ def checked(command, cwd):
 
 def verify_binary(binary, manifest):
     """Reject a reference executable before any oracle case runs unless its SHA matches."""
+    manifest = reference_identity.select(manifest)
     binary = Path(binary)
     if binary.is_symlink() or not binary.is_file():
         raise run.HarnessError("reference binary is missing, linked or not a regular file: " + str(binary))
@@ -80,13 +81,11 @@ def verify_binary(binary, manifest):
 
 def build_reference(suite, manifest, destination, update=False):
     """Archive the pinned commit and build with the recorded flags without network access."""
+    selected = reference_identity.select(manifest)
     actual_go = checked(["go", "version"], suite.parent).decode().strip()
     actual_python = "Python " + platform.python_version()
-    if actual_go != manifest.get("go_version") or actual_python != manifest.get("python_version"):
+    if actual_go != selected["go_version"] or actual_python != selected["python_version"]:
         raise run.HarnessError("reference toolchain mismatch: %s; %s" % (actual_go, actual_python))
-    actual_platform = sys.platform + "/" + {"aarch64": "arm64", "x86_64": "amd64"}.get(platform.machine(), platform.machine())
-    if actual_platform != manifest.get("reference_platform"):
-        raise run.HarnessError("reference platform mismatch: " + actual_platform)
     flags = manifest.get("reference_build_flags", ["-trimpath", "-buildvcs=false"])
     if flags != ["-trimpath", "-buildvcs=false"]:
         raise run.HarnessError("unsupported reference_build_flags: " + repr(flags))
@@ -151,7 +150,7 @@ def identity(suite, manifest, temp_root_width=None):
         with tempfile.TemporaryDirectory(prefix="reagent-parity-cases-") as temporary:
             temp_root_width = len(str(Path(temporary).resolve()))
     return {"suite_digest": run.suite_digest(suite), "reference_commit": manifest["reference_commit"],
-            "reference_binary_sha256": manifest["reference_binary_sha256"], "temp_root_width": temp_root_width}
+            "reference_binary_sha256": reference_identity.select(manifest)["reference_binary_sha256"], "temp_root_width": temp_root_width}
 
 
 STAMP = "verified.json"
@@ -227,7 +226,8 @@ def capture_case(case_id, binary, root, artifacts, destination):
 def update_oracle(suite, manifest, lane, cases, jobs=4):
     """Prepare explicit re-pin data and publish its seal only after every reference replay passes."""
     from parity import locks
-    updated_manifest = dict(manifest, goldens_frozen=True, freeze_status="ready")
+    updated_manifest = json.loads(json.dumps(manifest))
+    updated_manifest.update(goldens_frozen=True, freeze_status="ready")
     with tempfile.TemporaryDirectory(prefix="parity-oracle-update-") as temporary:
         prepared = Path(temporary)
         for source in suite.glob("*.py"):
@@ -235,11 +235,12 @@ def update_oracle(suite, manifest, lane, cases, jobs=4):
         for name in ("cases", "fixtures", "expected", "samples"):
             if (suite / name).exists():
                 shutil.copytree(suite / name, prepared / name, ignore=shutil.ignore_patterns("__pycache__"))
-        for name in ("mutations.json", "policy.json"):
-            shutil.copyfile(suite / name, prepared / name)
+        for name in ("mutations.json", "policy.json", "inventory.json"):
+            if (suite / name).exists():
+                shutil.copyfile(suite / name, prepared / name)
         lock = locks.update_lock(prepared, updated_manifest, lane, cases, jobs)
         acceptance_path = suite / "cli-acceptance.json"
-        if acceptance_path.exists():
+        if acceptance_path.exists() and sys.platform == "darwin":
             acceptance = json.loads(acceptance_path.read_bytes())
             phase = acceptance.setdefault("zero_exec_timing_migration", {})
             updates = {row['id']: row for row in phase.get('ledger_updates', [])}
@@ -252,9 +253,10 @@ def update_oracle(suite, manifest, lane, cases, jobs=4):
         updated_manifest["suite_digest"] = run.suite_digest(prepared)
         (prepared / "manifest.json").write_text(json.dumps(updated_manifest, indent=2) + "\n")
         verify_cache(lane, prepared, updated_manifest, cases, lock, jobs)
-        generated = ["expected/" + sys.platform + ".json", "inventory.json", "policy.json",
-                     *["samples/" + path.name for path in (prepared / "samples").iterdir()], "manifest.json"]
-        if acceptance_path.exists():
+        from parity import samples
+        generated = [reference_identity.select(updated_manifest)["normalized_lock"], "inventory.json", "policy.json",
+                     *samples.generated_paths(prepared), "manifest.json"]
+        if acceptance_path.exists() and sys.platform == "darwin":
             generated.append(acceptance_path.name)
         originals = {relative: (suite / relative).read_bytes() if (suite / relative).exists() else None
                      for relative in generated}

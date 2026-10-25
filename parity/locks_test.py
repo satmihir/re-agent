@@ -121,14 +121,19 @@ class LockTest(unittest.TestCase):
             with self.subTest(edit=edit), self.assertRaisesRegex(AssertionError, "policy kinds differ"):
                 locks.validate_policy(changed)
 
-    def test_explicit_update_and_read_bind_inventory_reference_and_detailed_policy(self):
+    @patch('sys.platform', 'linux')
+    @patch('platform.machine', return_value='x86_64')
+    def test_explicit_update_and_read_bind_inventory_reference_and_detailed_policy(self, machine):
         from contextlib import redirect_stdout
         import io
         import sys
         from parity import run, samples
+        from parity.identity_test import fixture_manifest
         from parity.model import Case
         cases = [Case("W01.test", "test", lambda context: None)]
-        manifest = {"reference_commit": "a" * 40, "reference_binary_sha256": "b" * 64}
+        manifest = fixture_manifest()
+        manifest['platforms']['darwin/arm64']['reference_binary_sha256'] = 'd' * 64
+        darwin_identity = copy.deepcopy(manifest['platforms']['darwin/arm64'])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             suite, stage = root / "suite", root / "stage"
@@ -136,16 +141,30 @@ class LockTest(unittest.TestCase):
             stage.mkdir()
             (stage / "W01.test").mkdir()
             (stage / "inventory.json").write_bytes(locks.canonical(run.leaf_inventory(cases, manifest)))
+            (suite / 'expected').mkdir()
+            (suite / 'expected/darwin.json').write_bytes(b'Darwin lock sentinel')
+            (suite / 'samples').mkdir()
+            (suite / 'samples/index.json').write_bytes(b'Darwin index sentinel')
+            (suite / 'samples/W00.test.tar.gz').write_bytes(b'Darwin bundle sentinel')
+            shared = run.leaf_inventory(cases, manifest)
+            shared.update(platform='darwin', reference_binary_sha256='d' * 64)
+            (suite / 'inventory.json').write_bytes(locks.canonical(shared))
             detailed = Path(__file__).with_name("policy.json").read_bytes()
             (suite / "policy.json").write_bytes(detailed)
             def refresh_samples(lane, destination):
-                (destination / "samples").mkdir(exist_ok=True)
-                (destination / "samples" / "index.json").write_text("{}")
+                samples.sample_directory(destination).mkdir(parents=True, exist_ok=True)
+                (samples.sample_directory(destination) / "index.json").write_text("{}")
                 return ["W01.test"]
             output = io.StringIO()
             with patch.object(locks, "frozen_lock", return_value=self.lock), \
                  patch.object(samples, "refresh_samples", side_effect=refresh_samples), redirect_stdout(output):
                 result = locks.update_lock(suite, manifest, stage, cases, jobs=1)
+            self.assertEqual((suite / 'expected/darwin.json').read_bytes(), b'Darwin lock sentinel')
+            self.assertEqual((suite / 'samples/index.json').read_bytes(), b'Darwin index sentinel')
+            self.assertEqual((suite / 'samples/W00.test.tar.gz').read_bytes(), b'Darwin bundle sentinel')
+            self.assertEqual(manifest['platforms']['darwin/arm64'], darwin_identity)
+            self.assertEqual(json.loads((suite / 'inventory.json').read_bytes()), shared)
+            self.assertTrue((suite / 'samples/linux/index.json').is_file())
             self.assertEqual(result["cases"], {"W01.test": self.lock})
             self.assertEqual(locks.read_lock(suite, manifest)["cases"], result["cases"])
             self.assertIn('"extra_case_digests": [', output.getvalue())
@@ -165,6 +184,11 @@ class LockTest(unittest.TestCase):
                 path.write_bytes(locks.canonical(changed))
                 with self.subTest(control=control), self.assertRaisesRegex(run.HarnessError, "W01"):
                     locks.read_lock(suite, manifest)
+            changed = copy.deepcopy(document)
+            changed["reference_identity"]["reference_platform"] = 'darwin/arm64' if sys.platform == 'linux' else 'linux/amd64'
+            path.write_bytes(locks.canonical(changed))
+            with self.assertRaisesRegex(run.HarnessError, 'pinned reference identity differs'):
+                locks.read_lock(suite, manifest)
             path.write_bytes(locks.canonical(document))
             before = path.read_bytes()
             with patch.object(locks, "frozen_lock", side_effect=AssertionError("raw replay differs")):

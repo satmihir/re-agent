@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import tarfile
 
+from parity.identity import current_platform
+
 
 SELECTIONS = {
     'C01.unknown': 'Unknown-command help, stderr/stdout channels and exit code; mutation 1 catcher.',
@@ -195,12 +197,39 @@ def bundle(case_id, artifacts, policies):
     return gzip.compress(stream.getvalue(), mtime=0)
 
 
+def sample_directory(suite):
+    """Retain Darwin's root samples and isolate Linux bundles and index below linux/."""
+    from parity.run import HarnessError
+    name = current_platform().split("/")[0]
+    root = Path(suite) / 'samples'
+    destination = root / 'linux' if name == 'linux' else root
+    if root.is_symlink() or destination.is_symlink():
+        raise HarnessError('sample directory must not be a symlink')
+    return destination
+
+
+def sample_files(directory):
+    """Exclude only the separately owned Linux subtree from Darwin's sample inventory."""
+    return {path.name for path in directory.iterdir()
+            if not (current_platform() == 'darwin/arm64' and path.name == 'linux' and path.is_dir() and not path.is_symlink())}
+
+
+def generated_paths(suite):
+    """Publish only files owned by the executing platform's sample lane."""
+    directory = sample_directory(suite)
+    if not directory.exists():
+        return []
+    return [str((directory / name).relative_to(suite)) for name in sorted(sample_files(directory))]
+
+
 def refresh_samples(lane, suite):
     """Refresh only the selected full normalized cases from replay-verified reference data."""
     from parity.run import HarnessError, load_golden, read_frozen_case
 
     lane, suite = Path(lane), Path(suite)
     inventory = json.loads((lane / 'inventory.json').read_bytes())
+    if inventory.get('platform') != current_platform().split('/')[0]:
+        raise HarnessError('sample source platform differs from executing platform')
     cases = {case['id']: case for case in inventory['cases']}
     missing = sorted(set(SELECTIONS) - cases.keys())
     if missing:
@@ -209,14 +238,17 @@ def refresh_samples(lane, suite):
     selected = {case_id[:3] for case_id in SELECTIONS}
     if selected != implemented:
         raise HarnessError('sample families differ: ' + ', '.join(sorted(selected ^ implemented)))
-    destination = suite / 'samples'
-    destination.mkdir(exist_ok=True)
+    destination = sample_directory(suite)
+    destination.mkdir(parents=True, exist_ok=True)
     index = {'schema_version': 1, 'format': 'Deterministic gzip tar: case.json and artifacts/<logical path>; every normalized artifact is complete.',
              'review': 'tar -tzf parity/samples/<case>.tar.gz; tar -xOzf parity/samples/<case>.tar.gz artifacts/<path>. Opaque/binary artifacts are not converted to text.',
              'pending_families': {family: '; '.join(sorted({case['pending'] for case in cases.values()
                                                           if case['id'].startswith(family + '.')}))
                                   for family in sorted({case_id[:3] for case_id in cases} - implemented)},
              'cases': []}
+    if current_platform() == 'linux/amd64':
+        index['platform'] = 'linux'
+        index['review'] = index['review'].replace('parity/samples/', 'parity/samples/linux/')
     changed = []
     for case_id, reason in SELECTIONS.items():
         documents, _, _ = read_frozen_case(lane / case_id)
@@ -236,7 +268,7 @@ def refresh_samples(lane, suite):
                                'path': filename, 'artifacts': len(artifacts), 'normalized_bytes': sum(map(len, artifacts.values())),
                                'normalized_sha256': normalized_digest(artifacts), 'bundle_sha256': hashlib.sha256(raw).hexdigest()})
     expected = {'index.json', *(case_id + '.tar.gz' for case_id in SELECTIONS)}
-    extra = {path.name for path in destination.iterdir()} - expected
+    extra = sample_files(destination) - expected
     if extra:
         raise HarnessError('extra sample files: ' + ', '.join(sorted(extra)))
     (destination / 'index.json').write_text(json.dumps(index, ensure_ascii=False, indent=2) + '\n')
@@ -248,12 +280,14 @@ def verify_samples(lane, suite):
     from parity.run import HarnessError, load_golden, read_metadata
 
     lane, suite = Path(lane), Path(suite)
-    directory = suite / 'samples'
+    directory = sample_directory(suite)
     index = json.loads((directory / 'index.json').read_bytes())
+    if index.get('platform', 'darwin') != current_platform().split('/')[0]:
+        raise HarnessError('selected sample index platform differs from executing platform')
     rows = {row['id']: row for row in index['cases']}
     if len(rows) != len(index['cases']) or rows.keys() != SELECTIONS.keys():
         raise HarnessError('sample case inventory differs')
-    if {path.name for path in directory.iterdir()} != {'index.json', *(case_id + '.tar.gz' for case_id in SELECTIONS)}:
+    if sample_files(directory) != {'index.json', *(case_id + '.tar.gz' for case_id in SELECTIONS)}:
         raise HarnessError('sample file inventory differs')
     mismatched = []
     for case_id, row in rows.items():
@@ -275,8 +309,10 @@ def verify_samples(lane, suite):
 
 def refresh_inventory(lane, suite):
     """Copy the complete reference case inventory without changing metadata encoding."""
-    from parity.run import read_lane_inventory
+    from parity.run import HarnessError, read_lane_inventory
 
+    if current_platform() != 'darwin/arm64':
+        raise HarnessError('standalone shared inventory migration is Darwin-only; use parity-golden for Linux')
     raw, _, _ = read_lane_inventory(lane)
     (Path(suite) / 'inventory.json').write_bytes(raw)
 

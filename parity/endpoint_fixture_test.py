@@ -1,10 +1,33 @@
 """Scripted deadline input stays deterministic without projecting any Go output."""
 
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from parity.cases import wire_endpoints, wire_routing
+
+
+class CredentialFixtureTest(unittest.TestCase):
+    def test_platform_credentials_use_only_the_exact_private_config_path(self):
+        roots = {'darwin': Path('Library/Application Support'), 'linux': Path('.config')}
+        for platform, relative in roots.items():
+            for expired in (False, True):
+                with self.subTest(platform=platform, expired=expired), tempfile.TemporaryDirectory() as root:
+                    ctx = SimpleNamespace(home=Path(root))
+                    with patch.object(wire_endpoints.sys, 'platform', platform):
+                        path, env = wire_endpoints._credentials(ctx, expired=expired)
+                    self.assertEqual(path, ctx.home / relative / 'reagent/chatgpt.json')
+                    self.assertEqual(env, {})
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+                    saved = json.loads(path.read_bytes())
+                    self.assertEqual(saved['expires_at'], 1 if expired else 4102444800)
+                    self.assertEqual(saved['access_token'], wire_endpoints.SECRETS[0])
+                    other = roots['linux' if platform == 'darwin' else 'darwin']
+                    self.assertFalse((ctx.home / other / 'reagent/chatgpt.json').exists())
 
 
 class DeadlineFixtureTest(unittest.TestCase):

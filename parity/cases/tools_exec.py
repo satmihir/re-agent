@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import select
 import signal
+import sys
 import time
 
 from parity.model import Case
@@ -266,6 +267,15 @@ def _executing(state):
     return state is not None and state['state'][0] not in 'ZX'
 
 
+def _start_identity(start):
+    assert isinstance(start, list) and start
+    assert all(type(value) is int and value >= 0 for value in start)
+    assert start[0] > 0, 'missing process-start identity'
+    if sys.platform == 'linux':
+        # Linux's independent /proc witness records exactly one start-tick count.
+        assert len(start) == 1, start
+
+
 def _tree(ctx, mode, pipes, escape=False):
     helper = Path(__file__).resolve().parents[1] / 'fixtures' / 'exec_tree.py'
     (ctx.workspace / 'exec_tree.py').write_bytes(helper.read_bytes())
@@ -299,9 +309,7 @@ def _tree(ctx, mode, pipes, escape=False):
         assert {row['role'] for row in records} == {'leader', 'child', 'grandchild'}
         assert len({row['pid'] for row in records}) == 3
         for row in records:
-            assert isinstance(row['start'], list) and row['start']
-            assert all(type(value) is int and value >= 0 for value in row['start'])
-            assert row['start'][0] > 0, 'missing process-start identity'
+            _start_identity(row['start'])
         if mode == 'cancel':
             process.send_signal(signal.SIGINT)
 

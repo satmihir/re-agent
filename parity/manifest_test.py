@@ -32,6 +32,23 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(len(cases), len({case.id.casefold() for case in cases}),
                          'case directories must not collide on case-insensitive filesystems')
 
+    def test_darwin_identity_still_loads_the_unchanged_committed_lock(self):
+        from unittest.mock import patch
+        from parity import locks
+        suite = Path(__file__).resolve().parent
+        manifest = json.loads((suite / 'manifest.json').read_bytes())
+        self.assertEqual(set(manifest['platforms']), {'darwin/arm64', 'linux/amd64'})
+        for name, entry in manifest['platforms'].items():
+            self.assertEqual(entry['normalized_lock'], 'expected/' + name.split('/')[0] + '.json')
+            self.assertEqual(entry['go_version'], 'go version go1.23.3 ' + name)
+            self.assertEqual(entry['python_version'], 'Python 3.11.5')
+            self.assertNotIn('reference_commit', entry)
+        with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'):
+            document = locks.read_lock(suite, manifest)
+        self.assertEqual(document['reference_identity']['reference_commit'], manifest['reference_commit'])
+        self.assertEqual(document['normalized_tree_sha256'],
+                         manifest['platforms']['darwin/arm64']['normalized_tree_sha256'])
+
     def test_leaf_metadata_digest_covers_more_than_counts(self):
         manifest = json.loads(Path(__file__).with_name('manifest.json').read_text())
         inventory = manifest['leaf_inventory']
