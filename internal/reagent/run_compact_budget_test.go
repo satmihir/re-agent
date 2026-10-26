@@ -24,23 +24,67 @@ func TestLoop_InRunContinuationShortensOversizedSummary(t *testing.T) {
 		t.Fatalf("shortened summary was not accepted: %+v", s.history)
 	}
 	prompt := model.requests[2].History[len(model.requests[2].History)-1].User.Text
-	if !strings.Contains(prompt, "32769") || !strings.Contains(prompt, "32768") {
-		t.Fatalf("shortening request lost current size or budget: %s", prompt)
+	if !strings.Contains(prompt, "32769") || !strings.Contains(prompt, "at most 24576 bytes") || !strings.Contains(prompt, "hard limit is 32768") {
+		t.Fatalf("shortening request lost current size, target or limit: %s", prompt)
 	}
+	var shortens int
 	for _, e := range events {
 		if e.Type == "compaction.failed" || e.Type == "compaction.skipped" {
 			t.Fatalf("successful shortening counted as failure: %+v", e)
 		}
+		if e.Type == "compaction.shorten" {
+			shortens++
+			data := e.Data.(map[string]any)
+			if data["summary_bytes"] != float64(MaxResultBytes+1) || data["target_bytes"] != float64(inRunCompactTargetBytes) || data["limit_bytes"] != float64(MaxResultBytes) || data["shortening"] != float64(1) {
+				t.Fatalf("shorten event = %+v", data)
+			}
+		}
+	}
+	if shortens != 1 {
+		t.Fatalf("shorten events = %d, want 1", shortens)
 	}
 }
 
-func TestLoop_InRunContinuationTwoOversizedRepliesCountOnce(t *testing.T) {
+// #189: shortened summaries routinely land just over the limit, so a second,
+// smaller request is cheaper than discarding the expensive first summary.
+func TestLoop_InRunContinuationSecondShorteningRecovers(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Provider = openaiName
 	oversized := turn(textBlock(strings.Repeat("s", MaxResultBytes+1)))
-	model := &compactModel{replies: []ModelResponse{continuationResponse("first"), oversized, oversized, turn(textBlock("done"))}}
+	slightlyOver := turn(textBlock(strings.Repeat("s", MaxResultBytes+2000)))
+	model := &compactModel{replies: []ModelResponse{continuationResponse("first"), oversized, slightlyOver, turn(textBlock("checkpoint retained")), turn(textBlock("done"))}}
 	s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
-	if result.Status != StatusCompleted || result.Reply != "done" || result.Steps != 4 || len(model.requests) != 4 || len(results(s)) != 1 {
+	if result.Status != StatusCompleted || result.Reply != "done" || len(model.requests) != 5 {
+		t.Fatalf("result=%+v requests=%d", result, len(model.requests))
+	}
+	if s.history[1].Kind != EntrySummary || s.history[1].Summary.Text != "checkpoint retained" {
+		t.Fatalf("second shortening was not accepted: %+v", s.history)
+	}
+	prompt := model.requests[3].History[len(model.requests[3].History)-1].User.Text
+	if !strings.Contains(prompt, fmt.Sprint(MaxResultBytes+2000)) || !strings.Contains(prompt, "at most 12288 bytes") {
+		t.Fatalf("second shortening lost current size or smaller target: %s", prompt)
+	}
+	var targets []any
+	for _, e := range events {
+		if e.Type == "compaction.failed" || e.Type == "compaction.skipped" {
+			t.Fatalf("recovered compaction counted as failure: %+v", e)
+		}
+		if e.Type == "compaction.shorten" {
+			targets = append(targets, e.Data.(map[string]any)["target_bytes"])
+		}
+	}
+	if fmt.Sprint(targets) != "[24576 12288]" {
+		t.Fatalf("shorten targets = %v", targets)
+	}
+}
+
+func TestLoop_InRunContinuationThreeOversizedRepliesCountOnce(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Provider = openaiName
+	oversized := turn(textBlock(strings.Repeat("s", MaxResultBytes+1)))
+	model := &compactModel{replies: []ModelResponse{continuationResponse("first"), oversized, oversized, oversized, turn(textBlock("done"))}}
+	s, result, events := continuationRun(t, cfg, model, 100_000, strings.Repeat("task ", 2000))
+	if result.Status != StatusCompleted || result.Reply != "done" || result.Steps != 5 || len(model.requests) != 5 || len(results(s)) != 1 {
 		t.Fatalf("result=%+v requests=%d", result, len(model.requests))
 	}
 	var failures, skips int
@@ -64,7 +108,7 @@ func TestLoop_InRunContinuationPromptCarriesByteBudget(t *testing.T) {
 	cfg := testConfig(t)
 	req := summaryRequest(cfg, RequestScope{}, nil, inRunCompactFocus)
 	prompt := req.History[len(req.History)-1].User.Text
-	budget := fmt.Sprintf("%d bytes", MaxResultBytes)
+	budget := fmt.Sprintf("%d bytes", inRunCompactTargetBytes)
 	if !strings.Contains(prompt, budget) || !strings.Contains(inRunCompactFocus, budget) || !strings.Contains(compactPrompt, "byte budget") {
 		t.Fatalf("summary prompt omits byte budget %q: %s", budget, prompt)
 	}

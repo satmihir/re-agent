@@ -445,7 +445,7 @@ func TestLoop_InRunContinuationRecoversWithBoundedFailures(t *testing.T) {
 	}{
 		{"fail then succeed", "tool reject tool tool summary done", []int{2, 5}, []int{5}, []int{1}, false},
 		{"three failures stop", "tool reject tool tool reject tool tool reject tool tool done", []int{2, 5, 8}, nil, []int{1, 2, 3}, true},
-		{"three oversized attempts stop", "tool oversized oversized tool tool oversized oversized tool tool oversized oversized tool tool done", []int{2, 3, 6, 7, 10, 11}, nil, []int{1, 2, 3}, true},
+		{"three oversized attempts stop", "tool oversized oversized oversized tool tool oversized oversized oversized tool tool oversized oversized oversized tool tool done", []int{2, 3, 4, 7, 8, 9, 12, 13, 14}, nil, []int{1, 2, 3}, true},
 		{"success resets streak", "tool reject tool tool summary tool reject tool tool summary done", []int{2, 5, 7, 10}, []int{5, 10}, []int{1, 1}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
