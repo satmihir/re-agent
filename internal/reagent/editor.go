@@ -103,6 +103,9 @@ func (e *editor) apply(k inputKey, h *promptHistory, complete func(string, int, 
 			return ""
 		}
 		return k.name
+	case "clear":
+		// The reader owns the screen; the buffer and caret are unchanged (#185).
+		return k.name
 	case "backspace":
 		if e.caret > 0 {
 			e.buffer = append(e.buffer[:e.caret-1], e.buffer[e.caret:]...)

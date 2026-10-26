@@ -675,3 +675,17 @@ func TestNewLineReader_CharacterDeviceWithoutTTYUsesScanner(t *testing.T) {
 		t.Fatal("non-TTY character device used raw input")
 	}
 }
+
+// #185 (C43): Ctrl-L clears the screen and redraws the line being typed.
+func TestTerminalReader_CtrlLClearsAndKeepsTheLine(t *testing.T) {
+	reader := terminalInput(strings.NewReader("alpha \x0comega\r"))
+	line, err := reader.ReadLine()
+	if err != nil || line != "alpha omega" {
+		t.Fatalf("got %q, %v", line, err)
+	}
+	out := reader.out.(*bytes.Buffer).String()
+	at := strings.LastIndex(out, "\x1b[H\x1b[2J")
+	if at < 0 || !strings.Contains(out[at:], "> alpha ") {
+		t.Fatalf("Ctrl-L did not clear and redraw the input: %q", out)
+	}
+}

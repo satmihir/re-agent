@@ -63,6 +63,15 @@ func (r *terminalReader) finishTurnInput() {
 	r.pauseTurnInput()
 	r.region.mu.Lock()
 	r.nextEditor, r.nextSubmission, r.nextEOF = r.turn.editor, r.turn.queued, r.turn.exit
+	if r.turn.ctx.Err() != nil {
+		// Input typed during a cancelled turn is never submitted; the next
+		// prompt starts empty, as Ctrl-C at the prompt clears the line (#185).
+		r.nextEditor, r.nextSubmission, r.nextEOF = nil, "", false
+		r.regionStatus.queued = false
+		r.queued, r.partial = nil, nil
+		r.keys.pending, r.keys.hold = nil, nil
+		r.keys.paste, r.keys.lastCR, r.pasting = false, false, false
+	}
 	r.turn = nil
 	r.region.mu.Unlock()
 }
