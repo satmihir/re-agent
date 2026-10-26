@@ -222,6 +222,17 @@ func (r *terminalRegion) drawLocked(rows []string, row, col, width, height int) 
 	fmt.Fprintf(r.out, "\x1b[%d;%dH\x1b[?2026l", top+r.caretRow, col+1)
 }
 
+// clearScreen erases the screen and puts the pane on the top row; the next
+// draw repaints it there.
+func (r *terminalRegion) clearScreen() {
+	if r.mu != nil {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
+	fmt.Fprint(r.out, "\x1b[?2026h\x1b[H\x1b[2J\x1b[?2026l")
+	r.top = 1
+}
+
 func (r *terminalRegion) control(sequence string) {
 	if r.mu != nil {
 		r.mu.Lock()

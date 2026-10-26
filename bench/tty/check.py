@@ -487,6 +487,49 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "ctrl-l-clears-screen": {
+        # #185: Ctrl-L clears the screen and redraws the typed input at the top.
+        "script": [reply("cleared input sent")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "alpha omega"),
+            ("idle", 0.3),
+            ("key", "ctrl-l"),
+            ("idle", 0.5),
+            ("show", "after Ctrl-L at the prompt"),
+            ("expect", "input_at_top", "❯ alpha omega"),
+            ("expect", "screen_lacks", "session ID"),
+            ("key", "enter"),
+            ("wait", "cleared input sent", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "status_row_last"),
+        ],
+    },
+    "cancelled-typeahead-discarded": {
+        # #185: input queued during a cancelled command is never submitted.
+        "script": [reply("fresh reply")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "!sleep 5"),
+            ("key", "enter"),
+            ("idle", 0.8),
+            ("type", "stale typed input"),
+            ("key", "enter"),
+            ("wait", "queued", 5),
+            ("key", "ctrl-c"),
+            ("wait", "interrupt", 5),
+            ("wait_status", "scripted / low", 5),
+            ("idle", 1.0),
+            ("show", "after Ctrl-C with queued input"),
+            ("expect", "screen_lacks", "❯ stale typed input"),
+            ("expect", "screen_lacks", "fresh reply"),
+            ("type", "fresh question"),
+            ("key", "enter"),
+            ("wait", "fresh reply", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "status_row_last"),
+        ],
+    },
     "resize-while-typing": {
         "script": [reply("unused")],
         "steps": [
@@ -512,7 +555,7 @@ SCENARIOS = {
     },
 }
 
-KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "esc": "\x1b",
+KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "esc": "\x1b",
         "left": "\x1b[D", "up": "\x1b[A"}
 
 
@@ -653,6 +696,13 @@ def check_status_row_last(s):
     return None
 
 
+def check_input_at_top(s, text):
+    rules = region_rows(s.term.screen())
+    if not rules or rules[0] != 0:
+        return "prompt region is not at the top of the screen: rules at %r" % (rules,)
+    return None if any(text in line for line in s.term.screen()[:rules[1]]) else "input row lacks %r" % text
+
+
 def check_screen_has(s, text):
     return None if any(text in line for line in s.term.screen()) else "screen lacks %r" % text
 
@@ -686,6 +736,7 @@ def check_no_rules(s):
 
 CHECKS = {
     "region_after_output": check_region_after_output,
+    "input_at_top": check_input_at_top,
     "status_row_last": check_status_row_last,
     "screen_has": check_screen_has,
     "screen_lacks": check_screen_lacks,

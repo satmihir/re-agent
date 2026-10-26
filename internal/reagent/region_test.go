@@ -401,3 +401,46 @@ func TestRegion_LargeTurnReplyKeepsEveryInsertedLine(t *testing.T) {
 		t.Fatal("large reply displaced the region")
 	}
 }
+
+// #185 (C43): Ctrl-L moves the input pane to the top of a cleared screen.
+func TestRegion_CtrlLRedrawsInputAtTop(t *testing.T) {
+	r := terminalInput(strings.NewReader("hello\x0c"))
+	r.region = &terminalRegion{out: r.out, initialRow: 7}
+	r.size = func() (int, int, error) { return 24, 10, nil }
+	r.styled = false
+	if _, err := r.ReadLine(); err == nil {
+		t.Fatal("input ended without an error")
+	}
+	out := r.out.(*bytes.Buffer).String()
+	at := strings.LastIndex(out, "\x1b[H\x1b[2J")
+	if at < 0 {
+		t.Fatalf("Ctrl-L did not clear the screen: %q", out)
+	}
+	// The end of input then collapses the pane, so check the redraw itself.
+	redraw := strings.TrimPrefix(out[at:], "\x1b[H\x1b[2J\x1b[?2026l")
+	if end := strings.Index(redraw, "\x1b[?2026l"); end >= 0 {
+		redraw = redraw[:end]
+	}
+	if !strings.Contains(redraw, "\x1b[1;1H\x1b[J") || !strings.Contains(redraw, "❯ hello") {
+		t.Fatalf("input not redrawn at the top: %q", redraw)
+	}
+}
+
+// #185 (C44): a cancelled turn never submits what was typed during it.
+func TestRegion_CancelledTurnDiscardsTypeAhead(t *testing.T) {
+	var out bytes.Buffer
+	r := terminalInput(strings.NewReader(""))
+	r.region = &terminalRegion{out: &out, mu: &sync.Mutex{}}
+	r.region.active = true
+	ctx, cancel := context.WithCancel(context.Background())
+	r.turn = &turnInput{editor: &editor{buffer: []rune("stale"), caret: 5}, ctx: ctx, cancel: cancel}
+	r.applyTurnKey(inputKey{name: "enter"})
+	r.queued = []inputKey{{text: 'x'}}
+	r.keys.pending = []byte("y")
+	r.applyTurnKey(inputKey{name: "interrupt"})
+	r.finishTurnInput()
+	if r.nextSubmission != "" || r.nextEditor != nil || r.regionStatus.queued || len(r.queued) != 0 || len(r.keys.pending) != 0 {
+		t.Fatalf("cancelled turn kept input: submission=%q editor=%v status=%+v queued=%v pending=%q",
+			r.nextSubmission, r.nextEditor, r.regionStatus, r.queued, r.keys.pending)
+	}
+}

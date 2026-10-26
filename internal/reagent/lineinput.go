@@ -540,6 +540,15 @@ func (r *terminalReader) readPhysicalLine(prompt string) (string, int, error) {
 					}
 					fmt.Fprint(r.out, "\r\n")
 					return "", rows, io.EOF
+				case "clear":
+					// Ctrl-L clears the screen and redraws the input at the top,
+					// keeping the text being typed (#185).
+					if r.region != nil {
+						r.region.clearScreen()
+					} else {
+						fmt.Fprint(r.out, "\x1b[H\x1b[2J")
+						rows, caretRow = 0, 0
+					}
 				}
 			}
 		}

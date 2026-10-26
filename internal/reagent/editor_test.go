@@ -18,6 +18,7 @@ func TestEditor_Keys(t *testing.T) {
 		{"kill end yank", "abc\x01\x1b[C\x0b\x19", "abc", 3},
 		{"kill start yank", "abc\x15\x19", "abc", 3},
 		{"kill word yank", "one two\x17\x19", "one two", 7},
+		{"clear keeps text", "ab\x1b[D\x0c", "ab", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keys, rest := decodeInputKeys([]byte(tc.input))
