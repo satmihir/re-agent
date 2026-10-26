@@ -49,7 +49,10 @@ def _cancel_exec(ctx):
                         reply("Recovered after reset.")]) as terminal:
         terminal.wait_prompt()
         submit(terminal, "go")
-        terminal.wait(lambda _: len(server.requests) >= 1, "exec readiness request")
+        # Finish the readiness transport before cancellation can close its client.
+        terminal.wait(lambda _: len(server.requests) >= 1 and server.requests[0].response is not None
+                      and server.requests[0].response.completed,
+                      "completed exec readiness response")
         terminal.send(b"\x03")
         terminal.wait_text("cancelled")
         settled(terminal, "exec-cancelled")

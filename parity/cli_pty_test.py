@@ -150,7 +150,7 @@ class TerminalCasesTest(unittest.TestCase):
                 cli_pty._typeahead(context)
             launch.assert_called_once_with(context, stdout_tty=True)
 
-    def test_cancel_exec_uses_fixed_argv_and_blocks_after_readiness_request(self):
+    def test_cancel_exec_uses_fixed_argv_and_blocks_after_readiness_response(self):
         from parity.cases import cli_pty_signals
         from parity.provider import Provider
         from parity.run import isolated_env
@@ -178,7 +178,9 @@ class TerminalCasesTest(unittest.TestCase):
 
             def ready(predicate, _description):
                 self.assertEqual(server.wait().path, '/exec-ready')
-                self.assertTrue(predicate(None))
+                with server._condition:
+                    self.assertTrue(server._condition.wait_for(lambda: predicate(None), timeout=5))
+                self.assertTrue(server.requests[0].response.completed)
                 self.assertIsNone(processes[0].poll(), 'ready helper must remain cancellable')
 
             def send(data):

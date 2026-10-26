@@ -9,6 +9,7 @@ from pathlib import Path
 import threading
 from urllib.parse import urlsplit
 
+from parity.agent_ordering import ordering
 from parity.model import Case
 from parity.provider import Response
 from parity.cases.tools_files import failure, proof, put
@@ -42,7 +43,7 @@ def wait(ids=('worker',), id='wait', **kwargs):
     return call(id, 'wait', dict(ids=list(ids), **kwargs))
 
 
-def queue(ctx, who, turns, model=OPENAI, barriers=None, arrived=None, witness=None):
+def queue(ctx, who, turns, model=OPENAI, barriers=None, arrived=None, witness=None, unordered=None):
     """Script one actor; keyed selectors prevent siblings consuming root replies."""
     provider = 'ANTHROPIC' if model.startswith('claude-') else 'OPENAI'
     suffix = '/messages' if provider == 'ANTHROPIC' else '/responses'
@@ -63,7 +64,10 @@ def queue(ctx, who, turns, model=OPENAI, barriers=None, arrived=None, witness=No
         else:
             body = _openai(turn) if isinstance(turn, str) else _openai(items=[
                 _call(name, arguments, id, 'item_' + id) for id, name, arguments in turn])
-        ctx.server.expect(path, Response(body, barrier=(barriers or {}).get(index)),
+        barrier = ordering(ctx).reply(who, () if isinstance(turn, str) else turn,
+                                      terminal=isinstance(turn, str),
+                                      barrier=(barriers or {}).get(index), unordered=unordered)
+        ctx.server.expect(path, Response(body, barrier=barrier),
                           marker=select, model=model)
 
 
@@ -829,7 +833,7 @@ def maximum_wait(ctx):
 
 def anonymous_named(ctx):
     queue(ctx, 'root', [[spawn('anonymous', 'anonymous'), spawn('named', 'worker', name='worker'),
-                         wait(('t1', 'worker'))],
+                         wait(('t1',)), wait(('worker',), id='named-wait')],
                         [call('anonymous-send', 'send', {'id': 't1', 'message': 'DO_NOT_RUN'}),
                          call('named-send', 'send', {'name': 'worker', 'message': 'NAMED_REUSE'}),
                          wait(('worker',), id='reuse-wait')], 'anonymous named complete'])

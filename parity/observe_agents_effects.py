@@ -36,6 +36,10 @@ def ledger_summary(summary, workspace, paths):
     assert summary['exec_unknown'] is True, ('exec_unknown lost from bounded effects', summary)
 
 
+class TraceTimeout(AssertionError):
+    """The requested trace witness did not appear before its deadline."""
+
+
 class TraceBarrier:
     """Wait on filesystem notifications, not timing guesses, for flushed trace evidence."""
 
@@ -92,7 +96,8 @@ class TraceBarrier:
             if predicate(records):
                 return records
             remaining = deadline - time.monotonic()
-            assert remaining > 0, ('missing trace witness', description)
+            if remaining <= 0:
+                raise TraceTimeout(('missing trace witness', description))
             if self.queue is None:
                 if select.select([self.fd], [], [], remaining)[0]:
                     os.read(self.fd, 1024 * 1024)

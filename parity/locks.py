@@ -26,7 +26,7 @@ SUBSTITUTION_KINDS = (
     "retry-display-delay", "snapshot-date", "trace-time", "typed-identity",
     "typed-scope-identity", "validated-auth-refresh-expiry", "validated-derived-digest",
     "validated-derived-length", "exec-effective-timeout-elapsed", "git-do-jev-ms",
-    "git-do-allocated-remote", "git-do-failed-display-remote-prefix",
+    "git-do-allocated-remote", "git-do-failed-display-remote-prefix", "clipped-allocated-path-prefix",
     "exec-allocated-executable", "exec-literal-environment",
     "exec-fixture-cwd", "exec-fixture-stdout-length", "tool-allocated-path-argument",
     "git-fixture-workspace", "tool-workspace-refusal", "tool-approved-workspace-path",
@@ -358,6 +358,12 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
     protected_cases, shell_updates = approved_shell_timing_updates(protected_cases, new_cases, staging)
     protected_cases, exec_updates = approved_exec_ledger_updates(protected_cases, new_cases, staging)
+    migration_path = suite / 'fixtures' / 'race-fixture-migrations.json'
+    migrations = json.loads(migration_path.read_bytes()) if migration_path.exists() else {}
+    if migrations and migrations['reference_commit'] != manifest['reference_commit']:
+        raise AssertionError('race fixture migration reference differs')
+    pairs = migrations.get('platforms', {}).get(selected['reference_platform'], {})
+    protected_cases, race_updates = approved_race_fixture_updates(protected_cases, new_cases, staging, pairs)
     protect_wire_locks(protected_cases, new_cases)
     protect_previous_locks(protected_cases, new_cases)
     document = {**pack(new_cases), "reference_identity": identity.reference(manifest)}
@@ -397,9 +403,11 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
                       "approved_zero_exec_timing_updates": timing_updates,
                       "approved_shell_timing_updates": shell_updates,
                       "approved_exec_ledger_updates": exec_updates,
+                      "approved_race_fixture_updates": race_updates,
                       "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))
     return {**document, "cases": new_cases, "approved_zero_exec_timing_updates": timing_updates,
-            "approved_shell_timing_updates": shell_updates, "approved_exec_ledger_updates": exec_updates}
+            "approved_shell_timing_updates": shell_updates, "approved_exec_ledger_updates": exec_updates,
+            "approved_race_fixture_updates": race_updates}
 
 
 def approved_zero_exec_timing_updates(old_cases, new_cases, staging):
@@ -549,6 +557,22 @@ def approved_exec_ledger_updates(old_cases, new_cases, staging):
                                            if not restore and mask & (1 << index) for site in rows],
                             restored_sites=[site for index, (restore, rows) in enumerate(groups)
                                             if restore and mask & (1 << index) for site in rows]))
+    return protected, updates
+
+
+def approved_race_fixture_updates(old_cases, new_cases, staging, pairs):
+    """Approve only reviewed complete hash pairs whose replacement fully replays."""
+    protected, updates = dict(old_cases), []
+    for case_id, pair in sorted(pairs.items()):
+        previous, actual = old_cases.get(case_id), new_cases.get(case_id)
+        if (previous is None or actual is None or previous == actual
+                or digest(previous) != pair['old_case_sha256']
+                or digest(actual) != pair['new_case_sha256']):
+            continue
+        if frozen_lock(Path(staging) / case_id) != actual:
+            raise AssertionError('race fixture migration evidence differs: ' + case_id)
+        protected[case_id] = actual
+        updates.append(dict(id=case_id, **pair))
     return protected, updates
 
 

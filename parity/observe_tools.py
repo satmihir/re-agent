@@ -36,8 +36,9 @@ class Tools:
         self.used_captures = set()
         self.remote = None
         self.original_text = normal.text
-        if sys.platform == 'linux' and self.case_id == 'T52.conflict-lease.lease':
-            normal.text = self.failed_display
+        if (self.case_id == 'C20.persistence-barriers'
+                or sys.platform == 'linux' and self.case_id == 'T52.conflict-lease.lease'):
+            normal.text = self.allocated_display
         self.enabled = bool(re.fullmatch(r'T(?:3[89]|4[0-9]|5[0-4])\..+', self.case_id)
                             or self.case_id in ('W53.propagation.git-do', 'T59.maps-numbers'))
         if not self.enabled:
@@ -70,6 +71,63 @@ class Tools:
             substitutions.extend(self.remote_spans(result))
             substitutions.extend(self.failure_message(outcome, substitutions))
             self.outcomes[key] = (outcome, substitutions)
+
+    def allocated_display(self, value, artifact, path):
+        if self.case_id == 'C20.persistence-barriers':
+            return self.checkpoint_display(value, artifact, path)
+        return self.failed_display(value, artifact, path)
+
+    def checkpoint_display(self, value, artifact, path):
+        normalized = self.original_text(value, artifact, path)
+        match = re.fullmatch(r'invocation-([1-9][0-9]*)\.stderr', artifact)
+        if path or match is None:
+            return normalized
+        number = int(match[1])
+        assert number <= len(self.invocations), 'allocated activity lacks invocation'
+        invocation = self.invocations[number - 1]
+        assert value.encode('utf-8', 'surrogateescape') == invocation['stderr'], 'allocated activity differs from raw invocation'
+        starts = [e for e in self.events if e.get('type') == 'tool.started'
+                  and e.get('data', {}).get('call_id') == 'barrier-helper']
+        assert len(starts) == 1, 'allocated activity lacks unique dispatch'
+        start = starts[0]
+        finishes = [e for e in self.events if e.get('type') == 'tool.finished' and self.key(e) == self.key(start)]
+        accepted = [e for e in self.events if e.get('type') == 'model.accepted'
+                    and (e.get('run_id'), e.get('step')) == self.key(start)[:2]]
+        assert len(finishes) == len(accepted) == 1, 'allocated activity lacks accepted call and finish'
+        finish, accept = finishes[0], accepted[0]
+        stamps = [dt.datetime.fromisoformat(e['time'].replace('Z', '+00:00')).timestamp()
+                  for e in (accept, start, finish)]
+        owners = [i for i in self.invocations if i['started'] <= stamps[0] <= stamps[1] <= stamps[2] <= i['ended']]
+        assert len(owners) == 1, 'allocated activity lacks unique invocation ownership'
+        if owners[0] is not invocation:
+            return normalized
+        call = {field: start['data'].get(field) for field in ('call_id', 'name', 'arguments')}
+        assert accept['seq'] < start['seq'] < finish['seq'], 'allocated activity sequence differs'
+        assert accept.get('session_id') == start.get('session_id') == finish.get('session_id'), 'allocated activity Session differs'
+        assert accept.get('agent_id', 'root') == start.get('agent_id', 'root') == finish.get('agent_id', 'root') == 'root'
+        calls = [b.get('call') for b in accept['data']['blocks'] if b.get('kind') == 'tool_call']
+        assert calls.count(call) == 1 and sum(c.get('call_id') == call['call_id'] for c in calls) == 1, 'allocated activity accepted call differs'
+        assert 'terminal' not in invocation, 'allocated activity requires nonterminal stderr'
+        from parity.observe_fixture_scripts import Scripts
+        scripts = Scripts(self.normal, self.events, self.case_id, self.observations)
+        outcome = finish['data']['outcome']
+        command = outcome['data']
+        assert finish['data']['name'] == call['name'] == 'exec'
+        assert outcome.get('ok') is True and outcome.get('code') == 'ok' and outcome.get('effect') == 'applied'
+        assert outcome.get('workspace') == start['data']['workspace']
+        assert command in scripts.commands and command.get('cwd') == '.'
+        assert type(command.get('exit_code')) is int and command['exit_code'] == 0 and command.get('signal') is None
+        duration = command.get('duration_ms')
+        assert type(duration) is int and 0 <= duration <= elapsed(invocation) * 1000
+        seconds = duration / 1000
+        timing = ('%.1fs' % seconds) if seconds < 60 else ('%dm%02ds' % (seconds // 60, seconds % 60))
+        source = scripts.source
+        target = "python3 -c '" + source.replace("'", "'\\''") + "'"
+        offset = target.index(self.normal.root)
+        if not offset < 159 < offset + len(self.normal.root):
+            return normalized  # Full paths and clips outside the allocation are not this slot.
+        return self.clipped_allocation(value, normalized, artifact, target, offset, 160,
+                                       '  ✓ exec ', ' → exit 0 in ' + timing + '\n')
 
     def failed_display(self, value, artifact, path):
         normalized = self.original_text(value, artifact, path)
@@ -141,25 +199,32 @@ class Tools:
         full = 'step_failed: ' + message
         safe = ''.join('\\x%02x' % ord(ch) if ch not in '\n\t' and
                        (ord(ch) < 32 or 127 <= ord(ch) <= 159) else ch for ch in full)
-        root = self.normal.root
         offset = len('step_failed: ' + ' '.join(argv) + ' exited 1: To ')
-        # This fixture clips inside an ASCII allocation, before any Git prose or controls.
+        return self.clipped_allocation(value, normalized, artifact, safe, offset, 120,
+                                       '  ✗ git_do recipe=rebase_push → ', '\n')
+
+    def clipped_allocation(self, value, normalized, artifact, full, offset, width, header, suffix):
+        root = self.normal.root
         if (not root.isascii() or not root.isprintable() or not root.endswith('/' + self.case_id)
-                or not safe[:121].isascii() or not safe[:121].isprintable()
-                or not offset < 119 < offset + len(root) or len(safe) <= 120):
-            raise AssertionError('failed Git display is not the witnessed 120-cell clipped allocation')
-        line = '  ✗ git_do recipe=rebase_push → ' + safe[:119] + '…\n'
+                or not full[:width + 1].isascii() or not full[:width + 1].isprintable()
+                or full[offset:offset + len(root)] != root
+                or not offset < width - 1 < offset + len(root) or len(full) <= width):
+            raise AssertionError('activity is not a witnessed clipped allocation')
+        line = header + full[:width - 1] + '…' + suffix
         if (value.splitlines(keepends=True).count(line) != 1
                 or normalized.splitlines(keepends=True).count(line) != 1
                 or value.count(line) != 1 or normalized.count(line) != 1):
             raise AssertionError('failed Git display differs from exact clipped activity')
         start_at = normalized.index(line)
         # Replace only what was visible; never shorten the full message and reclip it.
-        after = line[:len('  ✗ git_do recipe=rebase_push → ') + offset] + '<ROOT>…\n'
+        after = header + full[:offset] + '<ROOT>…' + suffix
         before_bytes, after_bytes = line.encode(), after.encode()
         begin = len(normalized[:start_at].encode('utf-8', 'surrogateescape'))
-        self.normal.record(artifact, ('git-do-failed-display',), before_bytes, after_bytes,
-                           'git-do-failed-display-remote-prefix', begin, begin + len(before_bytes))
+        # Keep T52's established bytes and ledger identity while sharing the witness logic.
+        site, kind = ('clipped-allocated-activity',), 'clipped-allocated-path-prefix'
+        if self.case_id == 'T52.conflict-lease.lease':
+            site, kind = ('git-do-failed-display',), 'git-do-failed-display-remote-prefix'
+        self.normal.record(artifact, site, before_bytes, after_bytes, kind, begin, begin + len(before_bytes))
         return normalized[:start_at] + after + normalized[start_at + len(line):]
 
     @staticmethod

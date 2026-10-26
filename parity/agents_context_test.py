@@ -68,8 +68,10 @@ class AgentContextTests(unittest.TestCase):
                 trace = ctx.artifacts / 'events.jsonl'
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     controller = pool.submit(on_start, None)
+                    published = dict(type='tool.finished', data=dict(call_id='spawn',
+                                     outcome=dict(ok=True, data=dict(id='t1'))))
                     started = dict(type='tool.started', data=dict(call_id='joined'))
-                    trace.write_text(json.dumps(started) + '\n')
+                    trace.write_text(json.dumps(published) + '\n' + json.dumps(started) + '\n')
                     self.assertEqual(reply(worker)['output'][0]['content'][0]['text'], 'polling child complete')
                     with trace.open('a') as stream:
                         stream.write(json.dumps(dict(type='tool.finished', data=dict(call_id='joined'))) + '\n')
@@ -160,9 +162,9 @@ class AgentContextTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check_delivery(ctx, 1)
 
-    def agent_normalizer(self, reverse=False):
+    def agent_normalizer(self, reverse=False, source_root='/fixture'):
         from parity.observe import Normalizer
-        root, child = '/fixture/root/events.jsonl', '/fixture/agent-eeeeeeeeeeeeeeee/events.jsonl'
+        root, child = source_root + '/root/events.jsonl', source_root + '/agent-eeeeeeeeeeeeeeee/events.jsonl'
         session, run, child_session, child_run = ('a' * 16, 'b' * 16, 'c' * 16, 'd' * 16)
         thread = {'id': 't1', 'parent_id': 'root', 'state': 'running', 'steps': 0,
                   'cost': {'input_tokens': 73}, 'trace_path': child, 'task': 'CHILD_worker'}
@@ -183,7 +185,7 @@ class AgentContextTests(unittest.TestCase):
         traces = [(Path(path), json.dumps(value).encode()) for path, value in events]
         if reverse:
             traces = traces[-1:] + traces[:-1]
-        normal = Normalizer('/fixture', '')
+        normal = Normalizer(source_root, '')
         agents = Agents(normal, traces, [], [], 'A13.batch-delivery', {})
         normal.json, normal.text = agents.json, agents.text
         return normal, agents, thread, delivery, out, events
@@ -228,6 +230,51 @@ class AgentContextTests(unittest.TestCase):
         wrong['data']['statuses'][0]['delivery_step'] = 2
         with self.assertRaises(AssertionError):
             agents._rewrite(json.dumps(wrong).encode(), 'test', ('outcome',))
+
+    def test_w39_directory_at_preview_boundary_requires_exact_child_source(self):
+        from parity.observe import go_json, go_string
+        source_root = '/private/var/folders/' + 'x' * 57 + '/T/reagent-parity-cases-abcdef12'
+        normal, agents, _, delivery, *_ = self.agent_normalizer(source_root=source_root)
+        self.assertEqual(len(normal.root), 110)
+        agents.case_id = 'W39.agent'
+        source = delivery['result']['trace_path']
+        directory = source.removesuffix('events.jsonl')
+        payload = go_json(delivery)
+        stop = payload.index(b'events.jsonl')
+        preview = RESULT + payload[:stop].decode()
+        self.assertLessEqual(len(preview.encode()), 512)
+        raw = go_json({'kind': 'user', 'user': {'source': 'agent', 'text': preview}})
+        actual = json.loads(agents._rewrite(raw, 'http-7.body'))['user']['text']
+        expected = preview.replace('d' * 16, 'RUN_2', 1).replace(directory, go_string('<ROOT>/agent-AGENT_1/')[1:-1].decode())
+        self.assertEqual(actual, expected)
+        self.assertTrue(actual.endswith('/agent-AGENT_1/'))
+        self.assertNotIn('events.jsonl', actual)
+        self.assertEqual(delivery['result']['reply'], 'd' * 16 + ' /fixture literal')
+        for control in ('foreign', 'missing', 'reply', 'ambiguous'):
+            with self.subTest(control=control):
+                saved_paths, saved_results = copy.deepcopy(agents.paths), copy.deepcopy(agents.results)
+                changed = raw
+                if control == 'foreign':
+                    changed = raw.replace(('e' * 16).encode(), ('f' * 16).encode())
+                elif control == 'missing':
+                    agents.paths['t1'] = set()
+                elif control == 'reply':
+                    changed = raw.replace(b'literal', b'forged')
+                else:
+                    agents.results.append(copy.deepcopy(delivery))
+                with self.assertRaises(AssertionError):
+                    agents._rewrite(changed, 'http-7.body')
+                agents.paths, agents.results = saved_paths, saved_results
+        # Arbitrary partial paths, ordinary prose and other cases gain no directory slot.
+        for text in (preview[:-1], preview + 'event'):
+            entry = go_json({'kind': 'user', 'user': {'source': 'agent', 'text': text}})
+            result = json.loads(agents._rewrite(entry, 'http-7.body'))['user']['text']
+            self.assertIn('/agent-' + 'e' * 16 + '/', result + '/')
+        agents.case_id = 'A13.batch-delivery'
+        result = json.loads(agents._rewrite(raw, 'http-7.body'))['user']['text']
+        self.assertTrue(result.endswith(directory))
+        assistant = go_json({'kind': 'assistant', 'assistant': {'text': preview}})
+        self.assertEqual(agents._rewrite(assistant, 'http-7.body'), assistant)
 
     def test_agent_historical_transcript_normalizes_only_owned_tool_results(self):
         normal, agents, thread, delivery, out, events = self.agent_normalizer()
