@@ -1,7 +1,8 @@
-"""Linux clipped Git diagnostics require independent call, command and allocation witnesses."""
+"""Clipped activity allocations require independent call, command and path witnesses."""
 import base64
 import copy
 import json
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from parity.observe_tools import Tools
 CASE = 'T52.conflict-lease.lease'
 ROOT = '/tmp/reagent-parity-cases-bpvpy8jm/' + CASE
 KIND = 'git-do-failed-display-remote-prefix'
+CLIPPED_KIND = 'clipped-allocated-path-prefix'
 ARGV = ['git', 'push', '-q', '--force-with-lease', 'origin', 'feature/parity']
 HEADER = '  ✗ git_do recipe=rebase_push → '
 
@@ -236,6 +238,112 @@ class GitFailedDisplayTest(unittest.TestCase):
             changed_raw['invoke-001.stderr'] += b'forged'
             with self.assertRaises(run.HarnessError):
                 run.validate_replay(changed_raw, replay, artifacts, policies, ledger)
+
+
+class CheckpointAllocatedDisplayTests(unittest.TestCase):
+    def fixture(self, root=None):
+        from parity.observe_agents_checkpoints import envelope
+        case = 'C20.persistence-barriers'
+        root = root or '/private/var/folders/' + 'x' * 60 + '/T/random/' + case
+        normal = Normalizer(root, None)
+        cache = 'Library/Caches' if sys.platform == 'darwin' else '.cache'
+        source = "from pathlib import Path; p=Path(%r); p.unlink(); p.mkdir()" % (root + '/home/' + cache + '/reagent/sessions/0123456789abcdef/checkpoint.json')
+        call = dict(call_id='barrier-helper', name='exec', arguments=json.dumps(dict(argv=['python3', '-c', source], cwd='.')))
+        command = dict(argv=['python3', '-c', source], resolved_executable=root + '/home/.parity-bin/python3',
+                       cwd='.', exit_code=0, signal=None, duration_ms=17)
+        outcome = dict(workspace=root + '/workspace', ok=True, code='ok', effect='applied', data=command)
+        events = [dict(type='model.accepted', data=dict(blocks=[dict(kind='tool_call', call=call)])),
+                  dict(type='tool.started', data=dict(call, workspace=root + '/workspace')),
+                  dict(type='tool.finished', data=dict(call_id='barrier-helper', name='exec', outcome=outcome))]
+        for index, event in enumerate(events):
+            event.update(run_id='a' * 16, session_id='0123456789abcdef', step=1, seq=index + 1,
+                         time='1970-01-01T00:01:40.%06dZ' % (100000 + index * 100000))
+        target = "python3 -c '" + source.replace("'", "'\\''") + "'"
+        clipped = target[:159] + '…' if len(target) > 160 else target
+        line = '  ✓ exec ' + clipped + ' → exit 0 in 0.0s\n'
+        invocations = [dict(started=90, ended=91, stderr=b'first invocation\n'),
+                       dict(started=100, ended=101, stderr=line.encode())]
+        observations = {'agents-checkpoints/synthetic-input.checkpoint.json': envelope(dict(id='0123456789abcdef', active=root + '/workspace'))}
+        return normal, events, invocations, observations, line, target
+
+    def project(self, data, value=None, artifact='invocation-2.stderr', path=()):
+        normal, events, invocations, observations, line, _ = data
+        tools = Tools(normal, [('trace', json.dumps(e).encode()) for e in events], [],
+                      invocations, 'C20.persistence-barriers', observations)
+        return tools.normal.text(line if value is None else value, artifact, path)
+
+    def test_simulated_darwin_clips_only_witnessed_root_and_preserves_payload(self):
+        with patch('sys.platform', 'darwin'):
+            data = self.fixture()
+            normal, _, _, _, line, target = data
+            self.assertGreaterEqual(len(normal.root), 100)
+            offset = target.index(normal.root)
+            self.assertEqual(self.project(data), '  ✓ exec ' + target[:offset] + '<ROOT>… → exit 0 in 0.0s\n')
+            self.assertEqual(len([r for r in normal.ledger if r['kind'] == CLIPPED_KIND]), 1)
+            self.assertEqual(self.project(data, artifact='reply'), line)
+            self.assertEqual(self.project(data, path=('payload',)), line)
+            with self.assertRaisesRegex(AssertionError, 'raw invocation'):
+                self.project(data, value=line + 'payload')
+            data = self.fixture()
+            data[2][1]['stderr'] += b'payload remains literal\n'
+            self.assertTrue(self.project(data, value=data[2][1]['stderr'].decode()).endswith('payload remains literal\n'))
+
+    def test_clipped_checkpoint_requires_independent_call_path_and_invocation_evidence(self):
+        for change in ('missing-start', 'missing-accept', 'missing-finish', 'foreign-path', 'checkpoint',
+                       'duplicate', 'invocation', 'session', 'argv', 'executable', 'duration', 'line', 'terminal'):
+            with self.subTest(change=change), patch('sys.platform', 'darwin'):
+                data = self.fixture()
+                _, events, invocations, observations, line, _ = data
+                if change.startswith('missing-'):
+                    events.pop({'missing-accept': 0, 'missing-start': 1, 'missing-finish': 2}[change])
+                elif change == 'foreign-path':
+                    events[1]['data']['arguments'] = events[1]['data']['arguments'].replace('/private/', '/foreign/')
+                elif change == 'checkpoint':
+                    observations[next(iter(observations))] = observations[next(iter(observations))].replace(b'workspace', b'workspacE')
+                elif change == 'duplicate':
+                    events.append(copy.deepcopy(events[-1]))
+                elif change == 'invocation':
+                    invocations[1]['started'] = 100.25
+                elif change == 'session':
+                    events[2]['session_id'] = 'foreign'
+                elif change in ('argv', 'executable', 'duration'):
+                    command = events[-1]['data']['outcome']['data']
+                    if change == 'argv':
+                        command['argv'] = ['foreign']
+                    elif change == 'executable':
+                        command['resolved_executable'] = '/foreign/python3'
+                    else:
+                        command['duration_ms'] = 5000
+                elif change == 'terminal':
+                    invocations[1]['terminal'] = {}
+                else:
+                    line = line.replace('exit 0', 'exit 1')
+                    invocations[1]['stderr'] = line.encode()
+                with self.assertRaises(AssertionError):
+                    self.project(data, value=line)
+                self.assertFalse(any(r['kind'] == CLIPPED_KIND for r in data[0].ledger))
+
+    def test_unclipped_or_complete_root_uses_existing_full_path_projection(self):
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform), patch('sys.platform', platform):
+                data = self.fixture('/short/C20.persistence-barriers')
+                expected = data[0].text(data[4], 'reply', ())
+                self.assertEqual(self.project(data), expected)
+                self.assertFalse(any(r['kind'] == CLIPPED_KIND for r in data[0].ledger))
+
+    def test_t52_existing_normalized_bytes_do_not_change_on_either_platform(self):
+        # The generalized slot keeps T52's literal 120-cell prefix/ellipsis output.
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform), patch('sys.platform', platform):
+                items = fixture()
+                expected = (b'literal nonpath prose\n' + (HEADER + 'step_failed: ' + ' '.join(ARGV)
+                            + ' exited 1: To <ROOT>…\n').encode() + b'untouched suffix\n')
+                if platform == 'darwin':
+                    expected = items[1][0]['stderr']
+                actual, ledger = project(items, platform=platform)
+                self.assertEqual(actual, expected)
+                sites = [r for r in ledger if r['kind'] == KIND]
+                self.assertEqual([r['path'] for r in sites], [['git-do-failed-display']] if platform == 'linux' else [])
 
 
 if __name__ == '__main__':

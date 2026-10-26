@@ -200,7 +200,9 @@ def provider_result(ctx, variant):
     assert len(terminal) == 1 and terminal[0]['status'] == status, terminal
     assert status.encode() in result.stderr
     assert len(ctx.server.requests) == 1
-    ctx.server.release('cli-timeout')
+    if variant == 'timeout':
+        response = ctx.server.requests[0].response
+        assert not response.chunks and not response.completed
 
 
 def script_loader(ctx, variant):

@@ -1,0 +1,42 @@
+{
+  "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
+  "platforms": {
+    "linux/amd64": {
+      "A14.anonymous-named": {
+        "old_case_sha256": "104f2246d258be003a68d35dccaf4832a1698f2646f88c95ab319973fd1f0173",
+        "new_case_sha256": "aba00e696a183d9e46eb35d2625e32fff29cb8960bb1a9c808704fc4945a2889",
+        "reason": "Separate anonymous and named joins establish callback order instead of racing sibling completion."
+      },
+      "A16.cancel-foreign": {
+        "old_case_sha256": "900e47b9dbcda5bda423e53c746c258f44bb3182206f66beabdeeab22249271f",
+        "new_case_sha256": "ba0c81c372e66a0788d4e5251fa4aefca611eb38fc024b8b6fdb7861bb058eb7",
+        "reason": "Separate a then b joins order sibling callbacks after the concurrent foreign cancel denial."
+      },
+      "A16.dismiss-foreign": {
+        "old_case_sha256": "f472802d5b4a99669b9d6f5bb04525399d7fe477446d987e5aa104b0c16eddc6",
+        "new_case_sha256": "f642b8fd91f33b8f1fbe1efd7a49f42b18787929a6793ecad6912c215ef8c0d8",
+        "reason": "Separate a then b joins order sibling callbacks after the concurrent foreign dismiss denial."
+      },
+      "A16.reset-foreign": {
+        "old_case_sha256": "4a2f43cb7baab16ba70b5b8fda68db24fe95cd979d0e2fb10541d9d70d2b1bc7",
+        "new_case_sha256": "918132b3c0d3153a2c23902495e72ce7bcd66fd7444a66ac9d67ccc085688d1b",
+        "reason": "Separate a then b joins order sibling callbacks after the concurrent foreign reset denial."
+      },
+      "A20.competing": {
+        "old_case_sha256": "9901e8ee9b50d0ebf0a87c4fe4aab8e014f99cf202219a396718f3eedfbbcbdb",
+        "new_case_sha256": "dfcd3e578ac84fdad875f6d65b5b4095ea378425527624c2fd03d6a8467bb2b3",
+        "reason": "Separate b then a joins order callbacks while retaining independent concurrent edit-publication barriers."
+      },
+      "A22.sibling-overlap": {
+        "old_case_sha256": "b69bd0e79dd2e694cf6372452f2e1b5bb87ec77a7ffe14a447ba43ad8c12795c",
+        "new_case_sha256": "1e5566726767cb281bc4664ba6c8abe07a77f07fc83c049199a8c74e70377126",
+        "reason": "Separate b then a joins order callbacks while preserving the witnessed overlapping execs."
+      },
+      "A39.reverse-release": {
+        "old_case_sha256": "f32b7252f7f4d98790171fcc6bc44ebbba7e87e3b4e4863a873e766d5674a48a",
+        "new_case_sha256": "8f074770eef4e4ef5debbaef467aac1ddf7bbd883be579c2538f5af0d1188bcb",
+        "reason": "Separate b then a joins establish reverse callback order, with lexical a then b delivery retained at the step boundary."
+      }
+    }
+  }
+}

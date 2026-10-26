@@ -115,7 +115,8 @@ def _cancel_typeahead(ctx):
         terminal.wait(lambda _: any(e["type"] == "run.finished" and e["data"].get("status") == "cancelled"
                                      for e in events(ctx)), "cancelled run completion")
         settled(terminal, "typeahead-cancelled")
-        server.release("cancel-answer")
+        response = server.requests[0].response
+        assert not response.chunks and not response.completed
         following_turn(terminal, "fresh normal question")
         lack(terminal, "Cancelled answer must not appear.")
         assert len(server.requests) == 2, "cancelled queued input was submitted"

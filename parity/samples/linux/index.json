@@ -1704,9 +1704,9 @@
       "why": "Named Session reuse versus anonymous collection.",
       "path": "A14.anonymous-named.tar.gz",
       "artifacts": 48,
-      "normalized_bytes": 461648,
-      "normalized_sha256": "43c43e547d281a1814a5c2e655c3031f930063c62b5e0767f684aadad76eed59",
-      "bundle_sha256": "eaaf8dcc72c01dd4b21a8b7934a95d7f7ec192773e53d44dd115ecf95e01850d"
+      "normalized_bytes": 465163,
+      "normalized_sha256": "9e9e67107f106105068bbd3327d22a955cbea04a00fa5b9bd68e2ab5e80ca347",
+      "bundle_sha256": "73018f2781bcb0303e63a167e55f6602617525bcc9a0622bd32ca3ea6fcda95f"
     },
     {
       "id": "A15.root-finish",
@@ -1764,9 +1764,9 @@
       "why": "Independent sibling observations and stale edits; mutation 31.",
       "path": "A20.competing.tar.gz",
       "artifacts": 84,
-      "normalized_bytes": 862178,
-      "normalized_sha256": "0f979f76b835d3028f1956120ce73e6dbfcb3ed48072d29f1253c6b93bdc4b9b",
-      "bundle_sha256": "a25f50464af48cf286a10e82b887cd52374cdda545f6f40fd2de3ca9d5e14329"
+      "normalized_bytes": 864517,
+      "normalized_sha256": "7870953c388e1559e26470e89fa12ceab42f51cc1014f45d76b9cd3cb080735a",
+      "bundle_sha256": "4d2acb81d63a9bcfaa1c845a3ade64524b80a2a9ee6772f3e8f6f5bef0507db8"
     },
     {
       "id": "A21.ledger",
@@ -1974,9 +1974,9 @@
       "why": "Settled lexical delivery despite reverse completion; mutation 32.",
       "path": "A39.reverse-release.tar.gz",
       "artifacts": 48,
-      "normalized_bytes": 462094,
-      "normalized_sha256": "770ada86ed8dfff4c3805c93ff36946c17d94874bde9f65ea438175d0e7946ca",
-      "bundle_sha256": "d0841a82ddf8b711640c2904842e6c71d9794dc19b8e31d9e9668a9a0f96a924"
+      "normalized_bytes": 465694,
+      "normalized_sha256": "3ead6d09afc9b20e393128121eb795bf293c63168d7d60d1e7ad2be82809dcec",
+      "bundle_sha256": "53e7cd49fcd720987264b986fd33bf3c9396ee181d1ee35fdf2687a42d53a8c2"
     },
     {
       "id": "A40.call-ledger-compact",

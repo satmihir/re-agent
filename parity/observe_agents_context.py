@@ -346,13 +346,22 @@ class Agents:
             else:
                 rewritten = self._rewrite(original, artifact, path + loc + (mode,))
             changes = []
-            def leaves(left, right):
+            def leaves(left, right, location=()):
                 if left.children:
                     assert [k for k, _ in left.children] == [k for k, _ in right.children]
-                    for (_, a), (_, b) in zip(left.children, right.children):
-                        leaves(a, b)
+                    for (key, a), (_, b) in zip(left.children, right.children):
+                        leaves(a, b, location + (key,))
                 elif left.end <= len(prefix) and original[left.start:left.end] != rewritten[right.start:right.end]:
                     changes.append((left.start, left.end, rewritten[right.start:right.end]))
+                elif (self.case_id == 'W39.agent' and mode == 'result'
+                      and location == ('result', 'trace_path') and left.start < len(prefix) < left.end):
+                    # A router preview can end exactly at the witnessed directory's slash.
+                    source = full['result']['trace_path']
+                    self.validate_path(full['id'], source)
+                    directory = go_string(source.removesuffix('events.jsonl'))[:-1]
+                    if source.endswith('/events.jsonl') and prefix[left.start:] == directory:
+                        normalized = self.trace_reference(full['id'], source, artifact, path + loc + location)
+                        changes.append((left.start, len(prefix), go_string(normalized.removesuffix('events.jsonl'))[:-1]))
             leaves(lex(original), lex(rewritten))
             return replace_spans(prefix, changes).decode()
 

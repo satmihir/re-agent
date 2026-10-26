@@ -9,6 +9,7 @@ import threading
 import time
 
 from parity.cases.wire_routing import SOL, _openai
+from parity.agent_ordering import ordering
 from parity.model import Case
 from parity.provider import Response
 from parity.observe_agents_effects import TraceBarrier, delivery_ids, finish_continuation, ledger_summary, local_read_denied
@@ -37,19 +38,25 @@ def actor(raw):
 
 
 class Script:
-    """Key responses by independently encoded user turns, with explicit barriers."""
+    """Key responses by user turns; child replies join their parent's wait by default."""
 
-    def __init__(self, ctx):
+    def __init__(self, ctx, unordered=None):
         self.ctx = ctx
+        self.unordered = unordered
         self.markers = {}
 
-    def add(self, who, calls=(), text='', barrier=None, usage=None, body=None):
+    def add(self, who, calls=(), text='', barrier=None, usage=None, body=None, unordered=None,
+            chunk_barriers=()):
         if who not in self.markers:
             self.markers[who] = lambda raw, who=who: actor(raw) == who
         body = body if body is not None else _openai(text, calls=calls)
         if usage is not None:
             body['usage'] = usage
-        self.ctx.server.expect(ENDPOINT, Response(body, barrier=barrier), marker=self.markers[who], model=SOL)
+        terminal = not any(item.get('type') == 'function_call' for item in body.get('output', []))
+        barrier = ordering(self.ctx).reply(who, calls, terminal=terminal, barrier=barrier,
+                                           unordered=self.unordered if unordered is None else unordered)
+        self.ctx.server.expect(ENDPOINT, Response(body, barrier=barrier, chunk_barriers=chunk_barriers),
+                               marker=self.markers[who], model=SOL)
 
     def tools(self, who, *calls, **kwargs):
         self.add(who, calls=calls, **kwargs)
@@ -113,7 +120,7 @@ def assert_delivery(ctx, expected, agent='root'):
 
 
 def finish_rule(ctx, mode):
-    s = Script(ctx)
+    s = Script(ctx, unordered='finish-rule continuation deliberately runs without an explicit wait')
     s.tools('root', ('spawn-worker', 'spawn', spawn('worker', 'worker')))
     if mode == 'child':
         s.tools('worker', ('spawn-leaf', 'spawn', spawn('leaf', 'leaf')))
@@ -173,6 +180,12 @@ def finish_rule(ctx, mode):
         assert any('still running' in e.get('user', {}).get('text', '') for e in history), history
 
 
+def assert_finish_order(result, ids):
+    """Check callback notices, not the earlier child run.finished trace records."""
+    actual = re.findall(rb'\b(t[0-9]+) [^\n]* finished ', result.stderr)
+    assert actual == [id.encode() for id in ids], ('callback finish order', ids, actual)
+
+
 def digest_authority(ctx, mode):
     (ctx.workspace / 'f').write_text('original')
     s = Script(ctx)
@@ -181,10 +194,12 @@ def digest_authority(ctx, mode):
     s.tools('root', ('spawn-a', 'spawn', spawn('a', 'a', 'write', {'fork': True} if mode == 'fork-read' else None)))
     if mode == 'competing':
         s.tools('root', ('spawn-b', 'spawn', spawn('b', 'b', 'write')))
-        s.tools('a', ('read-a', 'read_file', {'path': 'f'}))
+        s.tools('a', ('read-a', 'read_file', {'path': 'f'}),
+                unordered='contested read/write must progress while the parent joins the competing sibling')
         s.tools('b', ('unread-b', 'edit_file', {'path': 'f', 'old_text': 'original', 'new_text': 'unauthorized'}), barrier='unread-b')
         s.tools('b', ('read-b', 'read_file', {'path': 'f'}))
-        s.tools('a', ('edit-a', 'edit_file', {'path': 'f', 'old_text': 'original', 'new_text': 'winner'}), barrier='edit-a')
+        s.tools('a', ('edit-a', 'edit_file', {'path': 'f', 'old_text': 'original', 'new_text': 'winner'}),
+                barrier='edit-a', unordered='winning edit precedes the competing stale edit, before its own join')
         s.tools('b', ('edit-b', 'edit_file', {'path': 'f', 'old_text': 'original', 'new_text': 'loser'}), barrier='edit-b')
         s.done('a', barrier='a-finished')
         s.done('b')
@@ -194,7 +209,10 @@ def digest_authority(ctx, mode):
     else:
         s.tools('a', ('edit-a', 'edit_file', {'path': 'f', 'old_text': 'original', 'new_text': 'BAD'}))
         s.done('a')
-    s.tools('root', ('wait-all', 'wait', {'ids': ['a', 'b'] if mode == 'competing' else ['a']}))
+    if mode == 'competing':
+        s.tools('root', ('wait-b', 'wait', {'ids': ['b']}), ('wait-all', 'wait', {'ids': ['a']}))
+    else:
+        s.tools('root', ('wait-all', 'wait', {'ids': ['a']}))
     if mode == 'child-read':
         s.tools('root', ('edit-parent', 'edit_file', {'path': 'f', 'old_text': 'original', 'new_text': 'BAD'}))
     s.done('root')
@@ -209,8 +227,9 @@ def digest_authority(ctx, mode):
         ctx.server.release('edit-b')
         s.wait('b', 4)
         ctx.server.release('a-finished')
-    s.run(control if mode == 'competing' else None)
+    result = s.run(control if mode == 'competing' else None)
     if mode == 'competing':
+        assert_finish_order(result, ['t2', 't1'])
         unread = outcomes(ctx, 't2')['unread-b']
         local_read_denied(unread)
         for agent, call in (('t1', 'read-a'), ('t2', 'read-b')):
@@ -250,12 +269,15 @@ def missing_recreate(ctx, mode):
 
 def lifecycle(ctx, action, state):
     s = Script(ctx)
+    concurrent = ('running/stopped controls require the applied write before any joining wait'
+                  if state in ('running', 'stopped') else None)
     s.tools('root', ('spawn', 'spawn', spawn('worker', 'worker', 'write')))
-    s.tools('worker', ('applied', 'write_file', {'path': 'lifecycle-effect', 'content': 'retained'}))
+    s.tools('worker', ('applied', 'write_file', {'path': 'lifecycle-effect', 'content': 'retained'}),
+            unordered=concurrent)
     if state == 'blocked':
         s.add('worker', body={'id': 'invalid-worker', 'status': 'completed', 'output': []})
     elif state in ('running', 'stopped'):
-        s.done('worker', barrier='held-worker')
+        s.done('worker', barrier='held-worker', unordered=concurrent)
     else:
         s.done('worker')
     if state == 'stopped':
@@ -300,16 +322,20 @@ def lifecycle(ctx, action, state):
 def foreign_control(ctx, action):
     s = Script(ctx)
     s.tools('root', ('a', 'spawn', spawn('a', 'a')), ('b', 'spawn', spawn('b', 'b')))
-    s.tools('a', ('foreign', action, {'id': 't2'}))
+    s.tools('a', ('foreign', action, {'id': 't2'}),
+            unordered='foreign control is witnessed before the held parent wait response')
     s.done('a', barrier='foreign-a')
     s.done('b', text='foreign sibling survived', barrier='foreign-b')
-    s.tools('root', ('wait', 'wait', {'ids': ['a', 'b']}), barrier='foreign-wait')
+    s.tools('root', ('wait-a', 'wait', {'ids': ['a']}),
+            ('wait', 'wait', {'ids': ['b']}), barrier='foreign-wait')
     s.done('root')
     def control(_):
         s.wait('a', 2); s.wait('b'); s.wait('root', 2)
+        assert not traces(ctx, 'run.finished', 't2'), 'foreign sibling finished before denial'
         ctx.server.release('foreign-a'); ctx.server.release('foreign-b')
         ctx.server.release('foreign-wait')
-    s.run(control)
+    result = s.run(control)
+    assert_finish_order(result, ['t1', 't2'])
     denied = outcomes(ctx, 't1')['foreign']
     assert not denied['ok'] and denied['code'] == 'agent_control_denied', ('foreign sibling control', denied)
     assert [r['result']['status'] for r in assert_delivery(ctx, ['t1', 't2'])] == ['completed', 'completed']
@@ -319,9 +345,11 @@ def shutdown(ctx, mode):
     s = Script(ctx)
     s.tools('root', ('spawn', 'spawn', spawn('worker', 'worker', 'write')))
     if mode == 'exec-inflight':
-        s.tools('worker', ('shutdown-exec', 'exec', held_exec(ctx)))
+        s.tools('worker', ('shutdown-exec', 'exec', held_exec(ctx)),
+                unordered='root failure cancels an in-flight exec instead of joining with wait')
     else:
-        s.done('worker', barrier='worker-held')
+        s.done('worker', barrier='worker-held',
+               unordered='root failure cancels an in-flight child instead of joining with wait')
     if mode in ('protocol', 'exec-inflight'):
         s.add('root', body={'id': 'bad', 'status': 'completed', 'output': []}, barrier='root-fail')
     else:
@@ -483,7 +511,8 @@ def exec_cancel(ctx, mode):
     s = Script(ctx)
     args = held_exec(ctx)
     s.tools('root', ('spawn', 'spawn', spawn('worker', 'worker', 'write')))
-    s.tools('worker', ('child-exec', 'exec', args))
+    s.tools('worker', ('child-exec', 'exec', args),
+            unordered='exec must already be in flight before parent control or overlap')
     s.tools('root', ('cancel', 'cancel', {'name': 'worker'}), barrier='cancel-ready')
     s.tools('root', ('send-blocked', 'send', {'name': 'worker', 'message': 'should be rejected'}))
     s.tools('root', ('reset', 'reset', {'name': 'worker'}))
@@ -516,7 +545,8 @@ def overlap(ctx, mode):
     args = held_exec(ctx, cwd=cwd, extra=tuple('argument-' + str(i) + '雪' * 600 for i in range(12)) if mode == 'bounds' else ())
     s = Script(ctx)
     s.tools('root', ('spawn', 'spawn', spawn('worker', 'worker', 'write')))
-    s.tools('worker', ('child-exec', 'exec', args))
+    s.tools('worker', ('child-exec', 'exec', args),
+            unordered='exec must already be in flight before parent control or overlap')
     s.done('worker')
     root_args = {'argv': ['python3', '-c', "print('overlap witness')"], 'cwd': 'other'}
     if mode == 'per-chain-step':
@@ -562,11 +592,12 @@ def overlap(ctx, mode):
 def sibling_exec(ctx):
     s = Script(ctx)
     s.tools('root', ('a', 'spawn', spawn('a', 'a', 'write')), ('b', 'spawn', spawn('b', 'b', 'write')))
-    s.tools('a', ('held', 'exec', held_exec(ctx, tag='a')))
+    s.tools('a', ('held', 'exec', held_exec(ctx, tag='a')),
+            unordered='held exec must overlap the sibling before its own joining wait')
     s.done('a')
     s.tools('b', ('overlap', 'exec', {'argv': ['python3', '-c', "print('sibling overlap')"], 'cwd': '.'}), barrier='sibling-ready')
     s.done('b')
-    s.tools('root', ('wait', 'wait', {'ids': ['a', 'b']}))
+    s.tools('root', ('wait-b', 'wait', {'ids': ['b']}), ('wait', 'wait', {'ids': ['a']}))
     s.done('root')
     def control(_):
         wait_path(ctx, '/ready-a')
@@ -574,7 +605,8 @@ def sibling_exec(ctx):
         ctx.server.release('sibling-ready')
         s.wait('b', 2)
         ctx.server.release('exec-a')
-    s.run(control)
+    invocation = s.run(control)
+    assert_finish_order(invocation, ['t2', 't1'])
     result = outcomes(ctx, 't2')['overlap']
     assert result['ok'] and result['data']['concurrent_exec'][0]['agent_id'] == 't1', result
     assert outcomes(ctx, 't1')['held']['ok']
@@ -603,20 +635,18 @@ def sorted_delivery(ctx, mode):
     s.tools('root', ('spawn-a', 'spawn', spawn('a', 'a')), ('spawn-b', 'spawn', spawn('b', 'b')))
     s.done('a', text='first actor data', barrier='release-a')
     s.done('b', text='second actor data', barrier='release-b')
-    s.tools('root', ('wait-both', 'wait', {'ids': ['a', 'b']}), barrier='wait-published')
+    s.tools('root', ('wait-b', 'wait', {'ids': ['b']}),
+            ('wait-both', 'wait', {'ids': ['a']}), barrier='wait-published')
     s.tools('root', ('receipt', 'wait', {'ids': ['b', 'a'], 'timeout': 0}))
     s.done('root')
     def control(_):
         s.wait('a'); s.wait('b'); s.wait('root', 2)
-        # Completion order is intentionally opposite to child-ID order. A following
-        # root wait cannot return until both are terminal; no background wake is used.
+        # Separate waits in one batch order callbacks without delivering either result early.
         ctx.server.release('release-b')
-        witness.finished('t2')
         ctx.server.release('release-a')
-        witness.finished('t1')
         ctx.server.release('wait-published')
-    with TraceBarrier(ctx.artifacts) as witness:
-        s.run(control)
+    result = s.run(control)
+    assert_finish_order(result, ['t2', 't1'])
     assert_delivery(ctx, ['t1', 't2'])
     events = traces(ctx, agent='root')
     finish = next(e for e in events if e['type'] == 'tool.finished' and e['data']['call_id'] == 'wait-both')

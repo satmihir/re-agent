@@ -521,16 +521,22 @@ def compact_cancel(ctx):
     state['seen'] = {'cancel-ledger': True}
     state['gc_requests'] = 41
     _install(ctx, state)
-    expect(ctx, 'must not accept summary', barrier='cancel-summary')
+    body = Response(_openai('must not accept summary')).encoded()
+    ctx.server.expect('/openai/v1/responses', Response(chunks=(body,), barrier='cancel-summary-headers',
+                                                    chunk_barriers=('cancel-summary',)), model=state['model'])
     expect(ctx, 'after cancelled summary')
     def cancel(process):
         ctx.server.wait(1)
         process.send_signal(signal.SIGINT)
     result = ctx.invoke(['chat', '--resume', ID], stdin=b'/compact\nafter cancel task\n/exit\n',
                         cli_workspace=None, on_start=cancel)
-    ctx.server.release('cancel-summary')
+    # Keep cancellation before headers, then record headers without releasing the body.
+    ctx.server.release('cancel-summary-headers')
+    ctx.server.wait_chunk('cancel-summary')
     assert result.returncode == 0, result
     assert len(ctx.server.requests) == 2
+    assert not ctx.server.requests[0].response.chunks
+    assert not ctx.server.requests[0].response.completed
     assert 'cancel preserved original' in texts(json.loads(ctx.server.requests[-1].body))
     saved = _saved(ctx, 'cancelled-summary')
     assert saved['seen']['cancel-ledger'] and saved['gc_requests'] == 42
@@ -554,12 +560,15 @@ def live_crash(ctx, finished=False):
         s.tools('worker', ('receipt-write', 'write_file', {'path': 'child-receipt', 'content': 'exactly once'}))
         s.done('worker')
     else:
-        s.done('worker', barrier='crash-child')
+        s.done('worker', chunk_barriers=('crash-child',),
+               unordered='Crash deliberately interrupts a running child before any joining wait.')
     calls.extend([('crash-helper', 'exec', {'argv': ['python3', '-c', helper], 'cwd': '.'}),
                   ('crash-unstarted', 'write_file', {'path': 'crash-must-not-exist', 'content': 'bad'})])
     s.tools('root', *calls)
     def crash(process):
         s.wait('worker')
+        if not finished:
+            ctx.server.wait_chunk('crash-child')
         assert select.select([descriptor], [], [], 10)[0], 'helper never published FIFO readiness'
         helper_pid = int(os.read(descriptor, 64))
         checkpoints = list(_cache(ctx).glob('*/checkpoint.json'))
@@ -580,7 +589,8 @@ def live_crash(ctx, finished=False):
         os.close(descriptor)
     assert result.returncode == -signal.SIGKILL
     if not finished:
-        ctx.server.release('crash-child')
+        response = s.wait('worker').response
+        assert not response.chunks and not response.completed
     path = next(_cache(ctx).glob('*/checkpoint.json'))
     identity = path.parent.name
     before = len(ctx.server.requests)
@@ -670,7 +680,9 @@ def terminal_transition(ctx, status, transition):
     if status == 'provider_error':
         ctx.server.expect('/openai/v1/responses', Response(status=400, body={'error': {'message': 'fixture provider error'}}), model=state['model'])
     elif status == 'cancelled':
-        expect(ctx, 'cancelled response never accepted', barrier='terminal-cancel')
+        body = Response(_openai('cancelled response never accepted')).encoded()
+        ctx.server.expect('/openai/v1/responses', Response(chunks=(body,), barrier='terminal-cancel-headers',
+                                                        chunk_barriers=('terminal-cancel',)), model=state['model'])
     elif status == 'refused':
         expect(ctx, body=_openai(items=[{'type': 'message', 'role': 'assistant', 'content': [{'type': 'refusal', 'refusal': 'fixture refusal'}]}]))
     elif status == 'protocol_error':
@@ -692,7 +704,10 @@ def terminal_transition(ctx, status, transition):
     result = ctx.invoke(['chat', '--resume', ID], stdin=b'terminal original task\n/exit\n',
                         cli_workspace=None, on_start=cancel if status == 'cancelled' else None)
     if status == 'cancelled':
-        ctx.server.release('terminal-cancel')
+        ctx.server.release('terminal-cancel-headers')
+        ctx.server.wait_chunk('terminal-cancel')
+        response = ctx.server.requests[0].response
+        assert not response.chunks and not response.completed
     assert result.returncode == 0, result
     ended = events(ctx, 'run.finished')[-1]
     status = 'limit_exceeded' if status == 'step-limit' else status

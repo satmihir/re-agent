@@ -178,7 +178,13 @@
     {
       "kind": "git-do-failed-display-remote-prefix",
       "owner": "Linux T52.conflict-lease.lease nonterminal invocation stderr failed lease-push activity only",
-      "validation": "Unique matching accepted/start/finish call in the owning invocation, exact rebase_push arguments and final lease-push argv/exit 1, exact independent recorder stdout/stderr, unique successful bare-init/remote-add allocation, original sanitized ASCII 120-cell clipping and ellipsis, and complete literal activity line",
+      "validation": "Unique matching accepted/start/finish call in the owning invocation, exact rebase_push arguments and final lease-push argv/exit 1, exact independent recorder stdout/stderr, unique successful bare-init/remote-add allocation, original sanitized ASCII 120-cell clipping and ellipsis, and complete literal activity line; uses the shared clipped allocated-path-prefix implementation without changing existing bytes or ledger sites",
+      "replacement": "Only the witnessed visible allocated-root prefix becomes <ROOT>; keep the original ellipsis and every nonpath byte, never normalize then reclip"
+    },
+    {
+      "kind": "clipped-allocated-path-prefix",
+      "owner": "C20.persistence-barriers exec target in nonterminal invocation stderr, on any platform; shared clipped-prefix implementation with the unchanged legacy T52 slot",
+      "validation": "Unique accepted/start/finish call, Session/Run/Step ordering and invocation ownership; T52 retains exact lease-push argv/exit, independent recorder result and successful bare-init/remote-add allocation; C20 requires checksum-validated synthetic checkpoint, independently allocated HOME/cache path, exact authored helper, matching executable/result and bounded displayed duration. Require the original sanitized ASCII clip inside the allocated root: 120 cells for the failure result, 160 for the exec target, exact ellipsis and complete literal activity line",
       "replacement": "Only the witnessed visible allocated-root prefix becomes <ROOT>; keep the original ellipsis and every nonpath byte, never normalize then reclip"
     },
     {
@@ -449,7 +455,7 @@
       "kind": "agent-exact-delivery-preview",
       "owner": "Incomplete source:agent result JSON in a bounded historical/router user-text preview only",
       "validation": "Visible UTF-8 payload is at most 512 bytes and an exact prefix of one unique complete independently observed agent.result encoded with the Go-compatible writer. The enclosing agent-result marker and user/source ownership must match; assistant/native prose is excluded",
-      "replacement": "Rewrite only complete typed leaf spans wholly contained in the original prefix using the full witnessed result; never retruncate normalized text, complete a partial token, or mask the remainder. Preserve marker/prefix/suffix and replay linkage to the full source"
+      "replacement": "Rewrite only complete typed leaf spans wholly contained in the original prefix using the full witnessed result. Additionally, W39.agent alone may rewrite the visible result.trace_path directory when the preview ends exactly at the slash before events.jsonl of the same child-owned retained source file. Never retruncate normalized text, complete a partial token, or mask any other remainder. Preserve marker/prefix/suffix and replay linkage to the full source"
     },
     {
       "kind": "agent-embedded-result",
