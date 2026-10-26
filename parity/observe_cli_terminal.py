@@ -240,9 +240,9 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
         events.append(event)
         owned_traces.append((path, line))
         trace_paths.add(str(artifact_root / relative))
-        if event.get('type') == 'run.started':
+        if event.get('type') == 'run.started' and not event.get('agent_id'):
             headers.append(event)
-        elif event.get('type') == 'run.finished':
+        elif event.get('type') == 'run.finished' and not event.get('agent_id'):
             finished.append(event)
     if len(finished) > 1:
         def utc(event):
@@ -260,6 +260,10 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
         positions = origins[start:start + len(value)]
         assert text[start:start + len(value)] == value and len(positions) == len(value)
         slots.append((positions, value, padded, kind))
+
+    from parity.observe_agents_effects import recap_slots
+    for start, value, replacement, kind in recap_slots(ctx, invocation, prefix, text, traces):
+        slot(start, value, replacement, kind)
 
     def session(start, value):
         witnesses = [event for event in headers if event.get('session_id') == value]

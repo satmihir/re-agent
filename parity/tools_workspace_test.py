@@ -84,12 +84,22 @@ class WorkspaceFixturesTest(unittest.TestCase):
                 if args[0] == 'add' or 'status' in args:
                     marker.touch()
                 return b''
+            state = dict(workspace=str(root / 'filtered-read-only'), counts='omitted in read-only/plan mode',
+                         git=dict(branch='main', upstream='origin/main', default_branch='origin/main',
+                                  ahead=0, behind=0, ahead_of_default=0, behind_default=0))
             def chat(stdin, flags):
                 marker.touch()
-                selectors[-1](b'{}')
+                for index, prompt in enumerate(('switch', 'switch', 'next', 'after-reset', 'after-model')):
+                    body = dict(input=[dict(role='user', content=[dict(text=prompt),
+                                dict(text='workspace_state\n' + json.dumps(state))])])
+                    with patch.object(Path, 'exists', side_effect=AssertionError('matcher did filesystem I/O')):
+                        self.assertTrue(selectors[index](json.dumps(body).encode()))
+                    server.requests.append(SimpleNamespace(json=lambda: dict(model='gpt-6-luna')))
+                return SimpleNamespace(returncode=0, stderr=b'')
             server = SimpleNamespace(requests=[], expect=lambda path, response, marker: selectors.append(marker))
             ctx = SimpleNamespace(root=root, server=server, chat=chat)
-            with patch.object(tools, '_git', git), patch.object(tools, 'events', return_value=[]):
+            switched = dict(outcome=dict(ok=True, data=dict(workspace_state=state)))
+            with patch.object(tools, '_git', git), patch.object(tools, 'events', side_effect=[[], [switched]]):
                 with self.assertRaisesRegex(AssertionError, 'restricted snapshot ran the clean-filter tripwire'):
                     tools._filter_tripwire(ctx)
 

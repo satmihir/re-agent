@@ -75,7 +75,9 @@ class ExecSlotsTest(unittest.TestCase):
         self.assertEqual(normal.ledger, [])
 
     def test_executable_slot_covers_file_workspace_and_git_t_families(self):
-        for case in ('T03.absolute', 'T04.replaced-root', 'T21.digest', 'T24.create', 'T40.hostile-programs.clean'):
+        for case in ('T03.absolute', 'T04.replaced-root', 'T21.digest', 'T24.create', 'T40.hostile-programs.clean',
+                     'A17.exec-shutdown', 'A21.ledger', 'A22.cancel-reset', 'A39.reverse-release',
+                     'C24.agents-write-recap'):
             with self.subTest(case=case):
                 events, invocations = evidence()
                 normal, tools = observer(events, invocations, case)
@@ -95,6 +97,104 @@ class ExecSlotsTest(unittest.TestCase):
         raw = go_json(events[1])
         self.assertEqual(tools.trace(raw, raw, 'trace'), raw)
         self.assertEqual(normal.ledger, [])
+
+    def test_nested_wire_request_router_and_handoff_slots_require_exact_owner(self):
+        from parity.observe_agents_context import HANDOFF
+        events, invocations = evidence()
+        normal, tools = observer(events, invocations, 'T31.success')
+        outcome = events[1]['data']['outcome']
+        entry = dict(kind='tool', tool=dict(name='exec', call_id='exec', outcome=outcome))
+        shapes = [dict(input=[dict(type='function_call_output', call_id='exec', output=json.dumps(outcome))]),
+                  dict(messages=[dict(role='user', content=[dict(type='tool_result', tool_use_id='exec', content=json.dumps(outcome))])]),
+                  dict(kind='user', user=dict(text=HANDOFF + '\nlabels\n' + json.dumps([entry])))]
+        shapes += [dict(type='api.attempt.started', data=dict(attempt=1, request_body=json.dumps(shapes[0]))),
+                   dict(model='router', questions={}, state=json.dumps(shapes[0]))]
+        for shape in shapes:
+            with self.subTest(shape=shape):
+                raw = go_json(shape)
+                rewritten = tools.exec.rewrite(raw, 'nested')
+                self.assertNotEqual(rewritten, raw)
+                self.assertIn(b'ROOT', rewritten)
+                self.assertIn(ROOT.encode(), rewritten)  # Arbitrary stdout remains literal.
+                self.assertEqual(tools.exec.rewrite(rewritten, 'nested-again'), rewritten)
+                # Normalizer.json re-enters for request_body; canonical slots must be inert.
+                self.assertEqual(tools.exec.rewrite(rewritten, 'nested-third'), rewritten)
+                for before, after in [(b'stderr sentinel', b'forged'), (b'python3', b'python3-other')]:
+                    with self.assertRaisesRegex(AssertionError, 'echo differs'):
+                        tools.exec.rewrite(rewritten.replace(before, after), 'nested-again')
+                for before, after in [(b'stderr sentinel', b'forged'), (b'python3', b'python3-other')]:
+                    forged = raw.replace(before, after)
+                    with self.assertRaisesRegex(AssertionError, 'echo differs'):
+                        tools.exec.rewrite(forged, 'nested')
+        wire = shapes[0]
+        for call in ('foreign', 'f' * 16):
+            changed = copy.deepcopy(wire)
+            changed['input'][0]['call_id'] = call
+            raw = go_json(changed)
+            self.assertEqual(tools.exec.rewrite(raw, 'nested'), raw)
+        duplicate = copy.deepcopy(events)
+        for event in duplicate:
+            event['run_id'] = 'b' * 16
+        _, ambiguous = observer(events + duplicate, invocations, 'T31.success')
+        with self.assertRaisesRegex(AssertionError, 'ambiguous'):
+            ambiguous.exec.rewrite(go_json(wire), 'nested')
+        for opaque in [dict(role='assistant', content=[wire]), dict(native=dict(items=[wire]))]:
+            raw = go_json(opaque)
+            self.assertEqual(tools.exec.rewrite(raw, 'nested'), raw)
+
+    def test_double_json_reentry_accepts_only_complete_raw_or_canonical_outcomes(self):
+        events, invocations = evidence()
+        normal, tools = observer(events, invocations)
+        outcome = events[1]['data']['outcome']
+        wire = dict(input=[dict(type='function_call_output', call_id='exec', output=json.dumps(outcome))])
+        request = dict(type='api.attempt.started', data=dict(attempt=1, request_body=json.dumps(wire)))
+        base_json = normal.json
+
+        def json_reentry(raw, artifact, path=(), event=None, opaque=False, response_slot=None):
+            rewritten = tools.exec.rewrite(raw, artifact, path)
+            return base_json(rewritten, artifact, path, event, opaque, response_slot)
+
+        normal.json = json_reentry
+        actual = normal.json(go_json(request), 'trace')
+        inner = json.loads(json.loads(actual)['data']['request_body'])
+        canonical = json.loads(inner['input'][0]['output'])
+        self.assertEqual(canonical['data']['resolved_executable'], '<ROOT>/home/.parity-bin/python3')
+        self.assertEqual(canonical['data']['stdout_bytes_seen'], len(canonical['data']['stdout'].encode()))
+        partial = copy.deepcopy(outcome)
+        partial['data']['resolved_executable'] = canonical['data']['resolved_executable']
+        for changed in [partial, dict(canonical, code='forged')]:
+            wire['input'][0]['output'] = json.dumps(changed)
+            request['data']['request_body'] = json.dumps(wire)
+            with self.assertRaisesRegex(AssertionError, 'echo differs'):
+                normal.json(go_json(request), 'trace')
+
+    def test_retained_outcome_requires_same_independently_witnessed_session(self):
+        events, invocations = evidence()
+        for event in events:
+            event['session_id'] = 'session'
+            event['agent_id'] = 't1'
+        outcome = events[1]['data']['outcome']
+        retained = dict(type='model.requested', run_id='b' * 16, session_id='session', agent_id='t1',
+                        data=dict(history=[dict(kind='tool', tool=dict(name='exec', call_id='exec', outcome=outcome))]))
+        for event_type in ('model.requested', 'compaction.requested'):
+            retained['type'] = event_type
+            normal, tools = observer(events + [retained], invocations, 'T31.success')
+            raw = go_json(retained)
+            rewritten = tools.exec.rewrite(raw, 'retained')
+            self.assertEqual(json.loads(rewritten)['data']['history'][0]['tool']['outcome']['data']['resolved_executable'],
+                             '<ROOT>/home/.parity-bin/python3')
+            self.assertEqual(tools.exec.rewrite(rewritten, 'again'), rewritten)
+            with self.assertRaisesRegex(AssertionError, 'echo differs'):
+                tools.exec.rewrite(raw.replace(b'stderr sentinel', b'forged'), 'retained')
+        for changes in [dict(session_id='foreign'), dict(agent_id='t2')]:
+            foreign = dict(retained, **changes)
+            _, tools = observer(events + [foreign], invocations, 'T31.success')
+            raw = go_json(foreign)
+            self.assertEqual(tools.exec.rewrite(raw, 'foreign'), raw)
+        conflicting = dict(retained, session_id='ambiguous')
+        _, tools = observer(events + [retained, conflicting], invocations, 'T31.success')
+        raw = go_json(retained)
+        self.assertEqual(tools.exec.rewrite(raw, 'ambiguous'), raw)
 
     def test_history_echo_is_owned_and_native_text_remains_literal(self):
         events, invocations = evidence()

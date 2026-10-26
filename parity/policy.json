@@ -244,7 +244,7 @@
     {
       "kind": "duration-ms",
       "owner": "api.attempt.finished data.duration_ms; auto.route data.router_latency_ms; typed non-native shell/exec outcomes",
-      "validation": "Non-boolean numeric value in [0,3600000], with the exact event or command/argv/timeout ownership predicates in Normalizer.json",
+      "validation": "Non-boolean numeric value in [0,3600000], with the exact event or command/argv/timeout ownership predicates in Normalizer.json. Only for owned C17.* cases, record even raw zero at cache-input history[0].shell.duration_ms and trace data.history[0]/data.initial_history[0].shell.duration_ms; no other zero-valued shell site changes. Existing locks migrate only after normalized artifacts match and omission of those exact three sites reconstructs the unique old canonical case hash.",
       "replacement": 0
     },
     {
@@ -346,7 +346,7 @@
     {
       "kind": "cache-prefix",
       "owner": "Logical request cache-key certificate",
-      "validation": "Independently derive original and normalized keys from original schema strings and logical first Entry",
+      "validation": "Independently derive original and normalized keys from original schema strings and logical first Entry. For the two A36 unavailable-trace fixtures only, the restored second traced request witnesses every first-request byte except the authored first prompt and its derived key; exact warning, response/output, declarations, unchanged sentinel and absence of other untraced exchanges are required (observe_trace_failures.py).",
       "replacement": "Normalized logical-prefix key"
     },
     {
@@ -381,8 +381,8 @@
     },
     {
       "kind": "independently-validated-failed-admission-guard",
-      "owner": "W51.effect-unknown and W51.timeout zero-byte rejected switches",
-      "validation": "Observed uncertain exec, same Session/call, no later acknowledgment, exact owned guard reason",
+      "owner": "W51.effect-unknown/W51.timeout and A38.switch-encoded-above zero-byte rejected switches",
+      "validation": "W51: observed uncertain exec, same Session/call, no later acknowledgment and exact owned reason. A38: checksum-validated small/large input states differ only in ASCII padding; a real destination HTTP request witnesses the complete encoded template; reconstruct projected history and cache key independently, proving exactly 10485761 bytes against the 10485760 limit before window admission (observe_agents_admission.py).",
       "replacement": "No executable output is waived; certificate only"
     },
     {
@@ -420,6 +420,204 @@
       "owner": "Only fake response .wire-body/.headers/.transport artifacts for the exact cases below",
       "validation": "Delivery certificate succeeds; no Go trace, output, status, effect, completed follow-up or rotating-refresh input is projected",
       "replacement": "Header cancellation: empty body/headers; body cancellation: exact heartbeat/headers; canonical incomplete transport"
+    },
+    {
+      "kind": "agent-envelope-run-reference",
+      "owner": "Typed agent.result run_id, lifecycle status delivery_run_id, and delivered effects origin/records run_id leaves; their certified history/wire echoes only",
+      "validation": "Run ID must already occur in complete retained trace envelopes, and child-owned references must belong to that agent. Delivery receipts additionally match the observed agent ID, parent delivery Run and Step. No identity is learned from the substituted leaf",
+      "replacement": "Only the witnessed Run token becomes its preregistered RUN_n; call IDs, agent IDs, state, ordering and all unrelated lexemes stay exact. Original span and replacement are retained for raw replay"
+    },
+    {
+      "kind": "agent-source-trace-path",
+      "owner": "trace_path on agent.spawn/send observations and lifecycle tool outcome thread/status/roster records, including typed historical echoes",
+      "validation": "Path equals an actual retained trace source file for that exact agent ID. Child source grammar ends in /agent-<16 lowercase hex>/events.jsonl; actor slot derives recursively from the parent-owned accepted spawn call, not asynchronous start order",
+      "replacement": "Only allocated root/known Run components and the independently owned agent trace-directory component become canonical path tokens and agent-AGENT_n. Preserve every other record field and retain original/replacement spans"
+    },
+    {
+      "kind": "agent-result-source-trace-path",
+      "owner": "result.trace_path inside a complete witnessed agent.result delivery and its exact structured echoes",
+      "validation": "Whole delivered result equals an independently retained agent.result payload; its Run belongs to that child and its trace path equals a retained source file for the same child",
+      "replacement": "Canonicalize only the witnessed result trace path using allocated roots, preregistered Run components and spawn-causal agent trace slot; retain full original delivery and token linkage for replay"
+    },
+    {
+      "kind": "agent-delivered-effect-workspace",
+      "owner": "workspace leaves of files records in witnessed delivered agent effect summaries and exact RunResult/history echoes",
+      "validation": "Effects are reached through the typed agent delivery/effects schema; whole deliveries match retained agent.result, and per-call origins reference the corresponding child Run envelope. Only an independently allocated capture-root prefix is eligible",
+      "replacement": "Replace only the owned allocation-root prefix in the workspace leaf; path suffix, changed-file list, digests, effects, counts and uncertainty remain literal. Store the reversible leaf substitution"
+    },
+    {
+      "kind": "agent-exact-delivery-preview",
+      "owner": "Incomplete source:agent result JSON in a bounded historical/router user-text preview only",
+      "validation": "Visible UTF-8 payload is at most 512 bytes and an exact prefix of one unique complete independently observed agent.result encoded with the Go-compatible writer. The enclosing agent-result marker and user/source ownership must match; assistant/native prose is excluded",
+      "replacement": "Rewrite only complete typed leaf spans wholly contained in the original prefix using the full witnessed result; never retruncate normalized text, complete a partial token, or mask the remainder. Preserve marker/prefix/suffix and replay linkage to the full source"
+    },
+    {
+      "kind": "agent-embedded-result",
+      "owner": "Complete marked agent.result JSON inside source:agent Entries or typed user input text, including historical/router echoes",
+      "validation": "Parse exactly the marked JSON payload and require whole-value equality with an independently retained agent.result. Recursively enforce child Run, source trace path and effects ownership; preserve bytes before the marker and after the parsed payload",
+      "replacement": "Re-encode only the containing string changes produced by the registered typed result substitutions. Provider-native assistant blocks, unmarked prose, call IDs and other string content remain literal; retain nested and enclosing original/replacement linkage"
+    },
+    {
+      "kind": "agent-embedded-roster",
+      "owner": "Marked agent_roster JSON appended to typed user/input_text records and historical/router user context",
+      "validation": "Exact roster marker, parsed record shape and user/source ownership are required. Each changed trace_path must equal a retained file for its named agent; delivery receipt IDs must match observed delivery Run/Step. Assistant and native tool-use/function-call content is excluded",
+      "replacement": "Only recursively certified roster trace paths and receipt Run references change inside the parsed payload. Preserve roster state/task/cost/IDs, surrounding text and all unrelated bytes; retain enclosing and nested substitution spans"
+    },
+    {
+      "kind": "agent-run-source-trace-path",
+      "owner": "Top-level run.finished.data.trace_path in a retained root or child trace envelope",
+      "validation": "The path must equal a retained source file belonging to the envelope's agent identity; child actor slot is bound to the accepted parent spawn-call chain, not arrival or file enumeration order",
+      "replacement": "Only owned root/known Run path components and the child agent trace-directory allocation become canonical tokens. Keep the envelope, terminal status and all other fields exact; original source path is replay evidence"
+    },
+    {
+      "kind": "agent-exact-tool-preview",
+      "owner": "truncated=true historical lifecycle ToolOutcome.data strings whose call_id identifies an observed lifecycle tool result",
+      "validation": "The preview is at most 512 UTF-8 bytes and exactly prefixes one unique retained full outcome.data for that call. Match the typed history/tool envelope and require the same lifecycle ownership and Run/trace/receipt checks as the full outcome",
+      "replacement": "Substitute only complete eligible leaves already wholly visible in the original prefix. Do not alter truncation flags, regenerate a prefix boundary, fill partial JSON, or normalize literal tool/model output; retain full-source and enclosing-string replay linkage"
+    },
+    {
+      "kind": "agent-embedded-tool-outcome",
+      "owner": "OpenAI function_call_output.output and Anthropic tool_result.content strings for independently observed lifecycle call IDs",
+      "validation": "Parse the entire string and require equality with one retained tool.finished outcome for the exact call ID; recurse only through the lifecycle outcome/thread/status schema and its independently witnessed paths/receipts",
+      "replacement": "Only certified typed agent Run/path references inside that complete outcome change. Re-escape the containing JSON string without changing unrelated fields, native assistant output or model prose; retain nested/enclosing original-to-normalized linkage"
+    },
+    {
+      "kind": "agent-router-state",
+      "owner": "String state payload on a typed router request object containing model and questions, reached through retained trace/captured request evidence",
+      "validation": "Parse the embedded JSON and recursively admit only registered complete agent outcomes/results/rosters or uniquely witnessed bounded previews. Routing HTTP bodies are linked to retained api.attempt.started request bytes; no new identities are inferred from state content",
+      "replacement": "Change only enclosing string escapes corresponding to recursively admitted typed substitutions; preserve routing decisions, numbers, truncation markers, tool arguments and all other text. Retain nested source/span linkage for raw replay"
+    },
+    {
+      "kind": "agent-embedded-request",
+      "owner": "request_body string with an attempt field in retained API-attempt evidence for an agent-enabled capture",
+      "validation": "Generative captured HTTP bodies must exactly match retained api.attempt.started request bytes. Recursively check typed user agent-result/roster strings and lifecycle tool echoes; assistant/native blocks are excluded and identities come only from trace envelopes",
+      "replacement": "Only containing-string changes from the already witnessed typed payload substitutions are admitted. Preserve request structure, schema ordering, native opaque bytes, tool arguments and literal output; retain raw HTTP/trace and nested replacement linkage"
+    },
+    {
+      "kind": "agent-historical-transcript",
+      "owner": "Historical conversation preamble plus final-line JSON records in typed user context, including model handoff/router history",
+      "validation": "Require the exact historical-conversation marker and parse only its final JSON-record line. Recursively validate lifecycle call outcomes, whole delivered results, receipt Runs, source trace paths and bounded previews against independently retained events; assistant/native records are not rewritten",
+      "replacement": "Only registered typed references within those records and their containing-string escapes change. Preamble, ordinary user/assistant prose, record ordering and all unrelated lexemes remain exact; retain nested and enclosing span linkage"
+    },
+    {
+      "kind": "exec-embedded-owned-outcome",
+      "owner": "Complete exec ToolOutcome echoes in later requests, router state and historical handoff records",
+      "validation": "Match the complete original outcome to one independently retained tool.finished owner at its accepted call ID. Only its already-certified top-level workspace/executable/timeout slots are reused. Missing, ambiguous, altered or foreign outcomes do not authorize substitution; assistant/native prose remains opaque",
+      "replacement": "Only the same top-level typed leaves change inside the exact complete echo and its containing-string escapes. Preserve outcomes, payload values, order and all unrelated bytes; retain exact nested spans and original witness linkage"
+    },
+    {
+      "kind": "agent-sharing-projection-workspace",
+      "owner": "A38 native/selected/foreign sharing boundary retained projection, only system Runtime Workspace line",
+      "validation": "Reconstruct the entire authored projection from its unique fixture witness child HTTP exchange, independently traced instructions and original call/context evidence. Require exact full projection equality and the independently allocated case workspace. Later repeated boundary exchanges cannot replace or ambiguate the designated witness",
+      "replacement": "Only the system Runtime Workspace allocation changes; preserve all other projection bytes, model data, message order and numeric measurements. Raw artifact accounting changes from literal B to witnessed typed N for exactly this artifact"
+    },
+    {
+      "kind": "fixture-owned-executable-path",
+      "owner": "Only C20 persistence-barrier helper's completed exec command resolved_executable",
+      "validation": "Context.isolated_env unconditionally allocates HOME/.parity-bin/python3 and prepends its directory to PATH. These fixed C20 fixtures do not override that configuration. Reconstruct it from the independently retained case allocation, validated seeded checkpoint, exact accepted python3 helper argv/cwd and full matching completed command. Foreign executable paths or changed script/argv cannot authorize normalization; do not infer this allocation from returned text",
+      "replacement": "Only the exact allocated executable leaf uses the same ROOT token as its owning case; all other command fields and script bytes remain exact"
+    },
+    {
+      "kind": "fixture-owned-script-path",
+      "owner": "C20 persistence-barrier helper arguments and exact command echoes, including fixture model response bodies",
+      "validation": "Validate the authored canonical checkpoint and fixed session ID; derive its path from Context's independently allocated case-root HOME (retained in replay metadata). Require one matching accepted exec dispatch with the exact helper script/argv/cwd and matching finished command echoes. Foreign scripts, roots, calls and changed code cannot become witnesses",
+      "replacement": "Only the allocated case prefix inside that exact script Path literal changes, preserving Python code, JSON/SSE framing, arguments and other payload bytes. Retain leaf and containing-string spans and the independent dispatch linkage"
+    },
+    {
+      "kind": "checkpoint-agent-delivery",
+      "owner": "A34 and W10.source checkpoint history user turns whose source is agent; W10.source's exact agent-cache-anchor-1 history index zero fixture also omits source",
+      "validation": "Validate canonical raw checksum first. Require the entire decoded delivery to equal the independently witnessed agent.result payload from retained traces. Agent/run identities and trace directory ownership come only from the same Agents evidence used for top-level results; altered payloads, foreign scopes and unknown sources cannot authorize a substitution",
+      "replacement": "Only certified typed references in the matching complete delivery change, preserving surrounding text, payload values and ordering; retain nested substitutions, state checksum and exact checkpoint inverse proof"
+    },
+    {
+      "kind": "terminal-agent-recap-workspace",
+      "owner": "C24's exact terminal applied child-write recap workspace span",
+      "validation": "Require the recap invocation and allocated workspace; one root effect must exactly match the owning child's Run effect and successful write_file outcome, including call ID, step, path, operation, content size and digest. The complete recap line must match that evidence",
+      "replacement": "Only the allocated case-root prefix in the owned recap line becomes a padded canonical token. All remaining cells, styles, order, cursor positions and raw replay evidence remain exact"
+    },
+    {
+      "kind": "checkpoint-roster-witnessed-trace",
+      "owner": "trace_path on decoded checkpoint roster/thread objects carrying id, parent_id, state and task, including typed handoff records",
+      "validation": "Validate the raw checkpoint envelope canonical bytes and state SHA before decoding eligible base64 fields. The original path must occur in independently retained root/child trace-source allocations or a matching run.finished reference; unbound checkpoint text cannot allocate a path or identity",
+      "replacement": "Only owned root, preregistered Session/Run path components and agent trace-directory allocations become canonical tokens. Agent directories additionally use the same actor/source-file correspondence as top-level agent paths, never checkpoint text. Re-encode only the changed typed JSON/base64 container, preserving native Items and unrelated bytes; checkpoint-linkage-inverse proves complete raw reconstruction"
+    },
+    {
+      "kind": "checkpoint-legacy-exact-bytes",
+      "owner": "Version-1 checkpoint envelopes in agents-checkpoints/ and agents-checkpoints-imports/, including frozen and root-independent migration inputs",
+      "validation": "Require exact envelope declaration order/canonical encoding and SHA-256 of the actual decoded gob payload. The named frozen-v1 input additionally matches its independently pinned full-file SHA. Relocated gob is never inferred equivalent from migrated v2 evidence",
+      "replacement": "None: retain and compare every envelope/gob byte literally, including root-bearing bytes. The ledger records identical before/after bytes and checksum/inverse validity; a changing absolute-root gob fixture must fail rather than acquire a mask"
+    },
+    {
+      "kind": "checkpoint-typed-base64",
+      "owner": "Checkpoint history/pending UserTurn.workspace/roster, ToolOutcome.data and gc_state.inherited outcomes' data slots only",
+      "validation": "Verify original canonical envelope/state and SHA first. Decode only these persisted RawMessage fields, require valid typed JSON for recursive substitutions, reject embedded trace-envelope identity discovery and unbound scopes. Opaque non-JSON bytes and assistant.native.items remain literal",
+      "replacement": "Base64 of the recursively normalized exact typed JSON bytes only when an eligible inner slot changed. Preserve null/empty distinctions and untouched number/escape/order/whitespace bytes; retain inner and base64 substitutions plus whole-checkpoint inverse proof"
+    },
+    {
+      "kind": "checkpoint-witnessed-session",
+      "owner": "Checkpoint envelope.id and state.id only",
+      "validation": "Raw envelope/state canonicality, checksum and normal ID equality must hold before substitution, except the exact independently declared corrupt-ID fixture delta. Live ID must already be registered from trace/display evidence, never the checkpoint field. Fixed synthetic 0123456789abcdef remains literal",
+      "replacement": "Only the independently registered live Session ID becomes SESSION_n; recompute the state digest separately and retain exact original/replacement spans under the whole-checkpoint inverse certificate"
+    },
+    {
+      "kind": "checkpoint-owned-workspace",
+      "owner": "Checkpoint state.launch and state.active path leaves",
+      "validation": "Canonical envelope/state and original state SHA are validated first. Path must equal or descend at a slash boundary from independently allocated capture workspace/root/artifact roots; foreign paths do not become witnesses",
+      "replacement": "Only the owned allocation-root prefix and already witnessed identity path components change. Preserve relative/foreign roots, suffixes, configuration flags and all other fields; whole-checkpoint inverse proof retains original bytes"
+    },
+    {
+      "kind": "checkpoint-witnessed-trace",
+      "owner": "Checkpoint state.last_trace and structured trace_path leaves",
+      "validation": "First validate original canonical envelope/state and checksum. Original trace path must be an independently retained trace source allocation or observed run.finished path, with replay source allocation correspondence checked when supplied; no path is learned from the checkpoint itself",
+      "replacement": "Only the witnessed root, preregistered Session/Run components and independently actor-bound agent trace directory become canonical tokens. Agent paths use the same retained source-file correspondence as top-level slots. Unknown paths remain literal, and checksum substitution plus checkpoint-linkage-inverse retain full raw reconstruction"
+    },
+    {
+      "kind": "checkpoint-runtime-workspace",
+      "owner": "Workspace line inside state.prompt.text's Runtime section only",
+      "validation": "Original checkpoint bytes and SHA are valid; split only at the exact Runtime header and stop before the exact Project instructions header. Require the line's path to match an independently owned allocation-root boundary; identical prose elsewhere is excluded",
+      "replacement": "Only the Runtime Workspace line's eligible path prefix/components change. Keep line endings, all other runtime values, project instructions and arbitrary matching user/model text literal; record exact containing-token replacement and whole-checkpoint inverse proof"
+    },
+    {
+      "kind": "checkpoint-handoff-transcript",
+      "owner": "state.handoff.text beginning with the exact historical-conversation preamble",
+      "validation": "Validate raw canonical envelope/state and SHA before parsing. Delegate only the typed transcript wrapper to the registered JSON normalizer, with all inner Run/path/result references independently witnessed; unbound scopes and invented trace envelopes are not identity evidence",
+      "replacement": "Only recursively admitted typed transcript substitutions and necessary containing-string escaping change; preserve native omissions, ordinary prose, record order and plan/entry counts. Retain nested and whole-checkpoint inverse linkage"
+    },
+    {
+      "kind": "checkpoint-gc-owned-path",
+      "owner": "Values, never keys, of checkpoint state.gc_state.paths",
+      "validation": "Original checkpoint canonicality and state SHA must hold. Each eligible value is a typed path under an independently allocated capture root at a slash boundary; call IDs and GC bookkeeping are not identities or timing slots",
+      "replacement": "Only owned path prefixes and already witnessed identity components change. Relative/foreign paths, map keys, dropped placeholders, GC ages/steps and ordering remain literal; retain leaf spans and whole-checkpoint inverse proof"
+    },
+    {
+      "kind": "checkpoint-shell-duration-ms",
+      "owner": "duration_ms on typed checkpoint history shell records only",
+      "validation": "Validate raw checkpoint canonicality and checksum first; duration is an integer, not bool, nonnegative and no larger than the independently captured invocation elapsed bound in milliseconds",
+      "replacement": "Only this duration becomes integer zero; command, stdout/stderr, signal, interruption, workspace and every other number remain governed by their own exact slots. Original duration and substituted token are retained for whole-checkpoint inverse replay"
+    },
+    {
+      "kind": "checkpoint-outcome-workspace",
+      "owner": "Typed history ToolOutcome.workspace, shell.workspace and gc_state.inherited outcome workspace leaves",
+      "validation": "First validate raw checkpoint canonical envelope/state and SHA. The workspace value must lie under an independently owned capture allocation root at a slash boundary; ordinary text/data is not searched for path-like strings",
+      "replacement": "Replace only the owned workspace root/known identity components. Preserve outcome data, effects, command text, return status and foreign/relative paths; retain exact token and whole-checkpoint inverse linkage"
+    },
+    {
+      "kind": "checkpoint-derived-state-sha256",
+      "owner": "Version-2 checkpoint envelope.sha256 after admitted typed state substitutions",
+      "validation": "Original raw-state SHA must match the original envelope before any substitution, except the exact A37.corrupt-checksum/C19.corrupt-checksum fixture whose sole declared delta is a literal leading zero. Original envelope/state canonical order, lexemes and bytes are checked without repairing them",
+      "replacement": "SHA-256 of the actual substituted canonical state span; preserve the corrupt fixture's exact leading-zero delta. Never zero or mask a checksum, drop a field, or sort/reformat raw input. Record raw/substituted digest linkage and whole-checkpoint inverse proof"
+    },
+    {
+      "kind": "checkpoint-linkage-inverse",
+      "owner": "Complete owned version-2 checkpoint artifact after its individually registered token/base64 substitutions",
+      "validation": "Validate original canonical envelope/state and raw SHA, or check the exact named corruption delta without treating the corrupt state as valid. Build inverse spans using accumulated byte shifts and require applying them to normalized bytes to reconstruct every original artifact byte exactly",
+      "replacement": "No additional mask: this row links the full original and normalized artifact, raw/substituted state digests, checksum-valid flag, exact corruption delta and inverse_verified result. Raw replay must reproduce all inner and enclosing rows before comparison"
+    },
+    {
+      "kind": "agent-causal-correspondence",
+      "owner": "Semantic correspondence certificate for complete retained agent/root trace sources and captured HTTP request ordering in agent-enabled cases only",
+      "validation": "Actor slots derive recursively from accepted parent spawn-call chains. Preserve per-actor trace sequence and link each captured generative request exactly to retained api.attempt.started body bytes; logical slots are actor slot, witnessed RUN_n, positive Step and attempt. Source list is unique and HTTP source order is a complete permutation; raw replay reconstructs the same certificate",
+      "replacement": "Only cross-agent asynchronous source/capture interleaving is projected into the certified causal order. No event/body/output/effect is dropped or merged; per-source event order, multiplicity and literal normalized bytes remain exact. Committed certificates retain logical slots/counts, not raw paths or identities"
     }
   ],
   "semantic_allowlist": {

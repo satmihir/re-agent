@@ -40,25 +40,37 @@ class SampleTests(unittest.TestCase):
                 bundle('W00.example', {name: b'x'}, {name: 'B'})
 
     def test_every_implemented_family_has_one_to_three_complete_samples(self):
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform):
+                self.check_platform_samples(platform)
+
+    def check_platform_samples(self, platform):
         suite = Path(__file__).resolve().parent
         inventory = json.loads((suite / 'inventory.json').read_bytes())
         cases = {case['id']: case for case in inventory['cases']}
-        index = json.loads((suite / 'samples/index.json').read_bytes())
-        locks = unpack(json.loads((suite / 'expected/darwin.json').read_bytes()))
+        directory = suite / 'samples' / ('linux' if platform == 'linux' else '')
+        index = json.loads((directory / 'index.json').read_bytes())
+        locks = unpack(json.loads((suite / ('expected/' + platform + '.json')).read_bytes()))
         selected = {row['id'] for row in index['cases']}
         self.assertEqual(len(selected), len(index['cases']))
-        # New selections are checked against live cases below, then frozen by parity-golden.
-        self.assertEqual(selected, set(SELECTIONS) & cases.keys())
-        self.assertEqual({case_id[:3] for case_id in selected}, {case_id[:3] for case_id, case in cases.items() if not case['pending']})
+        # Each platform owns its captured coverage; Linux cannot add Darwin evidence.
+        self.assertEqual(selected, set(SELECTIONS) & locks.keys())
+        captured_families = {case_id[:3] for case_id in locks}
+        self.assertEqual({case_id[:3] for case_id in selected}, captured_families)
+        runnable = {case_id for case_id, case in cases.items() if not case['pending']}
+        self.assertLessEqual(locks.keys(), runnable)
         self.assertTrue(all(1 <= count <= 3 for count in Counter(case_id[:3] for case_id in selected).values()))
         families = {case_id[:3] for case_id in cases}
         pending_families = {family for family in families
                             if all(case['pending'] for case_id, case in cases.items()
                                    if case_id.startswith(family + '.'))}
-        self.assertEqual(set(index['pending_families']), pending_families)
+        if locks.keys() == runnable:
+            self.assertEqual(set(index['pending_families']), pending_families)
+        else:
+            self.assertLessEqual(set(index['pending_families']), families - captured_families)
         for row in index['cases']:
             with self.subTest(case=row['id']):
-                raw = (suite / 'samples' / row['path']).read_bytes()
+                raw = (directory / row['path']).read_bytes()
                 self.assertEqual(hashlib.sha256(raw).hexdigest(), row['bundle_sha256'])
                 with tarfile.open(fileobj=io.BytesIO(gzip.decompress(raw))) as archive:
                     metadata = json.load(archive.extractfile('case.json'))
@@ -76,9 +88,9 @@ class SampleTests(unittest.TestCase):
                 # Python 3.11.5's mtime=0 fast path inherits zlib's platform byte.
                 headers = {'darwin': b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x13',
                            'linux': b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03'}
-                self.assertEqual(raw[:10], headers['darwin'])
+                self.assertEqual(raw[:10], headers[platform])
                 self.assertEqual(rebuilt[:10], headers[current_platform().split('/')[0]])
-                self.assertEqual(raw, headers['darwin'] + rebuilt[10:])
+                self.assertEqual(raw, headers[platform] + rebuilt[10:])
                 self.assertEqual(locks[row['id']]['artifacts'], [
                     [name, len(data), hashlib.sha256(data).hexdigest(), metadata['artifact_policies'][name]]
                     for name, data in sorted(artifacts.items())])

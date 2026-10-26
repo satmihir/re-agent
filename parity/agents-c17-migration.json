@@ -1,0 +1,61 @@
+{
+  "status": "inverse-proven Linux migration republished through permanent guards; user reports Darwin execution passed, with local Mac publication still required",
+  "evidence": "/tmp/reagent-parity-agents-proof/recovered-lane",
+  "method": "approved_shell_timing_updates replay-validates raw evidence, requires identical normalized artifact descriptors and normalized_sha256, and finds exactly one omission mask among the eight masks of the three approved duration-ms sites that reconstructs the exact old canonical case hash",
+  "sites": [
+    ["cache-input", ["history", 0, "shell", "duration_ms"], "duration-ms", 1],
+    ["trace-1.jsonl", ["data", "history", 0, "shell", "duration_ms"], "duration-ms", 1],
+    ["trace-1.jsonl", ["data", "initial_history", 0, "shell", "duration_ms"], "duration-ms", 1]
+  ],
+  "old_ledger_sha256": "d0bc57c1715b45d015daea1471dad599cb06867c4bea1830a10c558dfc96c2ce",
+  "new_ledger_sha256": "241335583185118f78e7b5e0fc1c27344ea676f2f52846abda51678e378c5d46",
+  "updates": [
+    {
+      "id": "C17.nonzero",
+      "old_case_sha256": "358a9cdd6b4268dfbf38c9b9cbae75007be1d4775bca6fee461be38c6c11421e",
+      "new_case_sha256": "7066eddbcec5470d65c18d0a4254892393c4ef320249cb2949d8554bbf62bfe2",
+      "inverse_case_sha256": "358a9cdd6b4268dfbf38c9b9cbae75007be1d4775bca6fee461be38c6c11421e",
+      "normalized_sha256": "93b46289bad72bfd8a14ed47845aa645071562fedadaa34d68963db625082227",
+      "omitted_sites_for_inverse": [0, 1, 2]
+    },
+    {
+      "id": "C17.plan",
+      "old_case_sha256": "a27f2281633633fbf982faeb231a995eb4ffc7e2f0d97d07e2e025e364d5612c",
+      "new_case_sha256": "9f5e690e8f9b5878879f3192f89d45f9f4bb42458091ce045e1009625f1240d5",
+      "inverse_case_sha256": "a27f2281633633fbf982faeb231a995eb4ffc7e2f0d97d07e2e025e364d5612c",
+      "normalized_sha256": "1a5f8894f088b0d9886321cf3d5253946880d8a1a5db958a90a5a972cc7f38e1",
+      "omitted_sites_for_inverse": [0, 1, 2]
+    },
+    {
+      "id": "C17.readonly",
+      "old_case_sha256": "6f837471c1292d3b85887570c09bea93ea77381c643ebe4341e13e688e9dd655",
+      "new_case_sha256": "31bb6c4f8da992a9c3b4b7d502c4ed2ba8b9b64011ad4b79bbdd5dee532b7609",
+      "inverse_case_sha256": "6f837471c1292d3b85887570c09bea93ea77381c643ebe4341e13e688e9dd655",
+      "normalized_sha256": "55d930161d123e3fe933e47167ac769883b1c506cba72fb1e6b6a4aff3ab4b45",
+      "omitted_sites_for_inverse": [0, 1, 2]
+    },
+    {
+      "id": "C17.truncated",
+      "old_case_sha256": "b508ad41036788e5db8dd36f0df5d80cc15337a5df0c99f8c41a3af4780db232",
+      "new_case_sha256": "96d254f6f1a15c8203a9d3abcc95910b5c676bd1141a001d575b91e50d115fef",
+      "inverse_case_sha256": "b508ad41036788e5db8dd36f0df5d80cc15337a5df0c99f8c41a3af4780db232",
+      "normalized_sha256": "36dd8526e310c0ccf488b83497e173726f46218b5213710d7209dd37d7f88d6f",
+      "omitted_sites_for_inverse": [0, 1, 2]
+    },
+    {
+      "id": "C17.utf8",
+      "old_case_sha256": "0b5d03484dca776c2582fc362b84b50dfb02d3b12561b94f36fb2b0903a3870a",
+      "new_case_sha256": "2c3b0a981a90aa1bdd5c7ea2bd76f9964fc1d220e9613a093cbcfd34f0159444",
+      "inverse_case_sha256": "0b5d03484dca776c2582fc362b84b50dfb02d3b12561b94f36fb2b0903a3870a",
+      "normalized_sha256": "a2e9f5a728dde01b5a0ed6a366eb8751af48ee769a693274822e0d47de017f92",
+      "omitted_sites_for_inverse": [0, 1, 2]
+    }
+  ],
+  "unchanged_case_sha256": {
+    "C17.empty": "8f92eaa2944454a9e466b157fba7fc10ec481db0ebb00b030918d240c5463616",
+    "C17.plan-text": "3b131782705cd1b144d826e9e0c469aa10092ad3fa9ae98e9f604e39d3bdc405",
+    "C17.success": "9842d47932b2859f68e163bdfdc0bee2de8b26d37d0e41bac798c53a4dbb3fb1"
+  },
+  "all_eight_normalized_artifacts_unchanged": true,
+  "darwin": "unchanged locally; user's c61b919 capture passed every case; the permanent shell and exec guards must complete the Mac publication"
+}

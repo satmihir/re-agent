@@ -131,7 +131,7 @@ class Provider:
         return "http://127.0.0.1:%d" % self._server.server_port
 
     def expect(self, path, response, marker=None, model=None):
-        """Append an attempt to a path/marker/model logical request script."""
+        """Append an attempt; callable markers run under the matcher lock and must not block."""
         if not isinstance(response, Response):
             response = Response(response)
         with self._condition:

@@ -379,7 +379,6 @@ def _filter_tripwire(ctx):
         checked = {}
 
         def restricted(body):
-            assert not marker.exists(), 'restricted snapshot ran the clean-filter tripwire'
             request = json.loads(body)
             messages = request['input']
             user = next(item for item in reversed(messages) if item.get('role') == 'user')

@@ -220,8 +220,11 @@ class Context:
                         raise HarnessError("Context owns --workspace")
                     if name != "--workspace" and not supplied[name].is_relative_to(self.artifacts):
                         raise HarnessError("trace destinations must be inside artifacts")
-            if cli_workspace is not True and (self.case is None or not self.case.id.startswith(('C05.', 'C07.'))):
-                raise HarnessError('CLI workspace overrides belong only to C05/C07 fixtures')
+            resume_without_workspace = (cli_workspace is None and args[:2] == ['chat', '--resume']
+                                        and len(args) >= 3 and re.fullmatch('[0-9a-f]{16}', args[2]))
+            if (cli_workspace is not True and not resume_without_workspace
+                    and (self.case is None or not self.case.id.startswith(('C05.', 'C07.')))):
+                raise HarnessError('CLI workspace overrides belong only to C05/C07 fixtures or checkpoint resume')
             if cli_workspace not in (True, None, '.', '/'):
                 destination = Path(cli_workspace)
                 if not destination.is_absolute() or not destination.is_relative_to(self.root):
@@ -451,6 +454,16 @@ def collect_cases():
     cases = list(collect()) + cli.collect()
     for module in (tools_arguments, tools_files, tools_exec, tools_git, tools_workspace):
         cases.extend(module.collect())
+    from parity.cases import agents_context, agents_effects, agents_checkpoints
+    for module in (agents_context, agents_effects, agents_checkpoints):
+        replacements = module.dependency_cases()
+        if not isinstance(replacements, dict):
+            replacements = {case.id: case for case in replacements}
+        unknown = replacements.keys() - {case.id for case in cases}
+        if unknown:
+            raise HarnessError('agent dependency replacement has no existing leaf: ' + ', '.join(sorted(unknown)))
+        cases = [replacements.get(case.id, case) for case in cases]
+        cases.extend(module.collect())
     ids = [case.id for case in cases]
     if len(set(ids)) != len(ids):
         raise HarnessError("duplicate case IDs")
@@ -504,14 +517,14 @@ def select_cases(cases, selections=(), areas=()):
     return selected
 
 
-def run_case(case_id, binary, root, artifacts, coverage=None):
+def run_case(case_id, binary, root, artifacts, coverage=None, reference_binary=None):
     """Keep a dynamically promoted machine workload gate through execution and cleanup."""
     from parity.capture_lock import CaseWorkload
     with CaseWorkload() as workload:
-        return _run_case(case_id, binary, root, artifacts, coverage, workload)
+        return _run_case(case_id, binary, root, artifacts, coverage, workload, reference_binary)
 
 
-def _run_case(case_id, binary, root, artifacts, coverage, workload):
+def _run_case(case_id, binary, root, artifacts, coverage, workload, reference_binary=None):
     from parity import observe
     case = next(case for case in collect_cases() if case.id == case_id)
     if case.pending or sys.platform not in case.platforms:
@@ -522,6 +535,7 @@ def _run_case(case_id, binary, root, artifacts, coverage, workload):
     try:
         os.umask(0o022)
         context = Context(binary, root, artifacts, case=case, coverage=coverage)
+        context.reference_binary = Path(reference_binary or binary).resolve()
         context._workload = workload
         if case.exclusive:
             context.require_exclusive()
@@ -541,7 +555,8 @@ def _run_case(case_id, binary, root, artifacts, coverage, workload):
                                    if key in item} for item in context.invocations],
                   "traces": [str(path.relative_to(context.artifacts)) for path in context.trace_paths],
                   "requests": len(context._server.requests) if context._server else 0}
-        if case.area == "tools":
+        from parity.observe_tools_exec import owns_exec
+        if owns_exec(case.id):
             from parity.observe_tools_exec import ALLOW_ENV
             for bounds, item in zip(replay["invocations"], context.invocations):
                 bounds["tool_env"] = {key: item["env"][key] for key in ALLOW_ENV if key in item["env"]}
@@ -603,9 +618,12 @@ def _run_case(case_id, binary, root, artifacts, coverage, workload):
 
 
 def execute_case(case_id, binary, root, artifacts, coverage=None, golden=None, inventory_error=None, keep_artifacts=False):
-    """Compare ordinary candidates inside workers, returning no artifact byte payloads."""
-    result = run_case(case_id, binary, root, artifacts, coverage)
+    """Compare candidates inside workers and retain complete per-case monotonic timings."""
+    started = time.monotonic()
+    reference_binary = str(Path(golden) / 'reference') if golden is not None else None
+    result = run_case(case_id, binary, root, artifacts, coverage, reference_binary)
     if golden is None:
+        result['duration_seconds'] = round(time.monotonic() - started, 6)
         return result
     if result["status"] == "passed":
         from parity.observe import compare
@@ -620,6 +638,7 @@ def execute_case(case_id, binary, root, artifacts, coverage=None, golden=None, i
     result.pop("artifacts", None)
     if result["status"] == "passed" and not keep_artifacts and Path(artifacts).exists():
         shutil.rmtree(artifacts)
+    result['duration_seconds'] = round(time.monotonic() - started, 6)
     return result
 
 
@@ -733,9 +752,9 @@ def replay_case(raw, replay):
                 invocation['cli_oversized_probe'] = invocations[0]
                 invocation['cli_oversized_prompt'] = raw['cli-prompt.bytes']
             if "tool_env" in bounds:
-                from parity.observe_tools_exec import ALLOW_ENV
+                from parity.observe_tools_exec import ALLOW_ENV, owns_exec
                 env = bounds["tool_env"]
-                if (not Path(root).name.startswith("T") or not isinstance(env, dict)
+                if (not owns_exec(Path(root).name) or not isinstance(env, dict)
                         or env.keys() - set(ALLOW_ENV)
                         or any(not isinstance(value, str) for value in env.values())):
                     raise HarnessError("invalid tool invocation environment witness")
@@ -774,7 +793,10 @@ def replay_case(raw, replay):
         for name in replay["traces"]:
             artifact_name(name)
             if not raw[name] or not raw[name].endswith(b"\n"):
-                raise HarnessError("empty or truncated raw trace")
+                from parity.observe_trace_failures import existing_literal
+                allocation = SimpleNamespace(root=Path(root), artifacts=directory)
+                if not existing_literal(allocation, directory / name, raw[name]):
+                    raise HarnessError("empty or truncated raw trace")
             traces.append(directory / name)
         if len(set(traces)) != len(traces):
             raise HarnessError("duplicate replay traces")
@@ -849,6 +871,17 @@ def account_raw(raw, normalized, policies, replay):
             raise HarnessError('missing cancelled-exec executable witness')
         # replay_case has already bound this configuration to its exact exec result.
         accounted[name] = 'N'
+    from parity.observe_checkpoint_artifacts import owns_artifact as checkpoint_artifact
+    for name in raw:
+        if checkpoint_artifact(name):
+            if name not in normalized or policies.get(name) not in ('B', 'N'):
+                raise HarnessError('missing typed checkpoint artifact: ' + name)
+            accounted[name] = policies[name]
+    projection = 'agents-checkpoints/admission-sharing-projection.json'
+    if projection in raw and 'retained/' + projection in normalized:
+        if policies.get('retained/' + projection) != 'N':
+            raise HarnessError('sharing projection lacks its typed Workspace certificate')
+        accounted[projection] = 'N'
     from parity.observe_tools import ARTIFACTS
     for name in ARTIFACTS & raw.keys() & normalized.keys():
         accounted[name] = policies[name]

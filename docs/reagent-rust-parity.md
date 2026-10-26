@@ -519,11 +519,10 @@ platforms rather than counting proxy tests twice; W53 covers the new env schema.
 
 #### Audited wire leaf inventory
 
-Counts below come from `parity.cases.wire.collect()` at the pinned reference.
-“Implemented” means a runnable assertion fixture exists, not that its golden
-comparison, repeatability or Linux run has passed. “Mixed” names every pending
-leaf; W13 is wholly pending. No wire family is silently omitted. The case-module
-runnable totals are input 1,191, decode 544, routing 315 and endpoints 695.
+Counts below come from the shared `parity.run.collect_cases()` inventory at the
+pinned reference, including area-4 replacements. “Implemented” means a runnable
+assertion fixture exists, not overall-suite approval or repeatability. All 2,761
+wire leaves are now runnable; no wire family is silently omitted.
 All named clauses above were audited against source; the finite stable-ID
 inventory is not unrestricted Cartesian exhaustion.
 
@@ -534,11 +533,15 @@ python3 -m unittest parity.manifest_test
 ```
 
 `--list` prints every stable leaf ID and its pending reason without a binary or
-network request. `parity/manifest.json` points to the complete committed inventory
-at `parity/inventory.json`; inventory presence is not a claim that capture is complete.
-Its independently reproducible metadata SHA-256 is recorded in the manifest.
+network request. Area-4 retained raw replay published coherent manifest/inventory,
+Linux locks and samples; Darwin's existing bytes remain unchanged. The comparison
+repair passed 34/34 targeted leaves, one full Linux run (4,111 passed, 29 pending),
+mutations 31/34 and three requested repeat rounds at 12 jobs. See
+`parity/agents-comparison-repair.md` for exact proof, negative tests and retained
+raw evidence; this is not final whole-suite coverage approval.
+The live declarations' reproducible metadata SHA-256 is recorded in the manifest.
 The digest covers the ID-sorted array of `id`, `description`, `comparison`, `slow`,
-`pending` and `platforms` (in their declared order), serialized as UTF-8
+`pending`, `platforms` (in their declared order) and `exclusive`, serialized as UTF-8
 `json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(',', ':'))`
 without a final newline; `parity/manifest_test.py` recomputes it from `collect()`.
 The digest is distinct from the suite-source and eventual golden-tree digests.
@@ -554,10 +557,10 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W07 | 36 | 36 | Implemented |
 | W08 | 48 | 48 | Implemented |
 | W09 | 18 | 18 | Implemented |
-| W10 | 13 | 12 | Mixed: `W10.source` |
-| W11 | 23 | 22 | Mixed: `W11.roster-change` |
+| W10 | 13 | 13 | Implemented |
+| W11 | 23 | 23 | Implemented |
 | W12 | 4 | 4 | Implemented |
-| W13 | 4 | 0 | Pending: `W13.four-point-ceiling`, `W13.native-fork`, `W13.nested-fork`, `W13.subsequent-child` |
+| W13 | 4 | 4 | Implemented |
 | W14 | 3 | 3 | Implemented |
 | W15 | 2 | 2 | Implemented |
 | W16 | 4 | 4 | Implemented |
@@ -568,7 +571,7 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W21 | 13 | 13 | Implemented |
 | W22 | 9 | 9 | Implemented |
 | W23 | 32 | 32 | Implemented |
-| W24 | 82 | 81 | Mixed: `W24.subscription-checkpoint-resume` |
+| W24 | 82 | 82 | Implemented |
 | W25 | 15 | 15 | Implemented |
 | W26 | 58 | 58 | Implemented |
 | W27 | 39 | 39 | Implemented |
@@ -583,7 +586,7 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W36 | 3 | 3 | Implemented |
 | W37 | 7 | 7 | Implemented |
 | W38 | 48 | 48 | Implemented |
-| W39 | 14 | 13 | Mixed: `W39.agent` |
+| W39 | 14 | 14 | Implemented |
 | W40 | 9 | 9 | Implemented |
 | W41 | 71 | 71 | Implemented |
 | W42 | 25 | 25 | Implemented |
@@ -591,20 +594,19 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W44 | 13 | 13 | Implemented |
 | W45 | 5 | 5 | Implemented |
 | W46 | 2 | 2 | Implemented |
-| W47 | 3 | 2 | Mixed: `W47.agent` |
+| W47 | 3 | 3 | Implemented |
 | W48 | 2 | 2 | Implemented |
 | W49 | 6 | 6 | Implemented |
 | W50 | 9 | 9 | Implemented, including the area-3 PTY picker |
 | W51 | 7 | 7 | Implemented |
-| W52 | 20 | 18 | Mixed: `W52.gc`, `W52.resume` |
-| W53 | 414 | 412 | Mixed: `W53.propagation.child`, `W53.propagation.nested-child` |
+| W52 | 20 | 20 | Implemented |
+| W53 | 414 | 414 | Implemented |
 | W54 | 213 | 213 | Implemented |
 
-All **13 pending dependencies** are later-area fixtures, not standalone wire
-clauses left unaudited; their exact executable reasons are in the manifest and
-`--list`. They remain required work, not accepted deviations or green skips.
+Area 4 completes all **13 formerly pending wire dependencies** below.
+Their replacements execute real agent/checkpoint exchanges rather than green skips.
 
-| Pending stable ID | Required later-area fixture |
+| Completed stable ID | Executed area-4 fixture |
 | --- | --- |
 | `W10.source` | Agents: synthetic agent-source Entry in a native child prefix |
 | `W11.roster-change` | Agents: deterministic admitted-child roster lifecycle |
@@ -622,9 +624,9 @@ clauses left unaudited; their exact executable reasons are in the manifest and
 
 ### Tools and workspace — T01–T60 (60 families)
 
-After area 3 completes human-consent and grant-lifetime PTY dependencies, tools
-retain **683 leaves: 671 runnable, 12 explicitly pending**, against the
-unchanged `14944a6b` pin. Argument/error tables, file effects, process liveness,
+After area 4, tools retain **683 leaves: 682 runnable, one explicitly pending**,
+against the unchanged `60fda0d3` pin. `T36.before-start` names the exact
+CLI-inaccessible pre-dispatch cancellation barrier; all agent dependencies run. Argument/error tables, file effects, process liveness,
 Myers patches and real local Git postconditions are independently asserted.
 Pending cases name C16, A20/A21, A31/A32 or the later pre-dispatch cancellation
 barrier; none is an unimplemented tools-family waiver. APFS rejects invalid UTF-8
@@ -794,7 +796,7 @@ Evidence: `tool_agents.go:65–181`, `agent_context.go:27–130`,
 | A25 | /review levels/default/bad/blocked/agents off | Prompt injection as ordinary turn, invalid no I/O; complete embedded prompt bytes N |
 | A26 | Script fresh finders/verifier/paging/probe lifecycle, read-only/plan | Harness can carry policy; prompt independence/budgets/disclosure/cleanup bytes, tool effects N/S; no judgment claim |
 | A27 | Manual summary text/tool/refusal/empty/large/provider failure/cancel | Transactional history, block/read-digest/GC clearing only on success; retained call IDs; following turn; N/S |
-| A28 | Chat60% warning/80% preturn and in-run40%; estimate versus measured input | Summary extra step/usage, original task+Summary, spare-step/8-summary/reserve16k/size skip, failure fallback/cancel; N/S |
+| A28 | Chat60% warning/80% preturn and in-run40%; estimate versus measured input | Summary extra step/usage, original task+Summary, spare-step/healthy summaries beyond eight and thirty/reserve16k/size skip, failure fallback/cancel; N/S |
 | A29 | GC off/on; redundant/stale reads/repeated exec; recent3 steps/errors/unknown/agent results | Eligible original IDs only, protected records untouched, before compaction; N/S |
 | A30 | Floor6.25%/share15%/interval16, break-even/near-compaction, request count16–48 | Independent arithmetic and trigger/event bytes, full next-request rebuild minus fixed values, pass prevents compaction where applicable; N/S |
 | A31 | Later request placeholders, earlier traces/history intact; recall unchanged/stale/missing | Request-view-only GC, recorded original returned/effect none, stale digest note/no authorization; N/B original |
@@ -807,6 +809,13 @@ Evidence: `tool_agents.go:65–181`, `agent_context.go:27–130`,
 | A38 | History sharing/model switch size exactly at encoded/window limits, large opaque reasoning | Byte/estimated-token admission uses nonreasoning calibration and reserve, no child published on fail; N/S |
 | A39 | Reverse child release order then root wait for both; independently ready boundaries; terminal no background wake | After wait publication witness, lexical child-ID delivery order and per-child queue order exactly once N; truly unconstrained ready subsets causal S (§4) |
 | A40 | Fork/reset/compact/resume call IDs plus file mutation and recalled outcomes | No replay after compact/switch/resume; reset's deliberate ledger clearing; histories/digests/GC restrictions consistent; N/S |
+
+`A28.inrun-eight-summary-bound` retains its historical ID but follows the Go
+pin: healthy in-run summaries have no count-only ceiling. The executable fixture
+schedules 31 successful summaries in one Run, including continuation after eight
+and thirty, with controlled usage and a pre-pinned step limit. This matches the
+intentional policy cases in `context_gc_policy_test.go:96–97`; step, admission,
+reserve and failure guards still apply (`run_compact.go:23–67,119–156`).
 
 `/review` budgets/independence are embedded instructions, **not runtime enforced**
 (`review.txt:77–87`). Compare the complete prompt by level and executable

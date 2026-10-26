@@ -238,7 +238,7 @@ def empty_switch_source(raw, data):
 
 
 class Derived:
-    def __init__(self, normal, traces, captures, invocations=()):
+    def __init__(self, normal, traces, captures, invocations=(), observations=None):
         self.normal = normal
         self.events = [lex(line).value for _, line in traces]
         self.invocations = invocations
@@ -325,7 +325,8 @@ class Derived:
                 fields['request_bytes'] = admission_size(canonical)
             if event['type'] == 'model.switch.failed' and 'request_bytes' in data:
                 from parity.observe_admission import failed_admission_fields
-                admission = failed_admission_fields(event, traces, codec='direct')
+                admission = failed_admission_fields(event, traces, codec='direct',
+                                                     captures=captures, observations=observations)
                 source, handoff, guard = admission['source'], admission['handoff'], admission['guard']
                 if source is None:
                     if guard is None:
