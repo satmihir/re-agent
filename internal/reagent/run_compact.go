@@ -11,9 +11,17 @@ const (
 	inRunCompactMinShrink = 0.15
 	inRunCompactCooldown  = 2
 	inRunCompactFailures  = 3
+	// Models overshoot a stated byte budget by about 10-25%, so ask below the
+	// hard handoff limit; each shortening request asks for less again.
+	inRunCompactTargetBytes = 24 << 10
+	inRunCompactShortenings = 2
 )
 
-var inRunCompactFocus = fmt.Sprintf("Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls. Keep the summary within %d bytes (UTF-8); drop transcript detail already captured in files or checkpoints first.", MaxResultBytes)
+var inRunCompactFocus = compactFocus(inRunCompactTargetBytes)
+
+func compactFocus(target int) string {
+	return fmt.Sprintf("Keep the current task and constraints, stage, unresolved findings or uncertain effects, exact artifact/checkpoint references, verification evidence and remaining work. Do not suggest repeating completed tool calls. Keep the summary within %d bytes (UTF-8); drop transcript detail already captured in files or checkpoints first.", target)
+}
 
 // compactWithinRun acts only at a settled pre-request boundary (v0 §10.4).
 func (r *Run) compactWithinRun(ctx context.Context) (RunStatus, string) {
@@ -67,7 +75,7 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 		return skip("the summary request cannot fit with 16,000 tokens reserved for a handoff and output", false)
 	}
 	var text string
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt <= inRunCompactShortenings; attempt++ {
 		r.steps++
 		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 			r.persistenceErr = err
@@ -104,12 +112,16 @@ func (r *Run) compactWithinRunAfterGC(ctx context.Context, gcRan bool) (RunStatu
 			break
 		}
 		reason := fmt.Sprintf("within-run summary exceeds the %d byte handoff limit", MaxResultBytes)
-		if attempt == 0 && (r.cfg.MaxSteps == 0 || r.steps+2 <= r.cfg.MaxSteps) {
-			focus := fmt.Sprintf("Shorten the existing %d byte summary to at most %d bytes (UTF-8). %s", len(text), MaxResultBytes, inRunCompactFocus)
+		if attempt < inRunCompactShortenings && (r.cfg.MaxSteps == 0 || r.steps+2 <= r.cfg.MaxSteps) {
+			target := inRunCompactTargetBytes >> attempt
+			focus := fmt.Sprintf("Shorten the existing %d byte summary to at most %d bytes (UTF-8); the hard limit is %d bytes. %s", len(text), target, MaxResultBytes, compactFocus(target))
 			scope.Step = r.steps + 1
 			req = summaryRequest(r.cfg, scope, []Entry{{Kind: EntrySummary, Summary: &Summary{Text: text}}}, focus)
 			shortenSize, err := admissionRequestBytes(r.cfg, req)
 			if err == nil && math.Ceil(float64(shortenSize)*rate)+16_000 <= float64(r.window) {
+				r.trace.Write("compaction.shorten", r.steps, map[string]any{
+					"summary_bytes": len(text), "target_bytes": target, "limit_bytes": MaxResultBytes, "shortening": attempt + 1,
+				})
 				continue
 			}
 		}
