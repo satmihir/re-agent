@@ -198,7 +198,7 @@ def verify_cache(lane, suite, manifest, cases, lock, jobs=4, only=None):
     """
     run.verify_inventory(lane, cases, manifest)
     expected = lock["cases"]
-    actual = {path.name for path in lane.iterdir()} - {"inventory.json", "cache.json", "reference", STAMP}
+    actual = {path.name for path in lane.iterdir()} - {"inventory.json", "cache.json", "reference", STAMP, "repin-receipt.json"}
     check_ids(actual, expected)
     selected = sorted(expected) if only is None else sorted(set(only) & set(expected))
     with ProcessPoolExecutor(max_workers=max(jobs, run.replay_jobs())) as pool:
@@ -218,8 +218,6 @@ def capture_case(case_id, binary, root, artifacts, destination):
     if result["status"] == "passed":
         run.freeze_case(Path(artifacts), Path(destination), result["artifacts"], result["artifact_policies"])
     result.pop("artifacts", None)
-    if result["status"] == "passed" and Path(artifacts).exists():
-        shutil.rmtree(artifacts)
     return result
 
 
@@ -278,8 +276,25 @@ def update_oracle(suite, manifest, lane, cases, jobs=4):
     return lock
 
 
+def _prepared_manifest(manifest, update, suite):
+    """Admit a prepared capture identity without publishing readiness before replay."""
+    selected = reference_identity.select(manifest, capture=update)
+    prepared = json.loads(json.dumps(manifest))
+    if update and selected.get('capture_status') == 'required':
+        previous_path = Path(suite) / selected['normalized_lock']
+        if previous_path.exists():
+            previous = json.loads(previous_path.read_bytes())['reference_identity']
+            if (previous['reference_commit'] != selected['reference_commit']
+                    and previous['reference_binary_sha256'] == selected['reference_binary_sha256']):
+                raise run.HarnessError('Darwin capture required: prepare the new platform binary SHA-256')
+        prepared['platforms'][selected['reference_platform']]['capture_status'] = 'ready'
+    return prepared
+
+
 def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
     """Capture into staging and publish only a complete, replay-verified reference lane."""
+    manifest_before_capture = manifest
+    manifest = _prepared_manifest(manifest, update, suite)
     lane = guard_cache(cache_path(manifest), manifest)
     lane.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix=".parity-golden-", dir=lane.parent) as temporary:
@@ -295,6 +310,11 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
                     lambda case: (case.id, str(binary), str(working / case.id),
                                   str(working / "artifacts" / case.id), str(staging / case.id)),
                     jobs, ProcessPoolExecutor)
+                retained = lane.parent / ('capture-' + str(time.time_ns()))
+                retained.mkdir()
+                (retained / 'report.json').write_text(json.dumps({'results': results}, indent=2) + '\n')
+                if (working / 'artifacts').exists():
+                    shutil.copytree(working / 'artifacts', retained / 'artifacts', symlinks=True)
                 if not run.accepted_outcomes(cases, results, "passed"):
                     failures = [result for result in results if result["status"] != "passed"]
                     raise run.HarnessError(json.dumps(failures))
@@ -319,16 +339,19 @@ def regenerate(suite, manifest, cases, lock, jobs=4, update=False):
             raise run.HarnessError("reference verification failed; evidence %s: %s" % (failed, exc)) from exc
         (staging / "cache.json").write_text(json.dumps(identity(suite, manifest, temp_root_width), sort_keys=True) + "\n")
         write_stamp(staging)
-        old = Path(temporary) / "previous"
+        old = lane.parent / ('previous-' + str(time.time_ns()))
         if lane.exists():
-            # Keep the old cache until every new case has passed replay and locks.
+            # Retain superseded evidence outside the temporary staging directory.
             lane.rename(old)
         try:
             staging.rename(lane)
         except Exception:
             if old.exists():
                 old.rename(lane)
+            failed = lane.parent / ('failed-' + str(time.time_ns()))
+            shutil.copytree(staging, failed, symlinks=True)
             raise
+    manifest_before_capture.update(manifest)
     return lane
 
 
@@ -386,13 +409,14 @@ def _main(argv=None):
             raise run.HarnessError("--jobs must be positive")
         suite = Path(__file__).resolve().parent
         manifest = json.loads((suite / "manifest.json").read_bytes())
+        reference_identity.guard_python(manifest)
         cases = run.collect_cases()
-        run.leaf_inventory(cases, manifest)
+        run.leaf_inventory(cases, _prepared_manifest(manifest, args.update, suite))
         lock = None if args.update else read_lock(suite, manifest)
         lane = regenerate(suite, manifest, cases, lock, args.jobs, args.update)
         print("parity-golden: %s (%.3fs)" % (lane, time.monotonic() - started))
         return 0
-    except (run.HarnessError, OSError, ValueError, KeyError, TypeError) as exc:
+    except (run.HarnessError, OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
         print("parity-golden: " + str(exc), file=sys.stderr)
         return 2
 

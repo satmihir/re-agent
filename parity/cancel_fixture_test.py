@@ -13,6 +13,28 @@ from parity.provider import Provider
 
 
 class CancelFixtureTest(unittest.TestCase):
+    def test_exactly_nine_body_cancels_are_pending_but_headers_and_timeouts_run(self):
+        cases = {case.id: case for case in wire_endpoints.collect() if case.id.startswith("W54.")}
+        kinds = ("openai", "anthropic", "proxy", "chatgpt", "jev",
+                 "auth-discovery", "auth-refresh", "auth-models", "auth-revoke")
+        body_ids = {f"W54.{kind}.cancel-body" for kind in kinds}
+        header_ids = {f"W54.{kind}.cancel" for kind in kinds}
+        self.assertEqual({identity for identity, case in cases.items() if case.pending}, body_ids)
+        self.assertEqual({identity for identity in cases if identity.endswith(".cancel")}, header_ids)
+        dependency = ("cancel-during-body needs client-side header-receipt observability "
+                      "(no trace event at this pin; server flush can’t prove receipt)")
+        for identity, case in cases.items():
+            with self.subTest(case=identity):
+                if identity in body_ids:
+                    self.assertIsNone(case.run)
+                    expected = dependency
+                    if identity == "W54.jev.cancel-body":
+                        expected += "; cancel timing otherwise races router_http_status 200/0"
+                    self.assertEqual(case.pending, expected)
+                else:
+                    self.assertIsNone(case.pending)
+                    self.assertTrue(callable(case.run))
+
     def test_cancelled_summary_stays_held_through_following_turn_and_teardown(self):
         cases = agents_checkpoints.dependency_cases()
         cases.update({case.id: case for case in agents_checkpoints.collect()})

@@ -44,7 +44,9 @@ def _stamp(event):
 def slots(ctx, invocation, prefix, raw_printed_text, traces, columns):
     """Return character slots only after complete field and lifecycle certification."""
     identity = ctx.case.id if getattr(ctx, 'case', None) else Path(ctx.root).name
-    if identity not in ('T23.human-consent', 'T26.lifetime'):
+    consent = identity in ('C44.workspace-allow', 'C44.workspace-deny', 'C44.workspace-escape',
+                           'C44.workspace-ctrl-c', 'C44.workspace-ctrl-d')
+    if identity not in ('T23.human-consent', 'T26.lifetime') and not consent:
         return []
     root = str(ctx.root)
     assert root.isascii() and root.isprintable() and len(root) >= len('<ROOT>')
@@ -66,6 +68,8 @@ def slots(ctx, invocation, prefix, raw_printed_text, traces, columns):
     assert len({key(e) for e in starts}) == len(starts), 'duplicate workspace terminal start'
     assert len({key(e) for e in finishes}) == len(finishes), 'duplicate workspace terminal finish'
     assert {key(e) for e in starts} == {key(e) for e in finishes}, 'workspace terminal lacks start/finish pair'
+    if consent:
+        assert len(starts) == 1 and starts[0]['data']['name'] == 'switch_workspace', 'C44 consent lacks one workspace switch'
     rows = [(match.start(1), match[1]) for match in _ROWS.finditer(raw_printed_text)]
     activities = [(at, line) for at, line in rows if re.match(r'  [✓✗!–] (?:request_workspace_access|switch_workspace) ', line)]
     assert len(activities) == len(starts), 'workspace terminal activity lacks unique lifecycle owner'
@@ -110,7 +114,10 @@ def slots(ctx, invocation, prefix, raw_printed_text, traces, columns):
         owners = [item for item in ctx.invocations if item['started'] <= begin <= end <= item['ended']]
         assert len(owners) == 1 and owners[0] is invocation, 'workspace terminal lacks unique invocation time owner'
         call = {field: start['data'].get(field) for field in ('call_id', 'name', 'arguments')}
-        assert accept['data'].get('blocks') == [{'kind': 'tool_call', 'call': call}], 'workspace terminal accepted call differs'
+        blocks = [{'kind': 'tool_call', 'call': call}]
+        if consent:
+            blocks.insert(0, {'kind': 'text', 'text': 'Requesting a workspace.'})
+        assert accept['data'].get('blocks') == blocks, 'workspace terminal accepted call differs'
         argument = json.loads(call['arguments'])
         assert set(argument) == {'path'} and isinstance(argument['path'], str)
         name, source = call['name'], start['data']['workspace']
@@ -122,6 +129,9 @@ def slots(ctx, invocation, prefix, raw_printed_text, traces, columns):
         assert outcome['workspace'] == source and outcome['effect'] == 'none' and outcome['truncated'] is False, 'workspace terminal outcome workspace/effect differs'
         assert type(outcome['ok']) is bool
         ok = outcome['ok']
+        if consent:
+            assert argument == {'path': root + '/consent-workspace'}, 'C44 consent target differs'
+            assert ok is (identity == 'C44.workspace-allow'), 'C44 consent choice differs'
         if ok:
             assert outcome['code'] == 'ok' and outcome['message'] == ''
             data = outcome['data']
@@ -132,14 +142,17 @@ def slots(ctx, invocation, prefix, raw_printed_text, traces, columns):
                 assert data['workspace_state']['kind'] == 'workspace_state' and data['workspace_state']['workspace'] == target, 'workspace terminal state target differs'
                 active[run] = target
         else:
-            assert outcome['code'] == 'permission_denied' and outcome['message'] == 'workspace access was not approved' and outcome['data'] is None, 'workspace terminal denial differs'
+            denial = 'workspace access was not approved'
+            if consent and identity != 'C44.workspace-deny':
+                denial = 'workspace consent was cancelled or unavailable'
+            assert outcome['code'] == 'permission_denied' and outcome['message'] == denial and outcome['data'] is None, 'workspace terminal denial differs'
         expected, field, visible = _activity(name, target if ok and name == _TOOLS[1] else argument['path'], ok, columns)
         assert activity_line == expected, 'workspace terminal activity rendering differs'
         if (target if ok and name == _TOOLS[1] else argument['path']).startswith(root):
             project(activity_at + field, target if ok and name == _TOOLS[1] else argument['path'], visible)
         segment = [(at, line) for at, line in rows if previous_end <= at < activity_at]
         locations = [(at, line) for at, line in segment if line.startswith('Location: ')]
-        assert len(locations) == int(name == _TOOLS[0] or not ok), 'workspace terminal consent field count differs'
+        assert len(locations) == int(consent or name == _TOOLS[0] or not ok), 'workspace terminal consent field count differs'
         for at, line in locations:
             assert line == 'Location: ' + json.dumps(target, ensure_ascii=False), 'workspace terminal consent target differs'
             project(at + len('Location: "'), target)

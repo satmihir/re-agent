@@ -184,15 +184,22 @@ def _edit(ctx, operation):
         "clear-screen": b"alpha omega\x0c",
     }[operation]
     ctx.server.expect("/openai/v1/responses", native_reply("Edited request received."))
+    ctx.server.expect("/openai/v1/responses", native_reply("Next ordinary turn works."))
     with native(ctx) as terminal:
         terminal.wait_prompt()
         terminal.send(keys[:-1] if operation == "clear-screen" else keys)
         terminal.wait_text(expected)
         if operation == "clear-screen":
-            before = terminal.terminal.screen()
+            assert terminal.terminal.row > 1, "Ctrl-L fixture must start below the top row"
+            terminal.snapshot("before-clear-screen")
             terminal.send(b"\x0c")
-            terminal.wait(lambda screen: screen.screen() != before
-                          and expected in "\n".join(screen.screen()), "Ctrl-L changed the input screen")
+            terminal.wait(lambda screen: screen.row == 1 and screen.col == len(expected) + 2
+                          and screen.modes[25] and screen.modes[2004]
+                          and screen.line(0) == "─" * screen.cols
+                          and screen.line(1) == "❯ " + expected
+                          and screen.line(2) == "─" * screen.cols
+                          and screen.line(3).strip().startswith("gpt-6-luna / low")
+                          and not any(screen.screen()[4:]), "Ctrl-L redraws preserved input at the top")
         terminal.snapshot("edited-input")
         terminal.send(b"\r")
         answer(terminal, "Edited request received.")
@@ -200,14 +207,18 @@ def _edit(ctx, operation):
         requests = ctx.server.requests
         assert len(requests) == 1
         inputs = requests[0].json()["input"]
-        texts = [item["text"] for entry in inputs if entry.get("role") == "user"
-                 for item in entry.get("content", []) if item.get("type") == "input_text"]
-        assert any(text == expected or text.endswith("\n" + expected) for text in texts), texts
+        users = [entry for entry in inputs if entry.get("role") == "user"]
+        assert len(users) == 1 and users[0]["content"][0] == {"type": "input_text", "text": expected}, users
+        next_turn(terminal)
+        assert len(requests) == 2
+        users = [entry for entry in requests[-1].json()["input"] if entry.get("role") == "user"]
+        assert [entry["content"][0]["text"] for entry in users] == [expected, "next question"], users
 
 
 def _history(ctx):
     ctx.server.expect("/openai/v1/responses", native_reply("First history reply."))
     ctx.server.expect("/openai/v1/responses", native_reply("Second history reply."))
+    ctx.server.expect("/openai/v1/responses", native_reply("Next ordinary turn works."))
     with native(ctx) as terminal:
         terminal.wait_prompt()
         submit(terminal, "history original")
@@ -220,7 +231,13 @@ def _history(ctx):
         answer(terminal, "Second history reply.")
         settled(terminal, "history-submitted")
         assert len(ctx.server.requests) == 2
-        assert "history original edited" in json.dumps(ctx.server.requests[-1].json())
+        for request, expected in zip(ctx.server.requests, (["history original"], ["history original", "history original edited"])):
+            users = [entry for entry in request.json()["input"] if entry.get("role") == "user"]
+            assert [entry["content"][0]["text"] for entry in users] == expected, users
+        next_turn(terminal)
+        assert len(ctx.server.requests) == 3
+        users = [entry for entry in ctx.server.requests[-1].json()["input"] if entry.get("role") == "user"]
+        assert [entry["content"][0]["text"] for entry in users] == ["history original", "history original edited", "next question"], users
 
 
 def _picker_next(ctx, terminal, model):

@@ -1,7 +1,7 @@
 # Terminal scenario reconciliation
 
-Reference: `60fda0d3f3eabc76fa11deed72aed7850532c97e` (#183).
-`bench/tty/check.py` currently declares **27**, not the historical 20, scenarios.
+Reference: `2ab234f79d1d42ba8a969ba3f4103eeeba717967` (#191/#192/#193).
+`bench/tty/check.py` currently declares **29** scenarios.
 This is the complete name crosswalk; pending cases are declared, never silently
 omitted. CLI/PTy collection is `parity.cases.cli_pty.collect()`.
 
@@ -34,13 +34,15 @@ omitted. CLI/PTy collection is `parity.cases.cli_pty.collect()`.
 | interrupt-running-command | C38: real exec readiness HTTP event, cancellation/uncertain effects, blocked next turn, reset recovery |
 | resize-while-typing | C39: retained input/cursor screenshot and unchanged submitted provider request |
 | narrow-terminal | C40: 18-column no-region input and subsequent turn |
+| ctrl-l-clears-screen | C43.clear-screen: clear/redraw at the top, exact input/caret, and following turn |
+| cancelled-typeahead-discarded | C44.typeahead-cancellation: cancelled Run and transport, no queued request, following turn |
 
 ## Added terminal coverage
 
 C41 adds model arrow/kj/Enter/numeric selection, model/effort cancellation with
 Esc/q/Ctrl-C/Ctrl-D, and plan here/fresh/keep/escape/typing-is-not-consent choices.
 C44 declares permission choices for allow/default deny/Esc/Ctrl-C/Ctrl-D and a next
-normal turn, but the entire family is stopped by the pinned cancellation defect. C41 enumerates all eight catalog model and six effort numeric choices;
+normal turn. C41 enumerates all eight catalog model and six effort numeric choices;
 C41.model-availability checks disabled Anthropic rows, ignored disabled/ninth shortcuts,
 and arrow navigation skipping all disabled rows. The picker retains unavailable rows;
 it has no text-filter or page-key behavior (`picker.go`, `region_picker.go`). The same
@@ -54,18 +56,14 @@ assertions and combining/wide-cell assertions, plus literal redirected stdout wi
 interactive input/stderr PTY. NO_COLOR intentionally retains Markdown syntax; it is
 not claimed to use the styled Markdown renderer. Intermediate progress is held on a
 provider continuation after a real listing, not a sleeping tool.
-C43 declares history recall/edit, Ctrl-A/E/K/W/L/U, Unicode and unknown escape
-sequences, but the family is stopped: Ctrl-L is decoded as `clear` without a
-handler in the pinned editor. The driver handles cursor reports and
-records every cell/style/cursor without whitespace or line deletion. C44 adds idle
-line cancellation, double Ctrl-C exit hint and Ctrl-D. The entire C44 family is
-explicitly pending after an executable probe showed queued input surviving a
-trace-confirmed cancelled run. C18 is also stopped after an editor-recovery probe
-lost the first byte of the following turn, but that observation preceded the
-mode-2004 readiness barrier: an input-handoff synchronization error is not ruled
-out, so it is not a conclusively synchronized Go-defect reproduction. The family
-has not been resumed. C43 is stopped after the missing Ctrl-L redraw. No Go fixes
-or re-pin are included.
+C43 covers history recall/edit, Ctrl-A/E/K/W/L/U, Unicode and unknown escape
+sequences. Ctrl-L must redraw the current input at the top with its caret intact.
+The driver records every cell/style/cursor without whitespace or line deletion.
+C44 adds idle line cancellation, double Ctrl-C exit hint, Ctrl-D, and a single
+cancelled-typeahead leaf, correlated with its cancelled Run and transport.
+C18 checks editor handoff and exact first-byte preservation on the next turn.
+All 28 C18/C43/C44 leaves are runnable at the new pin. No production Go changes
+are included; current execution evidence is in `repin-2ab234f7-linux.md`.
 
 ## Integration and evidence boundary
 
@@ -82,6 +80,6 @@ All snapshots preserve every cell/style/cursor, including intermediate queued in
 there are no broad screen masks. Typed normalization of volatile status fields is
 owned by terminal observation, not by these fixture predicates.
 
-Proofs and declared pending cases are recorded in `cli-acceptance.json` and the
-manifest. Pending agent/checkpoint fixtures and stopped Go-defect families are
-never counted as passed.
+Current proofs are recorded in `repin-2ab234f7-linux.md` and the manifest;
+`cli-acceptance.json` is historical. T36.before-start remains pending, never
+counted as passed. Darwin capture and acceptance pending on the Mac.

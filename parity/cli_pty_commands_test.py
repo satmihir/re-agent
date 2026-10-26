@@ -21,6 +21,39 @@ class TerminalCommandsTest(unittest.TestCase):
         self.assertTrue(all(callable(case.run) and not case.pending for case in cases))
         self.assertTrue(all(case.platforms == ('darwin', 'linux') for case in cases))
 
+    def test_reenabled_families_are_unique_and_runnable(self):
+        from collections import Counter
+        from parity.cases import cli
+        cases = cli.collect()
+        selected = [case for case in cases if case.id.startswith(('C18.', 'C43.', 'C44.'))]
+        self.assertEqual(Counter(case.id.split('.')[0] for case in selected),
+                         {'C18': 11, 'C43': 8, 'C44': 9})
+        self.assertEqual(len(selected), len({case.id for case in selected}))
+        self.assertTrue(all(callable(case.run) and not case.pending for case in selected))
+
+    def test_editor_recovery_rejects_lost_first_byte_and_changed_history(self):
+        def user(text):
+            return {'role': 'user', 'content': [{'type': 'input_text', 'text': text}]}
+        for accepted in (True, False):
+            history = [user(commands.EDIT_BYTES.decode())] if accepted else []
+            good = {'input': history + [user(commands.NEXT)]}
+            commands.assert_editor_followup(good, commands.EDIT_BYTES, accepted)
+            for change in ('first-byte', 'duplicate-byte', 'history', 'edit-command'):
+                body = copy.deepcopy(good)
+                if change == 'first-byte':
+                    body['input'][-1]['content'][0]['text'] = commands.NEXT[1:]
+                elif change == 'duplicate-byte':
+                    body['input'][-1]['content'][0]['text'] = commands.NEXT[0] + commands.NEXT
+                elif change == 'history':
+                    if accepted:
+                        body['input'].pop(0)
+                    else:
+                        body['input'].insert(0, user(commands.EDIT_BYTES.decode()))
+                else:
+                    body['input'].insert(0, user('/edit'))
+                with self.subTest(accepted=accepted, change=change), self.assertRaises(AssertionError):
+                    commands.assert_editor_followup(body, commands.EDIT_BYTES, accepted)
+
     def test_no_sleep_server_only_wait_or_screen_text_masks(self):
         tree = ast.parse(Path(commands.__file__).read_text())
         for node in ast.walk(tree):

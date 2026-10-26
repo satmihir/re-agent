@@ -31,6 +31,7 @@ SELECTIONS = {
     'C16.implement-here': 'Real plan picker and next-turn mode transition.',
     'C16.refuse-edit_file-flag': 'Plan dispatch denial preserves independently read bytes; mutation 4 catcher.',
     'C17.success': 'Human shell history, actual effects and independently matched request string.',
+    'C18.editor-visual': 'Editor handoff preserves the first byte of the following human turn.',
     'C21.context-gc': 'Dim GC notice, restored terminal status and next turn.',
     'C22.review-command': 'Review completion, invalid syntax and actual tool loop.',
     'C23.agents-live-wait': 'Live child wait and root continuation with exact delivery evidence.',
@@ -53,6 +54,8 @@ SELECTIONS = {
     'C40.narrow-terminal': 'Usable input without a full prompt region at 18 columns.',
     'C41.effort-cancel-ctrl-c': 'Picker cancellation restores exact terminal state.',
     'C42.markdown-color-48': 'Exact Markdown styled cells and wide/combining Unicode at narrow width.',
+    'C43.clear-screen': 'Ctrl-L redraws edited input at the top of the terminal.',
+    'C44.typeahead-cancellation': 'A cancelled turn discards queued typeahead before the next human turn.',
     'W01.catalog-gpt-6-sol-model': 'Catalog-backed model selection rather than an invalid-input-only sample.',
     'W02.chatgpt-explicit': 'Plan inference, stable session UUID and request-ID ownership.',
     'W03.live-key-userinfo': 'Proxy routing with credential-bearing input and redacted diagnostics.',
@@ -107,7 +110,6 @@ SELECTIONS = {
     'W52.anthropic-1-compact': 'Signed native tail and pinned system transition across compaction.',
     'W53.defaults.endpoints': 'Default endpoint diagnostics without public I/O.',
     'W53.issuer.models.password': 'Issuer catalog handling, credential redaction and allocated display-name URL normalization.',
-    'W54.anthropic.cancel-body': 'Narrow fixture-input delivery projection, preserving every Go output.',
     'W54.anthropic.progress': 'Shared transport read progress rather than timeout-only behavior.',
     'T01.list_files.array': 'Owned common decoder error envelope and unchanged workspace.',
     'T02.list_files.offset.omitted': 'Omitted numeric argument defaults.',
@@ -221,6 +223,17 @@ SELECTIONS.update({
 })
 
 
+RETIRED_SELECTIONS = {
+    'W54.anthropic.cancel-body': 'Narrow fixture-input delivery projection, preserving every Go output.',
+}
+
+# These bundles predate the pending body-cancellation scope; they are not current evidence.
+RETIRED_BUNDLES = {
+    'darwin/arm64': {'W54.anthropic.cancel-body': 'ac4f3fd58f3c6e181b330a9dc6315c7712d05256988edf2381349a0677472e33'},
+    'linux/amd64': {'W54.anthropic.cancel-body': '6f54bd003863ada7d2403e6a1c16aeff8c704179ce65e3ba2516aaac26e03cc1'},
+}
+
+
 def normalized_digest(artifacts):
     """Hash artifact names, logical lengths and normalized bytes, not raw evidence."""
     digest = hashlib.sha256()
@@ -275,6 +288,20 @@ def generated_paths(suite):
     return [str((directory / name).relative_to(suite)) for name in sorted(sample_files(directory))]
 
 
+def historical_rows(directory):
+    """Validate only explicitly pinned retired bundles, without treating them as runnable evidence."""
+    from parity.run import HarnessError
+
+    rows = []
+    for case_id, expected in sorted(RETIRED_BUNDLES[current_platform()].items()):
+        path = directory / (case_id + '.tar.gz')
+        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise HarnessError('historical sample identity violation: ' + case_id)
+        rows.append({'id': case_id, 'path': path.name, 'bundle_sha256': expected,
+                     'reason': 'Retained historical bytes; body cancellation is pending, not current reference evidence.'})
+    return rows
+
+
 def refresh_samples(lane, suite):
     """Refresh only the selected full normalized cases from replay-verified reference data."""
     from parity.run import HarnessError, load_golden, read_frozen_case
@@ -287,6 +314,9 @@ def refresh_samples(lane, suite):
     missing = sorted(set(SELECTIONS) - cases.keys())
     if missing:
         raise HarnessError('sample selection has missing cases: ' + ', '.join(missing))
+    pending = sorted(case_id for case_id in SELECTIONS if cases[case_id]['status'] != 'implemented')
+    if pending:
+        raise HarnessError('sample selections must be runnable: ' + ', '.join(pending))
     implemented = {case['id'][:3] for case in cases.values() if case['status'] == 'implemented'}
     selected = {case_id[:3] for case_id in SELECTIONS}
     if selected != implemented:
@@ -302,6 +332,9 @@ def refresh_samples(lane, suite):
     if current_platform() == 'linux/amd64':
         index['platform'] = 'linux'
         index['review'] = index['review'].replace('parity/samples/', 'parity/samples/linux/')
+    historical = historical_rows(destination)
+    if historical:
+        index['historical_cases'] = historical
     changed = []
     for case_id, reason in SELECTIONS.items():
         documents, _, _ = read_frozen_case(lane / case_id)
@@ -320,7 +353,8 @@ def refresh_samples(lane, suite):
         index['cases'].append({'id': case_id, 'description': cases[case_id]['description'], 'why': reason,
                                'path': filename, 'artifacts': len(artifacts), 'normalized_bytes': sum(map(len, artifacts.values())),
                                'normalized_sha256': normalized_digest(artifacts), 'bundle_sha256': hashlib.sha256(raw).hexdigest()})
-    expected = {'index.json', *(case_id + '.tar.gz' for case_id in SELECTIONS)}
+    expected = {'index.json', *(case_id + '.tar.gz' for case_id in SELECTIONS),
+                *(row['path'] for row in historical)}
     extra = sample_files(destination) - expected
     if extra:
         raise HarnessError('extra sample files: ' + ', '.join(sorted(extra)))
@@ -340,7 +374,11 @@ def verify_samples(lane, suite):
     rows = {row['id']: row for row in index['cases']}
     if len(rows) != len(index['cases']) or rows.keys() != SELECTIONS.keys():
         raise HarnessError('sample case inventory differs')
-    if sample_files(directory) != {'index.json', *(case_id + '.tar.gz' for case_id in SELECTIONS)}:
+    historical = historical_rows(directory)
+    if index.get('historical_cases', []) != historical:
+        raise HarnessError('historical sample inventory differs')
+    if sample_files(directory) != {'index.json', *(case_id + '.tar.gz' for case_id in SELECTIONS),
+                                   *(row['path'] for row in historical)}:
         raise HarnessError('sample file inventory differs')
     mismatched = []
     for case_id, row in rows.items():

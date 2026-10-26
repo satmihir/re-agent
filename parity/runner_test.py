@@ -1259,7 +1259,7 @@ while True: time.sleep(1)
         case = Case("W99", "fixture capture", lambda ctx: ctx.invoke(["help"]), exclusive=False)
         cases = [case] + [Case("W98.later-%02d" % index, "declared dependency", lambda _: self.fail("pending executed"), pending="requires later area", exclusive=True) for index in range(15)]
         lock = {"cases": {case.id: golden.case_lock({"exact": b"normalized"}, {"exact": "B"}, [])}}
-        with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")), patch("parity.run.__file__", str(suite / "run.py")), patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.build_reference", side_effect=lambda suite, manifest, destination, **_: shutil.copy2(self.binary, destination)), patch("parity.samples.SELECTIONS", {}), patch("parity.observe.finish", side_effect=observed), patch("parity.observe.compare") as compare, patch("parity.golden.ensure_cache", autospec=True, side_effect=lambda *_, **__: golden.cache_path(manifest)) as cache:
+        with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")), patch("parity.run.__file__", str(suite / "run.py")), patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.build_reference", side_effect=lambda suite, manifest, destination, **_: shutil.copy2(self.binary, destination)), patch("parity.samples.SELECTIONS", {}), patch("parity.samples.RETIRED_BUNDLES", {'linux/amd64': {}, 'darwin/arm64': {}}), patch("parity.observe.finish", side_effect=observed), patch("parity.observe.compare") as compare, patch("parity.golden.ensure_cache", autospec=True, side_effect=lambda *_, **__: golden.cache_path(manifest)) as cache:
             lane = golden.regenerate(suite, manifest, cases, lock, jobs=2)
             expected = lane / "W99"
             self.assertTrue((expected / "raw/invoke-001.stdout").is_file())
@@ -1356,6 +1356,38 @@ while True: time.sleep(1)
                 self.assertIn("metadata", stderr.getvalue())
                 regenerate.assert_not_called()
 
+    def test_cli_checks_harness_python_not_candidate_before_cache_or_workers(self):
+        suite = self.root / "guard-repository/parity"
+        suite.mkdir(parents=True)
+        alias = self.root / "python3"
+        alias.symlink_to(Path(sys.executable).resolve())
+        for mode in ([], ["--probe"]):
+            for state in ("alias", "wrong", "missing"):
+                with self.subTest(mode=mode, state=state):
+                    manifest = fixture_manifest()
+                    if state == "wrong":
+                        manifest["platforms"]["linux/amd64"]["python_executable"] = str(self.root / "other-python3.11")
+                    if state == "missing":
+                        del manifest["platforms"]["linux/amd64"]["python_executable"]
+                    (suite / "manifest.json").write_text(json.dumps(manifest))
+                    artifacts = self.root / ("guard-" + state + ("-probe" if mode else "-compare"))
+                    with patch("sys.platform", "linux"), patch("platform.machine", return_value="x86_64"), \
+                            patch("sys.executable", str(alias)), patch("parity.run.__file__", str(suite / "run.py")), \
+                            patch("parity.run.collect_cases", return_value=[Case("W99", "guard boundary", lambda _: None)]), \
+                            patch("parity.golden.ensure_cache", side_effect=RuntimeError("cache reached")) as cache, \
+                            patch("parity.run.schedule_cases", side_effect=RuntimeError("workers reached")) as workers, \
+                            patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                        arguments = ["--bin", str(self.binary), "--artifacts", str(artifacts)] + mode
+                        if state == "alias":
+                            with self.assertRaisesRegex(RuntimeError, "workers reached" if mode else "cache reached"):
+                                main(arguments)
+                        else:
+                            self.assertEqual(main(arguments), 2)
+                            self.assertIn("reference Python executable", stderr.getvalue())
+                            cache.assert_not_called()
+                            workers.assert_not_called()
+                            self.assertFalse(artifacts.exists())
+
     def test_obsolete_capture_cli_is_rejected_without_running_workers(self):
         with patch("parity.run.run_case") as worker, patch("parity.golden.ensure_cache", autospec=True) as cache, patch("sys.stderr", new_callable=io.StringIO) as stderr:
             with self.assertRaises(SystemExit) as rejected:
@@ -1411,7 +1443,7 @@ while True: time.sleep(1)
                 raise OSError("second freeze sentinel")
             return freeze_case(*args)
 
-        with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")), patch("parity.run.collect_cases", return_value=cases), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.build_reference", side_effect=lambda suite, manifest, destination, **_: shutil.copy2(self.binary, destination)), patch("parity.samples.SELECTIONS", {}), patch("parity.observe.finish", side_effect=observed):
+        with patch.dict(os.environ, XDG_CACHE_HOME=str(self.root / "cache")), patch("parity.run.collect_cases", return_value=cases), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.golden.build_reference", side_effect=lambda suite, manifest, destination, **_: shutil.copy2(self.binary, destination)), patch("parity.samples.SELECTIONS", {}), patch("parity.samples.RETIRED_BUNDLES", {'linux/amd64': {}, 'darwin/arm64': {}}), patch("parity.observe.finish", side_effect=observed):
             lane = golden.cache_path(manifest)
             with patch("parity.run.freeze_case", side_effect=fail_second), self.assertRaisesRegex(HarnessError, "second freeze sentinel"):
                 golden.regenerate(suite, manifest, cases, lock, jobs=1)

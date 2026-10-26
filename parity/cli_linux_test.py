@@ -23,9 +23,9 @@ class CLIPlatformTest(unittest.TestCase):
             self.assertEqual({case.id.split('.')[0] for case in cases},
                              {'C%02d' % number for number in range(1, 45)})
             self.assertTrue(all(case.platforms == ('darwin', 'linux') for case in cases))
-            stopped = [case for case in cases if case.id.startswith(('C18.', 'C43.', 'C44.'))]
-            self.assertTrue(stopped)
-            self.assertTrue(all(case.pending and 'pinned Go defect:' in case.pending for case in stopped))
+            enabled = [case for case in cases if case.id.startswith(('C18.', 'C43.', 'C44.'))]
+            self.assertEqual(len(enabled), 28)
+            self.assertTrue(all(callable(case.run) and not case.pending for case in enabled))
             inventories.append([{field.name: getattr(case, field.name)
                                  for field in fields(case) if field.name != 'run'} for case in cases])
         self.assertEqual(*inventories)

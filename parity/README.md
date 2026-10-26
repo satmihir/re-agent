@@ -2,8 +2,10 @@
 
 Python 3.11+ standard library only; the supplied executable is the boundary. Tests use
 loopback providers and fake credentials, never live APIs or Go internals.
-All four areas have executable fixtures, not overall-suite approval or an 85%
-claim. The unchanged reference pin is `60fda0d3`; area 4 rebases onto #186/#187.
+All four areas have executable fixtures. The reference pin is `2ab234f7`
+(#191 terminal fixes, #192 compaction shortening, #193 race fixtures).
+Current Linux re-pin and #139 acceptance evidence: [`repin-2ab234f7-linux.md`](repin-2ab234f7-linux.md).
+Historical proofs below are not new-pin acceptance.
 
 ## Area 4 — agents and checkpoints
 
@@ -25,13 +27,22 @@ protected-Go v1 migration use executable boundary evidence. Cross-imports run
 the supplied executable and independently verified protected Go reference in
 both directions. The root-independent v1 gob is fixed, never regenerated per lane.
 
-**Darwin entries pending the Mac capture.** Existing Darwin lock entries and
-sample bundles remain byte-identical. Simulated Darwin/arm64 now fails with exactly
-`new leaves need a Darwin capture`. The Mac still needs its own
-`make parity-golden UPDATE=1`; no live Mac execution is claimed.
+**Darwin capture and acceptance pending on the Mac.** Existing Darwin lock entries,
+sample bundles and binary hash remain byte-identical. Darwin/arm64 fails closed
+with `Darwin capture required`. The Mac must establish the new binary hash and
+platform commit, then run its own guarded `make parity-golden UPDATE=1`.
+No live Mac execution is claimed.
 
-Remaining exact dependencies: C18/C43/C44 (#185), T36.before-start's unavailable
-pre-dispatch CLI barrier. None is a green skip. No production Go changes or new dependencies.
+C18/C43/C44's 28 leaves are enabled at the new pin. Ten leaves remain pending,
+not green skips: T36.before-start's unavailable pre-dispatch barrier and nine
+W54 cancel-during-body cases (openai, anthropic, proxy, chatgpt, jev,
+auth-discovery, auth-refresh, auth-models, auth-revoke). Server flush cannot
+prove client header receipt; no trace event at this pin supplies that witness.
+Jev otherwise races `router_http_status` 200/0. All nine header-phase cancellation
+leaves remain runnable. Each body-case transition has explicit pending-change
+authorization and an old-lock/new-metadata receipt, never a fabricated raw replay.
+The user's Go observability follow-up is required to re-enable them.
+No production Go changes or new dependencies.
 See [`agents-area4.md`](agents-area4.md) for counts, slots, the C17 inverse-proven
 ledger migration, actual proof commands/results/timings, limitations and retained
 raw evidence. All later sections describe historical captures unless dated there.
@@ -188,26 +199,46 @@ and exact evidence. Historical acceptance below is not current proof.
 
 ## Reference
 
-The table below records the unchanged Darwin reference. `manifest.json` selects
-an exact identity by `darwin/arm64` or `linux/amd64`, sharing one commit and build
-recipe. Linux locks/samples and the authorized full proof passed after the
-area-3 merge/re-pin and narrow harness repairs. See
-[`linux-lane.md`](linux-lane.md) for toolchain paths, audits and actual results.
+The table below records the current Linux reference. `manifest.json` selects
+an exact identity by `darwin/arm64` or `linux/amd64`. Darwin's old identity is
+retained with capture required; it cannot compare against the new pin yet.
+The plain candidate is built independently from a separate archive.
 
 | Item | Value |
 |---|---|
-| Commit | `60fda0d3f3eabc76fa11deed72aed7850532c97e` (#183 merge: configurable workspace-snapshot Git timeout) |
-| SHA-256 | `b8d7e8cea619cba3f0f3d233e6e2898723a7100677c58b73ebd501d853bd64ed` |
-| Build | `git archive 60fda0d3f3eabc76fa11deed72aed7850532c97e`, then `go build -trimpath -buildvcs=false -o reference ./cmd/reagent` in the independently extracted archive |
-| Go | `go version go1.23.3 darwin/arm64` |
+| Commit | `2ab234f79d1d42ba8a969ba3f4103eeeba717967` (#191/#192/#193) |
+| SHA-256 | `9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06` |
+| Build | `git archive 2ab234f79d1d42ba8a969ba3f4103eeeba717967`, then `GOPROXY=off GOTOOLCHAIN=local go build -trimpath -buildvcs=false -o reference ./cmd/reagent` in the independently extracted archive |
+| Go | `go version go1.23.3 linux/amd64` |
 | Python | `Python 3.11.5` |
 
 Regeneration requires the exact Go/Python identities above and locally available
 Go module dependencies: the build uses `GOPROXY=off`, never a provider API.
-A verified cache can be compared without rebuilding Go. **For #141, exact Python
-3.11.5 is a hard host prerequisite**, including the patch version: a cold/stale
-cache must regenerate under the pinned interpreter. Do not edit the manifest to
-accept a host Python upgrade during translation.
+A verified cache can be compared without rebuilding Go. **For #141, the exact
+Python 3.11.5 interpreter is a hard host prerequisite**, not just its version:
+Linux fixtures deliberately retain `sys.executable` in tool argv and display.
+The Linux identity's `python_executable` records the resolved path
+`/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin/python3.11`.
+Capture, comparison (including a warm cache), and mutation execution fail closed
+when `sys.executable` resolves elsewhere. A symlink to the same interpreter is
+accepted; another installation reporting 3.11.5 is not. This guards the Python
+harness, **not the candidate**: a Rust `BIN` in #141 remains supported. Do not
+change the identity or mask interpreter paths during translation.
+
+Use this environment for **every** parity command, including mutations and tests:
+
+```sh
+export PATH=/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin:/usr/local/bin:/usr/bin:/bin
+export GOPROXY=off GOTOOLCHAIN=local GOCACHE=/home/mihir/.cache/go-build
+export REAGENT_WORKSPACE_GIT_TIMEOUT=60
+python3 --version  # Python 3.11.5
+python3 -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve())'
+```
+
+When isolating `XDG_CACHE_HOME` for an empty parity cache, keep that explicit
+GOCACHE: the archive-built protected hash was established with this Go cache.
+The prior environment-drift failures and retained evidence are documented in
+`repin-2ab234f7-linux.md`; they are not allowlist exceptions.
 
 `7e0408f` and `f37aa5a` observations were exploratory, never golden inputs.
 #160's null-final and trace UTF-8 repairs and #161's digits-only Retry-After
@@ -388,9 +419,9 @@ and well-formed streams cut off before a terminal event. The latter trace the
 retry reason `stream ended early`; without a window they are resumable
 `provider_error`, allowing a following turn. Explicit `response.incomplete` and
 JSON bodies that are not streams remain `incomplete_response` and are not retried.
-The #173 compaction prompt states its byte budget; an oversized in-run summary
-gets one shortening request in the same attempt, with two oversized replies
-counted as one failure. #177 changes the model-visible `spawn` description only;
+The #192 compaction prompt targets 24 KiB; an oversized in-run summary
+gets up to two shortening requests in the same attempt, with three oversized replies
+counted as one failure. Exact prompts and `compaction.shorten` events are asserted. #177 changes the model-visible `spawn` description only;
 requests declaring it under `--agents` therefore change bytes, not agent behavior
 or any pending agent leaf/reason.
 

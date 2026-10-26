@@ -28,13 +28,103 @@ class TerminalCasesTest(unittest.TestCase):
             else:
                 self.assertTrue(callable(case.run), case.id)
 
-    def test_all_twenty_seven_bench_names_are_reconciled(self):
+    def test_c43_c44_leaves_are_runnable_and_cancellation_has_one_owner(self):
+        from parity.cases import cli, cli_pty_signals
+
+        cases = cli.collect()
+        for family, expected in (('C43.', 8), ('C44.', 9)):
+            leaves = [case for case in cases if case.id.startswith(family)]
+            self.assertEqual(len(leaves), expected)
+            self.assertEqual(len({case.id for case in leaves}), expected)
+            self.assertTrue(all(callable(case.run) and not case.pending for case in leaves))
+        self.assertNotIn('C44.typeahead-cancellation', [case.id for case in cli_pty_signals.collect()])
+
+    def test_double_interrupt_waits_for_restored_prompt_before_the_second_key(self):
+        from unittest.mock import call
+        from parity.cases import cli_pty_signals
+        terminal = MagicMock()
+        terminal.__enter__.return_value = terminal
+        terminal.finish.return_value.returncode = 0
+        with patch.object(cli_pty_signals, 'native', return_value=terminal):
+            cli_pty_signals._idle(SimpleNamespace(), 'twice')
+        terminal.assert_has_calls([call.wait_prompt(), call.send(b'\x03'),
+                                   call.wait_text('Ctrl-C again to exit'), call.wait_prompt(),
+                                   call.send(b'\x03')])
+
+    def test_ctrl_l_requires_top_frame_preserved_text_caret_and_erased_screen(self):
+        from parity.cases import cli_pty_render
+        from parity.vt import Terminal
+
+        screen = Terminal(24, 80)
+        rule = '─' * 80
+        screen.feed(('\x1b[?2004h\x1b[?25h\x1b[7;1H❯ alpha omega\x1b[7;14H').encode())
+        session = MagicMock()
+        session.__enter__.return_value = session
+        session.terminal = screen
+        session.stdout = b'Next ordinary turn works.'
+        server = SimpleNamespace(requests=[], expect=lambda *_args: None)
+        context = SimpleNamespace(server=server)
+
+        def send(data):
+            if data == b'\r' or data == b'next question\r':
+                texts = ['alpha omega'] + (['next question'] if data != b'\r' else [])
+                body = {'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': text}]}
+                                  for text in texts]}
+                server.requests.append(SimpleNamespace(json=lambda: body))
+
+        def wait(predicate, description):
+            if description.startswith('reply '):
+                self.assertTrue(predicate(screen))
+                return
+            self.assertEqual(description, 'Ctrl-L redraws preserved input at the top')
+            self.assertFalse(predicate(screen), 'an unchanged input below the top must fail')
+            screen.feed(('\x1b[H\x1b[2J' + rule + '\x1b[2;1H❯ alpha omega'
+                         '\x1b[3;1H' + rule + '\x1b[4;1H  gpt-6-luna / low\x1b[2;14H').encode())
+            self.assertTrue(predicate(screen))
+            for change, restore in ((b'\x1b[2;13H', b'\x1b[2;14H'),
+                                    (b'\x1b[?25l', b'\x1b[?25h'),
+                                    (b'\x1b[?2004l', b'\x1b[?2004h'),
+                                    (b'\x1b[9;1Hleftover banner\x1b[2;14H', b'\x1b[9;1H\x1b[2K\x1b[2;14H'),
+                                    (b'\x1b[1;1H\x1b[2K\x1b[2;14H', ('\x1b[1;1H' + rule + '\x1b[2;14H').encode()),
+                                    ('\x1b[2;1H❯ wrong input\x1b[2;14H'.encode(), '\x1b[2;1H❯ alpha omega\x1b[2;14H'.encode())):
+                screen.feed(change)
+                self.assertFalse(predicate(screen), change)
+                screen.feed(restore)
+                self.assertTrue(predicate(screen))
+
+        session.send.side_effect = send
+        session.wait.side_effect = wait
+        with patch.object(cli_pty_render, 'native', return_value=session), \
+             patch.object(cli_pty_render, 'answer'):
+            cli_pty_render._edit(context, 'clear-screen')
+        session.snapshot.assert_any_call('before-clear-screen')
+        session.snapshot.assert_any_call('edited-input')
+        session.snapshot.assert_any_call('next-turn')
+        self.assertEqual(len(server.requests), 2)
+
+    def test_editor_request_oracle_rejects_substring_and_duplicate_user_turns(self):
+        from parity.cases import cli_pty_render
+
+        for texts in (['prefix\nalpha gamma'], ['alpha gamma', 'unexpected duplicate']):
+            with self.subTest(texts=texts):
+                body = {'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': text}]}
+                                  for text in texts]}
+                server = SimpleNamespace(requests=[], expect=lambda *_args: None)
+                context = SimpleNamespace(server=server)
+                session = MagicMock()
+                session.__enter__.return_value = session
+                session.send.side_effect = lambda data: server.requests.append(SimpleNamespace(json=lambda: body)) if data == b'\r' else None
+                with patch.object(cli_pty_render, 'native', return_value=session), \
+                     patch.object(cli_pty_render, 'answer'), self.assertRaises(AssertionError):
+                    cli_pty_render._edit(context, 'kill-word')
+
+    def test_all_twenty_nine_bench_names_are_reconciled(self):
         root = Path(__file__).resolve().parent.parent
         tree = ast.parse((root / 'bench/tty/check.py').read_text())
         declaration = next(node for node in tree.body if isinstance(node, ast.Assign)
                            and any(isinstance(target, ast.Name) and target.id == 'SCENARIOS' for target in node.targets))
         names = [ast.literal_eval(key) for key in declaration.value.keys]
-        self.assertEqual(len(names), 27)
+        self.assertEqual(len(names), 29)
         reconciliation = (root / 'parity/terminal-scenarios.md').read_text()
         for name in names:
             self.assertIn('| ' + name + ' |', reconciliation)
@@ -280,11 +370,10 @@ class TerminalCasesTest(unittest.TestCase):
         from parity.run import Context
         from parity.observe_cli_terminal import observations
         selected = os.environ.get('PARITY_PTY_CASES', 'C29.fresh-prompt,C31.paste-and-submit,C34.typeahead-queue-long-reply').split(',')
-        cases = {case.id: case for case in cli_pty.collect()}
+        from parity.cases import cli
+        cases = {case.id: case for case in cli.collect()}
         with tempfile.TemporaryDirectory(prefix='parity-pty-') as temporary:
             for identifier in selected:
-                if identifier.startswith(('C43.', 'C44.')):
-                    continue  # Stopped reference defects: never launch these families.
                 with self.subTest(case=identifier):
                     root = Path(temporary) / identifier
                     context = Context(os.environ['PARITY_PTY_BIN'], root, root / 'artifacts', cases[identifier])

@@ -1,7 +1,7 @@
 {
-  "platform": "darwin",
-  "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
-  "reference_binary_sha256": "b8d7e8cea619cba3f0f3d233e6e2898723a7100677c58b73ebd501d853bd64ed",
+  "platform": "linux",
+  "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+  "reference_binary_sha256": "9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06",
   "metadata_fields": [
     "id",
     "description",
@@ -11,7 +11,7 @@
     "platforms",
     "exclusive"
   ],
-  "metadata_sha256": "0e5a02d4f621ff3edbe8ece2e29ee1a3c440c31dffba2b5e37fd5baa78d23da7",
+  "metadata_sha256": "a8eb2cdc3c17aa9f008785c8d4ef5b18676071b6f1f630509b6255d0fa7bb873",
   "cases": [
     {
       "id": "A01.off",
@@ -7870,143 +7870,143 @@
       "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.editor-default",
       "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.editor-editor",
       "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.editor-empty",
       "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.editor-missing",
       "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.editor-nonzero",
       "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.editor-visual",
       "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.piped-default",
       "description": "Piped edit refuses before editor selection and recovers",
       "comparison": "N",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.piped-editor",
       "description": "Piped edit refuses before editor selection and recovers",
       "comparison": "N",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.piped-missing",
       "description": "Piped edit refuses before editor selection and recovers",
       "comparison": "N",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C18.piped-visual",
       "description": "Piped edit refuses before editor selection and recovers",
       "comparison": "N",
       "slow": false,
-      "pending": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C19.checkpoints",
@@ -8845,221 +8845,221 @@
       "description": "Editor keys preserve exact request bytes and cursor",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C43.clear-start",
       "description": "Editor keys preserve exact request bytes and cursor",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C43.history",
       "description": "History recall/edit submits the changed text once",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C43.home-end",
       "description": "Editor keys preserve exact request bytes and cursor",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C43.kill-end",
       "description": "Editor keys preserve exact request bytes and cursor",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C43.kill-word",
       "description": "Editor keys preserve exact request bytes and cursor",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C43.unicode",
       "description": "Editor keys preserve exact request bytes and cursor",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C43.unknown-escape",
       "description": "Editor keys preserve exact request bytes and cursor",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.idle-clear",
       "description": "Idle interruption/EOF and cancelled-input safety",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.idle-eof",
       "description": "Idle interruption/EOF and cancelled-input safety",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.idle-twice",
       "description": "Idle interruption/EOF and cancelled-input safety",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.typeahead-cancellation",
       "description": "Held request cancellation discards queued input before the next turn",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.workspace-allow",
       "description": "Fresh human consent controls workspace authority and subsequent turn",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.workspace-ctrl-c",
       "description": "Fresh human consent controls workspace authority and subsequent turn",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.workspace-ctrl-d",
       "description": "Fresh human consent controls workspace authority and subsequent turn",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.workspace-deny",
       "description": "Fresh human consent controls workspace authority and subsequent turn",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "C44.workspace-escape",
       "description": "Fresh human consent controls workspace authority and subsequent turn",
       "comparison": "P",
       "slow": false,
-      "pending": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+      "pending": null,
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "T01.delete_file.array",
@@ -51079,16 +51079,16 @@
     },
     {
       "id": "W54.anthropic.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.anthropic.header",
@@ -51157,16 +51157,16 @@
     },
     {
       "id": "W54.auth-discovery.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.auth-discovery.header",
@@ -51235,16 +51235,16 @@
     },
     {
       "id": "W54.auth-models.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.auth-models.header",
@@ -51313,16 +51313,16 @@
     },
     {
       "id": "W54.auth-refresh.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.auth-refresh.header",
@@ -51404,16 +51404,16 @@
     },
     {
       "id": "W54.auth-revoke.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.auth-revoke.header",
@@ -51482,16 +51482,16 @@
     },
     {
       "id": "W54.chatgpt.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.chatgpt.header",
@@ -53458,16 +53458,16 @@
     },
     {
       "id": "W54.jev.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt); cancel timing otherwise races router_http_status 200/0",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.jev.header",
@@ -53562,16 +53562,16 @@
     },
     {
       "id": "W54.openai.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.openai.header",
@@ -53640,16 +53640,16 @@
     },
     {
       "id": "W54.proxy.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
+      "description": "SIGINT during response body; refresh rotation survives",
       "comparison": "N",
       "slow": false,
-      "pending": null,
+      "pending": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt)",
       "platforms": [
         "darwin",
         "linux"
       ],
       "exclusive": false,
-      "status": "implemented"
+      "status": "pending"
     },
     {
       "id": "W54.proxy.header",

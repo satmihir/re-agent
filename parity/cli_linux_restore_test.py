@@ -21,16 +21,22 @@ class LinuxRestoreTest(unittest.TestCase):
         if change:
             frame = change(frame)
         prompt = '\x1b[21;1H' + '─' * 80 + '\x1b[22;1H❯ \x1b[23;1H' + '─' * 80 + '\x1b[22;3H'
+        if case == 'C44.typeahead-cancellation':
+            frame = frame.replace('[22;3H', '[22;24H')
+            prompt = prompt.replace('❯ ', '❯ stale cancelled input').replace('[22;3H', '[22;24H')
         before = (prose + prompt).encode()
         blocked = ('\x1b[1;1Herror: the last run ended with cancelled; inspect the trace at ' + str(path) +
                    ' and use /compact or /reset to continue\x1b[r\x1b[22;3H').encode()
+        if case == 'C44.typeahead-cancellation':
+            blocked = '\x1b[22;1H\x1b[2K❯ \x1b[22;3H'.encode()
         after = before + frame.encode() + blocked
         raw = after + b'\x1b[24;1H' + b'\r\n' * 26
         terminal = Terminal(24, 80)
         terminal.feed(before)
         shots = [{'label': 'before', 'offset': len(before), 'state': terminal.snapshot()}]
         terminal.feed(raw[len(before):len(after)])
-        shots.append({'label': 'blocked-next-turn', 'offset': len(after), 'state': terminal.snapshot()})
+        label = 'typeahead-cancelled' if case == 'C44.typeahead-cancellation' else 'blocked-next-turn'
+        shots.append({'label': label, 'offset': len(after), 'state': terminal.snapshot()})
         metadata = {'version': 1, 'initial_size': [24, 80], 'snapshots': shots,
                     'events': [{'kind': 'snapshot', 'label': shot['label'], 'offset': shot['offset']} for shot in shots]}
         invocation = {'args': ['chat', '--workspace', str(root / 'workspace')], 'trace': artifacts / 'invoke-001.traces',
@@ -92,6 +98,43 @@ class LinuxRestoreTest(unittest.TestCase):
         replayed.invocations[0]['trace'] = replayed.artifacts / 'invoke-001.traces'
         moved = [(replayed.artifacts / path.relative_to(ctx.artifacts), line) for path, line in traces]
         self.assertEqual(artifacts, self.project(replayed, moved)[0])
+
+    def test_typeahead_cancellation_requires_one_owned_model_request_and_no_tools(self):
+        case = 'C44.typeahead-cancellation'
+        def captured(allocation='aaaaaaaa', run='1111111111111111'):
+            ctx, traces = self.capture(run, allocation, case=case)
+            header, owner = [json.loads(line) for _, line in traces]
+            header['data']['prompt'] = 'hold this request'
+            owner['data']['tool_calls'] = 0
+            request = {**header, 'type': 'model.requested', 'seq': 2, 'step': 1, 'data': {'history': []}}
+            return ctx, [(traces[0][0], encoded(event)) for event in (header, request, owner)]
+        ctx, traces = captured()
+        actual, _ = self.project(ctx, traces)
+        other, other_traces = captured('bbbbbbbb', '2222222222222222')
+        self.assertEqual(actual, self.project(other, other_traces)[0])
+        for defect in ('missing-request', 'duplicate-request', 'session', 'step', 'sequence', 'prompt', 'tool-count', 'started-tool'):
+            with self.subTest(defect=defect):
+                changed = copy.deepcopy(traces)
+                events = [json.loads(line) for _, line in changed]
+                if defect == 'missing-request':
+                    events.pop(1)
+                elif defect == 'duplicate-request':
+                    events.append(copy.deepcopy(events[1]))
+                elif defect == 'session':
+                    events[1]['session_id'] = 'fedcba9876543210'
+                elif defect == 'step':
+                    events[1]['step'] = 2
+                elif defect == 'sequence':
+                    events[1]['seq'] = 6
+                elif defect == 'prompt':
+                    events[0]['data']['prompt'] = 'different prompt'
+                elif defect == 'tool-count':
+                    events[-1]['data']['tool_calls'] = 1
+                else:
+                    events.append({**events[1], 'type': 'tool.started'})
+                malformed = [(traces[0][0], encoded(event)) for event in events]
+                with self.assertRaises(AssertionError):
+                    self.project(copy.deepcopy(ctx), malformed)
 
     def test_wrong_missing_duplicate_and_cross_invocation_owners_fail(self):
         mutations = ('missing-start', 'missing-end', 'duplicate-start', 'duplicate-end', 'run', 'session',

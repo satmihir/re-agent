@@ -129,6 +129,7 @@ def trace_contract(paths):
         'agent.result': 'id run_id result effects',
         'compaction.finished': 'summary replaced_entries',
         'compaction.failed': 'reason',
+        'compaction.shorten': 'summary_bytes target_bytes limit_bytes shortening',
         'compaction.skipped': 'reason disabled consecutive_failures retry_after_step',
         'model.switch.requested': 'source_model source_provider source_effort destination_model destination_provider destination_effort fresh',
         'model.switch.finished': 'source_model source_provider source_effort destination_model destination_provider destination_effort fresh request_bytes latency_ms',
@@ -150,6 +151,12 @@ def trace_contract(paths):
             found.add(kind)
             if kind in required:
                 assert set(required[kind].split()) <= set(data), (kind, set(required[kind].split()) - set(data))
+            if kind == 'compaction.shorten':
+                assert set(data) == set(required[kind].split()), (kind, data)
+                assert all(type(value) is int for value in data.values()), (kind, data)
+                assert data['summary_bytes'] > 32768 and data['limit_bytes'] == 32768, data
+                assert data['shortening'] in (1, 2), data
+                assert data['target_bytes'] == (24576, 12288)[data['shortening'] - 1], data
             if kind in ('model.requested', 'compaction.requested'):
                 assert data['scope'] == {key: item[key] for key in ('session_id', 'run_id', 'step')}
                 for entry in data['history']:

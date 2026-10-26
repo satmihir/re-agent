@@ -48,6 +48,13 @@ def assert_edited_request(body, payload):
     assert latest(body)[0]['text'].encode() == payload, latest(body)
 
 
+def assert_editor_followup(body, payload, accepted):
+    """Reject lost first bytes, editor-command leakage and incorrect accepted history."""
+    assert latest(body)[0]['text'] == NEXT, latest(body)
+    assert (payload.decode() in texts(body)) == accepted, texts(body)
+    assert '/edit' not in texts(body)
+
+
 def _done(ctx, terminal, expected_requests):
     submit(terminal, '/exit')
     result = terminal.finish()
@@ -197,9 +204,7 @@ def edit(ctx, variant):
         wanted = 2 if accepted else 1
         terminal.wait(lambda _: len(ctx.server.requests) == wanted, 'ordinary request after editor')
         body = ctx.server.requests[-1].json()
-        assert latest(body)[0]['text'] == NEXT, latest(body)
-        assert (payload.decode() in texts(body)) == accepted, texts(body)
-        assert '/edit' not in texts(body)
+        assert_editor_followup(body, payload, accepted)
         ctx.server.release('next-turn')
         answer(terminal, 'Next ordinary turn works.')
         settled(terminal, 'next-normal-turn')

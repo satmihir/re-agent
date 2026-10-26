@@ -89,14 +89,17 @@ class CheckpointsTest(unittest.TestCase):
         self.assertNotIn('A28.inrun-nine-summaries', selected)
         fixture = selected['A28.inrun-eight-summary-bound']
         self.assertIsNone(fixture.pending)
-        for completed in (8, 30, 31):
-            with self.subTest(completed=completed):
+        for completed, mutation in ((8, None), (30, None), (31, None), (31, 'wire'), (31, 'trace'), (31, 'shorten')):
+            with self.subTest(completed=completed, mutation=mutation):
                 ctx = SimpleNamespace(server=SimpleNamespace(requests=[]))
                 program = []
                 trace = {
                     'compaction.finished': [dict(summary='stage summary %d' % index) for index in range(completed)],
-                    'compaction.requested': [{} for _ in range(completed)],
+                    'compaction.requested': [dict(history=[dict(kind='user', user=dict(
+                        text=cases._compact_prompt() + ('\n' if mutation == 'trace' else '')))]) for _ in range(completed)],
                     'compaction.failed': [], 'compaction.skipped': [],
+                    'compaction.shorten': [dict(summary_bytes=32769, target_bytes=24576,
+                                                limit_bytes=32768, shortening=1)] if mutation == 'shorten' else [],
                     'run.finished': [dict(status='completed', steps=63, tool_calls=31)],
                 }
 
@@ -108,6 +111,8 @@ class CheckpointsTest(unittest.TestCase):
                     self.assertEqual(stdin, 'inrun original task\n/exit\n')
                     for index in range(len(program)):
                         parts = ['inrun original task']
+                        if index % 2 == 1:
+                            parts.append(cases._compact_prompt() + ('\n' if mutation == 'wire' else ''))
                         if index > 0 and index % 2 == 0:
                             parts.append(cases.SUMMARY + 'stage summary %d' % (index // 2 - 1))
                         body = dict(input=[dict(role='user', content=[dict(type='input_text', text=part) for part in parts])])
@@ -118,7 +123,7 @@ class CheckpointsTest(unittest.TestCase):
                      patch.object(cases, 'expect', side_effect=expect), \
                      patch.object(cases, '_resume', side_effect=resume), \
                      patch.object(cases, 'events', side_effect=lambda context, kind: trace[kind]):
-                    if completed == 31:
+                    if completed == 31 and mutation is None:
                         fixture.run(ctx)
                     else:
                         with self.assertRaises(AssertionError):

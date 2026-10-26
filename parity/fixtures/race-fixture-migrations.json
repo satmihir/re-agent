@@ -1,4 +1,5 @@
 {
+  "scope": "Historical receipt only; not oracle-update authority. Current-pin replacements require fixtures/repin-2ab234f7.json.",
   "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
   "platforms": {
     "linux/amd64": {

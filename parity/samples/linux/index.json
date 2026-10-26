@@ -2,11 +2,7 @@
   "schema_version": 1,
   "format": "Deterministic gzip tar: case.json and artifacts/<logical path>; every normalized artifact is complete.",
   "review": "tar -tzf parity/samples/linux/<case>.tar.gz; tar -xOzf parity/samples/linux/<case>.tar.gz artifacts/<path>. Opaque/binary artifacts are not converted to text.",
-  "pending_families": {
-    "C18": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C43": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C44": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules"
-  },
+  "pending_families": {},
   "cases": [
     {
       "id": "C01.unknown",
@@ -197,6 +193,16 @@
       "normalized_bytes": 68054,
       "normalized_sha256": "7d835dad2ccdf0385c2fb73e4bae993cdc428b3f2fc2d7926379b800c1a47dea",
       "bundle_sha256": "e40629b52118cfbe1ec01e3dc5d56eafe7ed9974fb75e84a888ed97fcbbdfb08"
+    },
+    {
+      "id": "C18.editor-visual",
+      "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
+      "why": "Editor handoff preserves the first byte of the following human turn.",
+      "path": "C18.editor-visual.tar.gz",
+      "artifacts": 21,
+      "normalized_bytes": 1762666,
+      "normalized_sha256": "c77249a6cb9c0c919fea906f490431ce8eb1d94774f65d1a00954c247ed3c9ad",
+      "bundle_sha256": "4e7983f837f0a45c07f6b554ac1767b68cee203c1504fd7ed48ef3b7a6a4dae7"
     },
     {
       "id": "C21.context-gc",
@@ -417,6 +423,26 @@
       "normalized_bytes": 1258329,
       "normalized_sha256": "3e2e61168b4a39e696af31ae89acb8d789aae69d82aec6161d310028a10cb23d",
       "bundle_sha256": "d1b916a258d74a45f34365bd5d534aacf928856f504ee964d5c57b8b5fee268e"
+    },
+    {
+      "id": "C43.clear-screen",
+      "description": "Editor keys preserve exact request bytes and cursor",
+      "why": "Ctrl-L redraws edited input at the top of the terminal.",
+      "path": "C43.clear-screen.tar.gz",
+      "artifacts": 20,
+      "normalized_bytes": 1780152,
+      "normalized_sha256": "bdb275f56643d2c37849ebb642196819244e8c4f0954f5af1d579ee0d03e1f3b",
+      "bundle_sha256": "eb87ac0dbd6c296623ed6e6a6a66f3da7d1896c39cb6393a69ad372615d3e48c"
+    },
+    {
+      "id": "C44.typeahead-cancellation",
+      "description": "Held request cancellation discards queued input before the next turn",
+      "why": "A cancelled turn discards queued typeahead before the next human turn.",
+      "path": "C44.typeahead-cancellation.tar.gz",
+      "artifacts": 20,
+      "normalized_bytes": 1298078,
+      "normalized_sha256": "d4de35b4d0c93ab27fd1554acccfd9e67ffa46f8ff1c3461d3357ff62d18071a",
+      "bundle_sha256": "3a6cde8879fbfdb4cc67ea8e092db25c30d7dba4bc62b53cdbc5300d87dde9ef"
     },
     {
       "id": "W01.catalog-gpt-6-sol-model",
@@ -957,16 +983,6 @@
       "normalized_bytes": 823,
       "normalized_sha256": "634f03bba2aff2ff470448532760134ac40e823ec2394e1b46b4adcc76b73390",
       "bundle_sha256": "5f147a25923b49e3c2fbe6ccfa35da7ff84413df8fee1efb29e045266051f0e1"
-    },
-    {
-      "id": "W54.anthropic.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
-      "why": "Narrow fixture-input delivery projection, preserving every Go output.",
-      "path": "W54.anthropic.cancel-body.tar.gz",
-      "artifacts": 11,
-      "normalized_bytes": 64759,
-      "normalized_sha256": "2fe76700716ba9ee2c4b995b5ddc517d4761ee334ed49136b4299ff92f477431",
-      "bundle_sha256": "6f54bd003863ada7d2403e6a1c16aeff8c704179ce65e3ba2516aaac26e03cc1"
     },
     {
       "id": "W54.anthropic.progress",
@@ -1845,8 +1861,8 @@
       "path": "A28.inrun-at.tar.gz",
       "artifacts": 29,
       "normalized_bytes": 2498969,
-      "normalized_sha256": "b68de8bc4bb6e164a25ae40329139aa741c32ff5f9bce954721c8010e8253e0a",
-      "bundle_sha256": "97753f86e88e5a6a1b502f768ebd1220f64c371208a251a905d3bd9c733aa693"
+      "normalized_sha256": "fd02fd1a6c0b8923c0338e987995124bac76ce2a2f45b5e51f9fdf73f2407579",
+      "bundle_sha256": "6ec16f82c3f105c8981e60b6eaef2de45b6c962967264aa8bc730c6f2a777e61"
     },
     {
       "id": "A29.gc-on-redundant-recent-three",
@@ -2029,5 +2045,13 @@
       "bundle_sha256": "9d8180e76417b468c097543bfcb4e7b3e6a69079e0f9c1600653acc11a785335"
     }
   ],
-  "platform": "linux"
+  "platform": "linux",
+  "historical_cases": [
+    {
+      "id": "W54.anthropic.cancel-body",
+      "path": "W54.anthropic.cancel-body.tar.gz",
+      "bundle_sha256": "6f54bd003863ada7d2403e6a1c16aeff8c704179ce65e3ba2516aaac26e03cc1",
+      "reason": "Retained historical bytes; body cancellation is pending, not current reference evidence."
+    }
+  ]
 }

@@ -300,6 +300,8 @@ def validate_policy(policy):
 
 
 REFERENCE_FIELDS = identity.REFERENCE_FIELDS
+REPIN_REFERENCE = "2ab234f79d1d42ba8a969ba3f4103eeeba717967"
+REPIN_RECEIPT = "repin-receipt.json"
 
 
 def read_lock(suite, manifest):
@@ -337,15 +339,16 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
     """Explicitly update locks, inventory and selected samples only after complete raw replay."""
     from parity import run, samples
     suite, staging = Path(suite), Path(staging)
+    selected = identity.select(manifest)
     run.verify_inventory(staging, cases, manifest)
     executable = sorted(case.id for case in cases if not case.pending and sys.platform in case.platforms)
     # The verification stamp is cache metadata, never a case.
-    actual = {path.name for path in staging.iterdir()} - {"inventory.json", "cache.json", "reference", "verified.json"}
+    actual = {path.name for path in staging.iterdir()} - {"inventory.json", "cache.json", "reference", "verified.json", REPIN_RECEIPT}
     verify_inventory(executable, actual)
-    selected = identity.select(manifest)
     relative = selected["normalized_lock"]
     path = suite / relative
-    old_cases = unpack(json.loads(path.read_bytes())) if path.exists() else {}
+    previous_document = json.loads(path.read_bytes()) if path.exists() else {}
+    old_cases = unpack(previous_document) if previous_document else {}
     policy = json.loads((suite / "policy.json").read_bytes())
     validate_policy(policy)
     policy["ledger_contract"] = COMPARISON_POLICY["ledger_contract"]
@@ -355,17 +358,18 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
         with ProcessPoolExecutor(max_workers=max(jobs, run.replay_jobs())) as pool:
             futures = {case_id: pool.submit(frozen_lock, staging / case_id) for case_id in executable}
             new_cases = {case_id: future.result() for case_id, future in futures.items()}
-    protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
-    protected_cases, shell_updates = approved_shell_timing_updates(protected_cases, new_cases, staging)
-    protected_cases, exec_updates = approved_exec_ledger_updates(protected_cases, new_cases, staging)
-    migration_path = suite / 'fixtures' / 'race-fixture-migrations.json'
-    migrations = json.loads(migration_path.read_bytes()) if migration_path.exists() else {}
-    if migrations and migrations['reference_commit'] != manifest['reference_commit']:
-        raise AssertionError('race fixture migration reference differs')
-    pairs = migrations.get('platforms', {}).get(selected['reference_platform'], {})
-    protected_cases, race_updates = approved_race_fixture_updates(protected_cases, new_cases, staging, pairs)
-    protect_wire_locks(protected_cases, new_cases)
-    protect_previous_locks(protected_cases, new_cases)
+    timing_updates, shell_updates, exec_updates, race_updates = [], [], [], []
+    repin_receipt = None
+    if manifest['reference_commit'] == REPIN_REFERENCE:
+        allowlist = json.loads((suite / 'fixtures/repin-2ab234f7.json').read_bytes())
+        repin_receipt = verify_repin(old_cases, new_cases, staging, allowlist,
+                                     previous_document.get('reference_identity', {}), identity.reference(manifest), cases=cases)
+    else:
+        protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
+        protected_cases, shell_updates = approved_shell_timing_updates(protected_cases, new_cases, staging)
+        protected_cases, exec_updates = approved_exec_ledger_updates(protected_cases, new_cases, staging)
+        protect_wire_locks(protected_cases, new_cases)
+        protect_previous_locks(protected_cases, new_cases)
     document = {**pack(new_cases), "reference_identity": identity.reference(manifest)}
     changed = sorted(case_id for case_id in old_cases.keys() & new_cases.keys() if old_cases[case_id] != new_cases[case_id])
     report = {"changed_case_digests": [{"id": case_id,
@@ -382,14 +386,30 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
         inventory = json.loads((staging / "inventory.json").read_bytes())
         if (suite / "inventory.json").exists():
             previous = json.loads((suite / "inventory.json").read_bytes())
-            run.verify_shared_inventory(previous, manifest)
-            inventory.update({key: previous[key] for key in ("platform", "reference_binary_sha256")})
+            if repin_receipt is not None:
+                verify_previous_inventory(suite, previous, manifest, allowlist)
+            else:
+                run.verify_shared_inventory(previous, manifest)
+                inventory.update({key: previous[key] for key in ("platform", "reference_binary_sha256")})
         (prepared / "inventory.json").write_text(json.dumps(inventory, ensure_ascii=False, indent=2) + "\n")
+        approved_samples = {row['id'] for row in repin_receipt['updates']
+                            if row['full_replay_verified']} if repin_receipt else set()
+        selected_samples = samples.sample_directory(prepared)
+        # Only already replayed replacements may pass the historical W/T sample guards.
+        for case_id in approved_samples:
+            (selected_samples / (case_id + '.tar.gz')).unlink(missing_ok=True)
         sample_changes = samples.refresh_samples(staging, prepared)
-        for original in (suite / "samples").glob("*.tar.gz"):
-            replacement = prepared / "samples" / original.name
-            if not replacement.exists() or replacement.read_bytes() != original.read_bytes():
-                raise AssertionError("existing sample identity violation: " + original.name)
+        for original in (suite / "samples").rglob("*.tar.gz"):
+            replacement = prepared / original.relative_to(suite)
+            approved = (replacement.parent == selected_samples
+                        and original.name.removesuffix('.tar.gz') in approved_samples)
+            if not replacement.exists() or (replacement.read_bytes() != original.read_bytes() and not approved):
+                raise AssertionError("existing sample identity violation: " + str(original.relative_to(suite)))
+        for original in (suite / 'samples').rglob('index.json'):
+            replacement = prepared / original.relative_to(suite)
+            if (original.parent != suite / selected_samples.relative_to(prepared)
+                    and (not replacement.exists() or replacement.read_bytes() != original.read_bytes())):
+                raise AssertionError('existing sample index identity violation: ' + str(original.relative_to(suite)))
         (prepared / relative).write_bytes(canonical(document) + b"\n")
         (prepared / "policy.json").write_text(json.dumps(policy, ensure_ascii=False, indent=2) + "\n")
         generated = ["inventory.json", "policy.json",
@@ -398,16 +418,123 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
             destination = suite / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(prepared / name, destination)
+    if repin_receipt is not None:
+        (staging / REPIN_RECEIPT).write_bytes(canonical(repin_receipt) + b'\n')
     manifest["platforms"][selected["reference_platform"]]["normalized_tree_sha256"] = document["normalized_tree_sha256"]
     print(json.dumps({**report, "changed_sample_cases": sample_changes,
                       "approved_zero_exec_timing_updates": timing_updates,
                       "approved_shell_timing_updates": shell_updates,
                       "approved_exec_ledger_updates": exec_updates,
                       "approved_race_fixture_updates": race_updates,
+                      "repin_receipt": repin_receipt,
                       "normalized_tree_sha256": document["normalized_tree_sha256"]}, indent=2))
     return {**document, "cases": new_cases, "approved_zero_exec_timing_updates": timing_updates,
             "approved_shell_timing_updates": shell_updates, "approved_exec_ledger_updates": exec_updates,
-            "approved_race_fixture_updates": race_updates}
+            "approved_race_fixture_updates": race_updates, "repin_receipt": repin_receipt}
+
+
+def verify_previous_inventory(suite, inventory, manifest, allowlist):
+    """Authenticate a shared historical capture against its own retained platform lock."""
+    from parity import run
+    system = inventory.get('platform')
+    names = [name for name in identity.SUPPORTED if name.split('/')[0] == system]
+    if len(names) != 1:
+        raise run.HarnessError('unknown previous inventory platform')
+    if inventory.get('reference_commit') == manifest['reference_commit']:
+        entry = manifest.get('platforms', {}).get(names[0], {})
+        if entry.get('reference_commit', manifest['reference_commit']) != manifest['reference_commit']:
+            raise run.HarnessError('previous inventory mislabels an uncaptured platform identity')
+        run.verify_shared_inventory(inventory, manifest)
+        return
+    previous = json.loads((Path(suite) / 'expected' / (system + '.json')).read_bytes())['reference_identity']
+    if (previous.get('reference_platform') != names[0]
+            or previous.get('reference_commit') not in (allowlist['previous_reference_commit'], REPIN_REFERENCE)):
+        raise run.HarnessError('previous inventory lock reference identity differs')
+    historical = dict(manifest, reference_commit=previous['reference_commit'],
+                      platforms={names[0]: previous})
+    run.verify_shared_inventory(inventory, historical)
+
+
+def verify_repin(old_cases, new_cases, staging, allowlist, previous_identity, new_identity, cases=()):
+    """Bind runnable replacements to raw replay and explicit pending transitions to fresh metadata."""
+    if (allowlist.get('schema_version') != 1
+            or allowlist.get('previous_reference_commit') != '60fda0d3f3eabc76fa11deed72aed7850532c97e'
+            or allowlist.get('reference_commit') != REPIN_REFERENCE
+            or new_identity.get('reference_commit') != REPIN_REFERENCE
+            or previous_identity.get('reference_commit') not in (allowlist.get('previous_reference_commit'), REPIN_REFERENCE)
+            or previous_identity.get('reference_platform') != new_identity.get('reference_platform')):
+        raise AssertionError('re-pin allowlist reference identity differs')
+    platform = new_identity['reference_platform']
+    approved = allowlist.get('platforms', {}).get(platform)
+    if not isinstance(approved, dict):
+        raise AssertionError('invalid re-pin platform allowlist: ' + platform)
+    pending = {}
+    for case_id, entry in approved.items():
+        if isinstance(entry, str) and entry.strip():
+            continue
+        if (not isinstance(entry, dict) or entry.keys() != {'change', 'reason'}
+                or entry['change'] != 'pending' or not isinstance(entry['reason'], str)
+                or not entry['reason'].strip()):
+            raise AssertionError('invalid re-pin platform allowlist: ' + platform)
+        pending[case_id] = entry['reason']
+    removed = sorted(old_cases.keys() - new_cases.keys())
+    changed = sorted(case_id for case_id in new_cases if old_cases.get(case_id) != new_cases[case_id])
+    unlisted = sorted(set(changed) - (approved.keys() - pending.keys()))
+    unlisted_removed = sorted(set(removed) - pending.keys())
+    if unlisted_removed or unlisted:
+        raise AssertionError('unlisted re-pin change: removed=%s changed=%s' % (unlisted_removed, unlisted))
+    metadata = pending_repin_metadata(staging, cases, pending, new_identity, new_cases) if pending else {}
+    updates = []
+    for case_id in removed:
+        previous, actual = old_cases[case_id], metadata[case_id]
+        updates.append(dict(id=case_id, reason=pending[case_id], status='pending',
+                            old_case_sha256=digest(previous), new_case_sha256=digest(actual),
+                            before=previous, after=actual, full_replay_verified=False))
+    for case_id in changed:
+        previous, actual = old_cases.get(case_id), new_cases[case_id]
+        if frozen_lock(Path(staging) / case_id) != actual:
+            raise AssertionError('re-pin replay evidence differs: ' + case_id)
+        updates.append(dict(id=case_id, reason=approved[case_id],
+                            old_case_sha256=digest(previous) if previous is not None else None,
+                            new_case_sha256=digest(actual),
+                            before=previous, after=actual, full_replay_verified=True))
+    return dict(schema_version=1, platform=platform, allowlist_sha256=digest(allowlist),
+                previous_reference_identity=previous_identity, reference_identity=new_identity,
+                replayed_cases=len(new_cases), updates=sorted(updates, key=lambda row: row['id']))
+
+
+def pending_repin_metadata(staging, cases, pending, reference, new_cases):
+    """Require real capture inventory and supplied non-runnable leaves, never implicit collection."""
+    try:
+        inventory = json.loads((Path(staging) / 'inventory.json').read_bytes())
+    except (OSError, ValueError) as exc:
+        raise AssertionError('re-pin pending inventory unavailable') from exc
+    system = reference['reference_platform'].split('/')[0]
+    if (inventory.get('platform') != system
+            or any(inventory.get(key) != reference.get(key)
+                   for key in ('reference_commit', 'reference_binary_sha256'))):
+        raise AssertionError('re-pin pending inventory reference differs')
+    fields = ('id', 'description', 'comparison', 'slow', 'pending', 'platforms', 'exclusive')
+    rows = inventory.get('cases')
+    if (inventory.get('metadata_fields') != list(fields) or not isinstance(rows, list)
+            or any(not isinstance(row, dict) or not set(fields) <= row.keys() for row in rows)
+            or inventory.get('metadata_sha256') != digest([{field: row[field] for field in fields} for row in rows])):
+        raise AssertionError('re-pin pending inventory metadata digest differs')
+    result = {}
+    for case_id, reason in sorted(pending.items()):
+        leaves = [case for case in cases if case.id == case_id]
+        rows = [row for row in inventory.get('cases', []) if row.get('id') == case_id]
+        if (case_id in new_cases or len(leaves) != 1 or len(rows) != 1
+                or leaves[0].run is not None or leaves[0].pending != reason
+                or system not in leaves[0].platforms):
+            raise AssertionError('re-pin pending declaration differs: ' + case_id)
+        expected = {field: list(leaves[0].platforms) if field == 'platforms' else getattr(leaves[0], field)
+                    for field in fields}
+        expected['status'] = 'pending'
+        if rows[0] != expected:
+            raise AssertionError('re-pin pending inventory metadata differs: ' + case_id)
+        result[case_id] = rows[0]
+    return result
 
 
 def approved_zero_exec_timing_updates(old_cases, new_cases, staging):

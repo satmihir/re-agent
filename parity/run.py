@@ -1413,7 +1413,8 @@ def _main(argv=None):
             raise HarnessError("requires Linux or Darwin, Python and Git")
         suite = Path(__file__).resolve().parent
         manifest = json.loads((suite / "manifest.json").read_bytes())
-        from parity.identity import select
+        from parity.identity import guard_python, select
+        guard_python(manifest)
         selected_identity = select(manifest)
         from parity import golden as reference
         golden = None

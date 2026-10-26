@@ -1,0 +1,2046 @@
+{
+  "manifest_sha256": "aaa4e53281212a3c4013786348bd3581abbce9e408b3aa48638aea30274fb1b4",
+  "reference_binary": "/tmp/reagent-parity-repin-2ab234f7/reference",
+  "reference_binary_sha256": "9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06",
+  "reference_tree": "/home/mihir/src/re-agent-repin",
+  "later_pending": [],
+  "mutations": [
+    {
+      "id": 1,
+      "description": "Send unknown-command help to stdout instead of stderr",
+      "cases": [
+        "C01.bad-target",
+        "C01.help",
+        "C01.help-chat",
+        "C01.help-run",
+        "C01.long-help",
+        "C01.no-args",
+        "C01.short-help",
+        "C01.too-many-targets",
+        "C01.unknown"
+      ],
+      "intended_assertion": "Unknown-command diagnostics and help stay on stderr with empty stdout and exit 2",
+      "selectors": [
+        "C01"
+      ],
+      "patch_sha256": "f6d6c24f898b33f22f12c435533def15e616ef24b99e0d9d7b2b837e997c9bd6",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/cli.go": {
+          "before_sha256": "76ed3a4005a254d81098161af28abf74d8bf8d9c9c5b08f89953210189bd96ee",
+          "after_sha256": "acabef2910d99cf4759c96078f4cd9618cfa9748a26af75995416645628f7215"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-s0qimhcf/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-s0qimhcf",
+        "exit_code": 0,
+        "duration_seconds": 3.843699
+      },
+      "binary_sha256": "56851514aaf9ef0b7b443d3c10a57210a5d1434de4746f373bfb92bf7c756123",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "C01.unknown",
+          "assertion": "assert result.stdout == stdout, result.stdout\nAssertionError: b're:agent: a small, readable agent harness\\n\\nusage:\\n  reagent run  [flags] \"prompt\"    one task, then exit\\n  reagent chat [flags]             a conversation, one turn per line\\n  reagent help [run|chat]          this text, or a command\\'s flags\\n  reagent version                  the build\\'s version\\n  reagent login                    sign in with ChatGPT\\n  reagent logout                   disconnect ChatGPT\\n  reagent auth status              account, plan usage, expiry and models\\n\\nexamples:\\n  reagent chat --workspace ./repo\\n  reagent run --workspace ./repo \"Set the default timeout to 30s.\"\\n  reagent run --workspace . --show-context \"Where is the budget?\" | jq .\\n\\nenvironment:\\n  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run\\n  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,\\n                                      with no key; the provider must be openai\\n  TYPESAFE_API_KEY                    optional router key; read only when Auto is enabled\\n  REAGENT_MODEL                       default model\\n  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)\\n  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)\\n  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)\\n  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)\\n  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)\\n  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1\\xe2\\x80\\x933600 (default 600)\\n  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1\\xe2\\x80\\x933600 (default 300)\\n  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1\\xe2\\x80\\x933600 (default 2)\\n  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume\\n  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables\\n  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false\\n                                      experiments are exclusive and require --context-gc\\n                                      empty is unset; validated on resume, saved settings win\\n  NO_COLOR                            turn off styling\\n'"
+        }
+      ],
+      "mutant_cases_run": [
+        "C01.bad-target",
+        "C01.help",
+        "C01.help-chat",
+        "C01.help-run",
+        "C01.long-help",
+        "C01.no-args",
+        "C01.short-help",
+        "C01.too-many-targets",
+        "C01.unknown"
+      ],
+      "duration_seconds": 6.927351
+    },
+    {
+      "id": 2,
+      "description": "Accept misplaced flags after run prompt text",
+      "cases": [
+        "C03.bad-name",
+        "C03.before-prompt",
+        "C03.bool-false",
+        "C03.joined-trimmed",
+        "C03.malformed-bool",
+        "C03.malformed-duration",
+        "C03.malformed-int",
+        "C03.missing-duration",
+        "C03.missing-int",
+        "C03.missing-text",
+        "C03.overflow-int",
+        "C03.positional-terminator",
+        "C03.post-equals",
+        "C03.post-help",
+        "C03.post-prompt",
+        "C03.repeated",
+        "C03.single-dash",
+        "C03.terminator",
+        "C03.unknown-after",
+        "C03.unknown-flag"
+      ],
+      "intended_assertion": "A flag following a prompt without -- is a usage error, not prompt text",
+      "selectors": [
+        "C03"
+      ],
+      "patch_sha256": "e728b78bfa2fad2a965c093e6370020848c58b629fa461a859f5c1d9431eea15",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/cli.go": {
+          "before_sha256": "76ed3a4005a254d81098161af28abf74d8bf8d9c9c5b08f89953210189bd96ee",
+          "after_sha256": "230dd09fe5687cbe26cd90dab9a9a3e18cfc52b048252bc0edcf1835c5e0f43d"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-0js1e4_a/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-0js1e4_a",
+        "exit_code": 0,
+        "duration_seconds": 3.944559
+      },
+      "binary_sha256": "bff5eb02e1cde52ecd6d6307695e4eb717a2d51e141686112af3b5c920703668",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "C03.post-equals",
+          "assertion": "assert result.returncode == status, (result.returncode, result.stderr)\nAssertionError: (1, b're:agent \\xc2\\xb7 gpt-6-luna (openai \\xc2\\xb7 API key, effort low) \\xc2\\xb7 read, write, and execute \\xc2\\xb7 /tmp/reagent-parity-cases-jome1fbk/C03.post-equals/workspace\\n! exec mode: commands run as you, in /tmp/reagent-parity-cases-jome1fbk/C03.post-equals/workspace, and can read, write, and use the network\\n\\xe2\\x9c\\x97 provider_error \\xc2\\xb7 1 step \\xc2\\xb7 0 tool calls \\xc2\\xb7 tokens unknown \\xc2\\xb7 0.5s\\n  provider returned HTTP 500: unexpected or ambiguous parity request\\ntrace: /tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-02/mutant/C03.post-equals/invoke-001.trace.jsonl\\n')"
+        },
+        {
+          "case": "C03.post-help",
+          "assertion": "assert result.returncode == status, (result.returncode, result.stderr)\nAssertionError: (1, b're:agent \\xc2\\xb7 gpt-6-luna (openai \\xc2\\xb7 API key, effort low) \\xc2\\xb7 read, write, and execute \\xc2\\xb7 /tmp/reagent-parity-cases-jome1fbk/C03.post-help/workspace\\n! exec mode: commands run as you, in /tmp/reagent-parity-cases-jome1fbk/C03.post-help/workspace, and can read, write, and use the network\\n\\xe2\\x9c\\x97 provider_error \\xc2\\xb7 1 step \\xc2\\xb7 0 tool calls \\xc2\\xb7 tokens unknown \\xc2\\xb7 0.5s\\n  provider returned HTTP 500: unexpected or ambiguous parity request\\ntrace: /tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-02/mutant/C03.post-help/invoke-001.trace.jsonl\\n')"
+        },
+        {
+          "case": "C03.post-prompt",
+          "assertion": "assert result.returncode == status, (result.returncode, result.stderr)\nAssertionError: (1, b're:agent \\xc2\\xb7 gpt-6-luna (openai \\xc2\\xb7 API key, effort low) \\xc2\\xb7 read, write, and execute \\xc2\\xb7 /tmp/reagent-parity-cases-jome1fbk/C03.post-prompt/workspace\\n! exec mode: commands run as you, in /tmp/reagent-parity-cases-jome1fbk/C03.post-prompt/workspace, and can read, write, and use the network\\n\\xe2\\x9c\\x97 provider_error \\xc2\\xb7 1 step \\xc2\\xb7 0 tool calls \\xc2\\xb7 tokens unknown \\xc2\\xb7 0.5s\\n  provider returned HTTP 500: unexpected or ambiguous parity request\\ntrace: /tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-02/mutant/C03.post-prompt/invoke-001.trace.jsonl\\n')"
+        }
+      ],
+      "mutant_cases_run": [
+        "C03.bad-name",
+        "C03.before-prompt",
+        "C03.bool-false",
+        "C03.joined-trimmed",
+        "C03.malformed-bool",
+        "C03.malformed-duration",
+        "C03.malformed-int",
+        "C03.missing-duration",
+        "C03.missing-int",
+        "C03.missing-text",
+        "C03.overflow-int",
+        "C03.positional-terminator",
+        "C03.post-equals",
+        "C03.post-help",
+        "C03.post-prompt",
+        "C03.repeated",
+        "C03.single-dash",
+        "C03.terminator",
+        "C03.unknown-after",
+        "C03.unknown-flag"
+      ],
+      "duration_seconds": 7.845253
+    },
+    {
+      "id": 6,
+      "description": "Drop the queued typeahead submission at turn completion",
+      "cases": [
+        "C34.typeahead-queue-long-reply"
+      ],
+      "intended_assertion": "Queued input survives a long reply and becomes the next turn exactly once",
+      "selectors": [
+        "C34"
+      ],
+      "patch_sha256": "de346fee596285bc284620c0aec83ab9d722d1095faf33de1124429fde1a349b",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/terminal_turn.go": {
+          "before_sha256": "3354ea3af31cf40ac4d08b4423a91369358e662912f47220e7ab4bd2fc98ae0b",
+          "after_sha256": "9fca485329e43cb5f2ddaeaf157b83e5876c941f40d3678ce93cfb181d233552"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-pzgegi_b/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-pzgegi_b",
+        "exit_code": 0,
+        "duration_seconds": 4.014317
+      },
+      "binary_sha256": "62d7999b2e8269a1a7a28af328dc5406d18e112d9413608921bb8d04cb622d1b",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "C34.typeahead-queue-long-reply",
+          "assertion": "raise AssertionError(\"queued submission lost after held reply release\") from error\nAssertionError: queued submission lost after held reply release"
+        }
+      ],
+      "mutant_cases_run": [
+        "C34.typeahead-queue-long-reply"
+      ],
+      "duration_seconds": 27.775581
+    },
+    {
+      "id": 4,
+      "description": "Let plan mode dispatch edit_file despite its write effect",
+      "cases": [
+        "C16.refuse-edit_file-flag",
+        "T55.plan-edit_file"
+      ],
+      "intended_assertion": "Plan-mode edit is refused before dispatch and leaves the observed file unchanged",
+      "selectors": [
+        "C16.refuse-edit_file-flag",
+        "T55.plan-edit_file"
+      ],
+      "patch_sha256": "ae2370c37c6bf8f16e07716f65b0fc781ccdcd4146e77c2bd4d783926bb4d57b",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/loop.go": {
+          "before_sha256": "7b254364cc63c2b6919c13e2de9e1d372dd2c05779058e464715d47cc341b4d2",
+          "after_sha256": "33ac04fe3ced035549ccf0a227eb72e9027f4e0235fe079172cfd77588985f46"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-th390cee/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-th390cee",
+        "exit_code": 0,
+        "duration_seconds": 4.031462
+      },
+      "binary_sha256": "e0025a624490b415d367b778a6b182536f6fab41d133032b0122da0de35473ea",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "C16.refuse-edit_file-flag",
+          "assertion": "assert denied['ok'] is False and denied['code'] == 'plan_mode', denied\nAssertionError: {'workspace': '/tmp/reagent-parity-cases-hd6x6rgp/C16.refuse-edit_file-flag/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'update', 'path': 'guard.txt', 'changed': True, 'before_sha256': '25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218', 'after_sha256': '34cd4b2b763ac5fdeb63102b7d7375eb1647ba3b4c52b7b61e9566138d3f6f25', 'size_bytes': 8, 'edits': 1, 'edit_counts': [1]}, 'truncated': False, 'effect': 'applied'}"
+        },
+        {
+          "case": "T55.plan-edit_file",
+          "assertion": "assert path.read_bytes() == b'unchanged\\n', 'plan/read-only dispatch changed guarded file'\nAssertionError: plan/read-only dispatch changed guarded file"
+        }
+      ],
+      "mutant_cases_run": [
+        "C16.refuse-edit_file-flag",
+        "T55.plan-edit_file"
+      ],
+      "duration_seconds": 7.837206
+    },
+    {
+      "id": 3,
+      "description": "Strip CRLF instead of just one LF from a prompt file",
+      "cases": [
+        "W07.gpt-6-luna-crlf",
+        "W07.gpt-6-luna-crlf-proxy",
+        "W07.claude-haiku-4-5-crlf"
+      ],
+      "intended_assertion": "CR survives prompt-file LF removal and appears in encoded prompt bytes",
+      "selectors": [
+        "W07.gpt-6-luna-crlf",
+        "W07.claude-haiku-4-5-crlf"
+      ],
+      "patch_sha256": "4336e12432c8f7423c3925ff06f81bfa11fd1c86e1ed731696d34fda8a486da3",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/cli.go": {
+          "before_sha256": "76ed3a4005a254d81098161af28abf74d8bf8d9c9c5b08f89953210189bd96ee",
+          "after_sha256": "d827ec06906f3fac5ff466de74dd2eb0c999b054f1a9d1c8851938c2a83ce557"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-_e7i70qr/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-_e7i70qr",
+        "exit_code": 0,
+        "duration_seconds": 3.937067
+      },
+      "binary_sha256": "1326cc5ec05dadf5cf96408d4563cb35173fb99da19df1c3673e8b52e1504ed7",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W07.claude-haiku-4-5-crlf",
+          "assertion": "assert _parts(body)[0][\"text\"] == expected.decode()\nAssertionError"
+        },
+        {
+          "case": "W07.gpt-6-luna-crlf",
+          "assertion": "assert _parts(body)[0][\"text\"] == expected.decode()\nAssertionError"
+        },
+        {
+          "case": "W07.gpt-6-luna-crlf-proxy",
+          "assertion": "assert _parts(body)[0][\"text\"] == expected.decode()\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W07.gpt-6-luna-crlf",
+        "W07.gpt-6-luna-crlf-proxy",
+        "W07.claude-haiku-4-5-crlf"
+      ],
+      "duration_seconds": 7.332365
+    },
+    {
+      "id": 5,
+      "description": "Record shell output as trusted ordinary user text",
+      "cases": [
+        "W47.projection"
+      ],
+      "intended_assertion": "Shell command retains shell Entry kind and untrusted_tool_data provenance in handoff",
+      "selectors": [
+        "W47.projection"
+      ],
+      "patch_sha256": "0df2df01a02db3d91f5690c8e9ef29f5139d5fd4ab0235d69efb9faec8c196e7",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/session.go": {
+          "before_sha256": "3c94c14f43f0c115200dd13c952be93655a7dd1978b95de9915e43c8a4851f91",
+          "after_sha256": "3ef2d79383210e058ec9425f484e60e000312a16b35da40c2e3097136097de1f"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-epogmmkk/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-epogmmkk",
+        "exit_code": 0,
+        "duration_seconds": 4.083151
+      },
+      "binary_sha256": "0f3536ac262d088f9b7b41e958a9fbebf6a372bd45524a918ce20c683c997959",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W47.projection",
+          "assertion": "assert [r[\"kind\"] for r in records] == [\"user\", \"assistant\", \"tool\", \"assistant\", \"shell\"]\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W47.projection"
+      ],
+      "duration_seconds": 8.527549
+    },
+    {
+      "id": 9,
+      "description": "Disable HTML escaping in the OpenAI request encoder",
+      "cases": [
+        "W07.gpt-6-luna-html",
+        "W07.gpt-6-luna-html-proxy"
+      ],
+      "intended_assertion": "OpenAI request retains Go JSON HTML escaping for < > and &",
+      "selectors": [
+        "W07.gpt-6-luna-html"
+      ],
+      "patch_sha256": "9ebc6ae58ed43128eb46901b18ab1cd636014a8c90a2fdac803f7bc0fc4d49fc",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/openai.go": {
+          "before_sha256": "1019bdb2d9c57ea4a25922a121c5c4972faf6d6566043222a9aa895180a9e306",
+          "after_sha256": "5eb2bab1743e7310bebfbba16563a1d8fea43f12e104e7a70dfac7c9c24f51c3"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-jlr5_c_q/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-jlr5_c_q",
+        "exit_code": 0,
+        "duration_seconds": 4.126683
+      },
+      "binary_sha256": "f8997b43143100705fcd5d41f423137b3e9d4681b5d8b81615606d35657a5f1f",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W07.gpt-6-luna-html",
+          "assertion": "assert escape in result.stdout\nAssertionError"
+        },
+        {
+          "case": "W07.gpt-6-luna-html-proxy",
+          "assertion": "assert escape in result.stdout\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W07.gpt-6-luna-html",
+        "W07.gpt-6-luna-html-proxy"
+      ],
+      "duration_seconds": 7.583115
+    },
+    {
+      "id": 10,
+      "description": "Reverse two Responses request struct fields",
+      "cases": [
+        "W02.chatgpt-auto",
+        "W02.chatgpt-explicit",
+        "W02.chatgpt-request-id.empty-preferred",
+        "W02.chatgpt-request-id.fallback-only",
+        "W02.chatgpt-request-id.neither",
+        "W02.chatgpt-request-id.preferred-only",
+        "W02.gpt-5.6-luna-live",
+        "W02.gpt-5.6-luna-preview",
+        "W02.gpt-5.6-terra-live",
+        "W02.gpt-5.6-terra-preview",
+        "W02.gpt-6-luna-live",
+        "W02.gpt-6-luna-preview",
+        "W02.gpt-6-sol-live",
+        "W02.gpt-6-sol-preview",
+        "W02.gpt-6.1-sol-live",
+        "W02.gpt-6.1-sol-preview",
+        "W08.America-Los_Angeles-ro0-plan0",
+        "W08.America-Los_Angeles-ro0-plan0-anthropic",
+        "W08.America-Los_Angeles-ro0-plan0-proxy",
+        "W08.America-Los_Angeles-ro0-plan1",
+        "W08.America-Los_Angeles-ro0-plan1-anthropic",
+        "W08.America-Los_Angeles-ro0-plan1-proxy",
+        "W08.America-Los_Angeles-ro1-plan0",
+        "W08.America-Los_Angeles-ro1-plan0-anthropic",
+        "W08.America-Los_Angeles-ro1-plan0-proxy",
+        "W08.America-Los_Angeles-ro1-plan1",
+        "W08.America-Los_Angeles-ro1-plan1-anthropic",
+        "W08.America-Los_Angeles-ro1-plan1-proxy",
+        "W08.Etc-GMT+7-ro0-plan0",
+        "W08.Etc-GMT+7-ro0-plan0-anthropic",
+        "W08.Etc-GMT+7-ro0-plan0-proxy",
+        "W08.Etc-GMT+7-ro0-plan1",
+        "W08.Etc-GMT+7-ro0-plan1-anthropic",
+        "W08.Etc-GMT+7-ro0-plan1-proxy",
+        "W08.Etc-GMT+7-ro1-plan0",
+        "W08.Etc-GMT+7-ro1-plan0-anthropic",
+        "W08.Etc-GMT+7-ro1-plan0-proxy",
+        "W08.Etc-GMT+7-ro1-plan1",
+        "W08.Etc-GMT+7-ro1-plan1-anthropic",
+        "W08.Etc-GMT+7-ro1-plan1-proxy",
+        "W08.UTC-ro0-plan0",
+        "W08.UTC-ro0-plan0-anthropic",
+        "W08.UTC-ro0-plan0-proxy",
+        "W08.UTC-ro0-plan1",
+        "W08.UTC-ro0-plan1-anthropic",
+        "W08.UTC-ro0-plan1-proxy",
+        "W08.UTC-ro1-plan0",
+        "W08.UTC-ro1-plan0-anthropic",
+        "W08.UTC-ro1-plan0-proxy",
+        "W08.UTC-ro1-plan1",
+        "W08.UTC-ro1-plan1-anthropic",
+        "W08.UTC-ro1-plan1-proxy",
+        "W08.moved-anthropic-ro0-plan0",
+        "W08.moved-anthropic-ro0-plan1",
+        "W08.moved-anthropic-ro1-plan0",
+        "W08.moved-anthropic-ro1-plan1",
+        "W08.moved-direct-ro0-plan0",
+        "W08.moved-direct-ro0-plan1",
+        "W08.moved-direct-ro1-plan0",
+        "W08.moved-direct-ro1-plan1",
+        "W08.moved-proxy-ro0-plan0",
+        "W08.moved-proxy-ro0-plan1",
+        "W08.moved-proxy-ro1-plan0",
+        "W08.moved-proxy-ro1-plan1"
+      ],
+      "intended_assertion": "Request JSON token order keeps model before instructions",
+      "selectors": [
+        "W02",
+        "W08"
+      ],
+      "patch_sha256": "5ddcd7de15144b73161b35203c55999ecb42991128e5d321a25aac0cf3aaeea6",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/openai.go": {
+          "before_sha256": "1019bdb2d9c57ea4a25922a121c5c4972faf6d6566043222a9aa895180a9e306",
+          "after_sha256": "0ff946b6ed3ab69edb8bb849155ae2b43cc916aa02fe4c19e3687408265d547f"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-ywi44smu/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-ywi44smu",
+        "exit_code": 0,
+        "duration_seconds": 4.096512
+      },
+      "binary_sha256": "2501ab0001333a6639c81cb532bc78a3ce0ecf1354927e4fb96e8924d07b7ea9",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W02.chatgpt-auto",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15728/15728"
+        },
+        {
+          "case": "W02.chatgpt-explicit",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15728/15728"
+        },
+        {
+          "case": "W02.chatgpt-request-id.empty-preferred",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15728/15728"
+        },
+        {
+          "case": "W02.chatgpt-request-id.fallback-only",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15728/15728"
+        },
+        {
+          "case": "W02.chatgpt-request-id.neither",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15728/15728"
+        },
+        {
+          "case": "W02.chatgpt-request-id.preferred-only",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15728/15728"
+        },
+        {
+          "case": "W02.gpt-5.6-luna-live",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-5.6-luna-preview",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-5.6-terra-live",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-5.6-terra-preview",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-6-luna-live",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-6-luna-preview",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-6-sol-live",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-6-sol-preview",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-6.1-sol-live",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W02.gpt-6.1-sol-preview",
+          "assertion": "assert list(body) == [\"model\", \"instructions\", \"input\", \"tools\", \"reasoning\", \"text\",\nAssertionError"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro0-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15872/15872"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro0-plan0-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15847/15847"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro0-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16712/16712"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro0-plan1-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16687/16687"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro1-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10080/10080"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro1-plan0-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10055/10055"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro1-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10920/10920"
+        },
+        {
+          "case": "W08.America-Los_Angeles-ro1-plan1-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10895/10895"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro0-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15872/15872"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro0-plan0-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15847/15847"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro0-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16712/16712"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro0-plan1-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16687/16687"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro1-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10080/10080"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro1-plan0-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10055/10055"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro1-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10920/10920"
+        },
+        {
+          "case": "W08.Etc-GMT+7-ro1-plan1-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10895/10895"
+        },
+        {
+          "case": "W08.UTC-ro0-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15867/15867"
+        },
+        {
+          "case": "W08.UTC-ro0-plan0-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15842/15842"
+        },
+        {
+          "case": "W08.UTC-ro0-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16707/16707"
+        },
+        {
+          "case": "W08.UTC-ro0-plan1-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16682/16682"
+        },
+        {
+          "case": "W08.UTC-ro1-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10075/10075"
+        },
+        {
+          "case": "W08.UTC-ro1-plan0-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10050/10050"
+        },
+        {
+          "case": "W08.UTC-ro1-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10915/10915"
+        },
+        {
+          "case": "W08.UTC-ro1-plan1-proxy",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10890/10890"
+        },
+        {
+          "case": "W08.moved-direct-ro0-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15828/15828"
+        },
+        {
+          "case": "W08.moved-direct-ro0-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16668/16668"
+        },
+        {
+          "case": "W08.moved-direct-ro1-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10036/10036"
+        },
+        {
+          "case": "W08.moved-direct-ro1-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10876/10876"
+        },
+        {
+          "case": "W08.moved-proxy-ro0-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 15803/15803"
+        },
+        {
+          "case": "W08.moved-proxy-ro0-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 16643/16643"
+        },
+        {
+          "case": "W08.moved-proxy-ro1-plan0",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10011/10011"
+        },
+        {
+          "case": "W08.moved-proxy-ro1-plan1",
+          "assertion": "http-1.body: byte 2, expected b'{\"model\":\"gpt-6-luna\",\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and p', got b'{\"instructions\":\"You are re:agent, a local assistant working on the user\\'s supplied task.\\\\n\\\\nUse the available tools to obtain evidence and perform authorized act'; lengths 10851/10851"
+        }
+      ],
+      "mutant_cases_run": [
+        "W02.chatgpt-auto",
+        "W02.chatgpt-explicit",
+        "W02.chatgpt-request-id.empty-preferred",
+        "W02.chatgpt-request-id.fallback-only",
+        "W02.chatgpt-request-id.neither",
+        "W02.chatgpt-request-id.preferred-only",
+        "W02.gpt-5.6-luna-live",
+        "W02.gpt-5.6-luna-preview",
+        "W02.gpt-5.6-terra-live",
+        "W02.gpt-5.6-terra-preview",
+        "W02.gpt-6-luna-live",
+        "W02.gpt-6-luna-preview",
+        "W02.gpt-6-sol-live",
+        "W02.gpt-6-sol-preview",
+        "W02.gpt-6.1-sol-live",
+        "W02.gpt-6.1-sol-preview",
+        "W08.America-Los_Angeles-ro0-plan0",
+        "W08.America-Los_Angeles-ro0-plan0-anthropic",
+        "W08.America-Los_Angeles-ro0-plan0-proxy",
+        "W08.America-Los_Angeles-ro0-plan1",
+        "W08.America-Los_Angeles-ro0-plan1-anthropic",
+        "W08.America-Los_Angeles-ro0-plan1-proxy",
+        "W08.America-Los_Angeles-ro1-plan0",
+        "W08.America-Los_Angeles-ro1-plan0-anthropic",
+        "W08.America-Los_Angeles-ro1-plan0-proxy",
+        "W08.America-Los_Angeles-ro1-plan1",
+        "W08.America-Los_Angeles-ro1-plan1-anthropic",
+        "W08.America-Los_Angeles-ro1-plan1-proxy",
+        "W08.Etc-GMT+7-ro0-plan0",
+        "W08.Etc-GMT+7-ro0-plan0-anthropic",
+        "W08.Etc-GMT+7-ro0-plan0-proxy",
+        "W08.Etc-GMT+7-ro0-plan1",
+        "W08.Etc-GMT+7-ro0-plan1-anthropic",
+        "W08.Etc-GMT+7-ro0-plan1-proxy",
+        "W08.Etc-GMT+7-ro1-plan0",
+        "W08.Etc-GMT+7-ro1-plan0-anthropic",
+        "W08.Etc-GMT+7-ro1-plan0-proxy",
+        "W08.Etc-GMT+7-ro1-plan1",
+        "W08.Etc-GMT+7-ro1-plan1-anthropic",
+        "W08.Etc-GMT+7-ro1-plan1-proxy",
+        "W08.UTC-ro0-plan0",
+        "W08.UTC-ro0-plan0-anthropic",
+        "W08.UTC-ro0-plan0-proxy",
+        "W08.UTC-ro0-plan1",
+        "W08.UTC-ro0-plan1-anthropic",
+        "W08.UTC-ro0-plan1-proxy",
+        "W08.UTC-ro1-plan0",
+        "W08.UTC-ro1-plan0-anthropic",
+        "W08.UTC-ro1-plan0-proxy",
+        "W08.UTC-ro1-plan1",
+        "W08.UTC-ro1-plan1-anthropic",
+        "W08.UTC-ro1-plan1-proxy",
+        "W08.moved-anthropic-ro0-plan0",
+        "W08.moved-anthropic-ro0-plan1",
+        "W08.moved-anthropic-ro1-plan0",
+        "W08.moved-anthropic-ro1-plan1",
+        "W08.moved-direct-ro0-plan0",
+        "W08.moved-direct-ro0-plan1",
+        "W08.moved-direct-ro1-plan0",
+        "W08.moved-direct-ro1-plan1",
+        "W08.moved-proxy-ro0-plan0",
+        "W08.moved-proxy-ro0-plan1",
+        "W08.moved-proxy-ro1-plan0",
+        "W08.moved-proxy-ro1-plan1"
+      ],
+      "duration_seconds": 40.339104
+    },
+    {
+      "id": 11,
+      "description": "Include the first workspace snapshot in the cache hash",
+      "cases": [
+        "W10.base",
+        "W10.base-proxy",
+        "W11.turns",
+        "W11.turns-proxy"
+      ],
+      "intended_assertion": "Independent cache-key derivation excludes first workspace snapshot",
+      "selectors": [
+        "W10.base",
+        "W11.turns"
+      ],
+      "patch_sha256": "82b749cf710136acfc76408e5892203a7be68d8959b5860b5a1a5a8ab31f35c5",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/openai.go": {
+          "before_sha256": "1019bdb2d9c57ea4a25922a121c5c4972faf6d6566043222a9aa895180a9e306",
+          "after_sha256": "39462060423fe51ef5c0bfb7f320778882cc735ff5393523639d40aa6276b72f"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-s0rkl2dn/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-s0rkl2dn",
+        "exit_code": 0,
+        "duration_seconds": 4.047137
+      },
+      "binary_sha256": "e768349e5161405845172e09713850375806ac3454a0f06cba7a50bdf9253b7e",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W10.base",
+          "assertion": "assert body[\"prompt_cache_key\"] == digest.hexdigest()[:32]\nAssertionError"
+        },
+        {
+          "case": "W10.base-proxy",
+          "assertion": "assert body[\"prompt_cache_key\"] == digest.hexdigest()[:32]\nAssertionError"
+        },
+        {
+          "case": "W11.turns",
+          "assertion": "assert body[\"prompt_cache_key\"] == digest.hexdigest()[:32]\nAssertionError"
+        },
+        {
+          "case": "W11.turns-proxy",
+          "assertion": "assert body[\"prompt_cache_key\"] == digest.hexdigest()[:32]\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W10.base",
+        "W10.base-proxy",
+        "W11.turns",
+        "W11.turns-proxy"
+      ],
+      "duration_seconds": 7.941254
+    },
+    {
+      "id": 12,
+      "description": "Omit the last Anthropic tool-result cache breakpoint",
+      "cases": [
+        "W12.batch-and-next",
+        "W12.first",
+        "W12.results-then-text",
+        "W12.results-then-two-texts"
+      ],
+      "intended_assertion": "Last result block carries the ephemeral cache_control marker",
+      "selectors": [
+        "W12"
+      ],
+      "patch_sha256": "8453bc1ee317dcd99c03753c9bc60837c5238eac7ccd66754f36035deeca517b",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/anthropic.go": {
+          "before_sha256": "efe894f59fad228db2e4162b09187dd266445b1745596927e2d7f3ed46913262",
+          "after_sha256": "9a1dbc8d84d37d9f1972ceb425d770ed08656d71a27c18081515566dfa97cd48"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-424bf7lc/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-424bf7lc",
+        "exit_code": 0,
+        "duration_seconds": 4.00592
+      },
+      "binary_sha256": "8b77addd357db70b198010ca482cc63a251dd782a9ad6e83fb848aa10e9cd2c2",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W12.batch-and-next",
+          "assertion": "assert markers == [(len(body[\"messages\"]) - 1, len(body[\"messages\"][-1][\"content\"]) - 1)]\nAssertionError"
+        },
+        {
+          "case": "W12.results-then-text",
+          "assertion": "assert markers == [(len(body[\"messages\"]) - 1, len(body[\"messages\"][-1][\"content\"]) - 1)]\nAssertionError"
+        },
+        {
+          "case": "W12.results-then-two-texts",
+          "assertion": "assert markers == [(len(body[\"messages\"]) - 1, len(body[\"messages\"][-1][\"content\"]) - 1)]\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W12.batch-and-next",
+        "W12.first",
+        "W12.results-then-text",
+        "W12.results-then-two-texts"
+      ],
+      "duration_seconds": 8.987649
+    },
+    {
+      "id": 13,
+      "description": "Retry HTTP 408 in the default policy",
+      "cases": [
+        "W26.openai-408",
+        "W26.proxy-408",
+        "W26.anthropic-408"
+      ],
+      "intended_assertion": "HTTP 408 causes exactly one attempt without default retry",
+      "selectors": [
+        "W26.openai-408",
+        "W26.proxy-408",
+        "W26.anthropic-408"
+      ],
+      "patch_sha256": "cb8ed8540032909075103efb6d7614e9f516fb2cc0e03542726a49b725087c6e",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/transport.go": {
+          "before_sha256": "439ce26f24b40490084bd53f54e844b634d33c1d0ebd4bed9a1abdefa357cdc7",
+          "after_sha256": "bc57013e637e984a40faca0dce22660a608eeee97ebc517585365247d89987ca"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-qctbomiq/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-qctbomiq",
+        "exit_code": 0,
+        "duration_seconds": 4.046715
+      },
+      "binary_sha256": "6ac7397a40c3c2550ad0d1ba2336e8d89f5790ed1ab91fde5003c993d6d8a0a9",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W26.anthropic-408",
+          "assertion": "assert len(requests) == count, (len(requests), count)\nAssertionError: (2, 1)"
+        },
+        {
+          "case": "W26.openai-408",
+          "assertion": "assert len(requests) == count, (len(requests), count)\nAssertionError: (2, 1)"
+        },
+        {
+          "case": "W26.proxy-408",
+          "assertion": "assert len(requests) == count, (len(requests), count)\nAssertionError: (2, 1)"
+        }
+      ],
+      "mutant_cases_run": [
+        "W26.openai-408",
+        "W26.proxy-408",
+        "W26.anthropic-408"
+      ],
+      "duration_seconds": 7.912474
+    },
+    {
+      "id": 14,
+      "description": "Treat an incomplete SSE terminal event as transient overload",
+      "cases": [
+        "W28.no-retry-incomplete-event"
+      ],
+      "intended_assertion": "Incomplete SSE is not retried even with retry-window admission enabled",
+      "selectors": [
+        "W28.no-retry-incomplete-event"
+      ],
+      "patch_sha256": "7e3e71c10ed12a6b71aaf2eff8a235e842a7cd9d0d05d9ce6dd4d45f9354536f",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/openai_stream.go": {
+          "before_sha256": "99a4f965b34f5871b984b023f5fe1fd1b5638d098cd033410a9a2c4e91c803d1",
+          "after_sha256": "c431737d8fe935dc1231a7880ce34884bdc9e64a934648d70631b66d5daa17b6"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-440_tljk/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-440_tljk",
+        "exit_code": 0,
+        "duration_seconds": 4.078886
+      },
+      "binary_sha256": "eacc7a821caddf1e4cffd4ae9466eac94217e38d4d6bcb825672aaa0a9ac4f19",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W28.no-retry-incomplete-event",
+          "assertion": "assert len(requests) == count, (len(requests), count)\nAssertionError: (4, 1)"
+        }
+      ],
+      "mutant_cases_run": [
+        "W28.no-retry-incomplete-event"
+      ],
+      "duration_seconds": 15.452245
+    },
+    {
+      "id": 15,
+      "description": "Use the retry-window admission deadline as an in-flight deadline",
+      "cases": [
+        "W29.held-success"
+      ],
+      "intended_assertion": "A successful response held past admission deadline still completes",
+      "selectors": [
+        "W29.held-success"
+      ],
+      "patch_sha256": "3777a14a1554e30204d10613591ef5048257215bd2d9631854539aa78fbadfbc",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/transport.go": {
+          "before_sha256": "439ce26f24b40490084bd53f54e844b634d33c1d0ebd4bed9a1abdefa357cdc7",
+          "after_sha256": "05507e1b0cffd023f217256e262e01d9a3e160ecb6a98aa4d78cd6ed932aa97a"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-yntf4js_/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-yntf4js_",
+        "exit_code": 0,
+        "duration_seconds": 4.100855
+      },
+      "binary_sha256": "1e8f6e72d8392c3d79730e763fe98003a022c2332d1f1ab757f430ba58513d8d",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W29.held-success",
+          "assertion": "assert not future.done(), \"admission deadline cancelled the in-flight request\"\nAssertionError: admission deadline cancelled the in-flight request"
+        }
+      ],
+      "mutant_cases_run": [
+        "W29.held-success"
+      ],
+      "duration_seconds": 8.066253
+    },
+    {
+      "id": 16,
+      "description": "Add cached input to inclusive OpenAI input totals again",
+      "cases": [
+        "W32.openai-counters",
+        "W32.proxy-counters"
+      ],
+      "intended_assertion": "Input-token totals already include cached tokens and are not double counted",
+      "selectors": [
+        "W32.openai-counters",
+        "W32.proxy-counters"
+      ],
+      "patch_sha256": "d8410363b0d5a5e7965b71c3e2d976a57fe4b73d05269b6ed2fa8e7be742eb9a",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/openai_response.go": {
+          "before_sha256": "ac10503be802c5a694f354a94a397ea030074dca4452f7b6e96d96973274eac2",
+          "after_sha256": "88e80baf30f0f3b4fd4a628bb4e5063e0221736b9788d838f0ae22d27d12e103"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-65fx5bn8/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-65fx5bn8",
+        "exit_code": 0,
+        "duration_seconds": 4.209331
+      },
+      "binary_sha256": "3e118f773f4b46e43f1ccfcf383ca7ef54a0685f40deb9138091ba67a23dd0f4",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W32.openai-counters",
+          "assertion": "assert result[\"usage\"] == usage, result\nAssertionError: {'status': 'completed', 'reply': 'wire answer café € 🦀\\n', 'steps': 1, 'tool_calls': 0, 'usage': {'known': True, 'input_tokens': 138, 'cached_input_tokens': 37, 'output_tokens': 29, 'reasoning_tokens': 11}, 'trace_path': '/tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-16/mutant/W32.openai-counters/invoke-001.trace.jsonl'}"
+        },
+        {
+          "case": "W32.proxy-counters",
+          "assertion": "assert result[\"usage\"] == usage, result\nAssertionError: {'status': 'completed', 'reply': 'wire answer café € 🦀\\n', 'steps': 1, 'tool_calls': 0, 'usage': {'known': True, 'input_tokens': 138, 'cached_input_tokens': 37, 'output_tokens': 29, 'reasoning_tokens': 11}, 'trace_path': '/tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-16/mutant/W32.proxy-counters/invoke-001.trace.jsonl'}"
+        }
+      ],
+      "mutant_cases_run": [
+        "W32.openai-counters",
+        "W32.proxy-counters"
+      ],
+      "duration_seconds": 7.592003
+    },
+    {
+      "id": 17,
+      "description": "Choose maximum probability instead of cheapest sufficient cumulative route",
+      "cases": [
+        "W43.threshold-below"
+      ],
+      "intended_assertion": "Route follows the cheapest cumulative .80 threshold, not classifier argmax",
+      "selectors": [
+        "W43.threshold-below"
+      ],
+      "patch_sha256": "cf380b2f970bdfd2f089f36a89af1f5639d3bb1d61fcefd2a410d612a485f6a4",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/auto.go": {
+          "before_sha256": "e8ba9a3bd6686876275a9fd33dbf92939bf83fd7ab0454296a2eeca7d7d523ef",
+          "after_sha256": "a044b41a2468d708d9009430ecc81ad33ff8973de2c7932ce43c933fd94fec77"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-xhi3qd24/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-xhi3qd24",
+        "exit_code": 0,
+        "duration_seconds": 4.203657
+      },
+      "binary_sha256": "e95f79b2bec1df5809bc783f34a85b36116861f524b3d18365efafc9743f086c",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W43.threshold-below",
+          "assertion": "assert body.get(\"reasoning\", {}).get(\"effort\", \"\") == effort\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W43.threshold-below"
+      ],
+      "duration_seconds": 7.631461
+    },
+    {
+      "id": 18,
+      "description": "Leak provider-native reasoning items into model-switch visible text",
+      "cases": [
+        "W47.projection",
+        "W48.roundtrip"
+      ],
+      "intended_assertion": "Handoff bytes omit opaque encrypted native reasoning while preserving visible blocks",
+      "selectors": [
+        "W47.projection",
+        "W48.roundtrip"
+      ],
+      "patch_sha256": "b1ef608e9bd3914758ee2b2f5af10c39f27ca7df192ac00f4c19a4e1c1f41543",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/model_switch.go": {
+          "before_sha256": "beb1b48e9ad78916ed95d3b4353b4c380b69c14406a6921a2b0ea3fab2588ec2",
+          "after_sha256": "5704da6f6c974c5c2f70dde7dcd14fe58206ae883bbb23bd180bac37cce194ca"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-top1qvlb/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-top1qvlb",
+        "exit_code": 0,
+        "duration_seconds": 3.931295
+      },
+      "binary_sha256": "2d7d12463bf22eca6080b5f674a17089181105535e6647df0ea65b77f0b167c6",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W47.projection",
+          "assertion": "assert \"native-secret\" not in wrapped[0]\nAssertionError"
+        },
+        {
+          "case": "W48.roundtrip",
+          "assertion": "assert \"native-secret\" not in wrapped[0]\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W47.projection",
+        "W48.roundtrip"
+      ],
+      "duration_seconds": 8.563548
+    },
+    {
+      "id": 19,
+      "description": "Treat .environment as a withheld .env name",
+      "cases": [
+        "T03.environment"
+      ],
+      "intended_assertion": "The .environment allowed-path fixture remains readable and visible",
+      "selectors": [
+        "T03.environment"
+      ],
+      "patch_sha256": "b5da6b83d07cf94701bea886989bcb5060bbf39d37b864c9ef9cbfc91a32ae21",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/workspace.go": {
+          "before_sha256": "0c2b8cb4cf4b08ba0e78418fd4a8cf8ed99bf7a6e5d534ec9513a1e841679788",
+          "after_sha256": "aa3e8ee56f4e3df124fd9cbcb74c3936b88adbb3ec10e33956487fcc448f0b76"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-itcpasw2/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-itcpasw2",
+        "exit_code": 0,
+        "duration_seconds": 3.863673
+      },
+      "binary_sha256": "8eb2e669c1b369238388c48ce5465674d6b56ee203f5e41453ec0c8296656984",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T03.environment",
+          "assertion": "assert out == expected, (out, expected)\nAssertionError: ({'workspace': '/tmp/reagent-parity-cases-wh1jwndx/T03.environment/workspace', 'ok': False, 'code': 'invalid_path', 'message': '.environment is not readable', 'data': None, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-wh1jwndx/T03.environment/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'path': '.environment', 'sha256': 'e49c81e2d2f84e259d40e2fb8192f3bcd198b355184845d76d8f58807d0d78ee', 'size_bytes': 11, 'total_lines': 2, 'lines': [{'number': 1, 'text': 'alpha'}, {'number': 2, 'text': 'beta'}], 'next_line': None, 'eof': True}, 'truncated': False, 'effect': 'none'})"
+        }
+      ],
+      "mutant_cases_run": [
+        "T03.environment"
+      ],
+      "duration_seconds": 7.335866
+    },
+    {
+      "id": 20,
+      "description": "Remove resolved-path workspace containment before writing through an ancestor alias",
+      "cases": [
+        "T04.ancestor"
+      ],
+      "intended_assertion": "An outside symlink ancestor refuses writes without publication and preserves the external sentinel",
+      "selectors": [
+        "T04.ancestor"
+      ],
+      "patch_sha256": "2ea7f0d082e0b48d4ac6ceb10c0870776665d004cc3bc5661930498f4b0ab0f1",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/workspace.go": {
+          "before_sha256": "0c2b8cb4cf4b08ba0e78418fd4a8cf8ed99bf7a6e5d534ec9513a1e841679788",
+          "after_sha256": "8a7b9a84ab2a58b375843a6e8b72ef7ffc4e3e498bb2348dd1bae57d9d2131cb"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-q4rtdg07/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-q4rtdg07",
+        "exit_code": 0,
+        "duration_seconds": 4.035662
+      },
+      "binary_sha256": "6d215d17baf911b0e179da060903ff2f5a4ec8e5905dd622f521375b563fe4c1",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T04.ancestor",
+          "assertion": "assert sorted(path.name for path in target.iterdir()) == ['sentinel'], 'outside ancestor write published'\nAssertionError: outside ancestor write published"
+        }
+      ],
+      "mutant_cases_run": [
+        "T04.ancestor"
+      ],
+      "duration_seconds": 7.445158
+    },
+    {
+      "id": 21,
+      "description": "Authorize overwrite from an observed digest even when the current bytes differ",
+      "cases": [
+        "T14.explicit"
+      ],
+      "intended_assertion": "An observed digest cannot authorize an explicit-digest overwrite after an external byte change",
+      "selectors": [
+        "T14.explicit"
+      ],
+      "patch_sha256": "d13014fce174f73b13bded11b8bb86ca9c012b8fe8bd0408dab9b3effff549a7",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_write_file.go": {
+          "before_sha256": "180490cbddfde3e459f78c079731d6966e11e1f169383dcb161f6029d5b8525b",
+          "after_sha256": "861396498ea91ad0fe5b754b02b8d222641f58998e641252fb91fee24f8bcf37"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-ib4drghn/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-ib4drghn",
+        "exit_code": 0,
+        "duration_seconds": 4.030198
+      },
+      "binary_sha256": "7738465ae93307435e5f60ec27b3a9ad7b59bbe3d859a7b923aae76db6b6d3ad",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T14.explicit",
+          "assertion": "assert out == expected, (out, expected)\nAssertionError: ({'workspace': '/tmp/reagent-parity-cases-_4mino76/T14.explicit/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'overwrite', 'path': 'f', 'before_sha256': 'd67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed', 'after_sha256': '23794d91c53ae875c8e247d72561e35d9d06ee07c70c9e0dbcc977a6d161504a', 'size_bytes': 2}, 'truncated': False, 'effect': 'applied'}, {'workspace': '/tmp/reagent-parity-cases-_4mino76/T14.explicit/workspace', 'ok': False, 'code': 'stale_file', 'message': 'the file has changed since it was read; its current digest is d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed', 'data': None, 'truncated': False, 'effect': 'none'})"
+        }
+      ],
+      "mutant_cases_run": [
+        "T14.explicit"
+      ],
+      "duration_seconds": 8.118475
+    },
+    {
+      "id": 22,
+      "description": "Publish the first batch edit before validating the second edit",
+      "cases": [
+        "T17.atomic"
+      ],
+      "intended_assertion": "A later missing, ambiguous or overlapping edit refuses the batch without changing original file bytes",
+      "selectors": [
+        "T17.atomic"
+      ],
+      "patch_sha256": "e3a34a185c6950634e803656987b8d6d24c5ad2a8cd8670df0e968a4995c0a39",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_edit_file.go": {
+          "before_sha256": "519ad2b11c567997b0903159df76eb222e488d63e763d29a9e20f9016dc9e788",
+          "after_sha256": "9fbfca0ce0ae217fa5f5b33b0687e95045556f715d8772a1d71f85d974270324"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-7_427vy_/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-7_427vy_",
+        "exit_code": 0,
+        "duration_seconds": 4.063527
+      },
+      "binary_sha256": "60e60d693a732a35bd903b1c37d33961d95f8db27005a51e11175a2c45baa845",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T17.atomic",
+          "assertion": "assert (ctx.workspace / 'f').read_bytes() == data\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "T17.atomic"
+      ],
+      "duration_seconds": 7.719969
+    },
+    {
+      "id": 23,
+      "description": "Insert an automatic newline before append_text",
+      "cases": [
+        "T18.append-no-lf"
+      ],
+      "intended_assertion": "Appending preserves the exact caller-supplied bytes without an implicit newline",
+      "selectors": [
+        "T18.append-no-lf"
+      ],
+      "patch_sha256": "0440d5ad27c9c6fc2b074993d7ab5089fd8d4c1f6f5fa5a074f73bed87147ca3",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_edit_file.go": {
+          "before_sha256": "519ad2b11c567997b0903159df76eb222e488d63e763d29a9e20f9016dc9e788",
+          "after_sha256": "558fe41e77f27740195ac61ca131990b52dc839f925f6dc659bfb4e4f4c66ce6"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-ssiw16fh/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-ssiw16fh",
+        "exit_code": 0,
+        "duration_seconds": 4.013185
+      },
+      "binary_sha256": "5723d650d37f632f2944c1f63c723a64c8f007b4000a132049d5f60bc2b29468",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T18.append-no-lf",
+          "assertion": "assert out == expected, (out, expected)\nAssertionError: ({'workspace': '/tmp/reagent-parity-cases-xaaopwv0/T18.append-no-lf/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'update', 'path': 'f', 'changed': True, 'before_sha256': '8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8', 'after_sha256': '55ce793debd385067fa28fa7125f92c320948a5b7d6e086916289d5100f87b19', 'size_bytes': 10, 'appended_bytes': 4}, 'truncated': False, 'effect': 'applied'}, {'workspace': '/tmp/reagent-parity-cases-xaaopwv0/T18.append-no-lf/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'update', 'path': 'f', 'changed': True, 'before_sha256': '8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8', 'after_sha256': 'ecf7cf5b3fd389bb36c14bf657f48ce93620052367887dfe8a05c765e4c6f069', 'size_bytes': 9, 'appended_bytes': 4}, 'truncated': False, 'effect': 'applied'})"
+        }
+      ],
+      "mutant_cases_run": [
+        "T18.append-no-lf"
+      ],
+      "duration_seconds": 7.67666
+    },
+    {
+      "id": 24,
+      "description": "Follow a recursive-delete symlink and remove its target before the link",
+      "cases": [
+        "T21.outside-link"
+      ],
+      "intended_assertion": "Recursive deletion removes only the symlink and preserves every outside target byte",
+      "selectors": [
+        "T21.outside-link"
+      ],
+      "patch_sha256": "4729c3942fec56d1af751b7a5f7ec8cbca0b63a7b271ec1cfb57f56178d71625",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_write_file.go": {
+          "before_sha256": "180490cbddfde3e459f78c079731d6966e11e1f169383dcb161f6029d5b8525b",
+          "after_sha256": "c00c70140a158e0b498cfade140ee0cd25989231d49e469bb9998763b45b5fb1"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-a6768pyl/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-a6768pyl",
+        "exit_code": 0,
+        "duration_seconds": 4.01853
+      },
+      "binary_sha256": "70897d5eedc1d9e0b33aebff1c42347adab1fcc0636a8533e890f82753111127",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T21.outside-link",
+          "assertion": "assert outside.exists(), 'outside symlink target disappeared'\nAssertionError: outside symlink target disappeared"
+        }
+      ],
+      "mutant_cases_run": [
+        "T21.outside-link"
+      ],
+      "duration_seconds": 7.436354
+    },
+    {
+      "id": 25,
+      "description": "Report the requested recursive-delete root instead of the actual removed prefix on partial failure",
+      "cases": [
+        "T22.partial-permission"
+      ],
+      "intended_assertion": "A controlled deletion failure reports only paths actually removed, never the surviving requested root",
+      "selectors": [
+        "T22.partial-permission"
+      ],
+      "patch_sha256": "69ea368e02efac7b37e8c39df6dbf3059025e2ccb2983e8126bbe53ed7c7e950",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_write_file.go": {
+          "before_sha256": "180490cbddfde3e459f78c079731d6966e11e1f169383dcb161f6029d5b8525b",
+          "after_sha256": "145a750f9e8d6e94961cdbf84519e033c1108a23ebd0d9df4ece5e0d4b0bec5f"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-myhqww48/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-myhqww48",
+        "exit_code": 0,
+        "duration_seconds": 4.018101
+      },
+      "binary_sha256": "c24389b5d40088dda0fbc295b6e0eeb450fad6a3dfbf9b19a65b32d98f513e07",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T22.partial-permission",
+          "assertion": "assert out == expected, (out, expected)\nAssertionError: ({'workspace': '/tmp/reagent-parity-cases-hr4_5rso/T22.partial-permission/workspace', 'ok': False, 'code': 'permission_denied', 'message': 'path is not readable', 'data': {'operation': 'delete', 'path': 'tree', 'recursive': True, 'removed_paths': ['tree'], 'removed_count': 1, 'omitted': 0, 'failed_path': 'tree/a-blocked/f'}, 'truncated': False, 'effect': 'applied'}, {'workspace': '/tmp/reagent-parity-cases-hr4_5rso/T22.partial-permission/workspace', 'ok': False, 'code': 'permission_denied', 'message': 'path is not readable', 'data': {'operation': 'delete', 'path': 'tree', 'recursive': True, 'removed_paths': ['tree/z-removed'], 'removed_count': 1, 'omitted': 0, 'failed_path': 'tree/a-blocked/f'}, 'truncated': False, 'effect': 'applied'})"
+        }
+      ],
+      "mutant_cases_run": [
+        "T22.partial-permission"
+      ],
+      "duration_seconds": 7.437557
+    },
+    {
+      "id": 26,
+      "description": "Continue an exec then-chain after a nonzero predecessor",
+      "cases": [
+        "T32.failure-1"
+      ],
+      "intended_assertion": "A nonzero command stops the chain before later process launches and sentinel writes",
+      "selectors": [
+        "T32.failure-1"
+      ],
+      "patch_sha256": "aa655ee512fcee2287a7d09b95b9e50e58a8bacb6036a6e71b6b9f2e95a538a3",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_exec.go": {
+          "before_sha256": "00900ad05afa1f5b81166257c2491e44038d20399af4eb51be210c3f5365c2c4",
+          "after_sha256": "a31fc72d527b06f2ce0e08ebf078a55c0aa0f2c1a7f18c3b6acc77655e167782"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-zmvu1pz0/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-zmvu1pz0",
+        "exit_code": 0,
+        "duration_seconds": 3.992933
+      },
+      "binary_sha256": "0eff160b7b789e14dc4bc049264bb9b929123e1fde9d1e29b203cfa547be3a68",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T32.failure-1",
+          "assertion": "assert len(steps) == ran, outcome\nAssertionError: {'workspace': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'steps': [{'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-0\").write_text(\"0\"); print(os.getcwd()); sys.exit(9)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 9, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 16, 'timeout_ms': 10000, 'termination_reason': None}, {'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-1\").write_text(\"1\"); print(os.getcwd()); sys.exit(0)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 0, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 15, 'timeout_ms': 10000, 'termination_reason': None}, {'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-2\").write_text(\"2\"); print(os.getcwd()); sys.exit(0)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 0, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 16, 'timeout_ms': 10000, 'termination_reason': None}, {'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-3\").write_text(\"3\"); print(os.getcwd()); sys.exit(0)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 0, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 18, 'timeout_ms': 10000, 'termination_reason': None}, {'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-4\").write_text(\"4\"); print(os.getcwd()); sys.exit(0)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 0, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 31, 'timeout_ms': 10000, 'termination_reason': None}, {'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-5\").write_text(\"5\"); print(os.getcwd()); sys.exit(0)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 0, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 20, 'timeout_ms': 10000, 'termination_reason': None}, {'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-6\").write_text(\"6\"); print(os.getcwd()); sys.exit(0)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 0, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 16, 'timeout_ms': 10000, 'termination_reason': None}, {'argv': ['python3', '-c', 'from pathlib import Path; import os,sys; Path(\"step-7\").write_text(\"7\"); print(os.getcwd()); sys.exit(0)'], 'resolved_executable': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/home/.parity-bin/python3', 'cwd': 'sub', 'exit_code': 0, 'signal': None, 'stdout': '/tmp/reagent-parity-cases-1mqq7rqr/T32.failure-1/workspace/sub\\n', 'stderr': '', 'stdout_bytes_seen': 63, 'stderr_bytes_seen': 0, 'stdout_truncated': False, 'stderr_truncated': False, 'output_may_be_incomplete': False, 'encoding_replaced': False, 'duration_ms': 20, 'timeout_ms': 10000, 'termination_reason': None}]}, 'truncated': False, 'effect': 'applied'}"
+        }
+      ],
+      "mutant_cases_run": [
+        "T32.failure-1"
+      ],
+      "duration_seconds": 7.662402
+    },
+    {
+      "id": 27,
+      "description": "Cancel only the exec leader instead of terminating its process tree",
+      "cases": [
+        "T34.redirected-escape"
+      ],
+      "intended_assertion": "After exec timeout, independently observed descendants in the leader process group are no longer executing",
+      "selectors": [
+        "T34.redirected-escape"
+      ],
+      "patch_sha256": "10e915163e12f91ec11998f63bfc2010bf3099d3b90e427c805d3997a212918a",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_exec.go": {
+          "before_sha256": "00900ad05afa1f5b81166257c2491e44038d20399af4eb51be210c3f5365c2c4",
+          "after_sha256": "1221d7ac797d1226dd31f8bbcfb5afd29dfe695a947e07b1c3197262d1984fe6"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-mklchu0t/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-mklchu0t",
+        "exit_code": 0,
+        "duration_seconds": 3.998312
+      },
+      "binary_sha256": "8b8cf46bdba79874e809900f12dea3aec3884d2e55ed808bbb6184fc46fa9e18",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T34.redirected-escape",
+          "assertion": "assert not any(alive.values()), ('descendants still executing', states)\nAssertionError: ('descendants still executing', {2324997: {'ppid': 1, 'pgid': 2324995, 'state': 'S', 'start': [17284950]}, 2324998: {'ppid': 2324997, 'pgid': 2324998, 'state': 'S', 'start': [17284950]}})"
+        }
+      ],
+      "mutant_cases_run": [
+        "T34.redirected-escape"
+      ],
+      "duration_seconds": 27.701418
+    },
+    {
+      "id": 28,
+      "description": "Remove the refusal of promisor and partial-clone repositories",
+      "cases": [
+        "T40.promisor.extension",
+        "T40.promisor.remote"
+      ],
+      "intended_assertion": "Promisor and partial-clone configuration is refused before any lazy object read or external fetch program",
+      "selectors": [
+        "T40.promisor"
+      ],
+      "patch_sha256": "43d7c2ce73d830aa2831fe5b038556352f36cc7983dc556633402254e81c273f",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_git_inspect.go": {
+          "before_sha256": "afb921905c84df38ed29c633aa5a9a67c809503b8be4a6746dd87d08ba399a50",
+          "after_sha256": "089bf72a75b63d30c0b03ea2daa826ebd6631ccfbfbf8f7643a8f984beaaf408"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-gi11ou0b/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-gi11ou0b",
+        "exit_code": 0,
+        "duration_seconds": 4.104538
+      },
+      "binary_sha256": "cebaac9c95264c06d8d411c3d3a750adccc2ed49291f1a821f89ff4f09da0525",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T40.promisor.extension",
+          "assertion": "assert all(not out['ok'] and out['code'] == 'unsupported_repository' and out['effect'] == 'none'\nAssertionError: [{'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.extension/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'status', 'rev': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': '', 'output_bytes_seen': 0, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.extension/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'worktree_diff', 'rev': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': '', 'output_bytes_seen': 0, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.extension/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'show', 'rev': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': 'commit d0937ec3875d18fc0ce30964f60fbf09b1440c12\\nAuthor:     Parity Fixture <parity@example.invalid>\\nAuthorDate: Sat Jan 1 00:00:00 2000 +0000\\nCommit:     Parity Fixture <parity@example.invalid>\\nCommitDate: Sat Jan 1 00:00:00 2000 +0000\\n\\n    base fixture\\n\\n a.txt | 1 +\\n b.txt | 1 +\\n 2 files changed, 2 insertions(+)\\n', 'output_bytes_seen': 315, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.extension/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'log', 'to': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'count_limit': 20, 'output': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12 base fixture\\n', 'output_bytes_seen': 54, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.extension/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'diff', 'from': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'to': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': '', 'output_bytes_seen': 0, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}]"
+        },
+        {
+          "case": "T40.promisor.remote",
+          "assertion": "assert all(not out['ok'] and out['code'] == 'unsupported_repository' and out['effect'] == 'none'\nAssertionError: [{'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.remote/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'status', 'rev': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': '', 'output_bytes_seen': 0, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.remote/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'worktree_diff', 'rev': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': '', 'output_bytes_seen': 0, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.remote/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'show', 'rev': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': 'commit d0937ec3875d18fc0ce30964f60fbf09b1440c12\\nAuthor:     Parity Fixture <parity@example.invalid>\\nAuthorDate: Sat Jan 1 00:00:00 2000 +0000\\nCommit:     Parity Fixture <parity@example.invalid>\\nCommitDate: Sat Jan 1 00:00:00 2000 +0000\\n\\n    base fixture\\n\\n a.txt | 1 +\\n b.txt | 1 +\\n 2 files changed, 2 insertions(+)\\n', 'output_bytes_seen': 315, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.remote/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'log', 'to': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'count_limit': 20, 'output': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12 base fixture\\n', 'output_bytes_seen': 54, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-lczbgq6s/T40.promisor.remote/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'diff', 'from': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'to': 'd0937ec3875d18fc0ce30964f60fbf09b1440c12', 'output': '', 'output_bytes_seen': 0, 'output_truncated': False, 'encoding_replaced': False}, 'truncated': False, 'effect': 'none'}]"
+        }
+      ],
+      "mutant_cases_run": [
+        "T40.promisor.extension",
+        "T40.promisor.remote"
+      ],
+      "duration_seconds": 11.849563
+    },
+    {
+      "id": 29,
+      "description": "Change one word in the model-visible edit_not_found error",
+      "cases": [
+        "T16.missing"
+      ],
+      "intended_assertion": "An absent edit anchor retains the exact edit_not_found diagnostic wording",
+      "selectors": [
+        "T16.missing"
+      ],
+      "patch_sha256": "8c9d9d2df72be3e10a19f0f8c3402fb258ff7d5b2a0489ecfda1a956218d0f07",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/tool_edit_file.go": {
+          "before_sha256": "519ad2b11c567997b0903159df76eb222e488d63e763d29a9e20f9016dc9e788",
+          "after_sha256": "209a1ac8f080b537f98bf763fda51d1b45e96c3faab4ae3362f5a73c901ee44b"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-f6sss2gy/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-f6sss2gy",
+        "exit_code": 0,
+        "duration_seconds": 3.957324
+      },
+      "binary_sha256": "95de82a82ec2677ff61b8b1568e1d02c91a547a96b4a72aec42fee136c1e114f",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "T16.missing",
+          "assertion": "assert out == expected, (out, expected)\nAssertionError: ({'workspace': '/tmp/reagent-parity-cases-um6kcacq/T16.missing/workspace', 'ok': False, 'code': 'edit_not_found', 'message': 'old_text does not appear in the file; read the range again before retrying', 'data': None, 'truncated': False, 'effect': 'none'}, {'workspace': '/tmp/reagent-parity-cases-um6kcacq/T16.missing/workspace', 'ok': False, 'code': 'edit_not_found', 'message': 'old_text does not occur in the file; read the range again before retrying', 'data': None, 'truncated': False, 'effect': 'none'})"
+        }
+      ],
+      "mutant_cases_run": [
+        "T16.missing"
+      ],
+      "duration_seconds": 7.605946
+    },
+    {
+      "id": 7,
+      "description": "Skip checkpoint envelope checksum validation during resume",
+      "cases": [
+        "C19.corrupt-checksum"
+      ],
+      "intended_assertion": "A changed state with the old checksum is refused with the exact checksum diagnostic before any request",
+      "selectors": [
+        "C19.corrupt-checksum"
+      ],
+      "patch_sha256": "cf0371e39374d660e1aac45e747e87e65ce48d30fdb7fbdba6955528f954bb09",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/session_store.go": {
+          "before_sha256": "a5d2a4f079da32c63738420a5398a993b652c4c0b0d4d8556734027f95f90685",
+          "after_sha256": "546214493b6cd7133ccd8e65f6524ef3a6d718a4e5739486f5558457b0ffd582"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-_wi7jok9/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-_wi7jok9",
+        "exit_code": 0,
+        "duration_seconds": 3.958937
+      },
+      "binary_sha256": "dc3aa914db9456b8b53438522347c6bdb1440d3f1b816b9d8ca06937832c2763",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "C19.corrupt-checksum",
+          "assertion": "assert result.returncode == 2 and expected.encode() in result.stderr, (\nAssertionError: ('checksum rejection', 'checkpoint checksum mismatch', CompletedProcess(args=['/tmp/reagent-mutant-_wi7jok9/reagent-mutant', 'chat', '--trace-dir', '/tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-07/mutant/C19.corrupt-checksum/invoke-002.traces', '--resume', '0123456789abcdef'], returncode=0, stdout=b'', stderr=b're:agent chat \\xc2\\xb7 gpt-6-sol (openai \\xc2\\xb7 API key, effort low)\\nsession ID: 0123456789abcdef\\nworkspace /tmp/reagent-parity-cases-sf2h18vz/C19.corrupt-checksum/workspace \\xc2\\xb7 read, write, and execute \\xc2\\xb7 unlimited steps, unlimited tool calls per turn\\n! exec mode: commands run as you, in /tmp/reagent-parity-cases-sf2h18vz/C19.corrupt-checksum/workspace, and can read, write, and use the network\\n/help for commands \\xc2\\xb7 Ctrl-D to exit\\nresume: reagent chat --resume 0123456789abcdef\\n'))"
+        }
+      ],
+      "mutant_cases_run": [
+        "C19.corrupt-checksum"
+      ],
+      "duration_seconds": 6.865253
+    },
+    {
+      "id": 8,
+      "description": "Forget the GC setting on checkpoint restore",
+      "cases": [
+        "A32.recall-resume-unchanged"
+      ],
+      "intended_assertion": "Restored GC stays enabled in the next request and recall registration",
+      "selectors": [
+        "A32.recall-resume-unchanged"
+      ],
+      "patch_sha256": "d640993e948e02f3e17878d6f6d2205c22c6575eebbb85a59e0abf89558ce11b",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/session.go": {
+          "before_sha256": "3c94c14f43f0c115200dd13c952be93655a7dd1978b95de9915e43c8a4851f91",
+          "after_sha256": "054c12d761f6f95d87c6251f1bb97b1d90311dcfd026d0d11f8bb0d98615f091"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-wz5fftip/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-wz5fftip",
+        "exit_code": 0,
+        "duration_seconds": 4.062922
+      },
+      "binary_sha256": "7058bf3ec4c8f8157298ea06a4c4152c900acc40aa243c4ba8915fcc5ecb58bd",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "A32.recall-resume-unchanged",
+          "assertion": "assert len(outputs) == 1 and json.loads(outputs[0]['output'])['code'] == 'context_gc'\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "A32.recall-resume-unchanged"
+      ],
+      "duration_seconds": 8.42916
+    },
+    {
+      "id": 30,
+      "description": "Fork history at the current tool position rather than the complete-batch boundary",
+      "cases": [
+        "A04.native-prebatch"
+      ],
+      "intended_assertion": "The native fork contains no current-batch assistant, read or write outcome",
+      "selectors": [
+        "A04.native-prebatch"
+      ],
+      "patch_sha256": "2923829d5d62385f7c843c3fb188eadd292732ba974fce9b22d45b9b7b4e71c8",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/agent_context.go": {
+          "before_sha256": "5598c20101414c25706bac071d0a5bdf4564042a9c00c3f6a01295c117b3f120",
+          "after_sha256": "194956fae7abbaf5c5638b0f78eca2e24c7c62d4fe60852aca6a32e56abf9cec"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-9w7mkqsv/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-9w7mkqsv",
+        "exit_code": 0,
+        "duration_seconds": 4.042108
+      },
+      "binary_sha256": "2cbc558450318b7e0ee922db0e1110807c9e2d2743bdbb88c7b93554c73acaa6",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "A04.native-prebatch",
+          "assertion": "assert len(child['history']) == boundary + 1\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "A04.native-prebatch"
+      ],
+      "duration_seconds": 10.492839
+    },
+    {
+      "id": 31,
+      "description": "Share child file observations with sibling and parent workspaces",
+      "cases": [
+        "A20.competing"
+      ],
+      "intended_assertion": "A sibling without a local read cannot overwrite a file read by another child",
+      "selectors": [
+        "A20.competing"
+      ],
+      "patch_sha256": "2697d28319b92c4e14d5f59ce93e65aba0394eb0756e30b53787e4c530a17f29",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/agents.go": {
+          "before_sha256": "97fa1d574399703ebc5277dd6d4789d3f6f4035c0526d2fb9ab667b3e396a01d",
+          "after_sha256": "b87bdeefbacdaedb667a11de2f38d5b8bf089c570271ef249403a26042084936"
+        },
+        "internal/reagent/workspace_selection.go": {
+          "before_sha256": "4d8400edda5a41c07f34ae36f757723e92c096d713c881a983fb15b32bdf357e",
+          "after_sha256": "76240e90b4c58e0b001a4cc46498ecb399f876bf42947dcd606f2d5ae17d545d"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-_d22jfj7/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-_d22jfj7",
+        "exit_code": 0,
+        "duration_seconds": 3.907038
+      },
+      "binary_sha256": "90aa66ce8a043d4ee039ad2beb3cd5de3361b8e0d3b22b7e7be0f65f7f92bd7d",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "A20.competing",
+          "assertion": "assert outcome['ok'] is False and outcome['code'] == 'invalid_arguments' and outcome['message'] == 'read the file before changing it (read_file records what you have seen)', ('sibling missing_read authorization', outcome)\nAssertionError: ('sibling missing_read authorization', {'workspace': '/tmp/reagent-parity-cases-su9q81hg/A20.competing/workspace', 'ok': True, 'code': 'ok', 'message': '', 'data': {'operation': 'update', 'path': 'f', 'changed': True, 'before_sha256': '0682c5f2076f099c34cfdd15a9e063849ed437a49677e6fcc5b4198c76575be5', 'after_sha256': 'e9d83f01c9aff03af6380e341aad90a5547d378ef54582383c6c9a35c53181af', 'size_bytes': 12, 'edits': 1, 'edit_counts': [1]}, 'truncated': False, 'effect': 'applied'})"
+        }
+      ],
+      "mutant_cases_run": [
+        "A20.competing"
+      ],
+      "duration_seconds": 13.81976
+    },
+    {
+      "id": 32,
+      "description": "Deliver the settled ready child batch in reverse lexical ID order",
+      "cases": [
+        "A39.reverse-release"
+      ],
+      "intended_assertion": "After the wait publication witness, deliveries are lexical child-ID order exactly once",
+      "selectors": [
+        "A39.reverse-release"
+      ],
+      "patch_sha256": "ba2f4bb711a254ef1d5b601476e7685f35a9c486c1df80651fcd7c017bcf40db",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/agents.go": {
+          "before_sha256": "97fa1d574399703ebc5277dd6d4789d3f6f4035c0526d2fb9ab667b3e396a01d",
+          "after_sha256": "6aef97e3f5bf188a0069d27652ba58c93bab35a33ad8913cba2ba47707ee622f"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-kjeca6gh/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-kjeca6gh",
+        "exit_code": 0,
+        "duration_seconds": 3.978504
+      },
+      "binary_sha256": "7c230cd995a25ce164e05a7ed59c039e051e25832a2e7753c8269d74b5b76697",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "A39.reverse-release",
+          "assertion": "assert [item['id'] for item in results] == expected, ('lexical delivery order', expected, results)\nAssertionError: ('lexical delivery order', ['t1', 't2'], [{'id': 't2', 'name': 'b', 'run_id': '33a134633479b537', 'result': {'status': 'completed', 'reply': 'second actor data', 'steps': 1, 'tool_calls': 0, 'usage': {'known': True, 'input_tokens': 101, 'cached_input_tokens': 11, 'output_tokens': 7, 'reasoning_tokens': 2}, 'trace_path': '/tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-32/mutant/A39.reverse-release/invoke-001.traces/agent-a07b9cca819f7158/events.jsonl'}, 'effects': {'files': [], 'exec_unknown': False}}, {'id': 't1', 'name': 'a', 'run_id': '080ac1a4cbd95602', 'result': {'status': 'completed', 'reply': 'first actor data', 'steps': 1, 'tool_calls': 0, 'usage': {'known': True, 'input_tokens': 101, 'cached_input_tokens': 11, 'output_tokens': 7, 'reasoning_tokens': 2}, 'trace_path': '/tmp/reagent-parity-repin-2ab234f7/mutations-final-diagnostic/mutation-32/mutant/A39.reverse-release/invoke-001.traces/agent-281706c9a47dccaa/events.jsonl'}, 'effects': {'files': [], 'exec_unknown': False}}])"
+        }
+      ],
+      "mutant_cases_run": [
+        "A39.reverse-release"
+      ],
+      "duration_seconds": 10.971939
+    },
+    {
+      "id": 33,
+      "description": "Allow a parent final reply despite a running descendant",
+      "cases": [
+        "A15.root-finish",
+        "A15.child-finish"
+      ],
+      "intended_assertion": "A held child prevents premature parent completion and its data precedes the later final reply",
+      "selectors": [
+        "A15.root-finish",
+        "A15.child-finish"
+      ],
+      "patch_sha256": "18ed2ae552494f44d67b2bffc2fccdb8192ebbb71cb5d10e78d164162400aa90",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/loop.go": {
+          "before_sha256": "7b254364cc63c2b6919c13e2de9e1d372dd2c05779058e464715d47cc341b4d2",
+          "after_sha256": "ba27d9493ab9721aeea7f4b5677a6f22708b2d29e84cb97ed4ec785c075f4ae3"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-blfk3ee8/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-blfk3ee8",
+        "exit_code": 0,
+        "duration_seconds": 4.02054
+      },
+      "binary_sha256": "508ca51609415e78cae7c762559a1667b7b13afa13088b99ac61d8e09d766e87",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "A15.root-finish",
+          "assertion": "assert b'premature root answer' not in stdout, 'premature root completion omitted finish-rule continuation'\nAssertionError: premature root completion omitted finish-rule continuation"
+        },
+        {
+          "case": "A15.child-finish",
+          "assertion": "assert ('worker witnessed' if mode != 'child' else 'child final after leaf') in text, 'finish-rule continuation omitted held descendant data'\nAssertionError: finish-rule continuation omitted held descendant data"
+        }
+      ],
+      "mutant_cases_run": [
+        "A15.root-finish",
+        "A15.child-finish"
+      ],
+      "duration_seconds": 11.843295
+    },
+    {
+      "id": 34,
+      "description": "Lose exec_unknown while truncating a large agent delivery",
+      "cases": [
+        "A21.ledger"
+      ],
+      "intended_assertion": "Oversized delivered replies retain exec_unknown and full root effects",
+      "selectors": [
+        "A21.ledger"
+      ],
+      "patch_sha256": "f1cdb36d2c3bf73654fe529582257c7ee3f0d0c7a27b51cafabbd762d50c4e47",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/agents.go": {
+          "before_sha256": "97fa1d574399703ebc5277dd6d4789d3f6f4035c0526d2fb9ab667b3e396a01d",
+          "after_sha256": "ae643025189fd0b9fe96a09340ebe78c65ce0037213317ce76b5b23d39c39c5e"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-pdu1p18o/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-pdu1p18o",
+        "exit_code": 0,
+        "duration_seconds": 4.024334
+      },
+      "binary_sha256": "7dcb3666d5a6f94e7ddccf7bb9f69c7cb27fba30980dc1f5dc5e55e5fa923897",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "A21.ledger",
+          "assertion": "assert summary['exec_unknown'] is (mode == 'ledger'), ('exec_unknown must survive bounded delivery', summary)\nAssertionError: ('exec_unknown must survive bounded delivery', {'files': [{'workspace': '/tmp/reagent-parity-cases-97geh6ds/A21.ledger/workspace', 'path': 'segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/effect-000', 'operation': 'create'}, {'workspace': '/tmp/reagent-parity-cases-97geh6ds/A21.ledger/workspace', 'path': 'segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/effect-001', 'operation': 'create'}, {'workspace': '/tmp/reagent-parity-cases-97geh6ds/A21.ledger/workspace', 'path': 'segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/effect-002', 'operation': 'create'}, {'workspace': '/tmp/reagent-parity-cases-97geh6ds/A21.ledger/workspace', 'path': 'segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/effect-003', 'operation': 'create'}, {'workspace': '/tmp/reagent-parity-cases-97geh6ds/A21.ledger/workspace', 'path': 'segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/segment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\/effect-004', 'operation': 'create'}], 'omitted': 96, 'exec_unknown': False})"
+        }
+      ],
+      "mutant_cases_run": [
+        "A21.ledger"
+      ],
+      "duration_seconds": 85.043338
+    },
+    {
+      "id": 35,
+      "description": "Drop the latest-third-step outcome through a GC off-by-one",
+      "cases": [
+        "A29.gc-on-redundant-recent-three"
+      ],
+      "intended_assertion": "The latest three steps' outcomes remain unmodified in the next request",
+      "selectors": [
+        "A29.gc-on-redundant-recent-three"
+      ],
+      "patch_sha256": "c731cb1bcb7fe68c783c15a5d390b370fc68b46ea7ec5ce8ba285299506351cb",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/context_gc.go": {
+          "before_sha256": "250f07dec9c32decc2140de2ae23e8955267d2bf6032d52c686c21bbdd891299",
+          "after_sha256": "b26d844ac9b67afbe13dfab33e57a6c1dc2e0c99a2683042992d6e41402008ee"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-avzisfs9/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-avzisfs9",
+        "exit_code": 0,
+        "duration_seconds": 4.062288
+      },
+      "binary_sha256": "5df5f8b1d4e94d139fc826d709450ee767ce15297c7d051213bbc839da184a89",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "A29.gc-on-redundant-recent-three",
+          "assertion": "assert not set(dropped) & {'gc-read-13', 'gc-read-14', 'gc-read-15'}, ('protected third-latest completed step was dropped', dropped)\nAssertionError: ('protected third-latest completed step was dropped', ['gc-read-00', 'gc-read-01', 'gc-read-02', 'gc-read-03', 'gc-read-04', 'gc-read-05', 'gc-read-06', 'gc-read-07', 'gc-read-08', 'gc-read-09', 'gc-read-10', 'gc-read-11', 'gc-read-12', 'gc-read-13'])"
+        }
+      ],
+      "mutant_cases_run": [
+        "A29.gc-on-redundant-recent-three"
+      ],
+      "duration_seconds": 22.058187
+    },
+    {
+      "id": 36,
+      "description": "Byte-slice routing previews through a multibyte codepoint",
+      "cases": [
+        "W39.history"
+      ],
+      "intended_assertion": "Routing preview trims to a valid UTF-8 prefix without a replacement rune",
+      "selectors": [
+        "W39.history"
+      ],
+      "patch_sha256": "b9881f91bb30b34ec85c33a7fcdf75bbfec8741e8145a497fb72909378c20816",
+      "baseline_status": "passed",
+      "files": {
+        "internal/reagent/routing_packet.go": {
+          "before_sha256": "f914f678bbbd5f76eeefed97b4cbbd6338fa2373107f942a93676504432ef41e",
+          "after_sha256": "d1729ec2a496ba20d34948aa6be93cbf05a3d9171b1e6037fc34462135fad262"
+        }
+      },
+      "build": {
+        "argv": [
+          "go",
+          "build",
+          "-o",
+          "/tmp/reagent-mutant-ajr_gpwo/reagent-mutant",
+          "./cmd/reagent"
+        ],
+        "cwd": "/tmp/reagent-mutant-ajr_gpwo",
+        "exit_code": 0,
+        "duration_seconds": 3.985907
+      },
+      "binary_sha256": "a9123f6e74ec218d2f0edc7e90a4dc809721447ad3418c4de561704934a679a1",
+      "status": "caught",
+      "assertions": [
+        {
+          "case": "W39.history",
+          "assertion": "assert recent[2][\"assistant\"][\"blocks\"][0][\"text\"] == \"é\" * 255\nAssertionError"
+        }
+      ],
+      "mutant_cases_run": [
+        "W39.history"
+      ],
+      "duration_seconds": 8.443594
+    }
+  ],
+  "reference_revision": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+  "archive_sha256": "87b308dc1a42fd2241cc27a2fe8a11b3fa30d3aa7919716c11fba367b5975baa",
+  "jobs": 12,
+  "all_catchers": true,
+  "duration_seconds": 472.347996,
+  "caught": 36,
+  "selected": 36,
+  "not_selected": []
+}

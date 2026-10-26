@@ -8,8 +8,9 @@ approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 agents/context and checkpoints remain area 4. CLI proof status and stopped reference-defect
 families are recorded in `parity/README.md`; earlier design research/reviews are below.
 
-Reference pinned for the area suite: `60fda0d3f3eabc76fa11deed72aed7850532c97e`
-(#183 merge: configurable workspace-snapshot Git timeout). Observations from `7e0408f` and `f37aa5a`
+Reference pinned for the area suite: `2ab234f79d1d42ba8a969ba3f4103eeeba717967`
+(#191 terminal fixes, #192 bounded compaction shortening, #193 parity race fixtures).
+Darwin capture and acceptance pending on the Mac; its old binary hash is not a new-pin identity. Observations from `7e0408f` and `f37aa5a`
 were exploratory only and are not golden output. The earlier
 inventory reference was `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492`.
 `parity/manifest.json` records the protected binary SHA-256 and executable leaf
@@ -521,8 +522,9 @@ platforms rather than counting proxy tests twice; W53 covers the new env schema.
 
 Counts below come from the shared `parity.run.collect_cases()` inventory at the
 pinned reference, including area-4 replacements. “Implemented” means a runnable
-assertion fixture exists, not overall-suite approval or repeatability. All 2,761
-wire leaves are now runnable; no wire family is silently omitted.
+assertion fixture exists, not overall-suite approval or repeatability. Of 2,761
+wire leaves, 2,752 are runnable and nine cancel-during-body cases are explicitly
+pending until client-side header receipt is observable. No wire family is silently omitted.
 All named clauses above were audited against source; the finite stable-ID
 inventory is not unrestricted Cartesian exhaustion.
 
@@ -601,7 +603,23 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W51 | 7 | 7 | Implemented |
 | W52 | 20 | 20 | Implemented |
 | W53 | 414 | 414 | Implemented |
-| W54 | 213 | 213 | Implemented |
+| W54 | 213 | 204 | Pending: `W54.openai.cancel-body`, `W54.anthropic.cancel-body`, `W54.proxy.cancel-body`, `W54.chatgpt.cancel-body`, `W54.jev.cancel-body`, `W54.auth-discovery.cancel-body`, `W54.auth-refresh.cancel-body`, `W54.auth-models.cancel-body`, `W54.auth-revoke.cancel-body` |
+
+The nine W54 body-cancel dependencies require client-side header-receipt observability:
+no trace event at this pin provides it, and server flush cannot prove receipt.
+Jev otherwise races `router_http_status` 200/0. Header-phase cancellation remains runnable.
+
+| Pending stable ID | Exact dependency |
+| --- | --- |
+| `W54.openai.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
+| `W54.anthropic.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
+| `W54.proxy.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
+| `W54.chatgpt.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
+| `W54.jev.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt); cancel timing otherwise races router_http_status 200/0 |
+| `W54.auth-discovery.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
+| `W54.auth-refresh.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
+| `W54.auth-models.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
+| `W54.auth-revoke.cancel-body` | cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt) |
 
 Area 4 completes all **13 formerly pending wire dependencies** below.
 Their replacements execute real agent/checkpoint exchanges rather than green skips.

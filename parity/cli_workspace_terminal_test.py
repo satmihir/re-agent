@@ -28,13 +28,17 @@ def evidence(identity='T23.human-consent', root=ROOT):
     events = [{'type': 'run.started', 'seq': 1, 'step': 0, 'data': {'workspace': workspace}}]
     rows = [NOTICE + workspace + NOTICE_END]
     source = workspace
+    consent = identity.startswith('C44.workspace-')
+    calls = [('approve', 'request_workspace_access', target, True),
+             ('switch', 'switch_workspace', target, True),
+             ('return', 'switch_workspace', workspace, True),
+             ('deny', 'request_workspace_access', root + '/sibling', False),
+             ('parent', 'switch_workspace', root, False)]
+    if consent:
+        rows = []
+        calls = [('terminal_tool', 'switch_workspace', root + '/consent-workspace', identity == 'C44.workspace-allow')]
     # Expected request truncation at 120 cells is fixed independently of helper output.
-    for call_id, name, argument, ok in (
-            ('approve', 'request_workspace_access', target, True),
-            ('switch', 'switch_workspace', target, True),
-            ('return', 'switch_workspace', workspace, True),
-            ('deny', 'request_workspace_access', root + '/sibling', False),
-            ('parent', 'switch_workspace', root, False)):
+    for call_id, name, argument, ok in calls:
         destination = argument
         call = {'call_id': call_id, 'name': name, 'arguments': json.dumps({'path': argument})}
         out = {'workspace': source, 'ok': ok, 'code': 'ok' if ok else 'permission_denied',
@@ -46,13 +50,18 @@ def evidence(identity='T23.human-consent', root=ROOT):
             else:
                 out['data'] = {'previous_workspace': source, 'workspace': destination, 'changed': True,
                                'workspace_state': {'kind': 'workspace_state', 'workspace': destination}}
+        if consent and not ok and identity != 'C44.workspace-deny':
+            out['message'] = 'workspace consent was cancelled or unavailable'
         step = len(events)
+        blocks = [{'kind': 'tool_call', 'call': copy.deepcopy(call)}]
+        if consent:
+            blocks.insert(0, {'kind': 'text', 'text': 'Requesting a workspace.'})
         for kind, data in (
-                ('model.accepted', {'blocks': [{'kind': 'tool_call', 'call': copy.deepcopy(call)}]}),
+                ('model.accepted', {'blocks': blocks}),
                 ('tool.started', {**copy.deepcopy(call), 'workspace': source}),
                 ('tool.finished', {'call_id': call_id, 'name': name, 'outcome': out})):
             events.append({'type': kind, 'seq': len(events) + 1, 'step': step, 'data': data})
-        if name == 'request_workspace_access' or not ok:
+        if consent or name == 'request_workspace_access' or not ok:
             rows.append('Location: ' + json.dumps(destination))
         if ok and name == 'switch_workspace':
             rows.append(NOTICE + destination + NOTICE_END)
@@ -96,6 +105,29 @@ class WorkspaceTerminalTest(unittest.TestCase):
                 self.assertTrue(any(len(value) < len(ROOT) for _, value, _, _ in found))
                 self.assertIn('/target', text)
                 self.assertIn('permission_denied:', text)
+
+    def test_c44_consent_slots_require_exact_choice_target_and_accepted_call(self):
+        for variant in ('allow', 'deny', 'escape', 'ctrl-c', 'ctrl-d'):
+            identity = 'C44.workspace-' + variant
+            data = evidence(identity)
+            found, _, _ = observe(data)
+            self.assertEqual(len(found), 3 if variant == 'allow' else 2)
+            for defect in ('target', 'choice', 'text', 'duplicate'):
+                with self.subTest(variant=variant, defect=defect):
+                    changed = copy.deepcopy(data)
+                    events = changed[2]
+                    if defect == 'target':
+                        events[2]['data']['arguments'] = json.dumps({'path': ROOT + '/unowned'})
+                    elif defect == 'choice':
+                        events[-1]['data']['outcome']['ok'] = variant != 'allow'
+                    elif defect == 'text':
+                        events[1]['data']['blocks'][0]['text'] = 'Unowned model prose.'
+                    else:
+                        events.append(copy.deepcopy(events[2]))
+                    with self.assertRaises(AssertionError):
+                        observe(changed)
+        for identity in ('C44.workspace-allow.extra', 'C44.idle-clear'):
+            self.assertEqual(observe(evidence(identity))[0], [])
 
     def test_no_similar_case_or_model_output_can_authorize_slots(self):
         for identity in ('W50.picker', 'T23.preapproved-absolute', 'T23.human-consent.extra', 't23.human-consent'):

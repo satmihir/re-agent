@@ -840,7 +840,13 @@ def collect():
         for phase in ("header", "idle", "progress", "header-before-idle"):
             add(f"W54.{kind}.{phase}", "Real second-based timeout or read progress across shared transport", bound(_timeout, kind, phase))
         add(f"W54.{kind}.cancel", "SIGINT after held request receipt; no retry, refresh rotation survives", bound(_cancel, kind))
-        add(f"W54.{kind}.cancel-body", "SIGINT after headers and a flushed body chunk; refresh rotation survives", bound(_cancel, kind, "body"))
+        dependency = ("cancel-during-body needs client-side header-receipt observability "
+                      "(no trace event at this pin; server flush can’t prove receipt)")
+        if kind == "jev":
+            dependency += "; cancel timing otherwise races router_http_status 200/0"
+        cases.append(Case(id=f"W54.{kind}.cancel-body",
+                          description="SIGINT during response body; refresh rotation survives",
+                          run=None, pending=dependency))
     for phase in ("header", "body"):
         add("W54.jev.overall-" + phase, "Jev retains its separate two-second deadline with longer transport settings",
             bound(_overall_deadline, "jev", phase))

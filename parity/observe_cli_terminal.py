@@ -168,7 +168,7 @@ _FLASK = ('      ●      ', '  ▗▄▖   ▗▄▖  ', '   █  •  █   ',
 
 
 def _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origins, owned_traces, headers, owner, announcements):
-    """Admit only C38's owned synchronized insertion above the restored prompt."""
+    """Certify the owned cancellation insertion and its restored empty-prompt caret."""
     restores = list(re.finditer(r'(?m)(?:^|\x1b\[(?:[0-9;]*H|\?2026h))trace: ([^\n\x1b]+)(?=\x1b(?!\[r))', text))
     if not restores:
         return []
@@ -188,7 +188,18 @@ def _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origi
         paths = [Path(path).relative_to(ctx.artifacts) for path, line in owned_traces if json.loads(line) == event]
         assert paths == [relative], 'cancellation trace raw owner differs'
     assert start['data']['workspace'] == str(ctx.root / 'workspace'), 'cancellation trace workspace differs'
-    assert all(type(owner['data'][key]) is int and owner['data'][key] == 1 for key in ('steps', 'tool_calls')), 'cancellation trace run counts differ'
+    model_cancel = Path(ctx.root).name == 'C44.typeahead-cancellation'
+    tools = 0 if model_cancel else 1
+    assert type(owner['data']['steps']) is int and owner['data']['steps'] == 1, 'cancellation trace run counts differ'
+    assert type(owner['data']['tool_calls']) is int and owner['data']['tool_calls'] == tools, 'cancellation trace run counts differ'
+    if model_cancel:
+        events = [json.loads(line) for _, line in owned_traces]
+        requested = [event for event in events if event['type'] == 'model.requested' and event['run_id'] == run]
+        assert len(requested) == 1 and requested[0]['step'] == 1, 'cancelled model request lacks unique owner'
+        request = requested[0]
+        assert request['session_id'] == start['session_id'] and start['seq'] < request['seq'] < owner['seq'], 'cancelled model request scope differs'
+        assert start['data']['prompt'] == 'hold this request', 'cancelled model request prompt differs'
+        assert not any(event['type'] == 'tool.started' and event['run_id'] == run for event in events), 'cancelled model request started a tool'
     stamps = [datetime.fromisoformat(event['time'].replace('Z', '+00:00')) for event in (start, owner)]
     assert all(stamp.tzinfo is not None for stamp in stamps), 'cancellation trace owner lacks timezone'
     begin, end = [stamp.timestamp() for stamp in stamps]
@@ -216,7 +227,16 @@ def _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origi
     row, restore_row, restore_col = [int(value) for value in frame.groups()]
     assert not screen.modes[2026] and not screen.pending_wrap, 'cancellation trace starts inside an update'
     assert (restore_row, restore_col) == (screen.row + 1, screen.col + 1), 'cancellation trace restore differs from captured caret'
-    assert screen.col == 2 and screen.line(screen.row) == '❯', 'cancellation trace lacks restored input prompt'
+    expected_input = '❯ stale cancelled input' if model_cancel else '❯'
+    expected_col = len(expected_input) if model_cancel else 2
+    assert screen.col == expected_col and screen.line(screen.row) == expected_input, 'cancellation trace lacks restored input prompt'
+    if model_cancel:
+        cleared = [shot for shot in metadata['snapshots'] if shot['label'] == 'typeahead-cancelled']
+        assert len(cleared) == 1 and cleared[0]['offset'] >= frame_end, 'cancelled typeahead lacks cleared prompt witness'
+        state = cleared[0]['state']
+        cursor = state['cursor']
+        line = ''.join(cell['text'] for cell in state['grid'][cursor['row']]).rstrip()
+        assert line == '❯' and cursor['col'] == 2, 'cancelled typeahead was not discarded'
     needed = (len('trace: ') + len(match[1]) + screen.cols - 1) // screen.cols
     assert 1 <= row and row + needed < restore_row <= screen.rows, 'cancellation trace insertion overlaps restored prompt'
     return restores
@@ -373,6 +393,17 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
                                                       owned_traces, headers, owners[0], announcements)
         paths = list({match.start(1): match for match in paths + announcements + blocked
                       if '\x1b' not in match[1]}.values())
+    if Path(ctx.root).name == 'C44.typeahead-cancellation':
+        owners = [event for event in finished if event['data'].get('status') == 'cancelled']
+        assert len(owners) == 1, 'typeahead cancellation lacks unique cancelled run'
+        assert owners[0]['data']['steps'] == 1 and owners[0]['data']['tool_calls'] == 0, 'typeahead cancellation run counts differ'
+        announcements = list(re.finditer(r'(?m)(?:^|\x1b\[[1-9][0-9]*;[1-9][0-9]*H)trace: ([^\n\x1b]+)(?=$|\x1b\[r)', text))
+        assert all(match[1] == owners[0]['data']['trace_path'] for match in announcements), 'typeahead cancellation trace differs'
+        if sys.platform == 'linux':
+            announcements += _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origins,
+                                                      owned_traces, headers, owners[0], announcements)
+        assert len(announcements) == 1, 'typeahead cancellation lacks one trace announcement'
+        paths = list({match.start(1): match for match in paths + announcements if '\x1b' not in match[1]}.values())
     for match in paths:
         value = match[1]
         if value == 'not recorded':
