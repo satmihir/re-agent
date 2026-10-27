@@ -9,13 +9,13 @@
   "reference_build": "git archive 2ab234f79d1d42ba8a969ba3f4103eeeba717967; go build -trimpath -buildvcs=false -o reference ./cmd/reagent",
   "platforms": {
     "darwin/arm64": {
-      "capture_status": "required",
-      "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
-      "reference_binary_sha256": "b8d7e8cea619cba3f0f3d233e6e2898723a7100677c58b73ebd501d853bd64ed",
+      "capture_status": "ready",
+      "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+      "reference_binary_sha256": "8d9b9cf977ba8b5abbf2c08bb070267e469a396bde244abeadf26f82b9d04524",
       "go_version": "go version go1.23.3 darwin/arm64",
       "python_version": "Python 3.11.5",
       "normalized_lock": "expected/darwin.json",
-      "normalized_tree_sha256": "459eeffb85ef2a45bb2b0598baf5b478292a7a218a025d9cb31f1486018c4a95"
+      "normalized_tree_sha256": "1c3970d1ba28e6909b898fab171309fd6a5de6cea6ef74957dd07178e4630281"
     },
     "linux/amd64": {
       "reference_binary_sha256": "9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06",
@@ -289,7 +289,7 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "192e170deac2772544e41c6bbb1f580bcbdc271c9a724c596a9264540145d106",
+  "suite_digest": "b60915258a2e4414be5e8f2b4da1b215c6ac43e5806af966c97386982c63dd2b",
   "verification_evidence": "repin-2ab234f7-linux.md (current re-pin and acceptance, including diagnosed prior failures); agents-area4.md, linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin capture and acceptance pending on the Mac"

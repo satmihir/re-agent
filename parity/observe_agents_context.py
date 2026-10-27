@@ -355,13 +355,17 @@ class Agents:
                     changes.append((left.start, left.end, rewritten[right.start:right.end]))
                 elif (self.case_id == 'W39.agent' and mode == 'result'
                       and location == ('result', 'trace_path') and left.start < len(prefix) < left.end):
-                    # A router preview can end exactly at the witnessed directory's slash.
+                    # A router preview can end anywhere after the witnessed directory's name: at its slash
+                    # with Linux's root, inside events.jsonl with Darwin's longer one.
                     source = full['result']['trace_path']
                     self.validate_path(full['id'], source)
-                    directory = go_string(source.removesuffix('events.jsonl'))[:-1]
-                    if source.endswith('/events.jsonl') and prefix[left.start:] == directory:
-                        normalized = self.trace_reference(full['id'], source, artifact, path + loc + location)
-                        changes.append((left.start, len(prefix), go_string(normalized.removesuffix('events.jsonl'))[:-1]))
+                    encoded, cut = go_string(source), prefix[left.start:]
+                    directory = go_string(source.removesuffix('events.jsonl'))[:-2]
+                    if source.endswith('/events.jsonl') and encoded.startswith(cut) and len(cut) > len(directory):
+                        clipped = encoded[len(cut):]
+                        normalized = go_string(self.trace_reference(full['id'], source, artifact, path + loc + location))
+                        assert normalized.endswith(clipped), 'agent preview trace path clip differs after normalization'
+                        changes.append((left.start, len(prefix), normalized[:len(normalized) - len(clipped)]))
             leaves(lex(original), lex(rewritten))
             return replace_spans(prefix, changes).decode()
 

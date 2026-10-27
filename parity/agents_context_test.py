@@ -265,11 +265,15 @@ class AgentContextTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     agents._rewrite(changed, 'http-7.body')
                 agents.paths, agents.results = saved_paths, saved_results
-        # Arbitrary partial paths, ordinary prose and other cases gain no directory slot.
-        for text in (preview[:-1], preview + 'event'):
-            entry = go_json({'kind': 'user', 'user': {'source': 'agent', 'text': text}})
+        # Darwin's longer root moves the cut inside events.jsonl; the clipped tail stays as sent.
+        for clip in ('e', 'event', 'events', 'events.jsonl'):
+            entry = go_json({'kind': 'user', 'user': {'source': 'agent', 'text': preview + clip}})
             result = json.loads(agents._rewrite(entry, 'http-7.body'))['user']['text']
-            self.assertIn('/agent-' + 'e' * 16 + '/', result + '/')
+            self.assertEqual(result, expected + clip)
+        # A cut before the directory's slash, ordinary prose and other cases gain no directory slot.
+        entry = go_json({'kind': 'user', 'user': {'source': 'agent', 'text': preview[:-1]}})
+        result = json.loads(agents._rewrite(entry, 'http-7.body'))['user']['text']
+        self.assertTrue(result.endswith('/agent-' + 'e' * 16))
         agents.case_id = 'A13.batch-delivery'
         result = json.loads(agents._rewrite(raw, 'http-7.body'))['user']['text']
         self.assertTrue(result.endswith(directory))

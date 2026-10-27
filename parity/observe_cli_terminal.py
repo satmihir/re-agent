@@ -399,9 +399,9 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
         assert owners[0]['data']['steps'] == 1 and owners[0]['data']['tool_calls'] == 0, 'typeahead cancellation run counts differ'
         announcements = list(re.finditer(r'(?m)(?:^|\x1b\[[1-9][0-9]*;[1-9][0-9]*H)trace: ([^\n\x1b]+)(?=$|\x1b\[r)', text))
         assert all(match[1] == owners[0]['data']['trace_path'] for match in announcements), 'typeahead cancellation trace differs'
-        if sys.platform == 'linux':
-            announcements += _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origins,
-                                                      owned_traces, headers, owners[0], announcements)
+        # Darwin prints the same synchronized cursor-restore form here; C38 keeps its Linux-only gate.
+        announcements += _linux_cancelled_restore(ctx, invocation, prefix, raw, metadata, text, origins,
+                                                  owned_traces, headers, owners[0], announcements)
         assert len(announcements) == 1, 'typeahead cancellation lacks one trace announcement'
         paths = list({match.start(1): match for match in paths + announcements if '\x1b' not in match[1]}.values())
     for match in paths:

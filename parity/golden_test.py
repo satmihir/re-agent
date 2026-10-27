@@ -418,7 +418,9 @@ class GoldenTest(unittest.TestCase):
         self.manifest["platforms"][identity.current_platform()]["normalized_tree_sha256"] = packed["normalized_tree_sha256"]
         manifest = {**self.manifest, "suite_digest": run.suite_digest(self.suite)}
         self.assertEqual(golden.read_lock(self.suite, manifest)["cases"], {"W99": expected})
-        for change, message in (("missing", "missing: W99"), ("extra", "extra: W98"), ("digest", "invalid normalized lock for W99")):
+        # Darwin reports a missing new leaf as needing its own capture.
+        missing = "new leaves need a Darwin capture" if golden.sys.platform == "darwin" else "missing: W99"
+        for change, message in (("missing", missing), ("extra", "extra: W98"), ("digest", "invalid normalized lock for W99")):
             changed = json.loads(json.dumps(packed))
             if change == "missing":
                 changed["cases"].pop("W99")

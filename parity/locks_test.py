@@ -712,12 +712,14 @@ class RepinPendingTest(unittest.TestCase):
         self.cases = [Case(self.case_id, 'body cancellation', None, pending=self.reason)]
         self.manifest = fixture_manifest(reference_commit=locks.REPIN_REFERENCE)
         self.inventory = run.leaf_inventory(self.cases, self.manifest)
-        self.new_identity = dict(reference_commit=locks.REPIN_REFERENCE, reference_platform='linux/amd64',
+        from parity.identity import current_platform
+        self.platform = current_platform()
+        self.new_identity = dict(reference_commit=locks.REPIN_REFERENCE, reference_platform=self.platform,
                                  reference_binary_sha256=self.inventory['reference_binary_sha256'])
         self.previous_identity = dict(self.new_identity, reference_commit='60fda0d3f3eabc76fa11deed72aed7850532c97e')
         self.allowlist = dict(schema_version=1, reference_commit=locks.REPIN_REFERENCE,
                               previous_reference_commit=self.previous_identity['reference_commit'],
-                              platforms={'linux/amd64': {self.case_id: dict(change='pending', reason=self.reason)}})
+                              platforms={self.platform: {self.case_id: dict(change='pending', reason=self.reason)}})
         self.old = {self.case_id: {'value': 'previous runnable lock'}}
         self.new = {}
         self.write_inventory()
@@ -757,7 +759,7 @@ class RepinPendingTest(unittest.TestCase):
                 elif mutation == 'platform':
                     row['platforms'] = ['darwin']
                 elif mutation == 'capture-platform':
-                    self.inventory['platform'] = 'darwin'
+                    self.inventory['platform'] = 'linux' if self.platform.startswith('darwin') else 'darwin'
                 elif mutation == 'reference':
                     self.inventory['reference_binary_sha256'] = 'f' * 64
                 elif mutation == 'missing-row':
@@ -773,7 +775,7 @@ class RepinPendingTest(unittest.TestCase):
                 elif mutation == 'still-runnable':
                     self.new = dict(self.old)
                 elif mutation == 'allowlist-reason':
-                    self.allowlist['platforms']['linux/amd64'][self.case_id]['reason'] = 'tampered'
+                    self.allowlist['platforms'][self.platform][self.case_id]['reason'] = 'tampered'
                 elif mutation == 'metadata-fields':
                     self.inventory['metadata_fields'] = ['id']
                 if mutation != 'metadata-fields':
@@ -794,13 +796,13 @@ class RepinPendingTest(unittest.TestCase):
             with self.subTest(mutation=mutation):
                 self.setUp()
                 if mutation == 'string-reason':
-                    self.allowlist['platforms']['linux/amd64'][self.case_id] = self.reason
+                    self.allowlist['platforms'][self.platform][self.case_id] = self.reason
                 elif mutation == 'unlisted-removal':
                     self.old['T01.unlisted'] = {'value': 'old'}
                 elif mutation == 'runnable-replacement':
                     self.new[self.case_id] = {'value': 'new'}
                 else:
-                    self.allowlist['platforms']['linux/amd64'][self.case_id]['change'] = 'delete'
+                    self.allowlist['platforms'][self.platform][self.case_id]['change'] = 'delete'
                 with patch.object(locks, 'frozen_lock') as replay, self.assertRaises(AssertionError):
                     self.verify()
                 replay.assert_not_called()
