@@ -1,4 +1,4 @@
-use crate::cli::{text, yes};
+use crate::cli::{number, text, yes};
 use crate::render;
 use crate::runtime::Session;
 use crate::terminal::{Input, Submission};
@@ -7,7 +7,7 @@ use std::time::Instant;
 #[path = "cli/context.rs"]
 mod context_measure;
 #[path = "cli/model_switch.rs"]
-mod model_switch;
+pub(crate) mod model_switch;
 #[path = "cli/shell.rs"]
 mod user_shell;
 
@@ -90,6 +90,7 @@ fn plan_switch(on: bool) {
 
 /// Run reads a conversation from stdin and handles local chat commands.
 pub fn run(mut cfg: Value) -> i32 {
+    cfg["_display"] = json!(true);
     let saved = cfg.as_object_mut().unwrap().remove("restore");
     if text(&cfg, "session_id").is_empty() {
         cfg["session_id"] = json!(crate::types::new_id())
@@ -122,6 +123,10 @@ pub fn run(mut cfg: Value) -> i32 {
                 eprintln!("error: {e}");
                 return 2;
             }
+        }
+        if let Err(error) = crate::auto::initialize(&mut session) {
+            eprintln!("error: {error}");
+            return 2;
         }
     }
     if let Err(e) = crate::checkpoint::save(&session, "idle", "") {
@@ -168,14 +173,22 @@ pub fn run(mut cfg: Value) -> i32 {
                 eprintln!("  (Ctrl-C again to exit, or Ctrl-D)");
                 continue;
             }
-            Ok(Submission::Text(s)) => s,
+            Ok(Submission::Text(s)) => s.into_bytes(),
+            Ok(Submission::Bytes(bytes)) => bytes,
             Err(e) => {
                 eprintln!("error: read chat input: {}", crate::errors::stable_io(&e));
                 break 2;
             }
         };
         interrupted = None;
-        let line = line.trim();
+        let raw_line = crate::cli::trim_bytes(&line);
+        let semantic = String::from_utf8_lossy(raw_line);
+        let line = semantic.as_ref();
+        let raw_arg = raw_line
+            .iter()
+            .position(|b| *b == b' ')
+            .map(|offset| crate::cli::trim_bytes(&raw_line[offset + 1..]))
+            .unwrap_or_default();
         let (command, arg) = line
             .split_once(' ')
             .map(|(c, a)| (c, a.trim()))
@@ -196,7 +209,7 @@ pub fn run(mut cfg: Value) -> i32 {
                 session.config["plan"] = json!(on);
                 plan_switch(on);
                 if !arg.is_empty() {
-                    turn = Some(arg.to_string())
+                    turn = Some(raw_arg.to_vec())
                 }
             }
             "/model" => {
@@ -217,29 +230,7 @@ pub fn run(mut cfg: Value) -> i32 {
                 }
             }
             "/effort" => effort(&mut session, arg, scripted, &mut input),
-            "/auto" => {
-                if scripted {
-                    eprintln!(
-                        "a scripted run replays recorded responses, so Auto has nothing to route"
-                    )
-                } else if !matches!(arg, "" | "on" | "off") {
-                    eprintln!("usage: /auto [on|off]")
-                } else {
-                    session.config["auto"] = json!(if arg.is_empty() {
-                        !yes(&session.config, "auto")
-                    } else {
-                        arg == "on"
-                    });
-                    eprintln!(
-                        "auto {}",
-                        if yes(&session.config, "auto") {
-                            "on"
-                        } else {
-                            "off"
-                        }
-                    )
-                }
-            }
+            "/auto" => crate::auto::command(&mut session, arg),
             "/status" => status(
                 &session,
                 &usage,
@@ -267,7 +258,7 @@ pub fn run(mut cfg: Value) -> i32 {
             }
             "/friction" => {
                 if arg.is_empty() {
-                    turn = Some(FRICTION.into())
+                    turn = Some(FRICTION.as_bytes().to_vec())
                 } else {
                     eprintln!("usage: /friction")
                 }
@@ -276,11 +267,14 @@ pub fn run(mut cfg: Value) -> i32 {
                 if !matches!(arg, "" | "low" | "medium" | "high" | "max") {
                     eprintln!("usage: /review [low|medium|high|max]")
                 } else {
-                    turn = Some(format!(
-                        "re:agent code review\nReview level: {}\n\n{}",
-                        if arg.is_empty() { "medium" } else { arg },
-                        include_str!("cli/review.txt")
-                    ));
+                    turn = Some(
+                        format!(
+                            "re:agent code review\nReview level: {}\n\n{}",
+                            if arg.is_empty() { "medium" } else { arg },
+                            include_str!("cli/review.txt")
+                        )
+                        .into_bytes(),
+                    );
                 }
             }
             "/trace" => {
@@ -327,7 +321,7 @@ pub fn run(mut cfg: Value) -> i32 {
                                 if lines.len() > 5 {
                                     eprintln!("  · … {} more lines", lines.len() - 5)
                                 }
-                                turn = Some(message)
+                                turn = Some(message.into_bytes())
                             }
                         }
                         Err(e) => eprintln!("error: {e}"),
@@ -349,17 +343,33 @@ pub fn run(mut cfg: Value) -> i32 {
                     }
                 )
             }
-            _ => turn = Some(line.to_string()),
+            _ => turn = Some(raw_line.to_vec()),
         }
         if let Some(message) = turn {
             let started = Instant::now();
             let was_plan = yes(&session.state, "plan");
-            let result = session.submit(&message);
+            render::begin_turn(&mut session.state);
+            crate::cancellation::begin(&session.config);
+            let guard = match crate::cancellation::install(&session.config) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    break 1;
+                }
+            };
+            let result = session.submit_bytes(&message);
+            drop(guard);
             if !was_plan && yes(&session.state, "plan") {
                 plan_switch(true)
             }
             crate::types::usage_add(&mut usage, &result["usage"]);
-            render::result(&result, started.elapsed(), &session.config, true);
+            render::result(
+                &result,
+                started.elapsed(),
+                &session.config,
+                &session.state,
+                true,
+            );
             let blocked = text(&session.state, "blocked");
             if !blocked.is_empty() {
                 eprintln!("  session blocked: {}", blocked_advice(blocked))
@@ -373,7 +383,7 @@ pub fn run(mut cfg: Value) -> i32 {
             }
             if text(&result, "status") == "completed"
                 && yes(&session.state, "plan")
-                && text(&result, "reply").contains("<plan>\n")
+                && render::plan_block(text(&result, "reply")).is_some()
             {
                 eprintln!("/plan turns plan mode off; then ask for the implementation")
             }
@@ -430,6 +440,18 @@ fn status(s: &Session, usage: &Value, turns: i64) {
         render::plural(turns, "turn", "turns"),
         render::usage(usage)
     );
+    if yes(&s.state, "auto") {
+        eprintln!(
+            "auto       {} · fallback {} / {} · {} router attempts",
+            yes(&s.state, "auto_enabled"),
+            text(&s.state, "auto_fallback_model"),
+            text(&s.state, "auto_fallback_effort"),
+            number(&s.state, "auto_attempts")
+        );
+        if number(&s.state, "auto_attempts") > 0 {
+            eprintln!("{}", render::router_usage_line(&s.state["auto_usage"]));
+        }
+    }
     let window = crate::catalog::effective_context_window(&s.config);
     if window > 0 {
         let last = context_measure::last_request(&s.state["last_request"], window);
@@ -507,6 +529,7 @@ fn effort(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
     }
     match crate::catalog::select_effort(&info, arg) {
         Ok(e) => {
+            crate::auto::pin(s);
             s.config["reasoning_effort"] = json!(e);
             eprintln!("reasoning effort is now {e}; the next request starts a new prompt cache")
         }
@@ -584,6 +607,7 @@ fn model(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
         Ok(info) => {
             let name = text(&info, "id");
             if name == text(&s.config, "model") {
+                crate::auto::pin(s);
                 eprintln!("already using {name}");
                 return;
             }

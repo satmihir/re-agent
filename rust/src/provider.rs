@@ -20,6 +20,34 @@ pub fn error(status: &str, message: &str) -> ModelError {
     }
 }
 
+fn valid_http_endpoint(value: &str) -> bool {
+    // WHATWG URL parsing repairs malformed URLs that Go's net/url rejects.
+    if value.bytes().any(|byte| byte < 32 || byte == 127) {
+        return false;
+    }
+    let Some(after_scheme) = value
+        .strip_prefix("http://")
+        .or_else(|| value.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    if after_scheme.starts_with(['/', '?', '#']) || after_scheme.is_empty() {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'%'
+            && !(bytes.get(index + 1).is_some_and(u8::is_ascii_hexdigit)
+                && bytes.get(index + 2).is_some_and(u8::is_ascii_hexdigit))
+        {
+            return false;
+        }
+    }
+    reqwest::Url::parse(value)
+        .ok()
+        .is_some_and(|url| url.host_str().is_some_and(|host| !host.is_empty()))
+}
+
 pub fn validate_environment() -> Result<(), String> {
     for name in [
         "REAGENT_OPENAI_BASE_URL",
@@ -31,12 +59,7 @@ pub fn validate_environment() -> Result<(), String> {
         if value.is_empty() {
             continue;
         }
-        let valid = reqwest::Url::parse(&value).ok().is_some_and(|u| {
-            matches!(u.scheme(), "http" | "https")
-                && u.host_str().is_some_and(|h| !h.is_empty())
-                && u.query().is_none()
-                && u.fragment().is_none()
-        }) && !value.contains('#');
+        let valid = valid_http_endpoint(&value) && !value.contains(['?', '#']);
         if !valid {
             return Err(format!(
                 "{} must be a full http or https URL with a host and no query or fragment",
@@ -119,10 +142,7 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
                     proxy_provider
                 ));
             }
-            if !reqwest::Url::parse(&endpoint)
-                .ok()
-                .is_some_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
-            {
+            if !valid_http_endpoint(&endpoint) {
                 return Err("API_PROXY_URL must be a full http or https URL, such as http://localhost:8080/v1/responses".into());
             }
         }
@@ -222,10 +242,23 @@ impl Provider {
                 return Err(format!("parse script {}: invalid JSON value", path));
             }
             responses = value.as_array().cloned().unwrap_or_default();
-            for response in &mut responses {
+            let original = raw_tokens::array(&raw);
+            for (index, response) in responses.iter_mut().enumerate() {
                 validate_script_response(response)
                     .map_err(|m| format!("parse script {}: {}", path, m))?;
                 normalize_script(response);
+                if let Some(items) = original
+                    .get(index)
+                    .and_then(|raw| raw_tokens::field(raw, "native"))
+                    .and_then(|raw| raw_tokens::field(raw, "items"))
+                {
+                    if !array(&response["native"], "items").is_empty() {
+                        response["native"]["items"] = json!(raw_tokens::array(items)
+                            .into_iter()
+                            .map(crate::raw::new)
+                            .collect::<Vec<_>>());
+                    }
+                }
             }
             if responses.is_empty() {
                 return Err(format!("script {} contains no responses", path));
@@ -245,6 +278,10 @@ impl Provider {
             _ => "openai.responses",
         }
         .into()
+    }
+    /// set_cancellation binds in-flight HTTP and retry waits to a run's cancellation token.
+    pub fn set_cancellation(&mut self, token: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.transport.cancellation = Some(token);
     }
     pub fn drain_events(&mut self) -> Vec<Value> {
         std::mem::take(&mut self.transport.events)
@@ -414,6 +451,29 @@ fn normalize_script(v: &mut Value) {
 mod tests {
     use super::*;
     #[test]
+    fn endpoint_validation_rejects_url_parser_repairs() {
+        for endpoint in [
+            "http:opaque",
+            "http:/missing",
+            "http:///missing",
+            "http://host/%zz",
+            "http://u:%zz@host/",
+            "http://host/\tpath",
+            "http://host/\npath",
+            "HTTP://host/",
+        ] {
+            assert!(!valid_http_endpoint(endpoint), "{endpoint:?}");
+        }
+        for endpoint in [
+            "http://host",
+            "https://u:p%40ss@host/a%20b",
+            "http://[::1]:8080/path",
+            "http://host/space in path",
+        ] {
+            assert!(valid_http_endpoint(endpoint), "{endpoint:?}");
+        }
+    }
+    #[test]
     fn malformed_unicode_escape_is_an_error_not_a_panic() {
         for raw in [
             br#""\u""#.as_slice(),
@@ -434,6 +494,22 @@ mod tests {
         ] {
             assert!(validate_script_response(&response).is_err());
         }
+    }
+    #[test]
+    fn scripted_native_items_keep_original_token_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("script.json");
+        let item = br#"{ "type":"reasoning", "n":1e+02, "n":"\u0061" }"#;
+        let mut script = br#"[{"native":{"provider":"openai.responses","items":["#.to_vec();
+        script.extend_from_slice(item);
+        script.extend_from_slice(b"]}}]");
+        std::fs::write(&path, script).unwrap();
+        let mut provider = Provider::new(&json!({"provider":"scripted","scripted":path})).unwrap();
+        let response = provider.generate(&json!({})).unwrap();
+        assert_eq!(
+            crate::raw::bytes(&response["native"]["items"][0]).unwrap(),
+            item
+        );
     }
     #[test]
     fn script_exhaustion() {

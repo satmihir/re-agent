@@ -2,6 +2,9 @@ use crate::cli::{number, text, yes};
 use regex::Regex;
 use serde_json::Value;
 use std::time::Duration;
+#[path = "cli/activity.rs"]
+mod activity;
+pub use activity::{begin_turn, progress_text, tool_finished};
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -348,6 +351,30 @@ pub fn count(n: i64) -> String {
         format!("{:.1}M", n as f64 / 1e6)
     }
 }
+/// Router usage line keeps router accounting separate from generation tokens.
+pub(crate) fn router_usage_line(usage: &Value) -> String {
+    if !yes(usage, "known") {
+        return "router     Jev usage unknown; separate from generation".into();
+    }
+    format!(
+        "router     Jev {} tokens in · {} out; separate from generation",
+        count(number(usage, "input_tokens")),
+        count(number(usage, "output_tokens"))
+    )
+}
+
+fn router_usage_note(usage: &Value, styled: bool) -> String {
+    if usage.is_null() {
+        return String::new();
+    }
+    let line = format!("  · {}", router_usage_line(usage));
+    if styled {
+        format!("{DIM}{line}{RESET}\n")
+    } else {
+        format!("{line}\n")
+    }
+}
+
 /// Plural formats a count and its singular or plural label.
 pub fn plural(n: i64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
@@ -449,7 +476,7 @@ pub fn header(cfg: &Value, chat: bool) {
     if yes(cfg, "proxied") {
         header_line(&format!(
             "requests go to {} (API_PROXY_URL)",
-            std::env::var("API_PROXY_URL").unwrap_or_default()
+            crate::transport::redacted(&std::env::var("API_PROXY_URL").unwrap_or_default())
         ))
     }
     if chat {
@@ -503,25 +530,43 @@ pub fn usage(u: &Value) -> String {
     }
     out
 }
+/// Plan block finds the last completed exact-line block unless a later opening is unclosed.
+pub(crate) fn plan_block(reply: &str) -> Option<(usize, usize)> {
+    let mut open = None;
+    let mut found = None;
+    let mut offset = 0;
+    for line in reply.split_inclusive('\n') {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        match line {
+            "<plan>" => { open = Some(offset); found = None; }
+            "</plan>" => if let Some(start) = open.take() { found = Some((start, offset + line.len())); },
+            _ => {}
+        }
+        offset += line.len() + 1;
+    }
+    if open.is_some() { None } else { found }
+}
+
+fn reply_text(reply: &str, show_plan: bool, styled: bool, columns: usize) -> String {
+    if show_plan {
+        if let Some((start, end)) = plan_block(reply) {
+            let content = &reply[start + "<plan>\n".len()..end - "</plan>".len()];
+            let content = content.strip_suffix('\n').unwrap_or(content);
+            let label = if styled { format!("{DIM}plan{RESET}") } else { "plan".into() };
+            return format!("{}{label}\n{}{}", display(&reply[..start], styled, columns), display(content, styled, columns), display(&reply[end..], styled, columns));
+        }
+    }
+    display(reply, styled, columns)
+}
+
 /// Result prints a reply to stdout and its factual run summary to stderr.
-pub fn result(result: &Value, elapsed: Duration, cfg: &Value, chat: bool) {
+pub fn result(result: &Value, elapsed: Duration, cfg: &Value, state: &Value, chat: bool) {
     let reply = text(result, "reply");
     if !reply.is_empty() {
-        let mut reply = reply.to_string();
-        if chat {
-            if let Some(start) = reply.find("<plan>") {
-                if let Some(end) = reply[start..].find("</plan>") {
-                    let end = start + end;
-                    reply = format!(
-                        "{}plan\n{}{}",
-                        &reply[..start],
-                        reply[start + 6..end].trim(),
-                        &reply[end + 7..]
-                    );
-                }
-            }
+        if styled(2) && yes(&state["_display"], "printed") {
+            eprintln!();
         }
-        println!("{}", display(&reply, styled(1), columns(1).min(100)))
+        println!("{}", reply_text(reply, chat, styled(1), columns(1).min(100)))
     }
     let status = text(result, "status");
     let (mark, color) = match status {
@@ -559,6 +604,7 @@ pub fn result(result: &Value, elapsed: Duration, cfg: &Value, chat: bool) {
             }
         )
     }
+    eprint!("{}", activity::browsing_summary(state, styled(2)));
     if !text(result, "reason").is_empty() {
         let reason = if text(result, "reason") == "no_followup_step" {
             "the step budget ran out"
@@ -566,6 +612,36 @@ pub fn result(result: &Value, elapsed: Duration, cfg: &Value, chat: bool) {
             text(result, "reason")
         };
         eprintln!("  {}", sanitize(reason))
+    }
+    if yes(cfg, "recap") || status != "completed" {
+        for effect in result["effects"].as_array().into_iter().flatten() {
+            if !text(effect, "agent_id").is_empty() {
+                let description = if text(effect, "path").is_empty() {
+                    text(effect, "summary").to_string()
+                } else {
+                    format!("{} {}", text(effect, "operation"), text(effect, "path"))
+                };
+                eprintln!(
+                    "  agent {}: {} ({}) [{}]",
+                    sanitize(text(effect, "agent_id")),
+                    sanitize(&description),
+                    text(effect, "effect"),
+                    sanitize(text(effect, "workspace"))
+                );
+            }
+        }
+        for line in state["_display"]["recap"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if let Some(command) = line.strip_prefix("ran ") {
+                eprintln!("  ran     {command}");
+            } else {
+                eprintln!("  {line}");
+            }
+        }
     }
     if !chat || status != "completed" {
         let path = text(result, "trace_path");
@@ -580,18 +656,58 @@ pub fn result(result: &Value, elapsed: Duration, cfg: &Value, chat: bool) {
             }
         )
     }
+    eprint!("{}", router_usage_note(&result["router_usage"], styled(2)));
     if chat && yes(result, "resumable") {
         eprintln!("  nothing was lost; your next message continues from the last completed step")
     }
     if chat && styled(2) {
         eprintln!()
     }
-    let _ = cfg;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn router_notes_distinguish_missing_unknown_and_known_usage() {
+        for (usage, expected) in [
+            (serde_json::Value::Null, ""),
+            (
+                serde_json::json!({"known":false,"input_tokens":13,"output_tokens":3}),
+                "  · router     Jev usage unknown; separate from generation\n",
+            ),
+            (
+                serde_json::json!({"known":true,"input_tokens":13,"output_tokens":3}),
+                "  · router     Jev 13 tokens in · 3 out; separate from generation\n",
+            ),
+            (
+                serde_json::json!({"known":true,"input_tokens":0,"output_tokens":0}),
+                "  · router     Jev 0 tokens in · 0 out; separate from generation\n",
+            ),
+        ] {
+            assert_eq!(router_usage_note(&usage, false), expected);
+            assert_eq!(
+                router_usage_note(&usage, true),
+                if expected.is_empty() {
+                    String::new()
+                } else {
+                    format!("{DIM}{}{RESET}\n", expected.trim_end_matches('\n'))
+                }
+            );
+        }
+    }
+    #[test]
+    fn plan_rendering_removes_only_tag_lines_not_content_whitespace() {
+        for content in ["\u{2028}\u{2029}", "  indented\t ", "\n\nbody\n\n", "", "\u{a0}body\u{3000}"] {
+            let reply = format!("before\n<plan>\n{content}\n</plan>\nafter");
+            assert_eq!(reply_text(&reply, true, false, 0), format!("before\nplan\n{content}\nafter"));
+            assert_eq!(reply_text(&reply, false, false, 0), reply);
+        }
+        for reply in ["inline <plan>\nbody\n</plan>", "<plan> \nbody\n</plan>", "<plan>\nbody\n</plan> ", "<plan>\none\n</plan>\n<plan>\nunfinished"] {
+            assert_eq!(reply_text(reply, true, false, 0), reply);
+        }
+        assert_eq!(reply_text("<plan>\none\n</plan>\n<plan>\ntwo\n</plan>", true, false, 0), "<plan>\none\n</plan>\nplan\ntwo");
+    }
     #[test]
     fn controls_are_visible() {
         assert_eq!(display("x\x1b[31m\r\n", false, 80), "x\\x1b[31m\\x0d\n")

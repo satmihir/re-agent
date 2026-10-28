@@ -303,7 +303,11 @@ mod tests {
             b"{ \"type\": \"reasoning\", \"opaque\": \"\xff\xfeX\x80\", \"n\": 1e+02 }",
         );
         let response = json!({"blocks":[],"native":{"provider":"openai","items":[raw.clone()]},"usage":crate::types::usage_zero(true)});
-        let history = vec![json!({"kind":"assistant","assistant":response.clone()})];
+        let ordinary = crate::raw::string(b"ordinary-\xff\xfe-\xef\xbf\xbd-\xe2\x82-end");
+        let history = vec![
+            json!({"kind":"assistant","assistant":response.clone()}),
+            json!({"kind":"user","user":{"text":ordinary.clone()}}),
+        ];
         let request = crate::context::build_context(
             &json!({"model":"test","prompt":{"text":"pinned"}}),
             json!({"session_id":"s","run_id":"r","step":2}),
@@ -320,6 +324,8 @@ mod tests {
         trace.close();
         let text = std::fs::read_to_string(path).unwrap();
         assert!(!text.contains("__reagent_raw_json_v1"));
+        assert!(!text.contains("__reagent_raw_string_v1"));
+        assert!(text.contains("ordinary-\\ufffd\\ufffd-\u{fffd}-\\ufffd\\ufffd-end"));
         assert!(text.contains("\"n\":1e+02"));
         let events: Vec<Value> = text
             .lines()
@@ -332,6 +338,14 @@ mod tests {
         assert_eq!(
             events[1]["data"]["native"]["items"][0]["opaque"],
             "\u{fffd}X\u{fffd}"
+        );
+        assert_eq!(
+            events[0]["data"]["history"][1]["user"]["text"],
+            "ordinary-\u{fffd}\u{fffd}-\u{fffd}-\u{fffd}\u{fffd}-end"
+        );
+        assert_eq!(
+            crate::raw::string_bytes(&ordinary).unwrap(),
+            b"ordinary-\xff\xfe-\xef\xbf\xbd-\xe2\x82-end"
         );
         assert_eq!(crate::types::json_bytes(&request), original_body);
         assert_eq!(

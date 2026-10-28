@@ -85,6 +85,10 @@ fn encode_json(value: &Value, html: bool, out: &mut Vec<u8>) {
     }
     let encoded = match value {
         Value::Object(map) => {
+            if let Some(bytes) = crate::raw::string_bytes(value) {
+                out.extend_from_slice(encode_byte_string(&bytes, html).as_bytes());
+                return;
+            }
             out.push(b'{');
             for (index, (key, value)) in map.iter().enumerate() {
                 if index != 0 {
@@ -153,6 +157,26 @@ fn valid_utf8(mut bytes: &[u8]) -> String {
             }
         }
     }
+}
+
+fn encode_byte_string(mut bytes: &[u8], html: bool) -> String {
+    let mut out = String::from("\"");
+    while !bytes.is_empty() {
+        let (valid, invalid) = match std::str::from_utf8(bytes) {
+            Ok(_) => (bytes.len(), false),
+            Err(error) => (error.valid_up_to(), true),
+        };
+        let encoded = encode_string(std::str::from_utf8(&bytes[..valid]).unwrap(), html);
+        out.push_str(&encoded[1..encoded.len() - 1]);
+        if !invalid {
+            break;
+        }
+        // Go JSON quoting consumes one invalid byte, even in a truncated rune.
+        out.push_str("\\ufffd");
+        bytes = &bytes[valid + 1..];
+    }
+    out.push('"');
+    out
 }
 
 fn encode_string(value: &str, html: bool) -> String {
@@ -266,6 +290,69 @@ mod tests {
             assert_eq!(json_string(&value), repaired);
             assert_eq!(canonical_json(&value), repaired);
             assert_eq!(crate::raw::bytes(&value).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn byte_strings_quote_each_invalid_byte_and_preserve_literal_replacement_characters() {
+        for (source, expected) in [
+            (&b""[..], "\"\""),
+            (&b"plain"[..], "\"plain\""),
+            (&b"\xff\xfe"[..], r#""\ufffd\ufffd""#),
+            (&b"\xe2\x82"[..], r#""\ufffd\ufffd""#),
+            (&b"\xe2\x82X\x80"[..], r#""\ufffd\ufffdX\ufffd""#),
+            (&b"\xf0\x80\x80\x80"[..], r#""\ufffd\ufffd\ufffd\ufffd""#),
+            (&b"\xed\xa0\x80"[..], r#""\ufffd\ufffd\ufffd""#),
+            (&b"\xef\xbf\xbd"[..], "\"\u{fffd}\""),
+            (&b"\xff\xef\xbf\xbd\xfe"[..], "\"\\ufffd\u{fffd}\\ufffd\""),
+            (&b"\xff\xc3\xa9\xfe"[..], "\"\\ufffdé\\ufffd\""),
+        ] {
+            let value = crate::raw::string(source);
+            assert_eq!(json_bytes(&value), expected.as_bytes());
+            assert_eq!(json_string(&value), expected);
+            assert_eq!(canonical_json(&value), expected);
+            assert_eq!(crate::raw::string_bytes(&value).unwrap(), source);
+            let nested = json!({"history":[{"user":{"text":value}}]});
+            let expected = format!("{{\"history\":[{{\"user\":{{\"text\":{expected}}}}}]}}");
+            assert_eq!(json_string(&nested), expected);
+            assert_eq!(canonical_json(&nested), expected);
+        }
+    }
+
+    #[test]
+    fn byte_strings_keep_html_control_and_unicode_escaping() {
+        let value = crate::raw::string(b"<>&\xe2\x80\xa8\xe2\x80\xa9\x00\t\r\n\x08\x0c\"\\/\xff");
+        assert_eq!(
+            json_string(&value),
+            r#""\u003c\u003e\u0026\u2028\u2029\u0000\t\r\n\b\f\"\\/\ufffd""#
+        );
+        assert_eq!(
+            canonical_json(&value),
+            r#""<>&\u2028\u2029\u0000\t\r\n\b\f\"\\/\ufffd""#
+        );
+    }
+
+    #[test]
+    fn native_raw_json_is_not_reinterpreted_as_a_byte_string_wrapper() {
+        let source = br#"{ "__reagent_raw_string_v1" : "/w==" }"#;
+        let value = crate::raw::new(source);
+        assert_eq!(json_bytes(&value), br#"{"__reagent_raw_string_v1":"/w=="}"#);
+        assert_eq!(
+            canonical_json(&value),
+            r#"{"__reagent_raw_string_v1":"/w=="}"#
+        );
+        assert_eq!(
+            json_bytes(&crate::raw::new(b"\"\xff\xfe\"")),
+            b"\"\xff\xfe\""
+        );
+        for object in [
+            json!({"__reagent_raw_string_v1":"/w==","ordinary":true}),
+            json!({"__reagent_raw_string_v1":"not base64!"}),
+        ] {
+            assert_eq!(
+                json_string(&object),
+                serde_json::to_string(&object).unwrap()
+            );
         }
     }
 

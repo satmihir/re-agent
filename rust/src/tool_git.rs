@@ -423,7 +423,9 @@ fn inspect_inner(root: &Path, args: &Value) -> Result<Value, String> {
         }
     };
     let text = utf8(&raw.bytes);
+    data["output"] = json!("");
     data["output_bytes_seen"] = json!(raw.seen);
+    data["output_truncated"] = json!(false);
     data["encoding_replaced"] = json!(std::str::from_utf8(&raw.bytes).is_err());
     let make = |n: usize| {
         let mut d = data.clone();
@@ -434,9 +436,8 @@ fn inspect_inner(root: &Path, args: &Value) -> Result<Value, String> {
         d["output"] = json!(&text[..n]);
         let truncated = raw.incomplete || raw.seen > raw.bytes.len() || n < text.len();
         d["output_truncated"] = json!(truncated);
-        let mut o = attributed(outcome(true, "ok", "", d, "none"), root);
-        o["truncated"] = json!(truncated);
-        o
+        // Go measures the successful envelope before setting its final truncation flag.
+        attributed(outcome(true, "ok", "", d, "none"), root)
     };
     let mut lo = 0;
     let mut hi = text.len();
@@ -448,7 +449,9 @@ fn inspect_inner(root: &Path, args: &Value) -> Result<Value, String> {
             hi = mid - 1;
         }
     }
-    Ok(make(lo))
+    let mut result = make(lo);
+    result["truncated"] = result["data"]["output_truncated"].clone();
+    Ok(result)
 }
 fn valid_oid(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64)
@@ -538,42 +541,8 @@ impl Git<'_> {
         }
     }
     fn run(&self, args: &[String], input: Option<&[u8]>, limit: usize) -> Result<Output, String> {
-        let mut command = Command::new("git");
-        command.arg("--no-pager");
-        for s in [
-            "core.fsmonitor=false",
-            "core.hooksPath=/dev/null",
-            "core.attributesFile=/dev/null",
-            "core.quotePath=true",
-            "diff.external=",
-            "diff.submodule=short",
-            "log.showSignature=false",
-            "credential.helper=",
-            "protocol.allow=never",
-            "gc.auto=0",
-            "maintenance.auto=false",
-        ] {
-            command.args(["-c", s]);
-        }
-        command
-            .args(args)
-            .current_dir(self.root)
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default());
-        for (k, v) in [
-            ("LANG", "C"),
-            ("LC_ALL", "C"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_CONFIG_SYSTEM", "/dev/null"),
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_ATTR_NOSYSTEM", "1"),
-            ("GIT_OPTIONAL_LOCKS", "0"),
-            ("GIT_NO_REPLACE_OBJECTS", "1"),
-            ("GIT_NO_LAZY_FETCH", "1"),
-            ("GIT_TERMINAL_PROMPT", "0"),
-        ] {
-            command.env(k, v);
-        }
+        let mut command = inspect_command(self.root);
+        command.args(args);
         command
             .stdin(if input.is_some() {
                 Stdio::piped()
@@ -647,6 +616,50 @@ impl Git<'_> {
         Ok(output)
     }
 }
+
+/// inspect_command builds the same isolated Git invocation for inspection and workspace probes.
+pub(crate) fn inspect_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("--no-pager");
+    for s in [
+        "core.fsmonitor=false",
+        "core.hooksPath=/dev/null",
+        "core.attributesFile=/dev/null",
+        "core.quotePath=true",
+        "diff.external=",
+        "diff.submodule=short",
+        "log.showSignature=false",
+        "credential.helper=",
+        "protocol.allow=never",
+        "gc.auto=0",
+        "maintenance.auto=false",
+    ] {
+        command.args(["-c", s]);
+    }
+    command
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    for (k, v) in [
+        ("LANG", "C"),
+        ("LC_ALL", "C"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_CONFIG_SYSTEM", "/dev/null"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_ATTR_NOSYSTEM", "1"),
+        ("GIT_OPTIONAL_LOCKS", "0"),
+        ("GIT_NO_REPLACE_OBJECTS", "1"),
+        ("GIT_NO_LAZY_FETCH", "1"),
+        ("GIT_TERMINAL_PROMPT", "0"),
+    ] {
+        command.env(k, v);
+    }
+    command
+}
+
+#[cfg(test)]
+#[path = "git/inspect_tests.rs"]
+mod command_tests;
 
 #[cfg(test)]
 mod tests {

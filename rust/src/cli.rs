@@ -262,6 +262,19 @@ fn parse(args: &[String]) -> Result<(Value, BTreeSet<String>, Vec<String>, bool)
     Ok((cfg, used, args[i..].to_vec(), false))
 }
 
+pub(crate) fn trim_bytes(bytes: &[u8]) -> &[u8] {
+    let first = bytes.utf8_chunks().next().map_or("", |chunk| chunk.valid());
+    let start = first.len() - first.trim_start().len();
+    let bytes = &bytes[start..];
+    let last = bytes.utf8_chunks().last();
+    let trim = last
+        .filter(|chunk| chunk.invalid().is_empty())
+        .map_or(0, |chunk| {
+            chunk.valid().len() - chunk.valid().trim_end().len()
+        });
+    &bytes[..bytes.len() - trim]
+}
+
 pub(crate) fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
@@ -282,6 +295,21 @@ fn startup(message: &str) -> i32 {
 
 /// Main parses command flags and runs a task or conversation.
 pub fn main(args: Vec<String>) -> i32 {
+    main_input(args, None)
+}
+
+/// Main os preserves positional prompt bytes while parsing CLI syntax as text.
+pub fn main_os(args: Vec<std::ffi::OsString>) -> i32 {
+    use std::os::unix::ffi::OsStringExt;
+    let raw: Vec<Vec<u8>> = args.into_iter().map(|arg| arg.into_vec()).collect();
+    let args = raw
+        .iter()
+        .map(|arg| String::from_utf8_lossy(arg).into_owned())
+        .collect();
+    main_input(args, Some(raw))
+}
+
+fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
     let Some(command) = args.first().map(String::as_str) else {
         eprint!("{TOP}");
         return 2;
@@ -339,7 +367,12 @@ pub fn main(args: Vec<String>) -> i32 {
             }
         }
     }
-    let mut prompt = positional.join(" ").trim().to_string();
+    let joined = if let Some(raw) = raw_args.as_ref() {
+        raw[args.len() - positional.len()..].join(&b' ')
+    } else {
+        positional.join(" ").into_bytes()
+    };
+    let mut prompt = trim_bytes(&joined).to_vec();
     let scripted = !text(&cfg, "scripted").is_empty();
     let preview = yes(&cfg, "show_context");
     let resume = !text(&cfg, "resume").is_empty();
@@ -414,15 +447,15 @@ pub fn main(args: Vec<String>) -> i32 {
         } else {
             std::fs::read(path)
         };
-        let raw = match raw {
+        let mut raw = match raw {
             Ok(v) => v,
             Err(e) => return startup(&format!("read prompt: {}", crate::errors::stable_io(&e))),
         };
-        prompt = String::from_utf8_lossy(&raw)
-            .strip_suffix('\n')
-            .unwrap_or(&String::from_utf8_lossy(&raw))
-            .to_string();
-        if prompt.trim().is_empty() {
+        if raw.ends_with(b"\n") {
+            raw.pop();
+        }
+        prompt = raw;
+        if trim_bytes(&prompt).is_empty() {
             return startup(&format!("{path} contains no prompt"));
         }
     }
@@ -483,7 +516,7 @@ pub fn main(args: Vec<String>) -> i32 {
         return startup(&e);
     }
     if preview {
-        match crate::run_loop::preview(&cfg, &prompt) {
+        match crate::run_loop::preview_bytes(&cfg, &prompt) {
             Ok(body) => {
                 if let Some(s) = body.as_str() {
                     println!("{s}")
@@ -498,6 +531,7 @@ pub fn main(args: Vec<String>) -> i32 {
             }
         }
     }
+    cfg["_display"] = json!(true);
     if command == "chat" {
         return crate::chat::run(cfg);
     }
@@ -507,8 +541,21 @@ pub fn main(args: Vec<String>) -> i32 {
     };
     crate::render::header(&session.config, false);
     let started = std::time::Instant::now();
-    let result = session.submit(&prompt);
-    crate::render::result(&result, started.elapsed(), &session.config, false);
+    crate::render::begin_turn(&mut session.state);
+    crate::cancellation::begin(&session.config);
+    let guard = match crate::cancellation::install(&session.config) {
+        Ok(guard) => guard,
+        Err(error) => return startup(&error),
+    };
+    let result = session.submit_bytes(&prompt);
+    drop(guard);
+    crate::render::result(
+        &result,
+        started.elapsed(),
+        &session.config,
+        &session.state,
+        false,
+    );
     if text(&result, "status") == "completed" {
         0
     } else {
@@ -558,6 +605,19 @@ fn decimal(raw: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn byte_trimming_preserves_invalid_bytes_and_unicode_boundaries() {
+        for (input, expected) in [
+            (b" \t\r\n".as_slice(), b"".as_slice()),
+            (b" \xe2\x80\x83hello\xe2\x80\x83 ", b"hello"),
+            (b" \xe2\x80\x83\xff\xc0\x80\xe2\x80\x83 \r", b"\xff\xc0\x80"),
+            (b"\xff hello \xfe", b"\xff hello \xfe"),
+            (b" \xe2\x82", b"\xe2\x82"),
+            (b"literal\xef\xbf\xbd ", b"literal\xef\xbf\xbd"),
+        ] {
+            assert_eq!(trim_bytes(input), expected);
+        }
+    }
     #[test]
     fn flag_boundaries() {
         let args = vec![

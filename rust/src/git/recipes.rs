@@ -209,7 +209,10 @@ pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value
     if run.changed.len() > 12 {
         snapshot["changed"] = json!(&run.changed[..12]);
     } else {
-        snapshot.as_object_mut().unwrap().remove("changed_count");
+        snapshot
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("changed_count");
     }
     if let Some(recent) = snapshot["recent_commits"].as_array_mut() {
         for line in recent {
@@ -278,6 +281,7 @@ pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value
         }
     }
     run.result["steps"] = json!(run.steps);
+    order_result(&mut run.result);
     let status = s(&run.result, "status");
     let code = match status {
         "done" => "ok",
@@ -305,6 +309,75 @@ pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value
         root,
     ))
 }
+fn order_fields(value: &mut Value, fields: &[&str]) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    let mut previous = std::mem::take(map);
+    for field in fields {
+        if let Some(value) = previous.shift_remove(*field) {
+            map.insert((*field).into(), value);
+        }
+    }
+    map.extend(previous);
+}
+
+fn order_result(result: &mut Value) {
+    let decision = &mut result["decision"];
+    if decision
+        .get("probabilities")
+        .and_then(Value::as_object)
+        .is_some_and(|p| p.is_empty())
+    {
+        decision
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("probabilities");
+    }
+    if let Some(probabilities) = decision
+        .get_mut("probabilities")
+        .and_then(Value::as_object_mut)
+    {
+        probabilities.sort_keys();
+        for values in probabilities.values_mut() {
+            if let Some(values) = values.as_object_mut() {
+                values.sort_keys();
+            }
+        }
+    }
+    order_fields(
+        decision,
+        &[
+            "offered",
+            "probabilities",
+            "chosen_by",
+            "threshold",
+            "named_recipe",
+            "named_agreed",
+            "jev_outcome",
+            "declined_by",
+            "snapshot",
+        ],
+    );
+    order_fields(
+        result,
+        &[
+            "recipe",
+            "chosen_by",
+            "confidence",
+            "status",
+            "reason",
+            "output",
+            "steps",
+            "checks",
+            "jev_calls",
+            "jev_tokens",
+            "jev_ms",
+            "decision",
+        ],
+    );
+}
+
 fn check(name: impl Into<String>, ok: bool, evidence: impl Into<String>) -> Value {
     json!({"check":name.into(),"ok":ok,"evidence":evidence.into()})
 }
@@ -526,6 +599,24 @@ impl Run<'_> {
         if self.state.get("pull_request").is_some() || self.pr > 0 {
             self.observed = self.remote_tip(&branch).unwrap_or_default();
         }
+        order_fields(
+            &mut self.state,
+            &[
+                "branch",
+                "default_branch",
+                "upstream",
+                "ahead_of_upstream",
+                "behind_default",
+                "ahead_of_default",
+                "changed",
+                "changed_count",
+                "recent_commits",
+                "pull_request",
+                "pull_request_comments",
+                "finished_pull_request",
+                "finished_pull_request_state",
+            ],
+        );
     }
     fn feasible(&self) -> Vec<&'static str> {
         let branch = s(&self.state, "branch");
@@ -1488,4 +1579,39 @@ fn walk_embedded(root: &Path, dir: &Path, result: &mut Vec<String>) -> std::io::
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    #[test]
+    fn result_keeps_go_struct_order_and_sorts_probability_maps() {
+        let mut result = json!({"recipe":"commit","chosen_by":"jev","status":"declined","steps":[],"decision":{"offered":["commit","none"],"snapshot":{"branch":"main"},"probabilities":{"scope":{"more":0.2,"git_only":0.8},"outcome":{"none":0.1,"commit":0.9}},"declined_by":"threshold","named_agreed":false,"named_recipe":"commit","threshold":0.9,"chosen_by":"jev","jev_outcome":"commit"},"jev_ms":1,"jev_tokens":2,"jev_calls":1,"confidence":0.8,"reason":"declined"});
+        let before = result.clone();
+        order_result(&mut result);
+        assert_eq!(result, before);
+        assert_eq!(
+            crate::types::json_string(&result),
+            concat!(
+                r#"{"recipe":"commit","chosen_by":"jev","confidence":0.8,"status":"declined","reason":"declined","steps":[],"jev_calls":1,"jev_tokens":2,"jev_ms":1,"decision":{"offered":["commit","none"],"probabilities":{"outcome":{"commit":0.9,"none":0.1},"scope":{"git_only":0.8,"more":0.2}},"chosen_by":"jev","threshold":0.9,"named_recipe":"commit","named_agreed":false,"jev_outcome":"commit","declined_by":"threshold","snapshot":{"branch":"main"}}}"#,
+            )
+        );
+        let mut model = json!({"recipe":"status","chosen_by":"model","status":"done","steps":[],"decision":{"offered":["status"],"snapshot":{},"chosen_by":"model"},"output":"state"});
+        order_result(&mut model);
+        assert!(!model["decision"]
+            .as_object()
+            .unwrap()
+            .contains_key("probabilities"));
+        assert_eq!(
+            crate::types::json_string(&model),
+            r#"{"recipe":"status","chosen_by":"model","status":"done","output":"state","steps":[],"decision":{"offered":["status"],"chosen_by":"model","snapshot":{}}}"#
+        );
+        model["decision"]["probabilities"] = json!({});
+        order_result(&mut model);
+        assert!(!model["decision"]
+            .as_object()
+            .unwrap()
+            .contains_key("probabilities"));
+    }
 }

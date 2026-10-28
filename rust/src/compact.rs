@@ -1,4 +1,6 @@
-use crate::run_loop::{admission_bytes, admission_rate, flag, number, scope, string, window};
+use crate::run_loop::{
+    admission_bytes, admission_rate, flag, number, ordered_run_result, scope, string, window,
+};
 use crate::runtime::Session;
 use crate::{context, tools, types};
 use serde_json::{json, Value};
@@ -56,6 +58,7 @@ fn clear_evidence(session: &mut Session) {
     context::pin_instructions(&mut session.config);
     session.state["gc_state"] = json!({"last_pass":0});
     session.state["handoff"] = Value::Null;
+    session.state["routing_entries"] = json!(session.history.len());
     session.state["tokens_per_byte"] = json!(0.0);
     session.state["last_request"] = types::usage_zero(false);
 }
@@ -149,6 +152,7 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
             Ok(resp) => resp,
             Err(error) => {
                 session.add_usage(&error.usage);
+                crate::auto::record_usage(session, &error.usage);
                 session.state["last_request"] = error.usage;
                 let reason = format!("within-run compaction failed: {}", error.message);
                 session
@@ -163,6 +167,7 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
             }
         };
         session.add_usage(&resp["usage"]);
+        crate::auto::record_usage(session, &resp["usage"]);
         session.state["last_request"] = resp["usage"].clone();
         summary = match text(&resp) {
             Ok(text) => text,
@@ -330,7 +335,7 @@ impl Session {
             result["reason"] = json!(error);
         }
         self.trace.close();
-        Ok(result)
+        Ok(ordered_run_result(result))
     }
     fn compact_result(&self, status: &str, reason: &str, reply: &str) -> Value {
         let mut result =
@@ -344,7 +349,7 @@ impl Session {
         if !string(&self.state["last_trace"]).is_empty() {
             result["trace_path"] = self.state["last_trace"].clone();
         }
-        result
+        ordered_run_result(result)
     }
     fn compact_failed(&mut self, status: &str, reason: &str) -> Value {
         self.trace
@@ -355,7 +360,7 @@ impl Session {
             result["reason"] = json!(error);
         }
         self.trace.close();
-        result
+        ordered_run_result(result)
     }
     /// Reset discards accepted context without changing launch authority.
     pub fn reset(&mut self) {
@@ -366,18 +371,54 @@ impl Session {
         self.state["pending_submission"] = Value::Null;
         self.state["session_id"] = json!(types::new_id());
         self.config["session_id"] = self.state["session_id"].clone();
+        self.provider
+            .set_cancellation(crate::cancellation::token(&self.config));
         self.state["seen_calls"] = json!({});
         self.state["blocked"] = json!("");
         self.state["compacted_plan"] = json!("");
         self.state["gc_requests"] = json!(0);
         self.state["last_trace"] = json!("");
         clear_evidence(self);
+        if flag(&self.state["auto"]) {
+            self.state["auto_usage"] = types::usage_zero(true);
+            self.state["auto_attempts"] = json!(0);
+        }
+        crate::auto::begin_run(self);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reset_clears_router_accounting_without_changing_auto_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("script.json");
+        std::fs::write(
+            &script,
+            br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+        )
+        .unwrap();
+        for enabled in [false, true] {
+            let mut session = Session::new(json!({"workspace":directory.path(),"provider":"scripted","model":"scripted","scripted":script})).unwrap();
+            session.state["auto"] = json!(true);
+            session.state["auto_enabled"] = json!(enabled);
+            session.state["auto_fallback_model"] = json!("gpt-6-sol");
+            session.state["auto_fallback_effort"] = json!("medium");
+            session.state["auto_routes"] = json!([{"id":"capable"}]);
+            session.state["auto_usage"] =
+                json!({"known":false,"input_tokens":318,"output_tokens":17});
+            session.state["auto_attempts"] = json!(3);
+            session.reset();
+            assert_eq!(session.state["auto"], true);
+            assert_eq!(session.state["auto_enabled"], enabled);
+            assert_eq!(session.state["auto_fallback_model"], "gpt-6-sol");
+            assert_eq!(session.state["auto_fallback_effort"], "medium");
+            assert_eq!(session.state["auto_routes"], json!([{"id":"capable"}]));
+            assert_eq!(session.state["auto_usage"], types::usage_zero(true));
+            assert_eq!(session.state["auto_attempts"], 0);
+        }
+    }
     #[test]
     fn summaries_preserve_block_order() {
         assert_eq!(

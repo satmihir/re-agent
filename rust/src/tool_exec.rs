@@ -14,6 +14,7 @@ use std::{
     },
     path::Path,
     process::{Command, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
@@ -85,7 +86,7 @@ pub(crate) fn attributed(mut value: Value, root: &Path) -> Value {
     value
 }
 
-pub fn execute(workspace: &mut Workspace, _config: &Value, args: &Value) -> Result<Value, String> {
+pub fn execute(workspace: &mut Workspace, config: &Value, args: &Value) -> Result<Value, String> {
     if let Err(v) = keys(args, &["argv", "then", "cwd", "timeout_ms"]) {
         return Ok(v);
     }
@@ -167,8 +168,17 @@ pub fn execute(workspace: &mut Workspace, _config: &Value, args: &Value) -> Resu
         Err(e) => return Ok(os_failure(&e)),
         _ => {}
     }
+    let cancellation = crate::cancellation::token(config);
     if commands.len() == 1 {
-        return run(&workspace.root, &dir, cwd, &commands[0], timeout, LIMIT);
+        return run(
+            &workspace.root,
+            &dir,
+            cwd,
+            &commands[0],
+            timeout,
+            LIMIT,
+            &cancellation,
+        );
     }
     let budget = (LIMIT - 1024) / commands.len();
     let mut steps = vec![];
@@ -177,7 +187,15 @@ pub fn execute(workspace: &mut Workspace, _config: &Value, args: &Value) -> Resu
     let mut last = Value::Null;
     let mut not_run = vec![];
     for (i, argv) in commands.iter().enumerate() {
-        let mut step = run(&workspace.root, &dir, cwd, argv, timeout, budget)?;
+        let mut step = run(
+            &workspace.root,
+            &dir,
+            cwd,
+            argv,
+            timeout,
+            budget,
+            &cancellation,
+        )?;
         steps.push(step["data"].clone());
         truncated |= step["truncated"].as_bool().unwrap_or(false);
         if step["effect"] == "unknown" || (step["effect"] == "applied" && effect == "none") {
@@ -340,6 +358,7 @@ fn run(
     argv: &[String],
     timeout: u64,
     budget: usize,
+    cancellation: &AtomicBool,
 ) -> Result<Value, String> {
     let resolved = executable(&argv[0]);
     let mut command = Command::new(&resolved);
@@ -368,23 +387,43 @@ fn run(
     }
     let started = Instant::now();
     let mut data = json!({"argv":argv,"resolved_executable":resolved,"cwd":cwd,"exit_code":null,"signal":null,"stdout":"","stderr":"","stdout_bytes_seen":0,"stderr_bytes_seen":0,"stdout_truncated":false,"stderr_truncated":false,"output_may_be_incomplete":false,"encoding_replaced":false,"duration_ms":0,"timeout_ms":timeout,"termination_reason":null});
+    // LookPath failure precedes cancellation in Go's command construction.
+    let missing_executable = !argv[0].contains('/') && resolved == argv[0];
+    if cancellation.load(Ordering::Acquire) && !missing_executable {
+        data["duration_ms"] = json!(started.elapsed().as_millis() as u64);
+        return Ok(attributed(
+            outcome(
+                false,
+                "cancelled",
+                "the run was cancelled before the command started",
+                data,
+                "none",
+            ),
+            root,
+        ));
+    }
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
             let not_found = e.kind() == std::io::ErrorKind::NotFound
                 && !argv[0].contains('/')
                 && resolved == argv[0];
+            let cancelled = cancellation.load(Ordering::Acquire);
             data["duration_ms"] = json!(started.elapsed().as_millis() as u64);
             return Ok(attributed(
                 outcome(
                     false,
                     if not_found {
                         "executable_not_found"
+                    } else if cancelled {
+                        "cancelled"
                     } else {
                         "process_start_failed"
                     },
                     &if not_found {
                         format!("no such executable on PATH: {}", argv[0])
+                    } else if cancelled {
+                        "the run was cancelled before the command started".to_owned()
                     } else {
                         stable(&e).to_string()
                     },
@@ -408,6 +447,7 @@ fn run(
     let mut status = None;
     let mut exited = None;
     let mut timed_out = false;
+    let mut stopped = false;
     let mut incomplete = false;
     loop {
         for i in 0..2 {
@@ -448,9 +488,13 @@ fn run(
         if status.is_some() && eof.iter().all(|e| *e) {
             break;
         }
-        if !timed_out && status.is_none() && started.elapsed() >= Duration::from_millis(timeout) {
-            terminate_tree(pid);
-            timed_out = true;
+        if !stopped && status.is_none() {
+            let cancelled = cancellation.load(Ordering::Acquire);
+            if cancelled || started.elapsed() >= Duration::from_millis(timeout) {
+                terminate_tree(pid);
+                timed_out = !cancelled;
+                stopped = true;
+            }
         }
         if exited.is_some_and(|t| t.elapsed() >= Duration::from_secs(1)) {
             incomplete = true;
@@ -483,7 +527,14 @@ fn run(
         data[format!("{prefix}_truncated")] = json!(truncated);
     }
     data["encoding_replaced"] = json!(encoding);
-    let (code, message, effect) = if timed_out {
+    let (code, message, effect) = if cancellation.load(Ordering::Acquire) {
+        data["termination_reason"] = json!("cancelled");
+        (
+            "cancelled",
+            "the command was cut short by cancellation; its effects are unknown",
+            "unknown",
+        )
+    } else if timed_out {
         data["termination_reason"] = json!("timeout");
         ("timeout","the exec request timed out; its effects are unknown; inspect partial output and workspace before retrying","unknown")
     } else if incomplete {
@@ -706,5 +757,160 @@ mod boundary_tests {
         assert_eq!(value["data"]["steps"][0]["timeout_ms"], 10000);
         assert_eq!(value["data"]["steps"][0]["stdout"], "started");
         assert!(!d.path().join("forbidden").exists());
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_before_start_has_no_effect_and_keeps_lookup_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let config = json!({"session_id":"exec-before-start"});
+        crate::cancellation::cancel(&config);
+        let result = execute(
+            &mut workspace,
+            &config,
+            &json!({"argv":["/bin/sh","-c","touch unexpected"],"cwd":"."}),
+        )
+        .unwrap();
+        assert_eq!(result["code"], "cancelled");
+        assert_eq!(result["effect"], "none");
+        assert_eq!(
+            result["message"],
+            "the run was cancelled before the command started"
+        );
+        assert!(result["data"]["termination_reason"].is_null());
+        assert!(!dir.path().join("unexpected").exists());
+        let missing = execute(
+            &mut workspace,
+            &config,
+            &json!({"argv":["reagent-nonexistent-test-command"],"cwd":"."}),
+        )
+        .unwrap();
+        assert_eq!(missing["code"], "executable_not_found");
+        assert!(
+            crate::cancellation::cancelled(&config),
+            "execute must never reset cancellation"
+        );
+    }
+
+    #[test]
+    fn real_sigint_and_targeted_cancel_stop_exec_descendants_and_chain() {
+        for mode in ["signal", "targeted"] {
+            let dir = tempfile::tempdir().unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tool_exec::cancellation_tests::exec_cancel_child",
+                    "--nocapture",
+                ])
+                .env("REAGENT_EXEC_CANCEL_TEST", mode)
+                .env("REAGENT_EXEC_CANCEL_DIR", dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                utf8(&output.stdout),
+                utf8(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn exec_cancel_child() {
+        let Ok(mode) = std::env::var("REAGENT_EXEC_CANCEL_TEST") else {
+            return;
+        };
+        let dir = std::env::var("REAGENT_EXEC_CANCEL_DIR").unwrap();
+        let mut workspace = Workspace::open(&dir).unwrap();
+        let mut config = json!({"session_id":"exec-started"});
+        if mode == "targeted" {
+            config["agent_id"] = json!("t1");
+        }
+        crate::cancellation::begin(&config);
+        let _guard = if mode == "signal" {
+            Some(crate::cancellation::install(&config).unwrap())
+        } else {
+            None
+        };
+        let waiting = config.clone();
+        let ready = Path::new(&dir).join("escaped.pid");
+        let signal = mode == "signal";
+        let interrupter = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !ready.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            if signal {
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGINT);
+                }
+            } else {
+                crate::cancellation::cancel(&waiting);
+            }
+            assert!(ready.exists(), "exec did not reach its readiness marker");
+        });
+        let script = "import os,time,pathlib\npathlib.Path('parent.pid').write_text(str(os.getpid()))\npid=os.fork()\nif pid==0:\n os.setsid()\n pathlib.Path('escaped.pid').write_text(str(os.getpid()))\nprint('started',flush=True)\ntime.sleep(30)";
+        let result = execute(&mut workspace, &config, &json!({"argv":["/usr/bin/python3","-c",script],"cwd":".","timeout_ms":1,"then":[["/bin/sh","-c","touch unexpected"]]})).unwrap();
+        interrupter.join().unwrap();
+        assert_eq!(result["code"], "cancelled", "{result}");
+        assert_eq!(result["effect"], "unknown");
+        assert_eq!(result["message"], "step 1 of 2: the command was cut short by cancellation; its effects are unknown; the 1 after it did not run");
+        assert_eq!(
+            result["data"]["steps"][0]["termination_reason"],
+            "cancelled"
+        );
+        assert!(result["data"]["steps"][0]["signal"].is_string());
+        assert_eq!(result["data"]["not_run"].as_array().unwrap().len(), 1);
+        assert!(!Path::new(&dir).join("unexpected").exists());
+        assert!(crate::cancellation::cancelled(&config));
+        assert!(!crate::cancellation::cancelled(
+            &json!({"session_id":"exec-started","agent_id":"sibling"})
+        ));
+        let sibling = json!({"session_id":"exec-started","agent_id":"sibling"});
+        let unaffected = execute(
+            &mut workspace,
+            &sibling,
+            &json!({"argv":["/bin/true"],"cwd":"."}),
+        )
+        .unwrap();
+        assert_eq!(unaffected["ok"], true);
+        let still_cancelled = execute(
+            &mut workspace,
+            &config,
+            &json!({"argv":["/bin/true"],"cwd":"."}),
+        )
+        .unwrap();
+        assert_eq!(still_cancelled["code"], "cancelled");
+        assert_eq!(still_cancelled["effect"], "none");
+        drop(_guard);
+        crate::cancellation::begin(&config);
+        let recovered = execute(
+            &mut workspace,
+            &config,
+            &json!({"argv":["/bin/true"],"cwd":"."}),
+        )
+        .unwrap();
+        assert_eq!(recovered["ok"], true);
+        for name in ["parent.pid", "escaped.pid"] {
+            let pid = fs::read_to_string(Path::new(&dir).join(name)).unwrap();
+            if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+                let state = stat
+                    .rsplit_once(')')
+                    .unwrap()
+                    .1
+                    .split_whitespace()
+                    .next()
+                    .unwrap();
+                assert!(
+                    state == "Z" || state == "X",
+                    "descendant remains alive: {stat}"
+                );
+            }
+        }
     }
 }

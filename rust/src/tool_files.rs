@@ -230,12 +230,8 @@ fn search_text(ws: &Workspace, args: &Value) -> Result<Value, Value> {
         ));
     }
     let re = if regex {
-        let re = regex::Regex::new(query).map_err(|e| {
-            fail(
-                "invalid_arguments",
-                &format!("invalid regular expression: {e}"),
-            )
-        })?;
+        let re = regex::Regex::new(query)
+            .map_err(|e| fail("invalid_arguments", &crate::errors::regex_error(query, &e)))?;
         if re.is_match("") {
             return Err(fail(
                 "invalid_arguments",

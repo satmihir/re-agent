@@ -3,10 +3,31 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 const KEY: &str = "__reagent_raw_json_v1";
+const STRING_KEY: &str = "__reagent_raw_string_v1";
 
 /// new preserves opaque JSON bytes in an internal, serializer-recognized value.
 pub fn new(bytes: &[u8]) -> Value {
     json!({KEY:STANDARD.encode(bytes)})
+}
+
+/// string preserves invalid ordinary-string bytes until Go-compatible JSON quoting.
+pub fn string(bytes: &[u8]) -> Value {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Value::String(text.to_owned()),
+        Err(_) => json!({STRING_KEY:STANDARD.encode(bytes)}),
+    }
+}
+
+/// string_bytes retrieves ordinary string bytes without repairing invalid UTF-8.
+pub fn string_bytes(value: &Value) -> Option<Vec<u8>> {
+    if let Some(text) = value.as_str() {
+        return Some(text.as_bytes().to_vec());
+    }
+    let object = value.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    STANDARD.decode(object.get(STRING_KEY)?.as_str()?).ok()
 }
 
 /// bytes retrieves opaque JSON without normalizing its spelling or encoding.
@@ -21,7 +42,7 @@ pub fn bytes(value: &Value) -> Option<Vec<u8>> {
 /// parse returns the semantic JSON view of an opaque value for validation.
 pub fn parse(value: &Value) -> Result<Value, String> {
     match bytes(value) {
-        Some(bytes) => serde_json::from_slice(&bytes).map_err(|_| "invalid JSON data".into()),
+        Some(bytes) => crate::provider::decode_json(&bytes).map_err(|_| "invalid JSON data".into()),
         None => Ok(value.clone()),
     }
 }
@@ -80,6 +101,7 @@ mod tests {
         assert_eq!(bytes(&new(input)).unwrap(), input);
         assert_eq!(compact(input, true), b"{\"x\":1e+02,\"x\":\"\\u003c\xff\xfe\"}");
         assert!(bytes(&json!({"ordinary":true})).is_none());
+        assert_eq!(parse(&new(b"{\"text\":\"\xff\xfe\"}")).unwrap()["text"], "\u{fffd}\u{fffd}");
     }
 
     #[test]

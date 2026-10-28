@@ -1,6 +1,6 @@
+use crate::transport::http::Client;
 use crate::types::json_string;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -13,7 +13,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Explains how to reconnect an unusable ChatGPT authorization.
@@ -71,14 +71,7 @@ fn granted(c: &Credentials) -> bool {
 }
 
 fn stable(error: std::io::Error) -> String {
-    match error.raw_os_error() {
-        Some(code) => unsafe {
-            std::ffi::CStr::from_ptr(libc::strerror(code))
-                .to_string_lossy()
-                .into_owned()
-        },
-        None => error.to_string(),
-    }
+    crate::errors::stable_io(&error).into()
 }
 
 /// Returns the private ChatGPT credential file location.
@@ -196,6 +189,12 @@ impl Drop for CredentialLock {
 }
 
 fn lock_credentials(deadline: Instant) -> Result<CredentialLock, String> {
+    lock_credentials_cancelable(deadline, None)
+}
+fn lock_credentials_cancelable(
+    deadline: Instant,
+    cancellation: Option<&AtomicBool>,
+) -> Result<CredentialLock, String> {
     let path = credential_path()?;
     private_directory(path.parent().unwrap(), true)?;
     let file = OpenOptions::new()
@@ -207,6 +206,9 @@ fn lock_credentials(deadline: Instant) -> Result<CredentialLock, String> {
         .open(path.with_extension("json.lock"))
         .map_err(|e| format!("open ChatGPT credential lock: {}", stable(e)))?;
     loop {
+        if cancellation.is_some_and(|token| token.load(Ordering::SeqCst)) {
+            return Err("lock ChatGPT credentials: operation cancelled".into());
+        }
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(CredentialLock(file));
         }
@@ -215,7 +217,7 @@ fn lock_credentials(deadline: Instant) -> Result<CredentialLock, String> {
             return Err(format!("lock ChatGPT credentials: {}", stable(error)));
         }
         if Instant::now() >= deadline || INTERRUPTED.load(Ordering::SeqCst) {
-            return Err("lock ChatGPT credentials: context deadline exceeded".into());
+            return Err("lock ChatGPT credentials: operation timed out".into());
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -267,14 +269,12 @@ fn endpoint(variable: &str, fallback: &str) -> String {
 }
 
 fn client(timeout: Duration) -> Result<Client, String> {
-    Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(timeout)
-        .build()
+    Client::new(timeout, timeout, Some(timeout))
         .map_err(|_| "could not contact ChatGPT authorization service".into())
 }
 
 enum AuthError {
+    Cancelled,
     OAuth(String),
     Transport(Option<u16>),
     InvalidEndpoint,
@@ -282,6 +282,7 @@ enum AuthError {
 impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("context canceled"),
             Self::OAuth(_) => f.write_str("ChatGPT authorization failed; run reagent login."),
             Self::Transport(Some(status)) => write!(
                 f,
@@ -312,7 +313,9 @@ fn form(
     }
     let fields: BTreeMap<_, _> = fields.iter().copied().collect();
     let response = client.post(url).form(&fields).send().map_err(|e| {
-        if e.is_connect() {
+        if e.kind() == std::io::ErrorKind::ConnectionAborted {
+            AuthError::Cancelled
+        } else if e.kind() == std::io::ErrorKind::ConnectionRefused {
             AuthError::Transport(None)
         } else {
             AuthError::OAuth(UNKNOWN.into())
@@ -326,7 +329,13 @@ fn form(
     response
         .take(1 << 20)
         .read_to_end(&mut raw)
-        .map_err(|_| AuthError::OAuth(UNKNOWN.into()))?;
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::ConnectionAborted {
+                AuthError::Cancelled
+            } else {
+                AuthError::OAuth(UNKNOWN.into())
+            }
+        })?;
     let mut de = serde_json::Deserializer::from_slice(&raw);
     let body = Value::deserialize(&mut de);
     if !(200..300).contains(&status) {
@@ -395,17 +404,51 @@ fn cached(c: &Credentials, force: bool, rejected: &str) -> Result<Option<String>
 
 /// Gets a cached or durably refreshed token, optionally replacing a rejected token.
 pub fn token(force: bool, rejected: &str) -> Result<String, String> {
-    let _guard = TOKEN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    token_cancelable(force, rejected, None)
+}
+
+/// token_cancelable cancels credential waits but durably completes any started rotation.
+pub fn token_cancelable(
+    force: bool,
+    rejected: &str,
+    cancellation: Option<Arc<AtomicBool>>,
+) -> Result<String, String> {
+    let _guard = loop {
+        if cancellation
+            .as_ref()
+            .is_some_and(|token| token.load(Ordering::SeqCst))
+        {
+            return Err("refresh ChatGPT credentials: operation cancelled".into());
+        }
+        match TOKEN_LOCK.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+        }
+    };
     if let Some(token) = cached(&read_credentials()?, force, rejected)? {
         return Ok(token);
     }
-    let _lock = lock_credentials(Instant::now() + Duration::from_secs(300))?;
+    let _lock = lock_credentials_cancelable(
+        Instant::now() + Duration::from_secs(300),
+        cancellation.as_deref(),
+    )?;
     let mut c = read_credentials()?;
     if let Some(token) = cached(&c, force, rejected)? {
         return Ok(token);
     }
+    if cancellation
+        .as_ref()
+        .is_some_and(|token| token.load(Ordering::SeqCst))
+    {
+        return Err("refresh ChatGPT credentials: operation cancelled".into());
+    }
+    // A rotating token's replacement must be persisted even if the caller cancels.
+    let client = client(Duration::from_secs(30))?;
     let result = form(
-        &client(Duration::from_secs(30))?,
+        &client,
         &format!("{}/api/accounts/oauth/token", issuer()),
         &[
             ("grant_type", "refresh_token"),
@@ -1058,6 +1101,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancellation_does_not_wait_for_another_refresh() {
+        let _guard = TOKEN_LOCK.lock().unwrap();
+        let token = Arc::new(AtomicBool::new(true));
+        assert_eq!(
+            token_cancelable(false, "", Some(token)).unwrap_err(),
+            "refresh ChatGPT credentials: operation cancelled"
+        );
+    }
+
+    #[test]
+    fn credential_filesystem_errors_use_owned_categories() {
+        for (code, expected) in [
+            (libc::ELOOP, "too many symbolic links"),
+            (libc::ENOENT, "path does not exist"),
+            (libc::EACCES, "permission denied"),
+        ] {
+            assert_eq!(stable(std::io::Error::from_raw_os_error(code)), expected);
+        }
+    }
+
+    #[test]
     fn cache_obeys_refresh_embargo_and_rejected_token_race() {
         let mut c = Credentials {
             client_id: "client".into(),
@@ -1111,5 +1175,27 @@ mod tests {
         assert!(validate_id_token(&token, "https://issuer", "client", "n", "s").is_ok());
         assert!(validate_id_token(&token, "https://issuer", "client", "wrong", "s").is_err());
         assert!(validate_id_token(&token, "https://issuer", "wrong", "n", "s").is_err());
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use super::*;
+    #[test]
+    fn authorization_form_sends_no_accept_header() {
+        let (url, server) = crate::transport::http::tests::no_accept_server(
+            br#"{"access_token":"token"}"#.to_vec(),
+        );
+        let result = form(
+            &client(Duration::from_secs(2)).unwrap(),
+            &url,
+            &[("grant_type", "refresh_token"), ("refresh_token", "value")],
+            true,
+        );
+        assert_eq!(
+            result.map_err(|e| e.to_string()).unwrap()["access_token"],
+            "token"
+        );
+        server.join().unwrap();
     }
 }

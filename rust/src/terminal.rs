@@ -37,6 +37,7 @@ pub struct Input {
 /// Submission distinguishes text, interruption, and end of input.
 pub enum Submission {
     Text(String),
+    Bytes(Vec<u8>),
     Interrupted,
     Eof,
 }
@@ -160,17 +161,20 @@ impl Input {
     /// Read line handles continuation and bracketed pastes as one submission.
     pub fn read_line(&mut self, prompt: &str) -> io::Result<Submission> {
         if !self.terminal {
-            let mut line = String::new();
-            if self.reader.read_line(&mut line)? == 0 {
+            let mut line = Vec::new();
+            if self.reader.read_until(b'\n', &mut line)? == 0 {
                 return Ok(Submission::Eof);
             }
-            if line.ends_with('\n') {
+            if line.ends_with(b"\n") {
                 line.pop();
-                if line.ends_with('\r') {
+                if line.ends_with(b"\r") {
                     line.pop();
                 }
             }
-            return Ok(Submission::Text(line));
+            return Ok(match String::from_utf8(line) {
+                Ok(text) => Submission::Text(text),
+                Err(error) => Submission::Bytes(error.into_bytes()),
+            });
         }
         let _raw = Raw::enter()?;
         let mut line = String::new();

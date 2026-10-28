@@ -1,6 +1,8 @@
 pub mod agents;
 pub mod anthropic;
 pub mod auth;
+pub(crate) mod auto;
+pub(crate) mod cancellation;
 pub mod catalog;
 pub mod chat;
 pub mod checkpoint;
@@ -14,6 +16,7 @@ pub mod openai;
 pub mod provider;
 pub mod raw;
 pub mod render;
+pub(crate) mod routing_packet;
 pub mod run_loop;
 pub mod runtime;
 pub mod schemas;

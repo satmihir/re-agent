@@ -202,6 +202,69 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
 mod tests {
     use super::*;
     #[test]
+    fn tool_results_precede_following_user_parts_and_keep_inherited_markers() {
+        let native = crate::raw::new(
+            br#"{ "type":"tool_use", "id":"call", "name":"echo", "input":{"n":1e+02,"n":2} }"#,
+        );
+        let user = json!({"text":"task","workspace":{"kind":"workspace_state"},"roster":{"kind":"agent_roster","threads":[]},"plan":"on"});
+        let outcome = json!({"ok":false,"code":"failed","message":"failure","data":null,"truncated":false,"effect":"none"});
+        let request = json!({"model":"m","cache_entries":[1,3],"history":[
+            {"kind":"user","user":user},
+            {"kind":"assistant","assistant":{"native":{"provider":"anthropic.messages","items":[native]}}},
+            {"kind":"tool","tool":{"call_id":"call","outcome":outcome}},
+            {"kind":"user","user":user}
+        ]});
+        let body = encode_request(&request).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["content"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            messages[0]["content"][3]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(
+            crate::raw::bytes(&messages[1]["content"][0]),
+            crate::raw::bytes(&native)
+        );
+        let content = messages[2]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 5);
+        let expected = json!({"type":"tool_result","tool_use_id":"call","content":json_string(&outcome),"is_error":true,"cache_control":{"type":"ephemeral"}});
+        assert_eq!(
+            crate::types::json_bytes(&content[0]),
+            crate::types::json_bytes(&expected)
+        );
+        for (block, text) in content[1..].iter().zip(crate::openai::entry_texts(
+            &json!({"kind":"user","user":user}),
+        )) {
+            assert_eq!(block["type"], "text");
+            assert_eq!(block["text"], text);
+        }
+        assert!(content[1]["cache_control"].is_null());
+        assert!(content[2]["cache_control"].is_null());
+        assert!(content[3]["cache_control"].is_null());
+        assert_eq!(content[4]["cache_control"]["type"], "ephemeral");
+        assert_eq!(request["history"][0]["user"], user);
+    }
+    #[test]
+    fn invalid_user_bytes_survive_text_block_and_cache_marker() {
+        let text = crate::raw::string(b"raw\xff\xc0\x80\xef\xbf\xbd<&>\r");
+        let request = json!({"model":"m","history":[{"kind":"user","user":{"text":text}}]});
+        let body = encode_request(&request).unwrap();
+        assert_eq!(body["messages"][0]["content"][0]["text"], text);
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        let expected = "\"text\":\"raw\\ufffd\\ufffd\\ufffd�\\u003c\\u0026\\u003e\\r\"".as_bytes();
+        let wire = crate::types::json_bytes(&body);
+        assert!(wire
+            .windows(expected.len())
+            .any(|window| window == expected));
+        assert!(!String::from_utf8(wire)
+            .unwrap()
+            .contains("__reagent_raw_string"));
+    }
+    #[test]
     fn raw_arguments_and_usage() {
         let r=normalize(br#"{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"x","name":"echo","input":{ "a" : 1 }}],"usage":{"input_tokens":3,"cache_read_input_tokens":7,"cache_creation_input_tokens":2,"output_tokens":1}}"#).unwrap();
         assert_eq!(r["blocks"][0]["call"]["arguments"], "{ \"a\" : 1 }");

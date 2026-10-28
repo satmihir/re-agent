@@ -305,6 +305,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
                 .cloned()
                 .unwrap_or_else(|| c["workspace"].clone()),
             "active" => c["workspace"].clone(),
+            "launch_instructions" => c["project_instructions"].clone(),
             "history" => {
                 if session.history.is_empty() {
                     Value::Null
@@ -443,6 +444,35 @@ fn canonical(v: &Value) -> Vec<u8> {
 fn envelope(cp: &Value) -> Result<Vec<u8>, String> {
     let mut persisted = cp.clone();
     convert_raw(&mut persisted, false)?;
+    if let Some(roster) = persisted
+        .get_mut("agent_roster")
+        .and_then(Value::as_array_mut)
+    {
+        for record in roster {
+            *record = crate::agents::thread_record(record);
+            record.as_object_mut().unwrap().remove("depth");
+        }
+    }
+    if let Some(subtree) = persisted.get_mut("agent_subtree").filter(|v| v.is_object()) {
+        if let Some(records) = subtree.get_mut("threads").and_then(Value::as_array_mut) {
+            for record in records {
+                *record = crate::agents::thread_record(record);
+            }
+        }
+        if let Some(cost) = subtree.get_mut("total_cost") {
+            *cost = usage(cost);
+        }
+        *subtree = ordered(
+            subtree,
+            &[
+                "threads",
+                "total_cost",
+                "total_agents",
+                "next_offset",
+                "accounting_complete",
+            ],
+        );
+    }
     let bytes = canonical(&persisted);
     let digest = format!("{:x}", Sha256::digest(&bytes));
     let state = String::from_utf8(bytes).unwrap();
@@ -628,6 +658,10 @@ pub fn load(id: &str) -> Result<Value, String> {
     let bytes = fs::read(path)
         .map_err(|e| format!("read session {id}: {}", crate::errors::stable_io(&e)))?;
     let cp = parse(id, &bytes)?;
+    Ok(restored(id, cp))
+}
+
+fn restored(id: &str, cp: Value) -> Value {
     let mut config = Map::new();
     for key in [
         "provider",
@@ -661,7 +695,13 @@ pub fn load(id: &str) -> Result<Value, String> {
     s["session_id"] = json!(id);
     s["gc"] = cp["gc_state"].clone();
     s["recovery_workspace"] = cp["active"].clone();
-    Ok(json!({"config":config,"history":cp["history"],"state":s,"checkpoint":cp}))
+    if cp["context_gc"] == true && cp["gc_requests"].as_u64().unwrap_or(0) == 0 {
+        s["gc_requests"] = json!(cp["history"].as_array().map_or(0, |history| history
+            .iter()
+            .filter(|entry| !entry["assistant"].is_null())
+            .count()));
+    }
+    json!({"config":config,"history":cp["history"],"state":s,"checkpoint":cp})
 }
 
 /// Recover records interrupted calls as observations, never restarted actions.
@@ -857,6 +897,102 @@ mod tests {
         }
         convert_raw(&mut persisted, true).unwrap();
         assert_eq!(persisted, original);
+    }
+
+    #[test]
+    fn restored_settings_redeclare_recall_and_rebuild_legacy_request_count() {
+        let mut original = cp();
+        original["context_gc"] = json!(true);
+        original["read_only"] = json!(true);
+        original["agents"] = json!(true);
+        original["history"].as_array_mut().unwrap().extend([
+            json!({"kind":"assistant","assistant":{"blocks":[]}}),
+            json!({"kind":"assistant","assistant":{"blocks":[]}}),
+        ]);
+        let saved = restored("0123456789abcdef", original);
+        assert_eq!(saved["config"]["context_gc"], true);
+        assert_eq!(saved["config"]["checkpoint_enabled"], true);
+        assert_eq!(saved["state"]["gc_requests"], 2);
+        assert!(crate::tools::specs(&saved["config"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "recall"));
+    }
+
+    #[test]
+    fn agent_checkpoint_records_use_declaration_order_and_omit_empty_fields() {
+        let mut original = cp();
+        let record = json!({"state":"idle","name":"worker","id":"t1","parent_id":"root","task":"inspect","steps":0,"cost":crate::types::usage_zero(true),"authority":"","effects_unknown":false,"depth":1});
+        original["agent_roster"] = json!([record]);
+        original["agent_subtree"] = json!({"accounting_complete":true,"total_agents":1,"total_cost":crate::types::usage_zero(true),"threads":[record]});
+        let persisted: Value = serde_json::from_slice(&envelope(&original).unwrap()).unwrap();
+        let roster = &persisted["state"]["agent_roster"][0];
+        assert_eq!(
+            crate::types::json_string(roster),
+            r#"{"id":"t1","parent_id":"root","name":"worker","state":"idle","task":"inspect","steps":0,"cost":{"known":true,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0}}"#
+        );
+        let observation = &persisted["state"]["agent_subtree"]["threads"][0];
+        assert_eq!(
+            observation.as_object().unwrap().keys().last().unwrap(),
+            "depth"
+        );
+        assert_eq!(
+            persisted["state"]["agent_subtree"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "threads",
+                "total_cost",
+                "total_agents",
+                "accounting_complete"
+            ]
+        );
+    }
+
+    #[test]
+    fn idle_restore_is_atomically_rewritten_without_another_model_request() {
+        use std::os::unix::fs::MetadataExt;
+        const CHILD: &str = "REAGENT_CHECKPOINT_REWRITE_TEST";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = std::path::PathBuf::from(root);
+            let script = root.join("script.json");
+            std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#).unwrap();
+            let mut session = crate::runtime::Session::new(json!({"session_id":"0123456789abcdef","provider":"scripted","model":"scripted","scripted":script,"workspace":root,"checkpoint_enabled":true,"context_gc":true})).unwrap();
+            session.config["provider"] = json!("openai");
+            session.config["model"] = json!("gpt-6-sol");
+            session.config["scripted"] = json!("");
+            save(&session, "idle", "").unwrap();
+            let path = directory("0123456789abcdef")
+                .unwrap()
+                .join("checkpoint.json");
+            let old = std::fs::metadata(&path).unwrap().ino();
+            close("0123456789abcdef");
+            let saved = load("0123456789abcdef").unwrap();
+            session.config = saved["config"].clone();
+            session.state = saved["state"].clone();
+            session.history = saved["history"].as_array().cloned().unwrap_or_default();
+            assert_eq!(recover(&mut session).unwrap(), "");
+            save(&session, "idle", "").unwrap();
+            assert_ne!(std::fs::metadata(&path).unwrap().ino(), old);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            close("0123456789abcdef");
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "checkpoint::tests::idle_restore_is_atomically_rewritten_without_another_model_request", "--nocapture"]).env(CHILD, root.path()).env("XDG_CACHE_HOME", root.path().join("cache")).env("HOME", root.path()).output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     #[test]

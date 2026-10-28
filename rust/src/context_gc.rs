@@ -45,7 +45,9 @@ pub(crate) fn record_path(session: &mut Session, call: &Value) {
     if path.is_empty() {
         return;
     }
-    let Ok(path) = session.tools.workspace.resolve(path) else { return; };
+    let Ok(path) = session.tools.workspace.resolve(path) else {
+        return;
+    };
     let path = crate::workspace::missing_path(&path);
     if !session.state["gc_state"]["paths"].is_object() {
         session.state["gc_state"]["paths"] = json!({});
@@ -61,7 +63,9 @@ fn digest(session: &Session, path: &str) -> String {
     if !path.starts_with(&session.tools.workspace.root) {
         return String::new();
     }
-    let Ok(checked) = session.tools.workspace.resolve(&path.to_string_lossy()) else { return String::new(); };
+    let Ok(checked) = session.tools.workspace.resolve(&path.to_string_lossy()) else {
+        return String::new();
+    };
     let checked = match checked.canonicalize() {
         Ok(path) => path,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return "missing".into(),
@@ -78,10 +82,7 @@ fn digest(session: &Session, path: &str) -> String {
     else {
         return String::new();
     };
-    if !file
-        .metadata()
-        .is_ok_and(|m| m.is_file())
-    {
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
         return String::new();
     }
     let mut bytes = Vec::new();
@@ -145,7 +146,9 @@ fn results(accepted: &[Value], paths: &Value) -> (Vec<ResultRecord>, i64, bool) 
         };
         match string(&result["name"]) {
             "read_file" => {
-                let read = &result["outcome"]["data"];
+                let Ok(read) = crate::raw::parse(&result["outcome"]["data"]) else {
+                    continue;
+                };
                 let Some(lines) = read["lines"].as_array() else {
                     continue;
                 };
@@ -477,8 +480,14 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     } else {
         "instructions"
     };
-    let fixed_bytes = new_body.get(key).map(|v| types::json_string(v).len()).unwrap_or(0)
-        + new_body.get("tools").map(|v| types::json_string(v).len()).unwrap_or(0);
+    let fixed_bytes = new_body
+        .get(key)
+        .map(|v| types::json_bytes(v).len())
+        .unwrap_or(0)
+        + new_body
+            .get("tools")
+            .map(|v| types::json_bytes(v).len())
+            .unwrap_or(0);
     let rebuild_bytes = new_bytes.saturating_sub(fixed_bytes);
     let rebuild_tokens = rebuild_bytes as f64 * rate;
     let remaining = number(&session.state["gc_requests"]).clamp(16, 48);
@@ -515,11 +524,11 @@ pub(crate) fn collect(session: &mut Session) -> bool {
             ordered.push(json!({"call_id":id,"reason":drop["reason"],"step":drop["step"]}));
         }
     }
-    let old_body = types::json_string(&old_body);
-    let new_body = types::json_string(&new_body);
+    let old_body = types::json_bytes(&old_body);
+    let new_body = types::json_bytes(&new_body);
     let break_byte = old_body
-        .bytes()
-        .zip(new_body.bytes())
+        .iter()
+        .zip(new_body.iter())
         .take_while(|(a, b)| a == b)
         .count();
     session.history = accepted;
@@ -531,13 +540,11 @@ pub(crate) fn collect(session: &mut Session) -> bool {
 
 /// Recall returns the original bounded observation without authorizing writes.
 pub fn recall(session: &Session, arguments: &str) -> Value {
-    let args = match serde_json::from_str::<Value>(arguments) {
+    let schema: Value = serde_json::from_str(include_str!("schemas/recall.json")).unwrap();
+    let args = match tools::decode_arguments(arguments, &schema) {
         Ok(args) => args,
-        Err(_) => return tools::fail("invalid_arguments", "arguments must be valid JSON"),
+        Err(outcome) => return outcome,
     };
-    if args.as_object().is_none_or(|m| m.keys().any(|k| k != "id")) {
-        return tools::fail("invalid_arguments", "unknown field");
-    }
     let id = string(&args["id"]);
     if id.is_empty() {
         return tools::fail("invalid_arguments", "id must not be empty");
@@ -561,9 +568,10 @@ pub fn recall(session: &Session, arguments: &str) -> Value {
         );
     }
     let mut message = String::new();
-    if valid_digest(&original["data"]["sha256"]) {
+    let data = crate::raw::parse(&original["data"]).unwrap_or(Value::Null);
+    if valid_digest(&data["sha256"]) {
         let now = digest(session, string(&session.state["gc_state"]["paths"][id]));
-        if !now.is_empty() && now != string(&original["data"]["sha256"]) {
+        if !now.is_empty() && now != string(&data["sha256"]) {
             message = format!("File has changed since this read; current digest: {now}");
         }
     }

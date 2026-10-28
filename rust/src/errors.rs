@@ -1,3 +1,4 @@
+#[cfg(test)]
 use serde_json::Value;
 use std::io;
 
@@ -164,7 +165,14 @@ fn regex_issue(pattern: &str) -> Option<(usize, &'static str)> {
                 i += 2;
                 continue;
             }
-            if escape.is_ascii_alphanumeric() && !b"aftnrvAbBdDsSwWzxpP01234567".contains(&escape) {
+            let single_octal = matches!(escape, b'1'..=b'7')
+                && !bytes
+                    .get(i + 2)
+                    .is_some_and(|next| matches!(next, b'0'..=b'7'));
+            if single_octal
+                || escape.is_ascii_alphanumeric()
+                    && !b"aftnrvAbBdDsSwWzxpP01234567".contains(&escape)
+            {
                 return Some((i + 1, "invalid escape"));
             }
             i += 2;
@@ -367,6 +375,12 @@ mod tests {
         for (pattern, want) in [
             ("abc[", "4: unclosed character class"),
             (r"abc\q", "4: invalid escape"),
+            (r"(a)\1", "4: invalid escape"),
+            (r"é(a)\1", "6: invalid escape"),
+            (r"(a)\7x", "4: invalid escape"),
+            (r"(a)\18", "4: invalid escape"),
+            (r"[\1]", "2: invalid escape"),
+            (r"\Q\1\E(a)\1", "10: invalid escape"),
             ("abc(?=x)", "4: unsupported RE2 construct"),
             ("[z-a]", "2: invalid character range"),
             ("z-a[z-a]", "5: invalid character range"),

@@ -3,6 +3,7 @@ use crate::{
     types::{json_string, usage_add, usage_zero, ModelError},
 };
 use serde_json::{json, Value};
+pub mod http;
 use sha2::{Digest, Sha256};
 use std::{
     io::Read,
@@ -38,16 +39,13 @@ pub fn timeout(variable: &str, default: u64) -> Result<u64, String> {
     Ok(n)
 }
 
-pub fn client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("Go-http-client/1.1")
-        .timeout(Duration::from_secs(timeout(
-            "REAGENT_RESPONSE_HEADER_TIMEOUT",
-            600,
-        )?))
-        .build()
-        .map_err(|_| "cannot create HTTP client".into())
+pub fn client() -> Result<http::Client, String> {
+    http::Client::new(
+        Duration::from_secs(timeout("REAGENT_RESPONSE_HEADER_TIMEOUT", 600)?),
+        Duration::from_secs(timeout("REAGENT_RESPONSE_IDLE_TIMEOUT", 300)?),
+        None,
+    )
+    .map_err(|_| "cannot create HTTP client".into())
 }
 
 pub fn redacted(endpoint: &str) -> String {
@@ -84,6 +82,7 @@ pub struct Transport {
     pub config: Value,
     pub events: Vec<Value>,
     pub retry_usage: Value,
+    pub cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 impl Transport {
     pub fn new(config: &Value) -> Self {
@@ -91,7 +90,26 @@ impl Transport {
             config: config.clone(),
             events: Vec::new(),
             retry_usage: usage_zero(true),
+            cancellation: None,
         }
+    }
+    fn cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|token| token.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    fn pause(&self, duration: Duration) -> Result<(), ModelError> {
+        let end = Instant::now() + duration;
+        while Instant::now() < end {
+            if self.cancelled() {
+                return Err(error("cancelled", "model request cancelled"));
+            }
+            std::thread::sleep(
+                end.saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(20)),
+            );
+        }
+        Ok(())
     }
     fn event(&mut self, name: &str, step: usize, data: Value) {
         self.events
@@ -143,9 +161,13 @@ impl Transport {
             secrets.extend(crate::auth::secrets());
         }
         loop {
+            if self.cancelled() {
+                return Err(error("cancelled", "model request cancelled"));
+            }
             attempt += 1;
             let mut token = if chatgpt {
-                crate::auth::token(false, "").map_err(|m| error("provider_error", &m))?
+                crate::auth::token_cancelable(false, "", self.cancellation.clone())
+                    .map_err(|m| error("provider_error", &m))?
             } else if proxied {
                 String::new()
             } else {
@@ -153,12 +175,16 @@ impl Transport {
             };
             let mut refreshed = false;
             let (status, raw, retry_after, failure) = loop {
+                if self.cancelled() {
+                    return Err(error("cancelled", "model request cancelled"));
+                }
                 if !token.is_empty() && !secrets.contains(&token) {
                     secrets.push(token.clone());
                 }
                 self.event("api.attempt.started",step,json!({"attempt":attempt,"endpoint":redact(&redacted(&endpoint),&secrets,&endpoint),"request_body":trace_utf8(&redact_bytes(&bytes,&secrets,&endpoint)),"request_sha256":format!("{:x}",Sha256::digest(&bytes))}));
                 let sent = Instant::now();
-                let client = client().map_err(|m| error("provider_error", &m))?;
+                let mut client = client().map_err(|m| error("provider_error", &m))?;
+                client.cancellation = self.cancellation.clone();
                 let mut req = client
                     .post(endpoint)
                     .header("Content-Type", "application/json")
@@ -217,36 +243,55 @@ impl Transport {
                                     && !terminal_code(&provider_code(&raw))
                                 {
                                     refreshed = true;
-                                    token = crate::auth::token(true, &token)
-                                        .map_err(|m| error("provider_error", &m))?;
+                                    token = crate::auth::token_cancelable(
+                                        true,
+                                        &token,
+                                        self.cancellation.clone(),
+                                    )
+                                    .map_err(|m| error("provider_error", &m))?;
                                     secrets.extend(crate::auth::secrets());
                                     continue;
                                 }
                                 break (status, raw, retry_after, None);
                             }
                             Err(e) => {
-                                let msg = if e.to_string().to_lowercase().contains("timed out") {
+                                let msg = if e.kind() == std::io::ErrorKind::ConnectionAborted {
+                                    "context canceled".into()
+                                } else if e.kind() == std::io::ErrorKind::TimedOut {
                                     format!(
                                         "the provider sent nothing for {}s",
                                         timeout("REAGENT_RESPONSE_IDLE_TIMEOUT", 300)
                                             .unwrap_or(300)
                                     )
                                 } else {
-                                    "unexpected end of file".into()
+                                    let category = crate::errors::stable_io(&e);
+                                    if category == "operation failed" {
+                                        "connection or response read failed".into()
+                                    } else {
+                                        category.into()
+                                    }
                                 };
                                 self.event("api.attempt.finished",step,json!({"attempt":attempt,"http_status":status,"duration_ms":sent.elapsed().as_millis()as u64,"error":msg}));
+                                if e.kind() == std::io::ErrorKind::ConnectionAborted {
+                                    return Err(error("cancelled", "model request cancelled"));
+                                }
                                 break (0, Vec::new(), String::new(), Some(msg));
                             }
                         }
                     }
                     Err(e) => {
-                        let msg = if e.is_timeout() {
+                        let msg = if e.kind() == std::io::ErrorKind::ConnectionAborted {
+                            "context canceled"
+                        } else if e.kind() == std::io::ErrorKind::TimedOut {
                             "operation timed out"
                         } else {
                             "connection or response read failed"
                         }
                         .to_string();
                         self.event("api.attempt.finished",step,json!({"attempt":attempt,"http_status":0,"duration_ms":sent.elapsed().as_millis()as u64,"error":msg}));
+                        if e.kind() == std::io::ErrorKind::ConnectionAborted {
+                            return Err(error("cancelled", "model request cancelled"));
+                        }
                         break (0, Vec::new(), String::new(), Some(msg));
                     }
                 }
@@ -275,7 +320,7 @@ impl Transport {
                 if !stream_reason.is_empty() && stream_usage["known"] == true {
                     usage_add(&mut self.retry_usage, &stream_usage);
                 }
-                std::thread::sleep(Duration::from_millis(500));
+                self.pause(Duration::from_millis(500))?;
                 continue;
             }
             if !stream_reason.is_empty() && stream_usage["known"] == true {
@@ -302,7 +347,7 @@ impl Transport {
                     step,
                     json!({"attempt":attempt,"reason":reason,"delay_ms":delay.as_millis()as u64}),
                 );
-                std::thread::sleep(delay);
+                self.pause(delay)?;
             }
             if started.elapsed() >= deadline {
                 self.event(
@@ -441,6 +486,117 @@ pub fn chatgpt_error(code: &str, param: &str, usage: Value) -> Option<ModelError
 mod tests {
     use super::*;
     #[test]
+    fn native_response_bytes_survive_next_http_request() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        for mode in ["direct", "stream-final", "stream-items", "anthropic"] {
+            for invalid in [false, true] {
+                let anthropic = mode == "anthropic";
+                let streamed = mode.starts_with("stream");
+                let kind = if anthropic { "thinking" } else { "reasoning" };
+                let mut item =
+                    format!("{{ \"type\":\"{kind}\", \"x\":1e+02, \"x\":\"\\u0061").into_bytes();
+                if invalid {
+                    item.extend_from_slice(b"\xff\xfe");
+                }
+                item.extend_from_slice(br#"", "nested":[{"text":"[,]\""}] }"#);
+                let compact = crate::raw::compact(&item, true);
+                let mut response = if anthropic {
+                    br#"{"stop_reason":"end_turn","content":["#.to_vec()
+                } else {
+                    br#"{"status":"completed","output":["#.to_vec()
+                };
+                response.extend_from_slice(&item);
+                response.extend_from_slice(b"]}");
+                if mode == "stream-final" {
+                    response = [
+                        b"data: {\"type\":\"response.completed\",\"response\":".as_slice(),
+                        &response,
+                        b"}\n\n",
+                    ]
+                    .concat();
+                } else if mode == "stream-items" {
+                    response = [b"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":".as_slice(), &item,
+                        b"}\r\n\r\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n"].concat();
+                }
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let endpoint = format!("http://{}/model", listener.local_addr().unwrap());
+                let expected = compact.clone();
+                let server = std::thread::spawn(move || {
+                    for turn in 0..2 {
+                        let (mut stream, _) = listener.accept().unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut headers = Vec::new();
+                        let mut byte = [0u8; 1];
+                        while !headers.ends_with(b"\r\n\r\n") {
+                            stream.read_exact(&mut byte).unwrap();
+                            headers.push(byte[0]);
+                        }
+                        let headers = String::from_utf8(headers).unwrap().to_lowercase();
+                        let length = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse::<usize>()
+                            .unwrap();
+                        let mut body = vec![0; length];
+                        stream.read_exact(&mut body).unwrap();
+                        if turn == 1 {
+                            assert!(
+                                body.windows(expected.len())
+                                    .any(|window| window == expected),
+                                "native item changed in {mode}, invalid={invalid}"
+                            );
+                            assert!(!body
+                                .windows(b"__reagent_raw_json_v1".len())
+                                .any(|window| window == b"__reagent_raw_json_v1"));
+                            assert_eq!(std::str::from_utf8(&body).is_err(), invalid);
+                        }
+                        write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response.len()
+                        )
+                        .unwrap();
+                        stream.write_all(&response).unwrap();
+                    }
+                });
+                let config =
+                    json!({"provider":if anthropic{"anthropic"}else{"openai"},"proxied":streamed});
+                let mut transport = Transport::new(&config);
+                let mut request = json!({"model":"test","history":[]});
+                let body = crate::provider::encode_request(&config, &request).unwrap();
+                let (_, raw) = transport.call_endpoint(&request, &body, &endpoint).unwrap();
+                let normalized = if anthropic {
+                    crate::anthropic::normalize(&raw).unwrap()
+                } else if streamed {
+                    crate::openai::normalize(&crate::types::json_bytes(
+                        &crate::openai::assemble(&raw).unwrap(),
+                    ))
+                    .unwrap()
+                } else {
+                    crate::openai::normalize(&raw).unwrap()
+                };
+                let native = crate::raw::bytes(&normalized["native"]["items"][0]).unwrap();
+                assert_eq!(crate::raw::compact(&native, true), compact);
+                request["history"] = json!([{"kind":"assistant","assistant":normalized}]);
+                let body = crate::provider::encode_request(&config, &request).unwrap();
+                transport.call_endpoint(&request, &body, &endpoint).unwrap();
+                server.join().unwrap();
+                assert_eq!(transport.events[1]["data"]["body_utf8_replaced"], invalid);
+                if invalid {
+                    assert!(transport.events[2]["data"]["request_body"]
+                        .as_str()
+                        .unwrap()
+                        .contains('\u{fffd}'));
+                    assert!(crate::types::json_bytes(&body).contains(&0xff));
+                }
+            }
+        }
+    }
+    #[test]
     fn proxy_retry_preserves_request_bytes_and_emits_attempt_events() {
         use std::io::Write;
         use std::net::TcpListener;
@@ -466,6 +622,7 @@ mod tests {
                 assert!(headers.starts_with("post /responses http/1.1\r\n"));
                 assert!(headers.contains(&format!("session-id: {key}\r\n")));
                 assert!(!headers.contains("authorization:"));
+                assert!(!headers.lines().any(|line| line.starts_with("accept:")));
                 let length = headers
                     .lines()
                     .find_map(|line| line.strip_prefix("content-length: "))
@@ -502,6 +659,33 @@ mod tests {
         );
         assert_eq!(transport.events[3]["data"]["request_id"], "test-id");
     }
+    #[test]
+    fn closed_port_errors_keep_owned_failure_text() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/responses", listener.local_addr().unwrap());
+        drop(listener);
+        for retry in [false, true] {
+            let mut transport = Transport::new(&json!({
+                "provider":"openai", "proxied":true,
+                "model_retry_window":if retry {1} else {0}
+            }));
+            let failure = transport
+                .call_endpoint(&json!({}), &json!({}), &endpoint)
+                .unwrap_err();
+            assert_eq!(failure.status, "provider_error");
+            assert_eq!(
+                failure.message,
+                if retry {
+                    "model retry window exhausted after 1 attempts: connection or response read failed"
+                } else {
+                    "model request failed: connection or response read failed"
+                }
+            );
+            assert_eq!(transport.events[1]["event"], "api.attempt.finished");
+            assert_eq!(transport.events[1]["data"]["http_status"], 0);
+        }
+    }
+
     #[test]
     fn context_overflow() {
         assert_eq!(

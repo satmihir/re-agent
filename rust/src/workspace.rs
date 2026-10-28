@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 
 pub const MAX_FILE_BYTES: usize = 1 << 20;
@@ -336,12 +337,8 @@ pub fn project_instructions(root: &str) -> Result<Option<String>, String> {
 fn git(root: &str, args: &[&str]) -> Option<String> {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
-    let mut child = Command::new("git")
-        .arg("--no-optional-locks")
-        .args(["-C", root])
+    let mut child = crate::tool_git::inspect_command(Path::new(root))
         .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_NO_LAZY_FETCH", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -385,6 +382,59 @@ fn git(root: &str, args: &[&str]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&bytes).trim_end().to_string())
+}
+
+/// validate_destination checks linked-worktree identity before workspace consent.
+pub fn validate_destination(root: &Path) -> Result<(), Value> {
+    let bad = |message| fail("workspace_validation_failed", message);
+    let identity =
+        fs::metadata(root).map_err(|_| bad("cannot identify selected worktree directory"))?;
+    if !identity.is_dir() {
+        return Err(bad("cannot identify selected worktree directory"));
+    }
+    match fs::symlink_metadata(root.join(".git")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(info) if info.is_dir() => return Ok(()),
+        Ok(info) if info.is_file() => {}
+        _ => return Err(bad("cannot validate workspace Git metadata")),
+    }
+    let root_text = root.to_string_lossy();
+    let top = git(&root_text, &["rev-parse", "--show-toplevel"])
+        .ok_or_else(|| bad("cannot identify linked worktree"))?;
+    let top = fs::canonicalize(top)
+        .ok()
+        .and_then(|path| fs::metadata(path).ok());
+    if !top.is_some_and(|info| (info.dev(), info.ino()) == (identity.dev(), identity.ino())) {
+        return Err(bad(
+            "linked worktree top-level does not match the selected directory",
+        ));
+    }
+    let common = git(&root_text, &["rev-parse", "--git-common-dir"])
+        .ok_or_else(|| bad("cannot identify linked worktree common directory"))?;
+    let common = Path::new(&common);
+    let common = fs::canonicalize(if common.is_absolute() {
+        common.to_path_buf()
+    } else {
+        root.join(common)
+    })
+    .map_err(|_| bad("cannot resolve linked worktree common directory"))?;
+    if !fs::metadata(common).is_ok_and(|info| info.is_dir()) {
+        return Err(bad("linked worktree common directory is not a directory"));
+    }
+    let listing = git(&root_text, &["worktree", "list", "--porcelain", "-z"])
+        .ok_or_else(|| bad("cannot read a complete repository worktree list"))?;
+    for field in listing.split('\0') {
+        if let Some(path) = field.strip_prefix("worktree ") {
+            if fs::metadata(path)
+                .is_ok_and(|info| (info.dev(), info.ino()) == (identity.dev(), identity.ino()))
+            {
+                return Ok(());
+            }
+        }
+    }
+    Err(bad(
+        "selected directory is not in the repository's worktree list",
+    ))
 }
 
 fn local_date_zone(timestamp: libc::time_t) -> (String, String) {
@@ -645,6 +695,21 @@ mod tests {
             let result: Value = serde_json::from_str(line).unwrap();
             assert_eq!(json!([result[1][1], result[2][1]]), expected, "{zone}");
             assert!(!result[0].as_str().unwrap().starts_with(['+', '-']));
+        }
+    }
+
+    #[test]
+    fn snapshot_ref_only_counts_survive_outside_a_git_repository() {
+        let root = tempfile::tempdir().unwrap();
+        for (read_only, plan) in [(false, false), (true, false), (false, true)] {
+            let state =
+                snapshot(&json!({"workspace":root.path(),"read_only":read_only,"plan":plan}));
+            assert!(state.get("git").is_none());
+            if read_only || plan {
+                assert_eq!(state["counts"], "omitted in read-only/plan mode");
+            } else {
+                assert!(state.get("counts").is_none());
+            }
         }
     }
 
