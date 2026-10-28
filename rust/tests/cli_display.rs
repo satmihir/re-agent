@@ -234,3 +234,121 @@ fn blocked_chat_advice_precedes_trace_and_resubmission_is_only_an_error() {
     );
     assert!(output.stdout.is_empty());
 }
+
+#[test]
+fn status_lists_launch_and_preapproved_workspaces_in_sorted_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let launch = directory.path().join("launch");
+    let first = directory.path().join("aaa");
+    let last = directory.path().join("zzz");
+    for path in [&launch, &first, &last] {
+        std::fs::create_dir(path).unwrap();
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_reagent"))
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", directory.path())
+        .env("XDG_CACHE_HOME", directory.path().join("cache"))
+        .env("NO_COLOR", "1")
+        .env("OPENAI_API_KEY", "offline-key")
+        .env("REAGENT_OPENAI_BASE_URL", "http://127.0.0.1:1")
+        .args(["chat", "--workspace"])
+        .arg(&launch)
+        .arg("--allow-workspace")
+        .arg(&last)
+        .arg("--allow-workspace")
+        .arg(&first)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"/status\n/reset\n/status\n/exit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    let expected: Vec<_> = [&first, &launch, &last]
+        .into_iter()
+        .map(|path| format!("approved   {} (until chat exits)", path.display()))
+        .collect();
+    let approved: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.starts_with("approved   "))
+        .collect();
+    assert_eq!(
+        approved,
+        expected
+            .iter()
+            .chain(&expected)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    );
+    assert!(stderr.find("mode       ").unwrap() < stderr.find("approved   ").unwrap());
+    assert!(stderr.find("approved   ").unwrap() < stderr.find("session    ").unwrap());
+}
+
+#[test]
+fn piped_plan_offers_only_the_last_closed_exact_line_plan_and_keeps_planning() {
+    for (reply, offer) in [
+        ("<plan>\nready\n</plan>", true),
+        ("<plan>\nold\n</plan>\n<plan>\nnew\n</plan>", true),
+        ("<plan>\nold\n</plan>\n<plan>\nunclosed", false),
+        (" <plan>\nnot an exact tag\n</plan>", false),
+        ("not a plan", false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("responses.json");
+        std::fs::write(
+            &script,
+            serde_json::to_vec(&json!([
+                {"blocks":[{"kind":"text","text":reply}]},
+                {"blocks":[{"kind":"text","text":"next turn"}]}
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_reagent"))
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", directory.path())
+            .env("XDG_CACHE_HOME", directory.path().join("cache"))
+            .env("NO_COLOR", "1")
+            .args(["chat", "--plan", "--workspace"])
+            .arg(directory.path())
+            .arg("--scripted")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"plan it\nnext\n/status\n/exit\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{reply}: {stderr}");
+        assert_eq!(
+            stderr
+                .matches("/plan turns plan mode off; then ask for the implementation")
+                .count(),
+            usize::from(offer),
+            "{reply}: {stderr}"
+        );
+        assert!(
+            stderr.contains("mode       read, write, and execute · plan mode"),
+            "{stderr}"
+        );
+        assert!(String::from_utf8(output.stdout)
+            .unwrap()
+            .ends_with("next turn\n"));
+    }
+}

@@ -8,6 +8,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 pub const MAX_FILE_BYTES: usize = 1 << 20;
 pub const MAX_RESULT_BYTES: usize = 32 << 10;
@@ -15,6 +16,7 @@ pub const MAX_RESULT_BYTES: usize = 32 << 10;
 pub struct Workspace {
     pub root: PathBuf,
     pub seen: HashMap<PathBuf, String>,
+    pub(crate) publish_mu: Arc<Mutex<()>>,
     digests: HashMap<PathBuf, HashSet<String>>,
     identity: (u64, u64),
 }
@@ -93,6 +95,7 @@ impl Workspace {
         Ok(Self {
             root,
             seen: HashMap::new(),
+            publish_mu: Arc::new(Mutex::new(())),
             digests: HashMap::new(),
             identity: (info.dev(), info.ino()),
         })

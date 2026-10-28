@@ -633,6 +633,26 @@ pub fn model_finished(region: Option<&crate::terminal::RegionHandle>) {
     }
 }
 
+/// Agents refreshed updates working counts and wait progress, then prints drained notices once.
+pub fn agents_refreshed(
+    region: Option<&crate::terminal::RegionHandle>,
+    count: usize,
+    wait_label: Option<&str>,
+    notices: &[String],
+) {
+    if let Some(region) = region {
+        let label = wait_label.map(|label| sanitize(label).replace('\n', "↵").replace('\t', "⇥"));
+        let _ = region
+            .lock()
+            .unwrap()
+            .refresh_agents(count, label.as_deref());
+    }
+    for notice in notices {
+        let notice = sanitize(notice).replace('\n', "↵").replace('\t', "⇥");
+        crate::terminal::output(region, 2, &format!("  ↳ {notice}\n"));
+    }
+}
+
 /// Tool started shows progress for an executing command.
 pub fn tool_started(region: Option<&crate::terminal::RegionHandle>, call: &Value) {
     if text(call, "name") != "exec" {
@@ -644,6 +664,32 @@ pub fn tool_started(region: Option<&crate::terminal::RegionHandle>, call: &Value
     }
 }
 
+fn retry_delay(milliseconds: i64) -> String {
+    if milliseconds == 0 {
+        return "0s".into();
+    }
+    let magnitude = i128::from(milliseconds).abs();
+    if magnitude < 1000 {
+        return format!("{milliseconds}ms");
+    }
+    let seconds = format!("{}.{:03}", magnitude / 1000 % 60, magnitude % 1000)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned();
+    let hours = magnitude / 3_600_000;
+    let minutes = magnitude / 60_000 % 60;
+    let prefix = if hours > 0 {
+        format!("{hours}h{minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        String::new()
+    };
+    format!(
+        "{}{prefix}{seconds}s",
+        if milliseconds < 0 { "-" } else { "" }
+    )
+}
 /// Retry scheduled records the failed attempt and shows its backoff status.
 pub fn retry_scheduled(
     region: Option<&crate::terminal::RegionHandle>,
@@ -651,11 +697,7 @@ pub fn retry_scheduled(
     delay_ms: i64,
     reason: &str,
 ) {
-    let delay = if delay_ms % 1000 == 0 {
-        format!("{}s", delay_ms / 1000)
-    } else {
-        format!("{delay_ms}ms")
-    };
+    let delay = retry_delay(delay_ms);
     let reason = sanitize(reason).replace('\n', "\n    ");
     let note = format!("  · model attempt {attempt} failed ({reason}); retrying in {delay}");
     let note = if styled(2) {
@@ -785,9 +827,15 @@ pub fn result_in_region(
     macro_rules! println {
         ($($args:tt)*) => { crate::terminal::output(region, 1, &format!("{}\n", format_args!($($args)*))) };
     }
+    if let Some(region) = region {
+        let _ = region.lock().unwrap().begin_output();
+    }
     let reply = text(result, "reply");
     if !reply.is_empty() {
-        if styled(2) && yes(&state["_display"], "printed") {
+        if styled(2)
+            && (yes(&state["_display"], "printed")
+                || region.is_some_and(|region| region.lock().unwrap().printed))
+        {
             eprintln!();
         }
         println!(
@@ -896,10 +944,18 @@ pub fn result_in_region(
     }
     eprint!("{}", router_usage_note(&result["router_usage"], styled(2)));
     if chat && text(state, "blocked").is_empty() && yes(result, "resumable") {
-        eprintln!("  nothing was lost; your next message continues from the last completed step")
+        let line = "  nothing was lost; your next message continues from the last completed step";
+        if styled(2) {
+            eprintln!("{DIM}{line}{RESET}");
+        } else {
+            eprintln!("{line}");
+        }
     }
     if chat && styled(2) {
         eprintln!()
+    }
+    if let Some(region) = region {
+        let _ = region.lock().unwrap().end_output();
     }
 }
 
@@ -994,6 +1050,42 @@ mod tests {
         }
         let cfg = serde_json::json!({"provider":"openai","model":"gpt-6-luna","context_window_tokens":1_000_000});
         assert!(model_presentation(&cfg).2.contains("window 1M override"));
+    }
+    #[test]
+    fn retry_delay_matches_go_duration_units() {
+        for (milliseconds, expected) in [
+            (0, "0s"),
+            (500, "500ms"),
+            (1000, "1s"),
+            (1532, "1.532s"),
+            (1500, "1.5s"),
+            (60000, "1m0s"),
+            (3600000, "1h0m0s"),
+        ] {
+            assert_eq!(retry_delay(milliseconds), expected);
+        }
+    }
+    #[test]
+    fn agent_notices_are_single_safe_lines_without_wait_labels_in_plain_output() {
+        const CHILD: &str = "REAGENT_TEST_AGENT_NOTICES";
+        if std::env::var_os(CHILD).is_some() {
+            agents_refreshed(
+                None,
+                2,
+                Some("waiting on t1 worker (step 3)"),
+                &["t1 worker finished · completed\nnew\ttext".into()],
+            );
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "render::tests::agent_notices_are_single_safe_lines_without_wait_labels_in_plain_output", "--nocapture"])
+            .env(CHILD, "1")
+            .output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "  ↳ t1 worker finished · completed↵new⇥text\n"
+        );
     }
     #[test]
     fn controls_are_visible() {

@@ -20,6 +20,7 @@ pub(super) struct Status {
     plan: bool,
     blocked: bool,
     auto: bool,
+    agents: usize,
     context: Option<f64>,
 }
 
@@ -86,6 +87,9 @@ impl Status {
             }
             parts.push(model);
         }
+        if self.agents > 0 {
+            parts.push(crate::render::plural(self.agents as i64, "agent", "agents"));
+        }
         if self.auto {
             parts.push("auto".into());
         }
@@ -131,6 +135,8 @@ pub struct Region {
     caret_col: usize,
     visible: Vec<String>,
     pending: String,
+    pub(crate) printed: bool,
+    output_update: bool,
     color: bool,
 }
 
@@ -164,8 +170,14 @@ impl Progress {
 }
 
 fn emit(text: &str) -> io::Result<()> {
+    emit_line("", text.as_bytes(), "")
+}
+
+fn emit_line(prefix: &str, line: &[u8], suffix: &str) -> io::Result<()> {
     let mut out = io::stderr().lock();
-    out.write_all(text.as_bytes())?;
+    out.write_all(prefix.as_bytes())?;
+    out.write_all(line)?;
+    out.write_all(suffix.as_bytes())?;
     out.flush()
 }
 
@@ -188,7 +200,29 @@ impl Region {
             caret_col: 0,
             visible: Vec::new(),
             pending: String::new(),
+            printed: false,
+            output_update: false,
             color: styled(2),
+        }
+    }
+
+    /// Begin output keeps a reply and its summary in one visible terminal update.
+    pub(crate) fn begin_output(&mut self) -> io::Result<()> {
+        self.output_update = true;
+        emit("\x1b[?2026h")
+    }
+
+    /// End output publishes the completed reply, summary, and restored caret together.
+    pub(crate) fn end_output(&mut self) -> io::Result<()> {
+        self.output_update = false;
+        emit("\x1b[?2026l")
+    }
+
+    fn update_end(&self) -> &str {
+        if self.output_update {
+            ""
+        } else {
+            "\x1b[?2026l"
         }
     }
 
@@ -305,9 +339,10 @@ impl Region {
         self.visible = rows;
         self.active = true;
         out.push_str(&format!(
-            "\x1b[{};{}H\x1b[?2026l",
+            "\x1b[{};{}H{}",
             top + self.caret_row,
-            col + 1
+            col + 1,
+            self.update_end()
         ));
         emit(&out)
     }
@@ -320,6 +355,23 @@ impl Region {
             ticked: Instant::now(),
             frame: 0,
         });
+        self.repaint()
+    }
+
+    /// Refresh agents updates counts and a wait label without restarting its clock.
+    pub(crate) fn refresh_agents(
+        &mut self,
+        count: usize,
+        wait_label: Option<&str>,
+    ) -> io::Result<()> {
+        self.status.agents = count;
+        if let Some(label) = wait_label {
+            if let Some(progress) = &mut self.progress {
+                progress.label = label.to_owned();
+            } else {
+                return self.set_progress(Some(label));
+            }
+        }
         self.repaint()
     }
 
@@ -385,6 +437,30 @@ impl Region {
         Ok(())
     }
 
+    /// Picker replaces the input pane without releasing terminal ownership.
+    pub(super) fn picker(
+        &mut self,
+        header: &str,
+        options: Vec<String>,
+        width: usize,
+        height: usize,
+    ) -> io::Result<()> {
+        let mut rows = vec![header.to_owned()];
+        rows.extend(options);
+        if width >= 20 {
+            self.width = width;
+            rows.insert(0, self.rule());
+            rows.push(self.rule());
+            rows.push(self.status.row(width, self.color));
+            if let Some(progress) = &self.progress {
+                rows.push(format!("  {}", progress.text(width - 2, self.color)));
+            }
+            if self.queued {
+                rows.push("  queued".into());
+            }
+        }
+        self.draw(rows, 1, 0, width, height)
+    }
     /// Collapse removes the pane before exiting or handing the terminal to another program.
     pub(crate) fn collapse(&mut self) -> io::Result<()> {
         if self.active {
@@ -402,14 +478,22 @@ impl Region {
     }
 
     fn insert(&mut self, line: &str) -> io::Result<()> {
+        self.insert_bytes(line.as_bytes())
+    }
+
+    /// Insert bytes preserves raw shell output while retaining the input caret.
+    pub(crate) fn insert_bytes(&mut self, line: &[u8]) -> io::Result<()> {
+        self.printed = true;
         if !self.active {
-            return emit(&format!("{line}\n"));
+            return emit_line("", line, "\n");
         }
         let available = self
             .height
             .saturating_sub(self.top + self.visible.len() - 1);
         if available > 0 {
-            let needed = width(line).div_ceil(self.width).max(1);
+            let needed = width(&String::from_utf8_lossy(line))
+                .div_ceil(self.width)
+                .max(1);
             let movement = available.min(needed);
             let old_top = self.top;
             emit(&format!("\x1b[?2026h\x1b[{old_top};1H\x1b[J"))?;
@@ -422,15 +506,29 @@ impl Region {
                 self.height,
             )?;
             if movement == needed {
-                return emit(&format!(
-                    "\x1b[?2026h\x1b[{old_top};1H{line}\x1b[{};{}H\x1b[?2026l",
-                    self.top + self.caret_row,
-                    self.caret_col + 1
-                ));
+                return emit_line(
+                    &format!("\x1b[?2026h\x1b[{old_top};1H"),
+                    line,
+                    &format!(
+                        "\x1b[{};{}H{}",
+                        self.top + self.caret_row,
+                        self.caret_col + 1,
+                        self.update_end()
+                    ),
+                );
             }
         }
         let above = self.top.saturating_sub(1).max(1);
-        emit(&format!("\x1b[?2026h\x1b[1;{above}r\x1b[{above};1H\r\n\x1b[{above};1H{line}\x1b[r\x1b[{};{}H\x1b[?2026l", self.top + self.caret_row, self.caret_col + 1))
+        emit_line(
+            &format!("\x1b[?2026h\x1b[1;{above}r\x1b[{above};1H\r\n\x1b[{above};1H"),
+            line,
+            &format!(
+                "\x1b[r\x1b[{};{}H{}",
+                self.top + self.caret_row,
+                self.caret_col + 1,
+                self.update_end()
+            ),
+        )
     }
 
     fn write_text(&mut self, text: &str) -> io::Result<()> {
@@ -495,6 +593,61 @@ mod tests {
         assert!(progress.text(80, true).ends_with(" · 1.5s\x1b[0m"));
         progress.started = now - Duration::from_secs(65);
         assert!(progress.text(80, false).ends_with(" · 1m05s"));
+    }
+
+    #[test]
+    fn agent_refresh_preserves_clocks_drafts_and_progress_when_no_wait_label_is_supplied() {
+        let mut region = Region::new();
+        region.color = false;
+        region.status.model = "model".into();
+        region.status.auto = true;
+        region
+            .set_progress(Some("waiting on t1 worker (step 1)"))
+            .unwrap();
+        let started = Instant::now() - Duration::from_secs(5);
+        let ticked = Instant::now() - Duration::from_millis(50);
+        let progress = region.progress.as_mut().unwrap();
+        progress.started = started;
+        progress.ticked = ticked;
+        progress.frame = 4;
+        region.buffer = "draft text".chars().collect();
+        region.caret = 3;
+        let handle = Arc::new(Mutex::new(region));
+        crate::render::agents_refreshed(
+            Some(&handle),
+            2,
+            Some("waiting on t1 worker (step 2)"),
+            &[],
+        );
+        {
+            let region = handle.lock().unwrap();
+            let progress = region.progress.as_ref().unwrap();
+            assert_eq!(progress.started, started);
+            assert_eq!(progress.ticked, ticked);
+            assert_eq!(progress.frame, 4);
+            assert_eq!(progress.label, "waiting on t1 worker (step 2)");
+            assert_eq!(region.status.row(80, false), "  model · 2 agents · auto");
+            assert_eq!(region.status.row(20, false), "  model · 2 agents");
+            assert_eq!(region.buffer.iter().collect::<String>(), "draft text");
+            assert_eq!(region.caret, 3);
+        }
+        crate::render::agents_refreshed(Some(&handle), 1, None, &[]);
+        {
+            let mut region = handle.lock().unwrap();
+            assert_eq!(region.status.row(80, false), "  model · 1 agent · auto");
+            assert_eq!(
+                region.progress.as_ref().unwrap().label,
+                "waiting on t1 worker (step 2)"
+            );
+            region
+                .status
+                .update(&serde_json::json!({"model":"next"}), &Value::Null);
+            assert_eq!(region.status.row(80, false), "  next · 1 agent");
+        }
+        crate::render::agents_refreshed(Some(&handle), 0, None, &[]);
+        let region = handle.lock().unwrap();
+        assert_eq!(region.status.row(80, false), "  next");
+        assert_eq!(region.progress.as_ref().unwrap().started, started);
     }
 
     #[test]

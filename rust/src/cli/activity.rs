@@ -118,6 +118,16 @@ fn go_value(v: &Value) -> String {
     match v {
         Value::Null => "<nil>".into(),
         Value::String(s) => s.clone(),
+        Value::Number(number) => {
+            let value = number.as_f64().unwrap();
+            let absolute = value.abs();
+            if absolute != 0.0 && !(1e-4..1e6).contains(&absolute) {
+                let scientific = format!("{value:e}");
+                let (mantissa, exponent) = scientific.split_once('e').unwrap();
+                return format!("{mantissa}e{:+03}", exponent.parse::<i32>().unwrap());
+            }
+            value.to_string()
+        }
         Value::Array(a) => format!("[{}]", a.iter().map(go_value).collect::<Vec<_>>().join(" ")),
         Value::Object(o) => {
             let mut keys: Vec<_> = o.keys().collect();
@@ -585,6 +595,21 @@ mod tests {
             ("delete_file", r#"{"path":"f","unrecognized":true}"#, "f"),
             ("read_file", "[]", "[]"),
             ("read_file", r#"{"path":42}"#, "path=42"),
+            (
+                "read_file",
+                r#"{"path":42.0,"timeout":1.0}"#,
+                "path=42 timeout=1",
+            ),
+            (
+                "read_file",
+                r#"{"path":1e6,"timeout":0.00001}"#,
+                "path=1e+06 timeout=1e-05",
+            ),
+            (
+                "read_file",
+                r#"{"path":42,"data":{"timeout":1.0},"values":[1.0,1.5]}"#,
+                "data=map[timeout:1] path=42 values=[1 1.5]",
+            ),
             ("read_file", r#"{"path":"f"} {}"#, r#"{"path":"f"} {}"#),
             ("echo", "null", "\"\""),
             ("search_text", "{}", "\"\" in "),

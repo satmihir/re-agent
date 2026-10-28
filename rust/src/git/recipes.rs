@@ -105,6 +105,7 @@ struct Run<'a> {
     result: Value,
     jev: bool,
     prefix: String,
+    cancellation: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value, String> {
     if let Err(v) = keys(
@@ -197,6 +198,7 @@ pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value
         result: json!({"recipe":"","chosen_by":"model","status":"","steps":[],"decision":{}}),
         jev,
         prefix: String::new(),
+        cancellation: crate::cancellation::token(config),
     };
     run.snapshot();
     let allowed = run.feasible();
@@ -406,6 +408,9 @@ impl Run<'_> {
             .unwrap_or_default()
     }
     fn exec(&self, argv: &[String]) -> (String, i32, bool) {
+        if self.cancellation.load(std::sync::atomic::Ordering::SeqCst) {
+            return (String::new(), -1, true);
+        }
         let mut pipes = [0; 2];
         if unsafe { libc::pipe(pipes.as_mut_ptr()) } != 0 {
             return ("operation failed".into(), -1, false);
@@ -484,7 +489,9 @@ impl Run<'_> {
             if status.is_some() && eof {
                 break;
             }
-            if started.elapsed() >= Duration::from_secs(60) {
+            if started.elapsed() >= Duration::from_secs(60)
+                || self.cancellation.load(std::sync::atomic::Ordering::SeqCst)
+            {
                 let _ = child.kill();
                 let _ = child.wait();
                 return (utf8(&bytes), -1, true);

@@ -200,6 +200,10 @@ struct Pty {
 
 impl Pty {
     fn start(command: &mut Command) -> Self {
+        Self::start_output(command, true)
+    }
+
+    fn start_output(command: &mut Command, stdout_tty: bool) -> Self {
         use std::os::{fd::FromRawFd, unix::process::CommandExt};
         let (mut master, mut slave) = (-1, -1);
         let size = libc::winsize {
@@ -222,10 +226,13 @@ impl Pty {
         );
         let terminal = unsafe { std::fs::File::from_raw_fd(master) };
         let slave = unsafe { std::fs::File::from_raw_fd(slave) };
-        command
-            .stdin(slave.try_clone().unwrap())
-            .stdout(slave.try_clone().unwrap())
-            .stderr(slave);
+        command.stdin(slave.try_clone().unwrap());
+        if stdout_tty {
+            command.stdout(slave.try_clone().unwrap());
+        } else {
+            command.stdout(Stdio::piped());
+        }
+        command.stderr(slave);
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
@@ -242,7 +249,6 @@ impl Pty {
     }
 
     fn wait(&mut self, marker: &[u8]) {
-        use std::os::fd::AsRawFd;
         let start = self.raw.len();
         let deadline = Instant::now() + Duration::from_secs(5);
         while !self.raw[start..]
@@ -255,17 +261,43 @@ impl Pty {
                 String::from_utf8_lossy(marker),
                 String::from_utf8_lossy(&self.raw)
             );
+            self.pump();
+        }
+    }
+
+    fn pump(&mut self) {
+        use std::os::fd::AsRawFd;
+        let mut poll = libc::pollfd {
+            fd: self.terminal.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut poll, 1, 20) } > 0 {
+            let mut bytes = [0; 8192];
+            let count = self.terminal.read(&mut bytes).unwrap();
+            assert!(count > 0, "terminal closed before marker");
+            self.raw.extend_from_slice(&bytes[..count]);
+        }
+    }
+
+    fn request(&mut self, listener: &TcpListener) -> (TcpStream, Value) {
+        use std::os::fd::AsRawFd;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
             let mut poll = libc::pollfd {
-                fd: self.terminal.as_raw_fd(),
+                fd: listener.as_raw_fd(),
                 events: libc::POLLIN,
                 revents: 0,
             };
-            if unsafe { libc::poll(&mut poll, 1, 20) } > 0 {
-                let mut bytes = [0; 8192];
-                let count = self.terminal.read(&mut bytes).unwrap();
-                assert!(count > 0, "terminal closed before marker");
-                self.raw.extend_from_slice(&bytes[..count]);
+            if unsafe { libc::poll(&mut poll, 1, 0) } > 0 {
+                return request(listener, &mut self.child);
             }
+            assert!(
+                Instant::now() < deadline,
+                "HTTP request missing; terminal: {}",
+                String::from_utf8_lossy(&self.raw)
+            );
+            self.pump();
         }
     }
 
@@ -295,7 +327,7 @@ fn pty_turn_reader_preserves_draft_resize_and_one_queued_submission() {
     let mut pty = Pty::start(&mut command);
     pty.wait("❯ ".as_bytes());
     pty.send(b"first held turn\r");
-    let (mut first, _) = request(&listener, &mut pty.child);
+    let (mut first, _) = pty.request(&listener);
     pty.send(b"second queued");
     pty.wait("❯ second queued".as_bytes());
     let size = libc::winsize {
@@ -316,7 +348,7 @@ fn pty_turn_reader_preserves_draft_resize_and_one_queued_submission() {
         std::io::ErrorKind::WouldBlock
     );
     respond(&mut first, false);
-    let (mut second, body) = request(&listener, &mut pty.child);
+    let (mut second, body) = pty.request(&listener);
     assert!(body.to_string().contains("second queued"));
     respond(&mut second, false);
     pty.wait(b"\x1b[?2004h");
@@ -329,6 +361,7 @@ fn pty_turn_cancellation_discards_queued_text_before_next_request() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut command = command(&directory, "chat");
+    command.env_remove("NO_COLOR").env("TERM", "xterm-256color");
     command.env("OPENAI_API_KEY", "offline-key").env(
         "REAGENT_OPENAI_BASE_URL",
         format!("http://{}", listener.local_addr().unwrap()),
@@ -336,18 +369,26 @@ fn pty_turn_cancellation_discards_queued_text_before_next_request() {
     let mut pty = Pty::start(&mut command);
     pty.wait("❯ ".as_bytes());
     pty.send(b"first held turn\r");
-    let (_first, _) = request(&listener, &mut pty.child);
+    let (_first, _) = pty.request(&listener);
     pty.send(b"stale queued input\r");
     pty.wait(b"  queued");
     pty.send(b"\x03");
     pty.wait(b"\x1b[?2004h");
-    assert!(String::from_utf8_lossy(&pty.raw).contains("cancelled"));
+    let output = String::from_utf8_lossy(&pty.raw);
+    assert!(output.contains("cancelled"));
+    assert!(output.contains("\x1b[2m  nothing was lost; your next message continues from the last completed step\x1b[0m"), "{output}");
+    let trace = output.find("trace: ").unwrap();
+    let prompt = output[..trace].rfind("❯ ").unwrap();
+    assert!(
+        output[prompt..trace].starts_with("❯ stale queued input\r\n"),
+        "{output}"
+    );
     assert_eq!(
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
     pty.send(b"fresh ordinary turn\r");
-    let (mut second, body) = request(&listener, &mut pty.child);
+    let (mut second, body) = pty.request(&listener);
     assert!(body.to_string().contains("fresh ordinary turn"));
     assert!(!body.to_string().contains("stale queued input"));
     respond(&mut second, false);
@@ -368,7 +409,7 @@ fn pty_unsubmitted_draft_survives_completion_and_is_edited_before_submit() {
     let mut pty = Pty::start(&mut command);
     pty.wait("❯ ".as_bytes());
     pty.send(b"first held turn\r");
-    let (mut first, _) = request(&listener, &mut pty.child);
+    let (mut first, _) = pty.request(&listener);
     pty.send(b"follow-up");
     pty.wait("❯ follow-up".as_bytes());
     respond(&mut first, false);
@@ -378,7 +419,7 @@ fn pty_unsubmitted_draft_survives_completion_and_is_edited_before_submit() {
         std::io::ErrorKind::WouldBlock
     );
     pty.send(b"\x01edited \x05\r");
-    let (mut second, body) = request(&listener, &mut pty.child);
+    let (mut second, body) = pty.request(&listener);
     assert!(body.to_string().contains("edited follow-up"));
     respond(&mut second, false);
     pty.wait(b"\x1b[?2004h");
@@ -476,7 +517,7 @@ fn checkpoint_publication_failure_stops_chat_before_reply_recap_or_next_request(
 }
 
 #[test]
-fn chat_compacts_before_the_next_turn_at_forty_percent() {
+fn chat_compacts_before_the_next_turn_at_eighty_percent() {
     let directory = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -503,7 +544,7 @@ fn chat_compacts_before_the_next_turn_at_forty_percent() {
         &mut stream,
         body["stream"].as_bool().unwrap_or(false),
         "first reply",
-        40000,
+        80000,
     );
     let (mut stream, body) = request(&listener, &mut child);
     assert!(
@@ -526,9 +567,494 @@ fn chat_compacts_before_the_next_turn_at_forty_percent() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(output.status.success(), "{stderr}");
     assert!(
-        stderr.contains("context 40% of the window; compacting before this turn\n"),
+        stderr.contains("context 80% of the window; compacting before this turn\n"),
         "{stderr}"
     );
     assert!(stderr.contains("compacted: "), "{stderr}");
     assert_eq!(output.stdout, b"first reply\nsecond turn works\n");
+}
+
+#[test]
+fn pty_workspace_consent_discards_typeahead_and_requires_fresh_non_numeric_keys() {
+    for (keys, allowed) in [
+        (b"\r".as_slice(), false),
+        (b"1".as_slice(), false),
+        (b"\x1b[A\r".as_slice(), true),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut command = command(&directory, "chat");
+        command
+            .env("OPENAI_API_KEY", "offline-key")
+            .env(
+                "REAGENT_OPENAI_BASE_URL",
+                format!("http://{}", listener.local_addr().unwrap()),
+            )
+            .arg("--read-only");
+        let mut pty = Pty::start(&mut command);
+        pty.wait("❯ ".as_bytes());
+        pty.send(b"open another workspace\r");
+        let (mut stream, _) = pty.request(&listener);
+        pty.send(b"must discard typeahead\r");
+        pty.wait(b"  queued");
+        let arguments = json!({"path":destination.path()}).to_string();
+        let response = json!({"id":"consent-fixture","object":"response","status":"completed","model":"gpt-6-luna","output":[{"type":"function_call","id":"item-consent","call_id":"call-consent","name":"request_workspace_access","arguments":arguments}],"usage":{"input_tokens":13,"output_tokens":3}}).to_string();
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+        stream.flush().unwrap();
+        pty.wait(b"Workspace consent");
+        let screen = String::from_utf8_lossy(&pty.raw);
+        assert!(screen.contains("Authority: read only"), "{screen}");
+        assert!(
+            screen.contains(
+                "Duration: until this chat exits, including /reset, /model, and compaction."
+            ),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("Files read here may be sent to the provider and recorded in traces."),
+            "{screen}"
+        );
+        assert!(screen.contains("Location: \""), "{screen}");
+        std::thread::sleep(Duration::from_millis(70));
+        assert!(listener.accept().is_err(), "typeahead answered consent");
+        pty.send(keys);
+        let (mut stream, body) = pty.request(&listener);
+        let request_text = body.to_string();
+        assert!(!request_text.contains("must discard typeahead"), "{body}");
+        assert_eq!(
+            request_text.contains("permission_denied"),
+            !allowed,
+            "{body}"
+        );
+        respond(&mut stream, false);
+        pty.wait(b"\x1b[?2004h");
+        pty.send(b"fresh followup\r");
+        let (mut stream, body) = pty.request(&listener);
+        assert!(body.to_string().contains("fresh followup"), "{body}");
+        respond(&mut stream, false);
+        pty.wait(b"\x1b[?2004h");
+        pty.send(b"/exit\r");
+    }
+}
+
+#[test]
+fn pty_model_picker_keeps_the_region_and_accepts_the_next_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command.env("OPENAI_API_KEY", "offline-key").env(
+        "REAGENT_OPENAI_BASE_URL",
+        format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"/model\r");
+    pty.wait(b"Select a model");
+    let screen = String::from_utf8_lossy(&pty.raw);
+    assert!(screen.contains("current"), "{screen}");
+    let start = pty.raw.len();
+    pty.send(b"\r");
+    pty.wait("❯ ".as_bytes());
+    assert!(!pty.raw[start..]
+        .windows(6)
+        .any(|bytes| bytes == b"\x1b[?25l"));
+    pty.send(b"after model picker\r");
+    let (mut stream, body) = pty.request(&listener);
+    assert_eq!(body["model"], "gpt-6-luna");
+    assert!(body.to_string().contains("after model picker"), "{body}");
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_idle_interrupt_hint_is_dim_and_clear_keeps_the_fresh_editor() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = command(&directory, "chat");
+    command
+        .env("OPENAI_API_KEY", "offline-key")
+        .env_remove("NO_COLOR");
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"discard draft\x03");
+    pty.wait(b"\x1b[?2004h");
+    assert!(String::from_utf8_lossy(&pty.raw)
+        .contains("\x1b[2m  (Ctrl-C again to exit, or Ctrl-D)\x1b[0m"));
+    pty.send(b"kept");
+    pty.wait("❯ kept".as_bytes());
+    pty.send(b"\x0c");
+    pty.wait(b"\x1b[H\x1b[2J");
+    pty.send(b"more");
+    pty.wait("❯ keptmore".as_bytes());
+    pty.send(b"\x15/exit\r");
+}
+
+#[test]
+fn pty_exec_cancellation_prints_trace_before_changing_the_prompt_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command.env("OPENAI_API_KEY", "offline-key").env(
+        "REAGENT_OPENAI_BASE_URL",
+        format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"run a command\r");
+    let (mut stream, _) = pty.request(&listener);
+    let response = json!({"id":"exec-fixture","status":"completed","model":"gpt-6-luna","output":[{"type":"function_call","id":"item-exec","call_id":"call-exec","name":"exec","arguments":json!({"argv":["sh","-c","sleep 30"],"cwd":"."}).to_string()}],"usage":{"input_tokens":13,"output_tokens":3}}).to_string();
+    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+    stream.flush().unwrap();
+    pty.wait(b"running sh");
+    pty.send(b"\x03");
+    pty.wait(b"\x1b[?2004h");
+    let output = String::from_utf8_lossy(&pty.raw);
+    let trace = output.find("trace: ").unwrap();
+    let prompt = output[..trace].rfind("❯ ").unwrap();
+    assert!(output[prompt..trace].starts_with("❯ \r\n"), "{output}");
+    assert!(!output[..trace].contains("(blocked) ❯"), "{output}");
+    pty.send(b"after cancelled command\r");
+    let (mut stream, body) = pty.request(&listener);
+    assert!(
+        body.to_string().contains("after cancelled command"),
+        "{body}"
+    );
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_model_selection_dims_picker_rules_and_reprobes_after_switching() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command
+        .env("OPENAI_API_KEY", "offline-key")
+        .env_remove("NO_COLOR")
+        .env(
+            "REAGENT_OPENAI_BASE_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"/model\r");
+    pty.wait(b"Select a model");
+    let raw = String::from_utf8_lossy(&pty.raw);
+    let header = raw.rfind("Select a model").unwrap();
+    let frame = raw[..header].rfind("\x1b[J").unwrap();
+    assert!(raw[frame..].starts_with("\x1b[J\x1b[2m─"), "{raw}");
+    pty.send(b"\x1b[B\r");
+    pty.wait(b"\x1b[6n");
+    assert!(String::from_utf8_lossy(&pty.raw).contains("switched to "));
+    pty.send(b"after selected model\r");
+    let (mut stream, body) = pty.request(&listener);
+    assert_ne!(body["model"], "gpt-6-luna");
+    assert!(body.to_string().contains("after selected model"), "{body}");
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_plan_choices_require_consent_and_scope_implementation_history() {
+    for (keys, choice) in [
+        (b"\r".as_slice(), "keep"),
+        (b"1".as_slice(), "keep"),
+        (b"typed feedback".as_slice(), "keep"),
+        (b"\x1b".as_slice(), "keep"),
+        (b"\x1b[A\x1b[A\r".as_slice(), "here"),
+        (b"\x1b[A\r".as_slice(), "fresh"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut command = command(&directory, "chat");
+        command
+            .env("OPENAI_API_KEY", "offline-key")
+            .env(
+                "REAGENT_OPENAI_BASE_URL",
+                format!("http://{}", listener.local_addr().unwrap()),
+            )
+            .arg("--plan");
+        let mut pty = Pty::start(&mut command);
+        pty.wait("❯ ".as_bytes());
+        pty.send(b"original planning request\r");
+        let (mut stream, body) = pty.request(&listener);
+        pty.send(b"stale queued input\r");
+        pty.wait(b"  queued");
+        let plan = "  keep this indentation\ncheck the workspace";
+        respond_with(
+            &mut stream,
+            body["stream"].as_bool().unwrap_or(false),
+            &format!("<plan>\n{plan}\n</plan>"),
+            13,
+        );
+        pty.wait(b"Plan ready");
+        let frame = String::from_utf8_lossy(&pty.raw);
+        assert!(frame.contains("❯ 3  Keep planning"), "{choice}: {frame}");
+        assert!(frame.contains("esc keep planning"), "{choice}: {frame}");
+        assert!(listener.accept().is_err(), "typeahead implemented the plan");
+        pty.send(keys);
+        if choice == "keep" {
+            pty.wait(b"kept planning");
+            pty.wait(b"\x1b[?2004h");
+            assert!(
+                listener.accept().is_err(),
+                "non-consent started implementation"
+            );
+            pty.send(b"fresh followup\r");
+        }
+        let (mut stream, body) = pty.request(&listener);
+        let encoded = body.to_string();
+        assert!(!encoded.contains("stale queued input"), "{choice}: {body}");
+        if choice == "fresh" {
+            assert!(!encoded.contains("original planning request"), "{body}");
+            assert!(
+                encoded.contains("workspace may have changed since; check what you rely on."),
+                "{body}"
+            );
+            assert!(encoded.contains(plan.split('\n').next().unwrap()), "{body}");
+            assert!(!encoded.contains("<plan>"), "{body}");
+        } else if choice == "here" {
+            assert!(pty
+                .raw
+                .windows(b"Implement the plan.\r\n".len())
+                .any(|bytes| bytes == b"Implement the plan.\r\n"));
+            assert!(encoded.contains("original planning request"), "{body}");
+            assert!(encoded.contains("Implement the plan."), "{body}");
+            assert!(
+                encoded.contains("plan mode ended before this message"),
+                "{body}"
+            );
+        } else {
+            assert!(encoded.contains("fresh followup"), "{body}");
+            assert!(
+                encoded.contains("plan mode is on for this message"),
+                "{body}"
+            );
+        }
+        respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+        pty.wait(b"\x1b[?2004h");
+        pty.send(b"/exit\r");
+    }
+}
+
+#[test]
+fn pty_shell_streams_above_the_draft_and_interrupt_discards_typeahead() {
+    use std::os::fd::AsRawFd;
+    for interrupt in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut command = command(&directory, "chat");
+        command.env("OPENAI_API_KEY", "offline-key").env(
+            "REAGENT_OPENAI_BASE_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let mut pty = Pty::start(&mut command);
+        pty.wait("❯ ".as_bytes());
+        let command = if interrupt {
+            b"!printf 'shell helper ready\\n'; exec sleep 20\r".as_slice()
+        } else {
+            b"!printf 'shell helper ready\\n'; printf 'raw \\377 line\\n'; sleep .3; printf 'last line'\r".as_slice()
+        };
+        pty.send(command);
+        pty.wait(b"shell helper ready\x1b[");
+        pty.send(b"draft while shell runs");
+        pty.wait("❯ draft while shell runs".as_bytes());
+        let size = libc::winsize {
+            ws_row: 24,
+            ws_col: 60,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe { libc::ioctl(pty.terminal.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+            0
+        );
+        pty.wait("─".repeat(60).as_bytes());
+        if interrupt {
+            pty.send(b"\r");
+            pty.wait(b"  queued");
+            pty.send(b"\x03");
+            pty.wait(b"interrupted after");
+            pty.wait(b"\x1b[?2004h");
+            assert!(listener.accept().is_err());
+            pty.send(b"new question\r");
+        } else {
+            pty.wait(b"last line");
+            pty.wait(b"\x1b[?2004h");
+            assert!(pty
+                .raw
+                .windows(b"raw \xff line".len())
+                .any(|line| line == b"raw \xff line"));
+            pty.send(b"\r");
+        }
+        let (mut stream, body) = pty.request(&listener);
+        let encoded = body.to_string();
+        assert!(encoded.contains("user_shell_command"), "{body}");
+        assert!(encoded.contains("shell helper ready"), "{body}");
+        if interrupt {
+            assert!(!encoded.contains("draft while shell runs"), "{body}");
+            assert!(encoded.contains("new question"), "{body}");
+            assert!(encoded.contains("\\\"interrupted\\\":true"), "{body}");
+        } else {
+            assert!(encoded.contains("draft while shell runs"), "{body}");
+            assert!(encoded.contains("last line"), "{body}");
+        }
+        respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+        pty.wait(b"\x1b[?2004h");
+        pty.send(b"/exit\r");
+    }
+}
+
+#[test]
+fn pty_editor_hands_off_cooked_stdio_and_restores_before_preview_or_error() {
+    for (mode, stdout_tty) in [
+        ("accept", true),
+        ("accept", false),
+        ("empty", true),
+        ("nonzero", true),
+        ("missing", true),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("editor.py");
+        std::fs::write(&script, r#"import os,sys,termios,stat
+mode,stdout_tty,path=sys.argv[1:]
+assert all(os.isatty(fd) for fd in (0,2))
+assert os.isatty(1)==(stdout_tty=='true')
+assert termios.tcgetattr(0)[3] & termios.ICANON
+assert os.open('/dev/tty',os.O_RDONLY)>=0
+assert stat.S_IMODE(os.stat(path).st_mode)==0o600
+assert open(path,'rb').read()==b''
+sys.stderr.write('editor cooked stdio ready\n');sys.stderr.flush()
+if mode=='nonzero':sys.exit(7)
+open(path,'wb').write(b'\t \n' if mode=='empty' else b'edited \xff text\nline2\nline3\nline4\nline5\nline6\n')
+"#).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut command = command(&directory, "chat");
+        command
+            .env("OPENAI_API_KEY", "offline-key")
+            .env(
+                "REAGENT_OPENAI_BASE_URL",
+                format!("http://{}", listener.local_addr().unwrap()),
+            )
+            .env(
+                "VISUAL",
+                if mode == "missing" {
+                    "missing-editor".into()
+                } else {
+                    format!("python3 {} {mode} {stdout_tty}", script.display())
+                },
+            )
+            .env_remove("NO_COLOR")
+            .env("TERM", "xterm-256color");
+        let mut pty = Pty::start_output(&mut command, stdout_tty);
+        pty.wait("❯ ".as_bytes());
+        let start = pty.raw.len();
+        pty.send(b"/edit\r");
+        let marker = match mode {
+            "accept" => "  · … 1 more lines",
+            "empty" => "nothing to send",
+            "nonzero" => "error: run editor: command exited with status 7",
+            _ => "error: run editor: executable not found",
+        };
+        pty.wait(marker.as_bytes());
+        let raw = String::from_utf8_lossy(&pty.raw[start..]);
+        let release = raw.find("\x1b[?2004l").unwrap();
+        let restore = raw[release..].find("\x1b[?2004h").unwrap() + release;
+        assert!(restore < raw.find(marker).unwrap(), "{mode}: {raw}");
+        if mode != "missing" {
+            assert!(raw.contains("editor cooked stdio ready"), "{raw}");
+        }
+        if mode == "accept" {
+            assert!(raw.contains("\x1b[2m  · edited � text\x1b[0m"), "{raw}");
+            let (mut stream, body) = pty.request(&listener);
+            assert!(body.to_string().contains("edited � text"), "{body}");
+            respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+            pty.wait(b"\x1b[?2004h");
+            if !stdout_tty {
+                let output = String::from_utf8_lossy(&pty.raw);
+                let summary = output.find("completed").unwrap();
+                let caret = output[..summary].rfind("0% of context").unwrap();
+                assert!(
+                    !output[caret..summary].contains("\x1b[?2026l"),
+                    "result exposed the idle pane before its summary: {output}"
+                );
+                assert!(
+                    output[summary..].contains("\x1b[?2026l"),
+                    "result never published its final pane: {output}"
+                );
+            }
+        } else {
+            pty.wait(b"\x1b[?2004h");
+            assert!(listener.accept().is_err());
+        }
+        pty.send(b"next ordinary question\r");
+        let (mut stream, body) = pty.request(&listener);
+        assert!(
+            body.to_string().contains("next ordinary question"),
+            "{body}"
+        );
+        respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+        pty.wait(b"\x1b[?2004h");
+        pty.send(b"/exit\r");
+    }
+}
+
+#[test]
+fn pty_retry_notice_separates_the_redirected_reply_before_the_summary() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command
+        .env_remove("NO_COLOR")
+        .env("TERM", "xterm-256color")
+        .env("OPENAI_API_KEY", "offline-key")
+        .env(
+            "REAGENT_OPENAI_BASE_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        )
+        .args(["--model-retry-window", "3s"]);
+    let mut pty = Pty::start_output(&mut command, false);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"retry this request\r");
+    let (mut failed, _) = pty.request(&listener);
+    failed.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 2\r\nRetry-After: 0\r\nConnection: close\r\n\r\n{}").unwrap();
+    drop(failed);
+    let (mut stream, body) = pty.request(&listener);
+    respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+    pty.wait(b"completed");
+    let note = pty
+        .raw
+        .windows(b"model attempt 1 failed".len())
+        .position(|bytes| bytes == b"model attempt 1 failed")
+        .unwrap();
+    let summary = pty.raw[note..]
+        .windows(b"completed".len())
+        .position(|bytes| bytes == b"completed")
+        .unwrap()
+        + note;
+    assert!(
+        pty.raw[note..summary]
+            .windows(b"\x1b[20;1H\x1b[r".len())
+            .any(|bytes| bytes == b"\x1b[20;1H\x1b[r"),
+        "{}",
+        String::from_utf8_lossy(&pty.raw)
+    );
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"next question\r");
+    let (mut stream, body) = pty.request(&listener);
+    assert!(body.to_string().contains("next question"), "{body}");
+    respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
 }

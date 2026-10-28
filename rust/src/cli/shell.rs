@@ -11,24 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const LIMIT: usize = 32 << 10;
-static INTERRUPTED: AtomicBool = AtomicBool::new(false);
-extern "C" fn interrupt(_: libc::c_int) {
-    INTERRUPTED.store(true, Ordering::SeqCst);
-}
-struct Interrupt(libc::sighandler_t);
-impl Interrupt {
-    fn new() -> Self {
-        INTERRUPTED.store(false, Ordering::SeqCst);
-        Self(unsafe { libc::signal(libc::SIGINT, interrupt as *const () as libc::sighandler_t) })
-    }
-}
-impl Drop for Interrupt {
-    fn drop(&mut self) {
-        unsafe {
-            libc::signal(libc::SIGINT, self.0);
-        }
-    }
-}
 #[derive(Default)]
 struct Capture {
     head: Vec<u8>,
@@ -113,8 +95,12 @@ fn elapsed(ms: u64) -> String {
         format!("{}m{:02}s", ms / 60000, ms / 1000 % 60)
     }
 }
-fn run(dir: &str, command: &str, live: &mut dyn Write) -> Result<(Value, bool), String> {
-    let _interrupt = Interrupt::new();
+fn run(
+    dir: &str,
+    command: &str,
+    live: &mut dyn Write,
+    cancellation: &AtomicBool,
+) -> Result<(Value, bool), String> {
     let mut fds = [0; 2];
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(format!(
@@ -186,7 +172,7 @@ fn run(dir: &str, command: &str, live: &mut dyn Write) -> Result<(Value, bool), 
                 }
             }
         }
-        if INTERRUPTED.load(Ordering::SeqCst) && !cancelled {
+        if cancellation.load(Ordering::Acquire) && !cancelled {
             let _ = child.kill();
             cancelled = true;
         }
@@ -224,8 +210,41 @@ fn run(dir: &str, command: &str, live: &mut dyn Write) -> Result<(Value, bool), 
     }
     Ok((record, !last_newline))
 }
+struct Live<'a> {
+    region: Option<&'a crate::terminal::RegionHandle>,
+    pending: Vec<u8>,
+}
+impl Write for Live<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.region.is_none() {
+            return io::stdout().write(bytes);
+        }
+        self.pending.extend_from_slice(bytes);
+        while let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
+            let line: Vec<_> = self.pending.drain(..=end).collect();
+            self.region
+                .unwrap()
+                .lock()
+                .unwrap()
+                .insert_bytes(&line[..line.len() - 1])?;
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        io::stdout().flush()
+    }
+}
+
 /// Execute streams a user command and records its outcome without a model turn.
 pub(crate) fn execute(session: &mut Session, command: &str) {
+    let region = session.region.clone();
+    macro_rules! eprintln {
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
+    }
+    let mut live = Live {
+        region: region.as_ref(),
+        pending: Vec::new(),
+    };
     if command.is_empty() {
         eprintln!("!COMMAND runs COMMAND in the workspace; its output joins the conversation");
         return;
@@ -233,12 +252,13 @@ pub(crate) fn execute(session: &mut Session, command: &str) {
     match run(
         text(&session.config, "workspace"),
         command,
-        &mut io::stdout(),
+        &mut live,
+        &crate::cancellation::token(&session.config),
     ) {
         Err(e) => eprintln!("error: {}", render::sanitize(&e)),
         Ok((record, open)) => {
             if open {
-                println!()
+                let _ = live.write_all(b"\n");
             }
             let duration = elapsed(record["duration_ms"].as_u64().unwrap_or(0));
             let mut footer = if record["interrupted"] == true {
@@ -272,6 +292,7 @@ mod tests {
             "/tmp",
             "printf a; printf b >&2; printf c; exit 7",
             &mut live,
+            &AtomicBool::new(false),
         )
         .unwrap();
         assert_eq!(live, b"abc");
@@ -286,16 +307,33 @@ mod tests {
     #[test]
     fn shell_does_not_inherit_credentials() {
         let mut live = Vec::new();
-        let (record, _) =
-            run("/tmp", "printf '%s' \"${OPENAI_API_KEY-unset}\"", &mut live).unwrap();
+        let (record, _) = run(
+            "/tmp",
+            "printf '%s' \"${OPENAI_API_KEY-unset}\"",
+            &mut live,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(record["output"], "unset");
     }
     #[test]
     fn signal_and_noisy_output_are_bounded() {
-        let (record, _) = run("/tmp", "kill -TERM $$", &mut Vec::new()).unwrap();
+        let (record, _) = run(
+            "/tmp",
+            "kill -TERM $$",
+            &mut Vec::new(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert!(record["exit_code"].is_null());
         assert_eq!(record["signal"], "terminated");
-        let (record, _) = run("/tmp", "head -c 100000 /dev/zero", &mut Vec::new()).unwrap();
+        let (record, _) = run(
+            "/tmp",
+            "head -c 100000 /dev/zero",
+            &mut Vec::new(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(record["output_bytes_seen"], 100000);
         assert_eq!(record["output_truncated"], true);
         assert!(types::json_string(&record).len() <= LIMIT);

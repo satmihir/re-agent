@@ -159,7 +159,7 @@ fn post_at(
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::ConnectionAborted {
                 "Jev request: operation cancelled"
-            } else if e.kind() == std::io::ErrorKind::TimedOut {
+            } else if started.elapsed() >= Duration::from_secs(2) {
                 "Jev request: operation timed out"
             } else {
                 "could not send Jev request"
@@ -179,6 +179,8 @@ fn post_at(
                 "operation cancelled"
             } else if started.elapsed() >= Duration::from_secs(2) {
                 "operation timed out"
+            } else if error.kind() == std::io::ErrorKind::TimedOut {
+                "operation failed"
             } else {
                 crate::errors::stable_io(&error)
             };
@@ -729,9 +731,9 @@ fn configured_timeouts_interrupt_before_the_overall_jev_deadline() {
         assert_eq!(
             error,
             if body {
-                "read Jev response: operation timed out"
+                "read Jev response: operation failed"
             } else {
-                "Jev request: operation timed out"
+                "could not send Jev request"
             }
         );
         return;

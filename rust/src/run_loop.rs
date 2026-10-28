@@ -4,6 +4,19 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+struct DisplayPoller<'a> {
+    stopped: &'a std::sync::atomic::AtomicBool,
+    thread: std::thread::Thread,
+}
+
+impl Drop for DisplayPoller<'_> {
+    fn drop(&mut self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.thread.unpark();
+    }
+}
+
 pub(crate) fn string(v: &Value) -> &str {
     v.as_str().unwrap_or("")
 }
@@ -34,6 +47,7 @@ impl Session {
         }
         let plan = flag(&config["plan"]);
         let launch = config["workspace"].clone();
+        let launch_instructions = config["project_instructions"].clone();
         let mut session = Self {
             config,
             history: Vec::new(),
@@ -41,7 +55,7 @@ impl Session {
             provider,
             trace: crate::trace::Trace::disabled(),
             region: None,
-            state: json!({"session_id":session_id,"launch":launch,"seen_calls":{},"plan":plan,"gc_state":{"last_pass":0},
+            state: json!({"session_id":session_id,"launch":launch,"launch_instructions":launch_instructions,"seen_calls":{},"plan":plan,"gc_state":{"last_pass":0},
                 "gc_requests":0,"last_request":types::usage_zero(false),"tokens_per_byte":0.0,
                 "usage":types::usage_zero(true),"blocked":"","compacted_plan":""}),
         };
@@ -59,6 +73,9 @@ impl Session {
     /// Submit_bytes executes a submission without repairing its original text bytes.
     pub fn submit_bytes(&mut self, text: &[u8]) -> Value {
         let result = self.execute_submission(text);
+        if flag(&self.state["current_run"]) {
+            self.state["last_trace"] = json!(string(&result["trace_path"]));
+        }
         if flag(&self.config["_display"]) {
             crate::render::model_finished(self.region.as_ref());
         }
@@ -127,7 +144,7 @@ impl Session {
         } else {
             json!(self.history)
         };
-        self.trace.write("run.started", 0, json!({"model":self.provider.name(),"provider":self.config["provider"],
+        let mut header = json!({"model":self.provider.name(),"provider":self.config["provider"],
             "auth_mode":string(&self.config["auth_mode"]),"configured":self.config["model"],"build":"unknown",
             "workspace":self.config["workspace"],"approved_workspaces":self.tools.approved_paths(),
             "max_steps":number(&self.config["max_steps"]),"max_tool_calls":number(&self.config["max_tool_calls"]),
@@ -137,7 +154,16 @@ impl Session {
             "gc_state":{"dropped":dropped,"inherited_ids":inherited,"last_pass":number(&gc["last_pass"])},
             "context_window_tokens":window(&self.config),"context_window_override":number(&self.config["context_window_tokens"]),
             "gc_requests":number(&self.state["gc_requests"]),"prompt":crate::raw::string(text),"instructions":prefix["instructions"],"tools":prefix["tools"],
-            "initial_history":initial_history}));
+            "initial_history":initial_history});
+        if self.config["agent_prefix"].is_object() {
+            header["dispatch_tools"] = tools::specs(&self.config);
+            header["dispatch_mode"] = json!(if flag(&self.config["read_only"]) {
+                "read only"
+            } else {
+                "read, write, and execute"
+            });
+        }
+        self.trace.write("run.started", 0, header);
         let mut snapshot_config = self.config.clone();
         let foreign = self.config["workspace"] != self.state["launch"];
         snapshot_config["read_only"] = json!(
@@ -161,7 +187,7 @@ impl Session {
         self.state["task"] = user.clone();
         self.history.push(json!({"kind":"user","user":user}));
         self.state["pending_submission"] = Value::Null;
-        if let Err(error) = crate::checkpoint::save(self, "model", "") {
+        if let Err(error) = self.save_run("model", "") {
             return self.finish("persistence_error", &error, "");
         }
         loop {
@@ -181,7 +207,7 @@ impl Session {
             if let Some((status, reason)) = crate::compact::within_run(self, gc_ran) {
                 return self.finish(&status, &reason, "");
             }
-            if let Err(error) = crate::checkpoint::save(self, "model", "") {
+            if let Err(error) = self.save_run("model", "") {
                 return self.finish("persistence_error", &error, "");
             }
             if flag(&self.config["agent"])
@@ -196,6 +222,7 @@ impl Session {
             self.state["steps"] = json!(step);
             crate::agents::meter(self, &types::usage_zero(true));
             let history = self.request_history();
+            self.advance_agent_prefix();
             let req = context::build_context(
                 &self.config,
                 scope(string(&self.state["session_id"]), &run_id, step),
@@ -222,6 +249,7 @@ impl Session {
                     number(&self.config["max_steps"]),
                 );
             }
+            self.refresh_status();
             self.state["last_request"] = types::usage_zero(false);
             let response = self.generate(&req);
             if flag(&self.config["context_gc"]) {
@@ -237,6 +265,7 @@ impl Session {
                     self.add_usage(&error.usage);
                     crate::auto::record_usage(self, &error.usage);
                     self.state["last_request"] = error.usage.clone();
+                    self.refresh_status();
                     self.trace.write(
                         "model.failed",
                         step as usize,
@@ -248,6 +277,7 @@ impl Session {
                 }
             };
             self.state["last_request"] = resp["usage"].clone();
+            self.refresh_status();
             crate::auto::record_usage(self, &resp["usage"]);
             self.add_usage(&resp["usage"]);
             if flag(&resp["usage"]["known"]) && number(&resp["usage"]["input_tokens"]) > 0 {
@@ -274,13 +304,13 @@ impl Session {
             for call in &calls {
                 self.state["seen_calls"][string(&call["call_id"])] = json!(true);
             }
-            if let Err(error) = crate::checkpoint::save(self, "accepted", "") {
+            if let Err(error) = self.save_run("accepted", "") {
                 return self.finish("persistence_error", &error, "");
             }
             if calls.is_empty() {
                 let running = crate::agents::running(self);
                 if !running.is_empty() {
-                    self.history.push(json!({"kind":"user","user":{"source":"agent","text":format!("{} still running; wait for their results before finishing.",running.join(", "))}}));
+                    self.history.push(json!({"kind":"user","user":{"text":format!("{} still running; wait for their results before finishing.",running.join(", ")),"source":"agent"}}));
                     let _ = crate::agents::execute(
                         self,
                         "wait",
@@ -374,9 +404,14 @@ impl Session {
                 if spec.is_none() {
                     let mut all_config = execution_config.clone();
                     all_config["read_only"] = json!(false);
-                    let known = tools::specs(&all_config)
-                        .as_array()
-                        .is_some_and(|s| s.iter().any(|s| string(&s["name"]) == name));
+                    let known =
+                        (!flag(&execution_config["agent"])
+                            && tools::specs(&all_config)
+                                .as_array()
+                                .is_some_and(|s| s.iter().any(|s| string(&s["name"]) == name)))
+                            || self.config["agent_prefix"]["tools"].as_array().is_some_and(
+                                |specs| specs.iter().any(|spec| string(&spec["name"]) == name),
+                            );
                     let (code, message) = if known {
                         (
                             "permission_denied",
@@ -399,8 +434,7 @@ impl Session {
                     self.record_result(call,tools::fail("plan_mode",&format!("{name} is refused in plan mode, which only the user can end. Put the change in the plan; to see a command's output, ask the user to run it with !.")));
                     continue;
                 }
-                if let Err(error) = crate::checkpoint::save(self, "tool", string(&call["call_id"]))
-                {
+                if let Err(error) = self.save_run("tool", string(&call["call_id"])) {
                     return self.finish("persistence_error", &error, "");
                 }
                 self.trace.write("tool.started",step as usize,json!({"call_id":call["call_id"],"name":name,"arguments":call["arguments"],"workspace":self.config["workspace"]}));
@@ -508,7 +542,15 @@ impl Session {
             &self.request_history(),
             tools::specs(&self.config),
         );
-        request["max_output_tokens"] = json!(8192);
+        let fields = std::mem::take(request.as_object_mut().unwrap());
+        let mut ordered = serde_json::Map::new();
+        for (key, value) in fields {
+            if key == "instructions" {
+                ordered.insert("max_output_tokens".into(), json!(8192));
+            }
+            ordered.insert(key, value);
+        }
+        request = Value::Object(ordered);
         self.trace.write(
             "agent.cap_summary.requested",
             step as usize,
@@ -583,31 +625,73 @@ impl Session {
         let path = trace_path(&self.config, run_id).unwrap_or_default();
         self.trace
             .open(string(&self.state["session_id"]), run_id, &path);
-        self.state["last_trace"] = json!(self.trace.path());
+    }
+
+    fn refresh_status(&self) {
+        if flag(&self.config["_display"]) {
+            if let Some(region) = &self.region {
+                let _ = region
+                    .lock()
+                    .unwrap()
+                    .refresh_status(&self.config, &self.state);
+            }
+        }
     }
 
     pub(crate) fn generate(&mut self, request: &Value) -> Result<Value, types::ModelError> {
-        let response = self
-            .provider
-            .generate_displayed(
-                request,
-                &mut self.trace,
-                if flag(&self.config["_display"]) {
-                    self.region.as_ref()
-                } else {
-                    None
-                },
-            )
-            .map_err(|mut error| {
-                if error.status == "cancelled" {
-                    error.message = "cancelled during a model request".into();
-                }
-                error
+        let display = flag(&self.config["_display"]);
+        let poll = display
+            && flag(&self.config["agents"])
+            && self.config["agent_id"].as_str().unwrap_or("root") == "root";
+        let config = &self.config;
+        let session_id = string(&self.state["session_id"]);
+        let region = if display { self.region.as_ref() } else { None };
+        let stopped = std::sync::atomic::AtomicBool::new(false);
+        let response = std::thread::scope(|scope| {
+            let worker = poll.then(|| {
+                scope.spawn(|| {
+                    while !stopped.load(std::sync::atomic::Ordering::Acquire) {
+                        let (count, _, notices) =
+                            crate::agents::display_snapshot_for(config, session_id, &[]);
+                        crate::render::agents_refreshed(region, count, None, &notices);
+                        std::thread::park_timeout(std::time::Duration::from_millis(100));
+                    }
+                })
             });
+            let guard = worker.as_ref().map(|worker| DisplayPoller {
+                stopped: &stopped,
+                thread: worker.thread().clone(),
+            });
+            let result = self
+                .provider
+                .generate_displayed(request, &mut self.trace, region);
+            drop(guard);
+            if let Some(worker) = worker {
+                worker.join().unwrap();
+            }
+            result
+        })
+        .map_err(|mut error| {
+            if error.status == "cancelled" && error.message == "context canceled" {
+                error.message = "cancelled during a model request".into();
+            }
+            error
+        });
         if response.is_ok() {
             self.add_usage(&self.provider.retry_usage());
         }
         response
+    }
+
+    pub(crate) fn save_run(&mut self, phase: &str, in_flight: &str) -> Result<(), String> {
+        // Chat accounts for a completed run separately; only the durable copy includes it now.
+        let previous = self.state["usage"].clone();
+        let mut usage = previous.clone();
+        types::usage_add(&mut usage, &self.state["run_usage"]);
+        self.state["usage"] = usage;
+        let result = crate::checkpoint::save(self, phase, in_flight);
+        self.state["usage"] = previous;
+        result
     }
 
     pub(crate) fn add_usage(&mut self, usage: &Value) {
@@ -716,7 +800,7 @@ impl Session {
             );
         }
         if string(&self.state["persistence_error"]).is_empty() {
-            if let Err(error) = crate::checkpoint::save(self, "accepted", "") {
+            if let Err(error) = self.save_run("accepted", "") {
                 self.state["persistence_error"] = json!(error);
             }
         }
@@ -744,8 +828,8 @@ impl Session {
         if !self.state["router_usage"].is_null() {
             result["router_usage"] = self.state["router_usage"].clone();
         }
-        if !string(&self.state["last_trace"]).is_empty() {
-            result["trace_path"] = self.state["last_trace"].clone();
+        if !self.trace.path().is_empty() {
+            result["trace_path"] = json!(self.trace.path());
         }
         if self.state["effects"]
             .as_array()
@@ -782,7 +866,8 @@ impl Session {
         }
         let error = string(&self.state["persistence_error"]).to_owned();
         let saved = if error.is_empty() {
-            crate::checkpoint::save(self, "terminal", "")
+            self.state["last_trace"] = json!(self.trace.path());
+            self.save_run("terminal", "")
         } else {
             Err(error)
         };
@@ -1183,6 +1268,128 @@ mod boundary_tests {
         Session::new(config).unwrap()
     }
     #[test]
+    fn native_fork_header_distinguishes_inherited_declarations_from_dispatch_registry() {
+        for read_only in [false, true] {
+            for native in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut session = scripted(
+                    &dir,
+                    json!([{"blocks":[{"kind":"text","text":"done"}]}]),
+                    json!({"agent":true,"read_only":read_only,"max_steps":32}),
+                );
+                let dispatch = tools::specs(&session.config);
+                let mut parent = session.config.clone();
+                parent["agent"] = json!(false);
+                parent["read_only"] = json!(false);
+                let inherited =
+                    context::build_context(&parent, scope("", "", 0), &[], tools::specs(&parent));
+                if native {
+                    session.config["agent_prefix"] = json!({"instructions":inherited["instructions"],"tools":inherited["tools"],"cache_entries":[1]});
+                }
+                let result = session.submit("task");
+                assert_eq!(result["status"], "completed");
+                let trace = std::fs::read_to_string(string(&result["trace_path"])).unwrap();
+                let started: Value = serde_json::from_str(trace.lines().next().unwrap()).unwrap();
+                let header = &started["data"];
+                if native {
+                    assert_eq!(
+                        header["dispatch_mode"],
+                        if read_only {
+                            "read only"
+                        } else {
+                            "read, write, and execute"
+                        }
+                    );
+                    assert_eq!(header["dispatch_tools"], dispatch);
+                    assert_eq!(header["tools"], inherited["tools"]);
+                    assert_ne!(header["tools"], header["dispatch_tools"]);
+                } else {
+                    assert!(header.get("dispatch_mode").is_none());
+                    assert!(header.get("dispatch_tools").is_none());
+                    assert_eq!(header["tools"], dispatch);
+                }
+                let keys: Vec<_> = header.as_object().unwrap().keys().collect();
+                assert!(keys.windows(2).all(|keys| keys[0] < keys[1]));
+            }
+        }
+    }
+
+    #[test]
+    fn child_second_model_request_clears_inherited_cache_entries_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = scripted(
+            &dir,
+            json!([
+                {"blocks":[{"kind":"tool_call","call":{"call_id":"list","name":"list_files","arguments":"{\"path\":\".\"}"}}]},
+                {"blocks":[{"kind":"text","text":"done"}]}
+            ]),
+            json!({"agent":true,"read_only":true,"max_steps":32}),
+        );
+        let mut parent = child.config.clone();
+        parent["agent"] = json!(false);
+        parent["read_only"] = json!(false);
+        let inherited =
+            context::build_context(&parent, scope("", "", 0), &[], tools::specs(&parent));
+        let cache_entries = json!([{"kind":"user","user":{"text":"inherited parent request"}}]);
+        child.config["agent_prefix"] = json!({"instructions":inherited["instructions"],"tools":inherited["tools"],"cache_entries":cache_entries});
+        let result = child.submit("inspect the workspace");
+        assert_eq!(result["status"], "completed", "{result}");
+        let requests: Vec<Value> = std::fs::read_to_string(string(&result["trace_path"]))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| event["type"] == "model.requested")
+            .map(|event| event["data"].clone())
+            .collect();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["cache_entries"], cache_entries);
+        assert!(requests[1].get("cache_entries").is_none());
+        for request in requests {
+            assert_eq!(request["instructions"], inherited["instructions"]);
+            assert_eq!(request["tools"], inherited["tools"]);
+        }
+    }
+
+    #[test]
+    fn unavailable_child_writes_are_distinct_from_root_mode_and_inherited_declarations() {
+        for (agent, read_only, plan, native, expected) in [
+            (false, true, false, false, "permission_denied"),
+            (true, true, false, false, "tool_unavailable"),
+            (true, true, true, false, "tool_unavailable"),
+            (true, true, true, true, "permission_denied"),
+            (true, false, true, false, "plan_mode"),
+            (true, false, false, false, "ok"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut session = scripted(
+                &dir,
+                json!([
+                    {"blocks":[{"kind":"tool_call","call":{"call_id":"write","name":"write_file","arguments":"{\"path\":\"effect\",\"content\":\"written\"}"}}]},
+                    {"blocks":[{"kind":"text","text":"done"}]}
+                ]),
+                json!({"agent":agent,"read_only":read_only,"plan":plan,"max_steps":32}),
+            );
+            if native {
+                let mut parent = session.config.clone();
+                parent["agent"] = json!(false);
+                parent["read_only"] = json!(false);
+                session.config["agent_prefix"] = json!({"instructions":context::instructions(&parent),"tools":tools::specs(&parent)});
+            }
+            let result = session.submit("task");
+            assert_eq!(result["status"], "completed");
+            let outcome = &session.history[2]["tool"]["outcome"];
+            assert_eq!(
+                outcome["code"], expected,
+                "agent={agent} read_only={read_only} plan={plan} native={native}: {outcome}"
+            );
+            assert_eq!(dir.path().join("effect").exists(), expected == "ok");
+            if expected == "tool_unavailable" {
+                assert_eq!(outcome["message"], "no tool named write_file");
+            }
+        }
+    }
+
+    #[test]
     fn dispatch_uses_current_plan_without_rewriting_launch_config() {
         for current_plan in [false, true] {
             let dir = tempfile::tempdir().unwrap();
@@ -1406,6 +1613,25 @@ mod boundary_tests {
                     .collect();
                 assert_eq!(requests.len(), 1);
                 assert_eq!(requests[0]["data"]["max_output_tokens"], 8192);
+                let keys: Vec<_> = requests[0]["data"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect();
+                assert_eq!(
+                    keys,
+                    [
+                        "scope",
+                        "model",
+                        "max_output_tokens",
+                        "instructions",
+                        "history",
+                        "tools"
+                    ]
+                );
+                assert!(types::json_string(&requests[0]["data"])
+                    .contains("\"max_output_tokens\":8192,\"instructions\":"));
                 assert!(!requests[0]["data"]["tools"].as_array().unwrap().is_empty());
                 let terminal = if summary == "valid" {
                     "agent.cap_summary.accepted"
@@ -1484,89 +1710,112 @@ mod boundary_tests {
         use std::io::{Read, Write};
         for compact in [false, true] {
             for crash in [false, true] {
-                let dir = tempfile::tempdir().unwrap();
-                let trace = dir.path().join("events.jsonl");
-                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                listener.set_nonblocking(true).unwrap();
-                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "run_loop::boundary_tests::generation_events_child",
-                        "--nocapture",
-                    ])
-                    .env(
-                        "REAGENT_LOOP_EVENT_TEST",
-                        if compact { "compact" } else { "submit" },
-                    )
-                    .env("REAGENT_LOOP_EVENT_WORKSPACE", dir.path())
-                    .env(
-                        "API_PROXY_URL",
-                        format!("http://{}", listener.local_addr().unwrap()),
-                    )
-                    .env("REAGENT_RESPONSE_HEADER_TIMEOUT", "10")
-                    .spawn()
-                    .unwrap();
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                let mut stream = loop {
-                    match listener.accept() {
-                        Ok((stream, _)) => break stream,
-                        Err(error)
-                            if error.kind() == std::io::ErrorKind::WouldBlock
-                                && std::time::Instant::now() < deadline =>
-                        {
-                            std::thread::sleep(std::time::Duration::from_millis(2))
+                for previous in ["", "previous.jsonl"] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let trace = dir.path().join("events.jsonl");
+                    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                    listener.set_nonblocking(true).unwrap();
+                    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "run_loop::boundary_tests::generation_events_child",
+                            "--nocapture",
+                        ])
+                        .env(
+                            "REAGENT_LOOP_EVENT_TEST",
+                            if compact { "compact" } else { "submit" },
+                        )
+                        .env("REAGENT_LOOP_EVENT_WORKSPACE", dir.path())
+                        .env("REAGENT_LOOP_PREVIOUS_TRACE", previous)
+                        .env("XDG_CACHE_HOME", dir.path().join("cache"))
+                        .env("HOME", dir.path())
+                        .env(
+                            "API_PROXY_URL",
+                            format!("http://{}", listener.local_addr().unwrap()),
+                        )
+                        .env("REAGENT_RESPONSE_HEADER_TIMEOUT", "10")
+                        .spawn()
+                        .unwrap();
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    let mut stream = loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(error)
+                                if error.kind() == std::io::ErrorKind::WouldBlock
+                                    && std::time::Instant::now() < deadline =>
+                            {
+                                std::thread::sleep(std::time::Duration::from_millis(2))
+                            }
+                            other => {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                panic!("provider request did not arrive (compact={compact}, crash={crash}): {other:?}");
+                            }
                         }
-                        other => {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            panic!("provider request did not arrive (compact={compact}, crash={crash}): {other:?}");
-                        }
+                    };
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    let mut headers = Vec::new();
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte).unwrap();
+                        headers.push(byte[0]);
                     }
-                };
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                let mut headers = Vec::new();
-                while !headers.ends_with(b"\r\n\r\n") {
-                    let mut byte = [0];
-                    stream.read_exact(&mut byte).unwrap();
-                    headers.push(byte[0]);
-                }
-                let length: usize = String::from_utf8(headers)
-                    .unwrap()
-                    .to_lowercase()
-                    .lines()
-                    .find_map(|line| line.strip_prefix("content-length: ").map(str::to_owned))
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                let mut body = vec![0; length];
-                stream.read_exact(&mut body).unwrap();
-                let before = std::fs::read_to_string(&trace).unwrap();
-                let durable = before.contains("\"type\":\"api.attempt.started\"");
-                if crash || !durable {
-                    child.kill().unwrap();
-                    child.wait().unwrap();
-                } else {
-                    let response = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"handoff\"}]}]}}\n\n";
-                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
-                    assert!(child.wait().unwrap().success());
-                }
-                assert!(durable, "request event was buffered: {before}");
-                let events: Vec<Value> = std::fs::read_to_string(&trace)
-                    .unwrap()
-                    .lines()
-                    .map(|line| serde_json::from_str(line).unwrap())
-                    .collect();
-                for (event, count) in [
-                    ("api.attempt.started", 1),
-                    ("api.attempt.finished", usize::from(!crash)),
-                ] {
+                    let length: usize = String::from_utf8(headers)
+                        .unwrap()
+                        .to_lowercase()
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: ").map(str::to_owned))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    let mut body = vec![0; length];
+                    stream.read_exact(&mut body).unwrap();
+                    let checkpoint = dir
+                        .path()
+                        .join("cache/reagent/sessions/0123456789abcdef/checkpoint.json");
+                    let pending: Value =
+                        serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+                    assert_eq!(pending["state"]["phase"], "model");
                     assert_eq!(
-                        events.iter().filter(|entry| entry["type"] == event).count(),
-                        count,
-                        "{events:?}"
+                        pending["state"]["last_trace"],
+                        if compact {
+                            trace.to_str().unwrap()
+                        } else {
+                            previous
+                        }
                     );
+                    let before = std::fs::read_to_string(&trace).unwrap();
+                    let durable = before.contains("\"type\":\"api.attempt.started\"");
+                    if crash || !durable {
+                        child.kill().unwrap();
+                        child.wait().unwrap();
+                    } else {
+                        let response = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"handoff\"}]}]}}\n\n";
+                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+                        assert!(child.wait().unwrap().success());
+                        let terminal: Value =
+                            serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+                        assert_eq!(terminal["state"]["phase"], "terminal");
+                        assert_eq!(terminal["state"]["last_trace"], trace.to_str().unwrap());
+                    }
+                    assert!(durable, "request event was buffered: {before}");
+                    let events: Vec<Value> = std::fs::read_to_string(&trace)
+                        .unwrap()
+                        .lines()
+                        .map(|line| serde_json::from_str(line).unwrap())
+                        .collect();
+                    for (event, count) in [
+                        ("api.attempt.started", 1),
+                        ("api.attempt.finished", usize::from(!crash)),
+                    ] {
+                        assert_eq!(
+                            events.iter().filter(|entry| entry["type"] == event).count(),
+                            count,
+                            "{events:?}"
+                        );
+                    }
                 }
             }
         }
@@ -1578,7 +1827,8 @@ mod boundary_tests {
             return;
         };
         let workspace = std::env::var("REAGENT_LOOP_EVENT_WORKSPACE").unwrap();
-        let mut session = Session::new(json!({"workspace":workspace,"provider":"openai","model":"test","proxied":true,"trace_file":format!("{workspace}/events.jsonl"),"no_project_instructions":true})).unwrap();
+        let mut session = Session::new(json!({"workspace":workspace,"provider":"openai","model":"test","proxied":true,"trace_file":format!("{workspace}/events.jsonl"),"no_project_instructions":true,"checkpoint_enabled":true,"session_id":"0123456789abcdef"})).unwrap();
+        session.state["last_trace"] = json!(std::env::var("REAGENT_LOOP_PREVIOUS_TRACE").unwrap());
         let result = if mode == "compact" {
             session
                 .history
@@ -1637,6 +1887,10 @@ mod boundary_tests {
                     assert_eq!(session.config["project_instructions"].as_str(), expected);
                     assert_eq!(session.config["prompt"], original_pin);
                     assert_eq!(
+                        session.state["launch_instructions"].as_str(),
+                        if disabled { None } else { Some(original) }
+                    );
+                    assert_eq!(
                         context::prompt_project(&session.config),
                         if disabled { None } else { Some(original) }
                     );
@@ -1651,6 +1905,10 @@ mod boundary_tests {
                         assert_eq!(session.compact("").unwrap()["status"], "completed");
                     }
                     assert_eq!(context::prompt_project(&session.config), expected);
+                    assert_eq!(
+                        session.state["launch_instructions"].as_str(),
+                        if disabled { None } else { Some(original) }
+                    );
                     assert!(context::instructions(&session.config)
                         .contains(target.path().to_str().unwrap()));
                     assert!(!context::instructions(&session.config).contains(original));
@@ -1658,6 +1916,69 @@ mod boundary_tests {
             }
         }
     }
+    #[test]
+    fn switched_checkpoint_restores_launch_rules_without_rewriting_the_recorded_pin() {
+        const CHILD: &str = "REAGENT_LOOP_LAUNCH_RULES_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "run_loop::boundary_tests::switched_checkpoint_restores_launch_rules_without_rewriting_the_recorded_pin", "--nocapture"])
+                .env(CHILD,"1").env("XDG_CACHE_HOME",root.path().join("cache")).env("HOME",root.path()).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let launch = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(launch.path().join("AGENTS.md"), "launch project rules").unwrap();
+        std::fs::write(target.path().join("AGENTS.md"), "target project rules").unwrap();
+        let arguments = types::json_string(&json!({"path":target.path()}));
+        let mut session = scripted(
+            &launch,
+            json!([
+                {"blocks":[{"kind":"tool_call","call":{"call_id":"switch","name":"switch_workspace","arguments":arguments}}]},
+                {"blocks":[{"kind":"text","text":"switched"}]},
+                {"blocks":[{"kind":"text","text":"handoff"}]}
+            ]),
+            json!({"no_project_instructions":false,"project_instructions":"launch project rules","allow_workspaces":[target.path()]}),
+        );
+        assert_eq!(session.submit("switch")["status"], "completed");
+        assert_eq!(session.compact("").unwrap()["status"], "completed");
+        let recorded_pin = session.config["prompt"].clone();
+        assert_eq!(recorded_pin["project"], "target project rules");
+        assert_eq!(session.state["launch_instructions"], "launch project rules");
+        session.config["provider"] = json!("openai");
+        session.config["model"] = json!("gpt-6-sol");
+        session.config["scripted"] = json!("");
+        session.config["checkpoint_enabled"] = json!(true);
+        crate::checkpoint::save(&session, "terminal", "").unwrap();
+        let id = string(&session.state["session_id"]);
+        crate::checkpoint::close(id);
+        let restored = crate::checkpoint::load(id).unwrap();
+        assert_eq!(
+            restored["checkpoint"]["project_instructions"],
+            "target project rules"
+        );
+        assert_eq!(
+            restored["checkpoint"]["launch_instructions"],
+            "launch project rules"
+        );
+        assert_eq!(
+            restored["config"]["project_instructions"],
+            "launch project rules"
+        );
+        assert_eq!(
+            restored["config"]["workspace"],
+            launch.path().to_str().unwrap()
+        );
+        assert_eq!(restored["config"]["prompt"], recorded_pin);
+        crate::checkpoint::close(id);
+    }
+
     #[test]
     fn unchanged_workspace_selection_does_not_reload_project_rules() {
         let dir = tempfile::tempdir().unwrap();
@@ -2822,6 +3143,192 @@ mod boundary_tests {
         }
     }
     #[test]
+    fn tool_checkpoint_keeps_previous_trace_until_terminal_finish() {
+        const CHILD: &str = "REAGENT_LOOP_TOOL_TRACE_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "run_loop::boundary_tests::tool_checkpoint_keeps_previous_trace_until_terminal_finish", "--nocapture"])
+                .env(CHILD, "1")
+                .env("XDG_CACHE_HOME", root.path().join("cache"))
+                .env("HOME", root.path())
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        for previous in ["", "previous.jsonl"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut session = scripted(
+                &dir,
+                json!([{"blocks":[{"kind":"text","text":"unused"}]}]),
+                json!({"checkpoint_enabled":true}),
+            );
+            let id = string(&session.state["session_id"]).to_owned();
+            let checkpoint = crate::checkpoint::directory(&id)
+                .unwrap()
+                .join("checkpoint.json");
+            let arguments = types::json_string(
+                &json!({"argv":["cp",checkpoint,"tool-checkpoint.json"],"cwd":"."}),
+            );
+            let script = dir.path().join("script.json");
+            std::fs::write(&script, types::json_string(&json!([
+                {"usage":{"known":true,"input_tokens":101,"cached_input_tokens":11,"output_tokens":7,"reasoning_tokens":0},"blocks":[{"kind":"tool_call","call":{"call_id":"inspect","name":"exec","arguments":arguments}}]},
+                {"usage":{"known":true,"input_tokens":2,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0},"blocks":[{"kind":"text","text":"done"}]},
+                {"usage":{"known":true,"input_tokens":3,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0},"blocks":[{"kind":"text","text":"next turn"}]},
+                {"usage":{"known":true,"input_tokens":4,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0},"blocks":[{"kind":"text","text":"handoff"}]},
+                {"usage":{"known":true,"input_tokens":5,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0},"blocks":[{"kind":"tool_call","call":{"call_id":"invalid","name":"read_file","arguments":"{}"}}]}
+            ]))).unwrap();
+            session.provider = provider::Provider::new(&session.config).unwrap();
+            // Keep the offline provider while exercising real durable barriers.
+            session.config["scripted"] = json!("");
+            session.state["last_trace"] = json!(previous);
+            let mut completed = types::usage_zero(true);
+            completed["input_tokens"] = json!(10);
+            session.state["usage"] = completed.clone();
+            session.state["run_usage"] = json!({"known":true,"input_tokens":101,"cached_input_tokens":11,"output_tokens":7,"reasoning_tokens":0});
+            session.save_run("accepted", "").unwrap();
+            let accepted: Value =
+                serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+            assert_eq!(accepted["state"]["usage"]["input_tokens"], 111);
+            assert_eq!(accepted["state"]["usage"]["cached_input_tokens"], 11);
+            assert_eq!(accepted["state"]["usage"]["output_tokens"], 7);
+            assert_eq!(session.state["usage"], completed);
+            std::fs::remove_file(&checkpoint).unwrap();
+            std::fs::create_dir(&checkpoint).unwrap();
+            assert!(session.save_run("accepted", "").is_err());
+            assert_eq!(session.state["usage"], completed);
+            std::fs::remove_dir(&checkpoint).unwrap();
+            let result = session.submit("inspect the in-flight checkpoint");
+            assert_eq!(result["status"], "completed", "{result}");
+            let pending: Value = serde_json::from_slice(
+                &std::fs::read(dir.path().join("tool-checkpoint.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(pending["state"]["phase"], "tool");
+            assert_eq!(pending["state"]["in_flight"], "inspect");
+            assert_eq!(pending["state"]["usage"]["input_tokens"], 111);
+            assert_eq!(pending["state"]["usage"]["cached_input_tokens"], 11);
+            assert_eq!(pending["state"]["usage"]["output_tokens"], 7);
+            assert_eq!(session.state["usage"], completed);
+            assert_eq!(pending["state"]["last_trace"], previous);
+            assert_ne!(result["trace_path"], previous);
+            assert_eq!(result["trace_path"], session.trace.path());
+            let terminal: Value =
+                serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+            assert_eq!(terminal["state"]["phase"], "terminal");
+            assert_eq!(terminal["state"]["usage"]["input_tokens"], 113);
+            assert_eq!(terminal["state"]["last_trace"], result["trace_path"]);
+            assert_eq!(session.state["last_trace"], result["trace_path"]);
+            types::usage_add(&mut completed, &result["usage"]);
+            session.state["usage"] = completed.clone();
+            for (compact, expected, status) in [
+                (false, 116, "completed"),
+                (true, 120, "completed"),
+                (true, 125, "protocol_error"),
+            ] {
+                let result = if compact {
+                    session.compact("").unwrap()
+                } else {
+                    session.submit("following turn")
+                };
+                assert_eq!(result["status"], status);
+                assert_eq!(session.state["usage"], completed);
+                types::usage_add(&mut completed, &result["usage"]);
+                let saved: Value =
+                    serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+                assert_eq!(saved["state"]["usage"], completed);
+                assert_eq!(completed["input_tokens"], expected);
+                session.state["usage"] = completed.clone();
+            }
+            crate::checkpoint::close(&id);
+        }
+    }
+
+    #[test]
+    fn retry_cancellation_preserves_the_provider_reason() {
+        const CHILD: &str = "REAGENT_LOOP_RETRY_CANCEL_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "run_loop::boundary_tests::retry_cancellation_preserves_the_provider_reason",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use std::io::{Read, Write};
+        let dir = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::env::set_var(
+            "API_PROXY_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let trace = dir.path().join("events.jsonl");
+        let mut session = Session::new(json!({"workspace":dir.path(),"provider":"openai","model":"test","proxied":true,"no_project_instructions":true,"model_retry_window":10_000_000_000i64,"trace_file":trace})).unwrap();
+        let token = crate::cancellation::token(&session.config);
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut part = [0; 4096];
+                let n = stream.read(&mut part).unwrap();
+                assert_ne!(n, 0);
+                bytes.extend_from_slice(&part[..n]);
+                if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&bytes[..end]);
+                    let length: usize = header
+                        .lines()
+                        .find_map(|line| {
+                            line.to_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|n| n.trim().parse().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let body = r#"{"error":{"message":"busy"}}"#;
+            write!(stream,"HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nRetry-After: 5\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            drop(stream);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !std::fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("api.retry.scheduled")
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "retry was not scheduled"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            token.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let result = session.submit("retry until cancelled");
+        server.join().unwrap();
+        assert_eq!(result["status"], "cancelled", "{result}");
+        assert_eq!(result["reason"], "cancelled before a retry");
+    }
+
+    #[test]
     fn compact_and_reset_forget_write_authorization() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("x"), "old").unwrap();
@@ -2838,5 +3345,276 @@ mod boundary_tests {
         session.reset();
         assert!(session.history.is_empty());
         assert_eq!(session.state["seen_calls"], json!({}));
+    }
+
+    #[test]
+    fn live_generation_refreshes_child_notices_and_context_in_a_real_terminal() {
+        use std::io::{Read, Write};
+        use std::os::{fd::FromRawFd, unix::process::CommandExt};
+        const CHILD: &str = "REAGENT_LOOP_LIVE_DISPLAY_TEST";
+        if let Ok(display) = std::env::var(CHILD) {
+            let root = std::env::var("REAGENT_LOOP_LIVE_WORKSPACE").unwrap();
+            let display = display == "true";
+            let mut session = Session::new(json!({"workspace":root,"provider":"openai","model":"gpt-6-sol","proxied":true,"agents":true,"_display":display,"context_window_tokens":100000,"max_steps":5,"no_project_instructions":true,"trace_dir":format!("{root}/traces")})).unwrap();
+            session.state["last_request"] = types::usage_zero(true);
+            let mut input = display.then(crate::terminal::Input::new);
+            if let Some(input) = input.as_mut() {
+                input.set_status(&session.config, &session.state);
+                input.restore().unwrap();
+                session.region = input.region();
+                assert!(session.region.is_some());
+            }
+            let spawn = crate::agents::execute(
+                &mut session,
+                "spawn",
+                r#"{"name":"worker","task":"live-child-canary","context":{"brief":"answer once"}}"#,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(spawn["ok"], true, "{spawn}");
+            let result = session.submit("live-root-canary");
+            assert_eq!(result["status"], "completed", "{result}");
+            if !display {
+                assert!(!crate::agents::notices(&session).is_empty());
+            }
+            return;
+        }
+        let respond = |stream: &mut std::net::TcpStream, output: Value, tokens: i64| {
+            let response = json!({"id":"local-response","status":"completed","output":output,"usage":{"input_tokens":tokens,"output_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}});
+            let body = format!(
+                "event: response.completed\ndata: {}\n\n",
+                types::json_string(&json!({"type":"response.completed","response":response}))
+            );
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        };
+        let message = json!([{"type":"message","content":[{"type":"output_text","text":"done"}]}]);
+        for display in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let (mut master, mut slave) = (-1, -1);
+            let size = libc::winsize {
+                ws_row: 24,
+                ws_col: 120,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &mut master,
+                        &mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null(),
+                        &size,
+                    )
+                },
+                0
+            );
+            let mut terminal = unsafe { std::fs::File::from_raw_fd(master) };
+            let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact","run_loop::boundary_tests::live_generation_refreshes_child_notices_and_context_in_a_real_terminal","--nocapture"])
+                .env(CHILD,display.to_string()).env("REAGENT_LOOP_LIVE_WORKSPACE",root.path())
+                .env("API_PROXY_URL",format!("http://{}",listener.local_addr().unwrap()))
+                .env("TERM","xterm").env("NO_COLOR","1").env("XDG_CACHE_HOME",root.path().join("cache")).env("HOME",root.path())
+                .stdin(slave.try_clone().unwrap()).stdout(slave.try_clone().unwrap()).stderr(slave);
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            drop(command);
+            let raw = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured = raw.clone();
+            let reader = std::thread::spawn(move || {
+                let mut bytes = [0; 8192];
+                while let Ok(n) = terminal.read(&mut bytes) {
+                    if n == 0 {
+                        break;
+                    }
+                    if bytes[..n].windows(4).any(|b| b == b"\x1b[6n") {
+                        let _ = terminal.write_all(b"\x1b[1;1R");
+                    }
+                    captured.lock().unwrap().extend_from_slice(&bytes[..n]);
+                }
+            });
+            let text = || String::from_utf8_lossy(&raw.lock().unwrap()).into_owned();
+            let mut child_request = None;
+            let mut held_root = None;
+            let mut roots = 0;
+            let mut live_notice = false;
+            let mut live_context = false;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while roots < 3 && std::time::Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(request) => request,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("{error}"),
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut part = [0; 8192];
+                    let n = stream.read(&mut part).unwrap();
+                    assert_ne!(n, 0);
+                    bytes.extend_from_slice(&part[..n]);
+                    if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&bytes[..end]);
+                        let length: usize = header
+                            .lines()
+                            .find_map(|line| {
+                                line.to_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|n| n.trim().parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                if String::from_utf8_lossy(&bytes).contains("live-root-canary") {
+                    roots += 1;
+                    if roots == 1 {
+                        respond(
+                            &mut stream,
+                            json!([{"type":"function_call","call_id":"list","name":"list_files","arguments":"{\"path\":\".\"}"}]),
+                            12000,
+                        );
+                    } else if roots == 2 {
+                        held_root = Some(stream);
+                    } else {
+                        if display {
+                            let until =
+                                std::time::Instant::now() + std::time::Duration::from_secs(1);
+                            while !text().contains("42% of context")
+                                && std::time::Instant::now() < until
+                            {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                            live_context &= text().contains("42% of context");
+                        }
+                        respond(&mut stream, message.clone(), 100);
+                    }
+                } else {
+                    child_request = Some(stream);
+                }
+                if child_request.is_some() && held_root.is_some() {
+                    respond(child_request.as_mut().unwrap(), message.clone(), 10);
+                    child_request.take();
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                    while std::time::Instant::now() < until {
+                        if text().contains("worker finished") {
+                            live_notice = true;
+                            break;
+                        }
+                        if !display {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    live_context = text().contains("0% of context")
+                        && text().contains("12% of context")
+                        && text().contains("step 2 of 5");
+                    respond(held_root.as_mut().unwrap(), message.clone(), 42000);
+                    held_root.take();
+                }
+            }
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break Some(status);
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            reader.join().unwrap();
+            let screen = text();
+            assert!(status.is_some_and(|status| status.success()), "{screen}");
+            assert_eq!(roots, 3, "{screen}");
+            assert_eq!(live_notice, display, "{screen}");
+            if display {
+                assert!(live_context, "{screen}");
+                println!("live terminal: child finish visible before held step 2 response; context 0% → 12% → 42%");
+            } else {
+                assert!(!screen.contains("worker finished"), "{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn crashed_accepted_and_tool_barriers_retain_running_usage() {
+        const CHILD: &str = "REAGENT_LOOP_USAGE_CRASH_TEST";
+        if let Ok(phase) = std::env::var(CHILD) {
+            let root = tempfile::tempdir().unwrap();
+            let arguments = types::json_string(
+                &json!({"argv":["kill","-KILL",std::process::id().to_string()],"cwd":"."}),
+            );
+            let response = json!({"usage":{"known":true,"input_tokens":101,"cached_input_tokens":11,"output_tokens":7,"reasoning_tokens":0},"blocks":[{"kind":"tool_call","call":{"call_id":"crash","name":"exec","arguments":arguments}}]});
+            let mut session = scripted(
+                &root,
+                json!([response]),
+                json!({"checkpoint_enabled":true,"session_id":"0123456789abcdef"}),
+            );
+            session.config["scripted"] = json!("");
+            if phase == "accepted" {
+                session
+                    .history
+                    .push(json!({"kind":"user","user":{"text":"crash after acceptance"}}));
+                session
+                    .history
+                    .push(json!({"kind":"assistant","assistant":response}));
+                session.state["run_usage"] = response["usage"].clone();
+                session.save_run("accepted", "").unwrap();
+                std::process::exit(86);
+            }
+            session.submit("crash during the accepted tool");
+            panic!("the crash tool did not terminate its session process");
+        }
+        for phase in ["accepted", "tool"] {
+            let root = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact","run_loop::boundary_tests::crashed_accepted_and_tool_barriers_retain_running_usage","--nocapture"])
+                .env(CHILD,phase)
+                .env("XDG_CACHE_HOME",root.path().join("cache"))
+                .env("HOME",root.path())
+                .output().unwrap();
+            if phase == "accepted" {
+                assert_eq!(output.status.code(), Some(86));
+            } else {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(
+                    output.status.signal(),
+                    Some(9),
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let path = root
+                .path()
+                .join("cache/reagent/sessions/0123456789abcdef/checkpoint.json");
+            let checkpoint: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(checkpoint["state"]["phase"], phase);
+            assert_eq!(
+                checkpoint["state"]["usage"],
+                json!({"known":true,"input_tokens":101,"cached_input_tokens":11,"output_tokens":7,"reasoning_tokens":0})
+            );
+            assert_eq!(checkpoint["state"]["last_trace"], "");
+        }
     }
 }

@@ -343,18 +343,41 @@ pub(crate) fn utf8(mut bytes: &[u8]) -> String {
     out
 }
 
-fn executable(name: &str) -> String {
+fn executable(name: &str) -> (String, Option<&'static str>) {
     if name.contains('/') {
-        return name.to_owned();
+        return (name.to_owned(), None);
     }
-    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        let p = dir.join(name);
-        use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(&p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) {
-            return p.to_string_lossy().into_owned();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    if !path.is_empty() {
+        for dir in std::env::split_paths(&path) {
+            let mut p = PathBuf::new();
+            for component in dir.join(name).components() {
+                match component {
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        if p.file_name().is_some_and(|part| part != "..") {
+                            p.pop();
+                        } else if !p.has_root() {
+                            p.push("..");
+                        }
+                    }
+                    _ => p.push(component),
+                }
+            }
+            use std::os::unix::fs::PermissionsExt;
+            if !fs::metadata(&p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) {
+                continue;
+            }
+            let debug = std::env::var("GODEBUG").unwrap_or_default();
+            let allow_dot = debug.split(',').rev().find_map(|entry| {
+                let (key, value) = entry.split_once('=')?;
+                (key == "execerrdot").then_some(value)
+            }) == Some("0");
+            let error = (!p.is_absolute() && !allow_dot).then_some("process_start_failed");
+            return (p.to_string_lossy().into_owned(), error);
         }
     }
-    name.to_owned()
+    (name.to_owned(), Some("executable_not_found"))
 }
 struct ActiveExec {
     workspace: PathBuf,
@@ -484,8 +507,14 @@ fn run(
     cancellation: &AtomicBool,
     config: &Value,
 ) -> Result<Value, String> {
-    let resolved = executable(&argv[0]);
-    let mut command = Command::new(&resolved);
+    let (resolved, lookup_error) = executable(&argv[0]);
+    // A bare relative lookup result must not trigger Rust's second PATH search.
+    let launch = if resolved.contains('/') {
+        resolved.clone()
+    } else {
+        format!("./{resolved}")
+    };
+    let mut command = Command::new(launch);
     command
         .args(&argv[1..])
         .current_dir(dir)
@@ -516,7 +545,7 @@ fn run(
         data["concurrent_exec"] = json!(concurrent);
     }
     // LookPath failure precedes cancellation in Go's command construction.
-    let missing_executable = !argv[0].contains('/') && resolved == argv[0];
+    let missing_executable = lookup_error == Some("executable_not_found");
     if cancellation.load(Ordering::Acquire) && !missing_executable {
         data["duration_ms"] = json!(started.elapsed().as_millis() as u64);
         return Ok(attributed(
@@ -530,27 +559,32 @@ fn run(
             root,
         ));
     }
+    if let Some(code) = lookup_error {
+        data["duration_ms"] = json!(started.elapsed().as_millis() as u64);
+        let message = if missing_executable {
+            format!("no such executable on PATH: {}", argv[0])
+        } else {
+            "operation failed".to_owned()
+        };
+        return Ok(attributed(
+            outcome(false, code, &message, data, "none"),
+            root,
+        ));
+    }
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
-            let not_found = e.kind() == std::io::ErrorKind::NotFound
-                && !argv[0].contains('/')
-                && resolved == argv[0];
             let cancelled = cancellation.load(Ordering::Acquire);
             data["duration_ms"] = json!(started.elapsed().as_millis() as u64);
             return Ok(attributed(
                 outcome(
                     false,
-                    if not_found {
-                        "executable_not_found"
-                    } else if cancelled {
+                    if cancelled {
                         "cancelled"
                     } else {
                         "process_start_failed"
                     },
-                    &if not_found {
-                        format!("no such executable on PATH: {}", argv[0])
-                    } else if cancelled {
+                    &if cancelled {
                         "the run was cancelled before the command started".to_owned()
                     } else {
                         stable(&e).to_string()
@@ -1155,6 +1189,139 @@ mod overlap_tests {
                 sibling["data"].get("concurrent_exec").is_none(),
                 "failed registration remained active"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn relative_path_lookup_obeys_errdot_without_changing_explicit_paths() {
+        for (mode, debug) in [
+            ("dot", None),
+            ("dot-disabled", Some("execerrdot=0")),
+            ("dot-duplicates-enabled", Some("execerrdot=0,execerrdot=1")),
+            ("dot-duplicates-disabled", Some("execerrdot=1,execerrdot=0")),
+            ("dot-other", Some("execerrdot=00")),
+            ("dot-empty", Some("execerrdot=0,execerrdot=")),
+            ("relative", None),
+            ("relative-disabled", Some("execerrdot=0")),
+            ("empty-element", None),
+            ("empty-path", None),
+            ("unset-path", None),
+            ("absolute", None),
+            ("explicit", None),
+            ("cancelled-dot", None),
+            ("cancelled-missing", None),
+        ] {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "tool_exec::path_tests::path_child",
+                    "--nocapture",
+                ])
+                .env("REAGENT_EXEC_PATH_TEST", mode)
+                .env_remove("GODEBUG");
+            if let Some(debug) = debug {
+                command.env("GODEBUG", debug);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{mode}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn path_child() {
+        let Ok(mode) = std::env::var("REAGENT_EXEC_PATH_TEST") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("bin")).unwrap();
+        for relative in ["local-command", "bin/local-command"] {
+            let file = dir.path().join(relative);
+            fs::write(&file, "#!/bin/sh\nprintf 'ran\\n'\n: > executed\n").unwrap();
+            fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_current_dir(dir.path()).unwrap();
+        match mode.as_str() {
+            "relative" | "relative-disabled" => std::env::set_var("PATH", "./bin"),
+            "empty-element" => std::env::set_var("PATH", ":/reagent-missing-path"),
+            "empty-path" => std::env::set_var("PATH", ""),
+            "unset-path" => std::env::remove_var("PATH"),
+            "absolute" => std::env::set_var("PATH", dir.path()),
+            _ => std::env::set_var("PATH", "."),
+        }
+        let config = json!({"session_id":crate::types::new_id()});
+        if mode.starts_with("cancelled-") {
+            crate::cancellation::cancel(&config);
+        }
+        let command = match mode.as_str() {
+            "explicit" => "./local-command",
+            "cancelled-missing" => "missing-command",
+            _ => "local-command",
+        };
+        let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let out = execute(
+            &mut workspace,
+            &config,
+            &json!({"argv":[command],"cwd":"."}),
+        )
+        .unwrap();
+        let success = matches!(
+            mode.as_str(),
+            "dot-disabled"
+                | "dot-duplicates-disabled"
+                | "relative-disabled"
+                | "absolute"
+                | "explicit"
+        );
+        let (code, message) = if success {
+            ("ok", String::new())
+        } else if matches!(
+            mode.as_str(),
+            "empty-path" | "unset-path" | "cancelled-missing"
+        ) {
+            (
+                "executable_not_found",
+                format!("no such executable on PATH: {command}"),
+            )
+        } else if mode == "cancelled-dot" {
+            (
+                "cancelled",
+                "the run was cancelled before the command started".into(),
+            )
+        } else {
+            ("process_start_failed", "operation failed".into())
+        };
+        assert_eq!(out["ok"], success, "{out}");
+        assert_eq!(out["code"], code, "{out}");
+        assert_eq!(out["message"], message, "{out}");
+        assert_eq!(out["effect"], if success { "applied" } else { "none" });
+        assert_eq!(out["data"]["stdout"], if success { "ran\n" } else { "" });
+        assert_eq!(dir.path().join("executed").exists(), success);
+        let resolved = match mode.as_str() {
+            "relative" | "relative-disabled" => "bin/local-command".into(),
+            "absolute" => dir
+                .path()
+                .join("local-command")
+                .to_string_lossy()
+                .into_owned(),
+            "explicit" => "./local-command".into(),
+            _ => command.to_owned(),
+        };
+        assert_eq!(out["data"]["resolved_executable"], resolved);
+        if !success {
+            assert_eq!(out["data"]["exit_code"], Value::Null);
+            assert_eq!(out["data"]["stdout_bytes_seen"], 0);
         }
     }
 }

@@ -18,8 +18,8 @@ pub fn execute(
         "list_files" => list_files(ws, args),
         "search_text" => search_text(ws, args),
         "write_file" => write_file(ws, config, args),
-        "edit_file" => edit_file(ws, args),
-        "delete_file" => delete_file(ws, args),
+        "edit_file" => edit_file(ws, config, args),
+        "delete_file" => delete_file(ws, config, args),
         _ => Err(fail("tool_unavailable", &format!("no tool named {name}"))),
     }
 }
@@ -433,6 +433,11 @@ fn write_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value,
         .ok_or_else(|| fail("invalid_arguments", "content must be a string"))?;
     text_content(content, "content")?;
     let expected = expected(args)?;
+    let publication = ws.publish_mu.clone();
+    let _guard = publication.lock().unwrap();
+    if crate::cancellation::cancelled(config) {
+        return Err(fail("not_executed", "cancelled before file publication"));
+    }
     let abs = ws.resolve(path(args))?;
     let mut created = vec![];
     let (operation, before, mode) = match fs::symlink_metadata(&abs) {
@@ -630,9 +635,14 @@ fn normalize(text: &str) -> (String, Vec<usize>) {
     }
     (String::from_utf8(normalized).unwrap(), offsets)
 }
-fn edit_file(ws: &mut Workspace, args: &Value) -> Result<Value, Value> {
+fn edit_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value, Value> {
     let expected = expected(args)?;
     let (edits, append, multi) = changes(args)?;
+    let publication = ws.publish_mu.clone();
+    let _guard = publication.lock().unwrap();
+    if crate::cancellation::cancelled(config) {
+        return Err(fail("not_executed", "cancelled before file publication"));
+    }
     let abs = ws.resolve(path(args))?;
     let info = fs::symlink_metadata(&abs).map_err(os_outcome)?;
     if info.file_type().is_symlink() {
@@ -792,9 +802,15 @@ fn delete_path(ws: &Workspace, p: &str) -> Result<PathBuf, Value> {
 }
 fn plan_delete(
     ws: &Workspace,
+    config: &Value,
     p: &Path,
     plan: &mut Vec<(PathBuf, fs::Metadata)>,
 ) -> Result<(), Value> {
+    #[cfg(test)]
+    deletion_checkpoint(config, "preflight");
+    if crate::cancellation::cancelled(config) {
+        return Err(fail("not_executed", "cancelled before deletion"));
+    }
     delete_path(ws, &p.to_string_lossy())?;
     let info = fs::symlink_metadata(p).map_err(os_outcome)?;
     if !info.is_dir() && !info.is_file() && !info.file_type().is_symlink() {
@@ -812,14 +828,19 @@ fn plan_delete(
             .map_err(os_outcome)?;
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
-            plan_delete(ws, &entry.path(), plan)?;
+            plan_delete(ws, config, &entry.path(), plan)?;
         }
     }
     Ok(())
 }
-fn delete_file(ws: &mut Workspace, args: &Value) -> Result<Value, Value> {
+fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value, Value> {
     let expected = expected(args)?;
     let recursive = optional_bool(args, "recursive")?;
+    let publication = ws.publish_mu.clone();
+    let _guard = publication.lock().unwrap();
+    if crate::cancellation::cancelled(config) {
+        return Err(fail("not_executed", "cancelled before deletion"));
+    }
     ws.check_root()?;
     let abs = if recursive {
         delete_path(ws, path(args))?
@@ -835,7 +856,7 @@ fn delete_file(ws: &mut Workspace, args: &Value) -> Result<Value, Value> {
             ));
         }
         let mut plan = vec![];
-        plan_delete(ws, &abs, &mut plan)?;
+        plan_delete(ws, config, &abs, &mut plan)?;
         let mut removed = vec![];
         let mut count = 0;
         let mut bytes = 0;
@@ -843,6 +864,11 @@ fn delete_file(ws: &mut Workspace, args: &Value) -> Result<Value, Value> {
         let mut failed = String::new();
         for (p, old) in plan.into_iter().rev() {
             let result = (|| {
+                #[cfg(test)]
+                deletion_checkpoint(config, "remove");
+                if crate::cancellation::cancelled(config) {
+                    return Err(fail("not_executed", "cancelled during deletion"));
+                }
                 delete_path(ws, &p.to_string_lossy())?;
                 let current = fs::symlink_metadata(&p).map_err(os_outcome)?;
                 if (old.dev(), old.ino(), old.mode() & libc::S_IFMT)
@@ -902,6 +928,11 @@ fn delete_file(ws: &mut Workspace, args: &Value) -> Result<Value, Value> {
         }
         let mut buffer = [0u8; 65536];
         loop {
+            #[cfg(test)]
+            deletion_checkpoint(config, "hash");
+            if crate::cancellation::cancelled(config) {
+                return Err(fail("not_executed", "cancelled while hashing file"));
+            }
             let n = file.read(&mut buffer).map_err(os_outcome)?;
             if n == 0 {
                 break;
@@ -914,6 +945,11 @@ fn delete_file(ws: &mut Workspace, args: &Value) -> Result<Value, Value> {
     } else {
         ws.check_digest(&abs, None)?.sha256
     };
+    #[cfg(test)]
+    deletion_checkpoint(config, "before_remove");
+    if crate::cancellation::cancelled(config) {
+        return Err(fail("not_executed", "cancelled before deletion"));
+    }
     let current = fs::symlink_metadata(&abs).map_err(os_outcome)?;
     if (current.dev(), current.ino(), current.mode() & libc::S_IFMT)
         != (info.dev(), info.ino(), info.mode() & libc::S_IFMT)
@@ -929,4 +965,120 @@ fn delete_file(ws: &mut Workspace, args: &Value) -> Result<Value, Value> {
         json!({"operation":"delete","path":ws.relative(&abs),"before_sha256":before}),
         "applied",
     ))
+}
+
+#[cfg(test)]
+thread_local! {
+    // The counter targets one tool call on this test thread, never another agent.
+    static CANCEL_DELETION_AT: std::cell::Cell<Option<(&'static str, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn deletion_checkpoint(config: &Value, phase: &str) {
+    CANCEL_DELETION_AT.with(|hook| {
+        if let Some((target, remaining)) = hook.get() {
+            if target == phase {
+                if remaining == 1 {
+                    hook.set(None);
+                    crate::cancellation::cancel(config);
+                } else {
+                    hook.set(Some((target, remaining - 1)));
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn deletion_cancelled_during_hash_or_before_removal_has_no_effect() {
+        for (phase, visits, explicit, message) in [
+            ("hash", 2, true, "cancelled while hashing file"),
+            ("before_remove", 1, true, "cancelled before deletion"),
+            ("before_remove", 1, false, "cancelled before deletion"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let content = vec![
+                b'a';
+                if phase == "hash" {
+                    2 * MAX_FILE_BYTES
+                } else {
+                    16
+                }
+            ];
+            let file = dir.path().join("file");
+            fs::write(&file, &content).unwrap();
+            let config = json!({"session_id":crate::types::new_id()});
+            let mut ws = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+            let mut args = json!({"path":"file"});
+            if explicit {
+                args["expected_sha256"] = json!(digest(&content));
+            } else {
+                execute(&mut ws, &config, "read_file", &args).unwrap();
+            }
+            let observed = ws.seen.clone();
+            CANCEL_DELETION_AT.with(|hook| hook.set(Some((phase, visits))));
+            let result = execute(&mut ws, &config, "delete_file", &args);
+            assert_eq!(
+                result,
+                Err(fail("not_executed", message)),
+                "{phase}, explicit={explicit}"
+            );
+            assert_eq!(fs::read(file).unwrap(), content);
+            assert_eq!(ws.seen, observed);
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+            assert!(CANCEL_DELETION_AT.with(|hook| hook.get().is_none()));
+        }
+    }
+
+    #[test]
+    fn recursive_deletion_cancellation_preserves_exact_partial_effects() {
+        for (phase, visits, removed_count, message) in [
+            ("preflight", 3, 0, "cancelled before deletion"),
+            ("remove", 1, 0, "cancelled during deletion"),
+            ("remove", 2, 1, "cancelled during deletion"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let tree = dir.path().join("tree");
+            fs::create_dir(&tree).unwrap();
+            for name in ["a", "b", "c"] {
+                fs::write(tree.join(name), name).unwrap();
+            }
+            let config = json!({"session_id":crate::types::new_id()});
+            let mut ws = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+            CANCEL_DELETION_AT.with(|hook| hook.set(Some((phase, visits))));
+            let result = execute(
+                &mut ws,
+                &config,
+                "delete_file",
+                &json!({"path":"tree","recursive":true}),
+            );
+            if phase == "preflight" {
+                assert_eq!(result, Err(fail("not_executed", message)));
+            } else {
+                let result = result.unwrap();
+                let (removed, failed, effect) = if removed_count == 0 {
+                    (vec![], "tree/c", "none")
+                } else {
+                    (vec!["tree/c"], "tree/b", "applied")
+                };
+                let mut expected = workspace_outcome(
+                    &ws,
+                    json!({"operation":"delete","path":"tree","recursive":true,"removed_paths":removed,"removed_count":removed_count,"omitted":0,"failed_path":failed}),
+                    effect,
+                );
+                expected["ok"] = json!(false);
+                expected["code"] = json!("not_executed");
+                expected["message"] = json!(message);
+                assert_eq!(result, expected);
+            }
+            assert!(tree.is_dir());
+            assert_eq!(fs::read_dir(&tree).unwrap().count(), 3 - removed_count);
+            assert_eq!(fs::read(tree.join("a")).unwrap(), b"a");
+            assert!(CANCEL_DELETION_AT.with(|hook| hook.get().is_none()));
+        }
+    }
 }

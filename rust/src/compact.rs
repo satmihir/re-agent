@@ -54,7 +54,7 @@ fn text(resp: &Value) -> Result<String, String> {
     Ok(text)
 }
 fn clear_evidence(session: &mut Session) {
-    session.tools.workspace.forget_seen();
+    session.tools.forget_seen();
     context::pin_instructions(&mut session.config);
     session.state["gc_state"] = json!({"last_pass":0});
     session.state["handoff"] = Value::Null;
@@ -142,7 +142,7 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
     for attempt in 0..=2 {
         let step = number(&session.state["steps"]) + 1;
         session.state["steps"] = json!(step);
-        if let Err(error) = crate::checkpoint::save(session, "model", "") {
+        if let Err(error) = session.save_run("model", "") {
             return Some(("persistence_error".into(), error));
         }
         session
@@ -245,7 +245,7 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
     session.state["compact_failures"] = json!(0);
     session.state["compact_retry_after"] = json!(0);
     session.trace.write("compaction.finished",number(&session.state["steps"]) as usize,json!({"summary":summary,"replaced_entries":old_len,"request_bytes_before":size,"request_bytes_after":new_size}));
-    if let Err(error) = crate::checkpoint::save(session, "accepted", "") {
+    if let Err(error) = session.save_run("accepted", "") {
         return Some(("persistence_error".into(), error));
     }
     None
@@ -266,6 +266,7 @@ impl Session {
         self.state["last_request"] = types::usage_zero(false);
         let req = request(self, &self.request_history(), focus, 1);
         self.trace.write("compaction.requested", 1, req.clone());
+        self.state["last_trace"] = json!(self.trace.path());
         // Scripted turns have no provider-native items for a real adapter to encode.
         let admission = if self.provider.name() == "scripted" {
             Ok(Value::Null)
@@ -330,7 +331,7 @@ impl Session {
             json!({"summary":summary,"replaced_entries":old_len}),
         );
         let mut result = self.compact_result("completed", "", &summary);
-        if let Err(error) = crate::checkpoint::save(self, "terminal", "") {
+        if let Err(error) = self.save_run("terminal", "") {
             result["status"] = json!("persistence_error");
             result["reason"] = json!(error);
         }
@@ -355,7 +356,7 @@ impl Session {
         self.trace
             .write("compaction.failed", 1, json!({"reason":reason}));
         let mut result = self.compact_result(status, reason, "");
-        if let Err(error) = crate::checkpoint::save(self, "terminal", "") {
+        if let Err(error) = self.save_run("terminal", "") {
             result["status"] = json!("persistence_error");
             result["reason"] = json!(error);
         }

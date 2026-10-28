@@ -59,13 +59,13 @@ pub fn inspect_raw(
     inspect(workspace, config, &args)
 }
 
-pub fn inspect(workspace: &mut Workspace, _config: &Value, args: &Value) -> Result<Value, String> {
+pub fn inspect(workspace: &mut Workspace, config: &Value, args: &Value) -> Result<Value, String> {
     Ok(attributed(
-        inspect_inner(&workspace.root, args)?,
+        inspect_inner(&workspace.root, config, args)?,
         &workspace.root,
     ))
 }
-fn inspect_inner(root: &Path, args: &Value) -> Result<Value, String> {
+fn inspect_inner(root: &Path, config: &Value, args: &Value) -> Result<Value, String> {
     if keys(
         args,
         &[
@@ -262,6 +262,7 @@ fn inspect_inner(root: &Path, args: &Value) -> Result<Value, String> {
     let git = Git {
         root,
         deadline: Instant::now() + Duration::from_secs(10),
+        cancellation: crate::cancellation::token(config),
     };
     let top = match git.run(&strings(&["rev-parse", "--show-toplevel"]), None, LIMIT) {
         Ok(v) => v,
@@ -526,11 +527,14 @@ impl Output {
 struct Git<'a> {
     root: &'a Path,
     deadline: Instant,
+    cancellation: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Git<'_> {
     fn failure(&self, error: &str, code: &str, message: &str) -> Value {
         if error == "timeout" {
             fail("timeout", "Git inspection exceeded its deadline")
+        } else if error == "cancelled" {
+            fail("cancelled", "Git inspection was cancelled")
         } else if error == "unavailable" {
             fail(
                 "git_unavailable",
@@ -541,6 +545,9 @@ impl Git<'_> {
         }
     }
     fn run(&self, args: &[String], input: Option<&[u8]>, limit: usize) -> Result<Output, String> {
+        if self.cancellation.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("cancelled".into());
+        }
         let mut command = inspect_command(self.root);
         command.args(args);
         command
@@ -596,10 +603,11 @@ impl Git<'_> {
             if status.is_some() && eof {
                 break;
             }
-            if Instant::now() >= self.deadline {
+            let cancelled = self.cancellation.load(std::sync::atomic::Ordering::SeqCst);
+            if Instant::now() >= self.deadline || cancelled {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("timeout".into());
+                return Err(if cancelled { "cancelled" } else { "timeout" }.into());
             }
             if exited.is_some_and(|t| t.elapsed() >= Duration::from_secs(1)) {
                 return Err("output_wait".into());

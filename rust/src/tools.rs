@@ -39,6 +39,22 @@ pub struct ToolState {
     pub workspace_consent: Option<Box<WorkspaceConsent>>,
 }
 impl ToolState {
+    /// forget_seen clears write authorization in every retained workspace without revoking grants.
+    pub(crate) fn forget_seen(&mut self) {
+        self.workspace.forget_seen();
+        for workspace in self.handles.values_mut() {
+            workspace.forget_seen();
+        }
+    }
+
+    /// share_publication_guard coordinates file changes without sharing read authorization.
+    pub(crate) fn share_publication_guard(&mut self, parent: &ToolState) {
+        self.workspace.publish_mu = parent.workspace.publish_mu.clone();
+        for workspace in self.handles.values_mut() {
+            workspace.publish_mu = parent.workspace.publish_mu.clone();
+        }
+    }
+
     /// approved_paths returns the canonical grants in the reference's trace order.
     pub fn approved_paths(&self) -> Vec<String> {
         let mut paths: Vec<_> = self
@@ -196,39 +212,95 @@ pub fn decode_arguments(arguments: &str, schema: &Value) -> Result<Value, Value>
         ));
     }
     let mut decoder = serde_json::Deserializer::from_str(arguments);
-    let args: Value = serde::Deserialize::deserialize(&mut decoder).map_err(|e| {
-        fail(
-            "invalid_arguments",
-            &crate::errors::json_error(arguments, &e),
-        )
-    })?;
+    let raw: &serde_json::value::RawValue =
+        serde::Deserialize::deserialize(&mut decoder).map_err(|e| {
+            fail(
+                "invalid_arguments",
+                &crate::errors::json_error(arguments, &e),
+            )
+        })?;
+    fn validate(raw: &[u8], schema: &Value, field: &str) -> Option<String> {
+        use crate::provider::raw_tokens;
+        // Typed Go fields accept null; RawMessage null rules belong to each tool.
+        if raw.starts_with(b"null") {
+            return None;
+        }
+        let kind = schema["type"].as_str().unwrap_or("object");
+        let valid = match kind {
+            "object" => raw.starts_with(b"{"),
+            "array" => raw.starts_with(b"["),
+            "string" => raw.starts_with(b"\""),
+            "boolean" => raw == b"true" || raw == b"false",
+            "integer" => serde_json::from_slice::<i64>(raw).is_ok(),
+            _ => true,
+        };
+        if !valid {
+            return Some(crate::errors::field_error(field));
+        }
+        if kind == "array" {
+            for item in raw_tokens::array(raw) {
+                if let Some(error) = validate(item, &schema["items"], field) {
+                    return Some(error);
+                }
+            }
+        }
+        if kind == "object" {
+            let properties = &schema["properties"];
+            for (key, value) in raw_tokens::members(raw) {
+                let Some(property) = properties.get(&key) else {
+                    return Some(format!("unknown field {}", crate::errors::quote(&key)));
+                };
+                // These Go fields are RawMessage: only the final occurrence is validated by the tool.
+                if field.is_empty()
+                    && (matches!(property["type"].as_str(), Some("integer" | "boolean"))
+                        || matches!(
+                            key.as_str(),
+                            "content" | "append_text" | "details" | "related_call_ids" | "edits"
+                        )
+                        || key == "expected_sha256" && properties.get("old_text").is_none()
+                        || key == "paths" && properties.get("query").is_some())
+                {
+                    continue;
+                }
+                let path = if field.is_empty() {
+                    key
+                } else {
+                    format!("{field}.{key}")
+                };
+                if let Some(error) = validate(value, property, &path) {
+                    return Some(error);
+                }
+            }
+        }
+        None
+    }
+    // Syntax must win over decoding errors, but a later duplicate cannot erase the first type error.
+    if let Some(mut error) = validate(raw.get().as_bytes(), schema, "") {
+        // Go's exec decoder replaces failures with its existing argv shape hint.
+        if schema["properties"].get("argv").is_some()
+            && crate::provider::raw_tokens::members(raw.get().as_bytes())
+                .into_iter()
+                .rev()
+                .find(|(key, _)| key == "argv")
+                .is_some_and(|(_, value)| !value.starts_with(b"["))
+            && decoder.end().is_ok()
+        {
+            error = "argv must be an array holding the first command's executable and arguments, such as [\"git\",\"fetch\",\"origin\"]; then holds only the commands after it".into();
+        }
+        return Err(fail("invalid_arguments", &error));
+    }
     if decoder.end().is_err() {
         return Err(fail(
             "invalid_arguments",
             "arguments must be one JSON object",
         ));
     }
-    let Some(object) = args.as_object() else {
-        return Err(fail(
+    serde_json::from_str(arguments).map_err(|error| {
+        fail(
             "invalid_arguments",
-            "arguments must be one JSON object",
-        ));
-    };
-    let properties = &schema["properties"];
-    for (key, value) in object {
-        let Some(property) = properties.get(key) else {
-            return Err(fail("invalid_arguments", &format!("unknown field {key:?}")));
-        };
-        // Go string fields accept null as their zero value; RawMessage fields validate it in the tool.
-        if property["type"] == "string"
-            && !value.is_string()
-            && !value.is_null()
-            && !["content", "expected_sha256", "append_text", "details"].contains(&key.as_str())
-        {
-            return Err(fail("invalid_arguments", &crate::errors::field_error(key)));
-        }
-    }
-    Ok(args)
+            &crate::errors::json_error(arguments, &error),
+        )
+    })
 }
 
 pub fn execute(
@@ -526,12 +598,13 @@ fn workspace_tool(
             "workspace transition metadata exceeds the result limit",
         ));
     }
-    let next = state
+    let mut next = state
         .handles
         .remove(&root)
         .map(Ok)
         .unwrap_or_else(|| Workspace::open(&root.to_string_lossy()))
         .map_err(|e| fail("io_error", &e))?;
+    next.publish_mu = state.workspace.publish_mu.clone();
     let old = std::mem::replace(&mut state.workspace, next);
     state.handles.insert(previous, old);
     if !state.approved.iter().any(|grant| grant.path == root) {
@@ -805,6 +878,229 @@ mod tests {
         for arguments in ["{}", r#"{"id":null}"#, r#"{"id":"original"}"#] {
             assert!(decode_arguments(arguments, &schema).is_ok(), "{arguments}");
         }
+    }
+
+    #[test]
+    fn argument_decoder_keeps_the_first_error_across_duplicate_fields() {
+        let read: Value = serde_json::from_str(include_str!("schemas/read_file.json")).unwrap();
+        let exec: Value = serde_json::from_str(include_str!("schemas/exec.json")).unwrap();
+        let edit: Value = serde_json::from_str(include_str!("schemas/edit_file.json")).unwrap();
+        let spawn = crate::agents::specs()
+            .into_iter()
+            .find(|spec| spec["name"] == "spawn")
+            .unwrap()["input_schema"]
+            .clone();
+        let argv_hint = "argv must be an array holding the first command's executable and arguments, such as [\"git\",\"fetch\",\"origin\"]; then holds only the commands after it";
+        for (schema, arguments, message) in [
+            (
+                &read,
+                r#"{"path":42,"path":"file"}"#,
+                "field \"path\" must be a string",
+            ),
+            (
+                &read,
+                r#"{"path":"file","path":42}"#,
+                "field \"path\" must be a string",
+            ),
+            (
+                &read,
+                r#"{"path":{},"path":"file"}"#,
+                "field \"path\" must be a string",
+            ),
+            (
+                &read,
+                r#"{"path":[],"path":"file"}"#,
+                "field \"path\" must be a string",
+            ),
+            (
+                &read,
+                r#"{"path":false,"path":null}"#,
+                "field \"path\" must be a string",
+            ),
+            (
+                &read,
+                r#"{"path":42,"path":"file","unknown":0}"#,
+                "field \"path\" must be a string",
+            ),
+            (
+                &read,
+                r#"{"unknown":0,"path":42,"path":"file"}"#,
+                "unknown field \"unknown\"",
+            ),
+            (
+                &read,
+                r#"{"path":42,"path":"file"} {}"#,
+                "field \"path\" must be a string",
+            ),
+            (&read, r#"{"unknown":0} {}"#, "unknown field \"unknown\""),
+            (&exec, r#"{"argv":"echo"}"#, argv_hint),
+            (&exec, r#"{"argv":["echo"],"argv":7}"#, argv_hint),
+            (&exec, r#"{"argv":[7],"argv":null}"#, argv_hint),
+            (&exec, r#"{"unknown":0,"argv":"echo"}"#, argv_hint),
+            (&exec, r#"{"argv":null,"cwd":7}"#, argv_hint),
+            (
+                &exec,
+                r#"{"argv":"echo"} {}"#,
+                "field \"argv\" must be an array of strings",
+            ),
+            (
+                &exec,
+                r#"{"argv":[7],"argv":["echo"]}"#,
+                "field \"argv\" must be an array of strings",
+            ),
+            (
+                &exec,
+                r#"{"argv":["echo"],"argv":[7]}"#,
+                "field \"argv\" must be an array of strings",
+            ),
+            (
+                &exec,
+                r#"{"then":[[7]],"then":[["echo"]]}"#,
+                "field \"then\" must be an array of command arrays",
+            ),
+            (
+                &exec,
+                r#"{"then":[["echo"]],"then":[[7]]}"#,
+                "field \"then\" must be an array of command arrays",
+            ),
+            (
+                &spawn,
+                r#"{"context":{"brief":7,"brief":"ok"}}"#,
+                "field \"context.brief\" must be a string",
+            ),
+            (
+                &spawn,
+                r#"{"context":{"brief":"ok","brief":7}}"#,
+                "field \"context.brief\" must be a string",
+            ),
+            (
+                &spawn,
+                r#"{"context":{"brief":7},"context":{"brief":"ok"}}"#,
+                "field \"context.brief\" must be a string",
+            ),
+            (
+                &spawn,
+                r#"{"context":{"files":[7]},"context":{"files":["file"]}}"#,
+                "field \"context.files\" must be an array of strings",
+            ),
+            (
+                &spawn,
+                r#"{"context":{"unknown":0,"brief":7},"task":7}"#,
+                "unknown field \"unknown\"",
+            ),
+            (
+                &spawn,
+                r#"{"context":{"brief":7,"unknown":0},"task":7}"#,
+                "field \"context.brief\" must be a string",
+            ),
+            (
+                &edit,
+                r#"{"expected_sha256":7,"expected_sha256":"digest"}"#,
+                "field \"expected_sha256\" must be a string",
+            ),
+        ] {
+            let result = decode_arguments(arguments, schema).unwrap_err();
+            assert_eq!(result["code"], "invalid_arguments", "{arguments}");
+            assert_eq!(result["message"], message, "{arguments}");
+        }
+        for (arguments, message) in [
+            (r#"{"path":42,"path":}"#, "invalid JSON at byte 19"),
+            (r#"{"unknown":0,"path":}"#, "invalid JSON at byte 21"),
+        ] {
+            let result = decode_arguments(arguments, &read).unwrap_err();
+            assert_eq!(result["message"], message, "{arguments}");
+        }
+    }
+
+    #[test]
+    fn argument_decoder_preserves_nulls_arrays_and_deferred_raw_fields() {
+        let read: Value = serde_json::from_str(include_str!("schemas/read_file.json")).unwrap();
+        let exec: Value = serde_json::from_str(include_str!("schemas/exec.json")).unwrap();
+        let edit: Value = serde_json::from_str(include_str!("schemas/edit_file.json")).unwrap();
+        let write: Value = serde_json::from_str(include_str!("schemas/write_file.json")).unwrap();
+        let search: Value = serde_json::from_str(include_str!("schemas/search_text.json")).unwrap();
+        for (schema, arguments, expected) in [
+            (
+                &read,
+                r#"{"path":null,"path":"file"}"#,
+                json!({"path":"file"}),
+            ),
+            (
+                &read,
+                r#"{"path":"file","path":null}"#,
+                json!({"path":null}),
+            ),
+            (
+                &read,
+                r#"{"path":"first","path":"last"}"#,
+                json!({"path":"last"}),
+            ),
+            (
+                &read,
+                r#"{"max_lines":"wrong","max_lines":1}"#,
+                json!({"max_lines":1}),
+            ),
+            (
+                &exec,
+                r#"{"argv":null,"argv":[null,"echo"]}"#,
+                json!({"argv":[null,"echo"]}),
+            ),
+            (
+                &exec,
+                r#"{"argv":["echo"],"argv":null,"then":[null,[null]]}"#,
+                json!({"argv":null,"then":[null,[null]]}),
+            ),
+            (
+                &write,
+                r#"{"content":7,"content":"ok","expected_sha256":[],"expected_sha256":"digest"}"#,
+                json!({"content":"ok","expected_sha256":"digest"}),
+            ),
+            (
+                &edit,
+                r#"{"edits":[{"old_text":7,"old_text":"old"}],"append_text":7,"append_text":"ok"}"#,
+                json!({"edits":[{"old_text":"old"}],"append_text":"ok"}),
+            ),
+            (
+                &search,
+                r#"{"paths":[7],"paths":["file"],"regex":[],"regex":false}"#,
+                json!({"paths":["file"],"regex":false}),
+            ),
+        ] {
+            assert_eq!(
+                decode_arguments(arguments, schema).unwrap(),
+                expected,
+                "{arguments}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_wrong_path_cannot_publish_a_write_even_when_the_last_path_is_valid() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = json!({"workspace":directory.path()});
+        let mut state = ToolState::new(&config).unwrap();
+        for arguments in [
+            r#"{"path":7,"path":"file","content":"created"}"#,
+            r#"{"path":"file","path":7,"content":"created"}"#,
+        ] {
+            let result = execute(&mut state, &config, "write_file", arguments).unwrap();
+            assert_eq!(result["code"], "invalid_arguments");
+            assert_eq!(result["message"], "field \"path\" must be a string");
+            assert!(!directory.path().join("file").exists());
+        }
+        let result = execute(
+            &mut state,
+            &config,
+            "write_file",
+            r#"{"path":"first","path":"file","content":"created"}"#,
+        )
+        .unwrap();
+        assert_eq!(result["ok"], true);
+        assert!(!directory.path().join("first").exists());
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("file")).unwrap(),
+            "created"
+        );
     }
 
     #[test]
@@ -1340,6 +1636,242 @@ mod tests {
                 "{change}"
             );
             assert_eq!(state.workspace.root, fs::canonicalize(launch).unwrap());
+        }
+    }
+
+    #[test]
+    fn publication_guard_survives_switches_without_sharing_observations() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let launch = dir.path().join("launch");
+        let target = dir.path().join("target");
+        fs::create_dir(&launch).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(launch.join("file"), "base\n").unwrap();
+        let config = json!({"workspace":launch,"allow_workspaces":[target]});
+        let mut parent = ToolState::new(&config).unwrap();
+        assert_eq!(
+            execute(&mut parent, &config, "read_file", r#"{"path":"file"}"#).unwrap()["ok"],
+            true
+        );
+        let mut child = ToolState::new(&config).unwrap();
+        child.share_publication_guard(&parent);
+        let publication = parent.workspace.publish_mu.clone();
+        assert!(Arc::ptr_eq(&publication, &child.workspace.publish_mu));
+        assert!(child.workspace.seen.is_empty());
+        assert_eq!(
+            execute(
+                &mut child,
+                &config,
+                "write_file",
+                r#"{"path":"file","content":"unread"}"#
+            )
+            .unwrap()["code"],
+            "invalid_arguments"
+        );
+        for path in [&target, &launch, &target] {
+            let result = execute(
+                &mut parent,
+                &config,
+                "switch_workspace",
+                &json!({"path":path}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(result["ok"], true, "{result}");
+            assert!(Arc::ptr_eq(&publication, &parent.workspace.publish_mu));
+            assert!(parent
+                .handles
+                .values()
+                .all(|ws| Arc::ptr_eq(&publication, &ws.publish_mu)));
+        }
+        // Sharing also updates cached handles, not just the currently selected workspace.
+        let other = ToolState::new(&config).unwrap();
+        parent.share_publication_guard(&other);
+        assert!(Arc::ptr_eq(
+            &other.workspace.publish_mu,
+            &parent.workspace.publish_mu
+        ));
+        assert!(parent
+            .handles
+            .values()
+            .all(|ws| Arc::ptr_eq(&other.workspace.publish_mu, &ws.publish_mu)));
+        assert_eq!(fs::read(launch.join("file")).unwrap(), b"base\n");
+    }
+
+    fn publication_args(name: &str, writer: usize) -> Value {
+        match name {
+            "write_file" => json!({"path":"file","content":format!("{writer}-write\n")}),
+            "edit_file" => {
+                json!({"path":"file","old_text":"base","new_text":format!("{writer}-edit")})
+            }
+            "delete_file" => json!({"path":"file"}),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn competing_file_publications_have_one_winner_and_no_lost_update() {
+        use std::sync::{mpsc, Arc, Barrier};
+        use std::time::Duration;
+        for explicit in [false, true] {
+            for first in ["write_file", "edit_file", "delete_file"] {
+                for second in ["write_file", "edit_file", "delete_file"] {
+                    let dir = tempfile::tempdir().unwrap();
+                    fs::write(dir.path().join("file"), "base\n").unwrap();
+                    let config = json!({"workspace":dir.path(),"agents":true,"session_id":crate::types::new_id()});
+                    let mut parent = ToolState::new(&config).unwrap();
+                    let mut child = ToolState::new(&config).unwrap();
+                    child.share_publication_guard(&parent);
+                    for state in [&mut parent, &mut child] {
+                        assert_eq!(
+                            execute(state, &config, "read_file", r#"{"path":"file"}"#).unwrap()
+                                ["ok"],
+                            true
+                        );
+                    }
+                    let publication = parent.workspace.publish_mu.clone();
+                    let held = publication.lock().unwrap();
+                    let start = Arc::new(Barrier::new(3));
+                    let (sent, received) = mpsc::channel();
+                    let (blocked, results) = std::thread::scope(|scope| {
+                        for (i, (mut state, name)) in
+                            [(parent, first), (child, second)].into_iter().enumerate()
+                        {
+                            let start = start.clone();
+                            let sent = sent.clone();
+                            let config = &config;
+                            scope.spawn(move || {
+                                let mut args = publication_args(name, i);
+                                if explicit {
+                                    args["expected_sha256"] =
+                                        json!(crate::workspace::digest(b"base\n"));
+                                }
+                                start.wait();
+                                sent.send((
+                                    i,
+                                    execute(&mut state, config, name, &args.to_string()).unwrap(),
+                                ))
+                                .unwrap();
+                            });
+                        }
+                        start.wait();
+                        let early = received.recv_timeout(Duration::from_millis(50));
+                        let blocked = early.is_err();
+                        drop(held);
+                        let mut results = Vec::new();
+                        if let Ok(result) = early {
+                            results.push(result);
+                        }
+                        while results.len() < 2 {
+                            results.push(received.recv_timeout(Duration::from_secs(5)).unwrap());
+                        }
+                        (blocked, results)
+                    });
+                    assert!(blocked, "file tools bypassed the publication guard");
+                    let winners: Vec<_> = results
+                        .iter()
+                        .filter(|(_, out)| out["ok"] == true)
+                        .collect();
+                    assert_eq!(
+                        winners.len(),
+                        1,
+                        "{first}/{second}, explicit={explicit}: {results:?}"
+                    );
+                    let (winner, outcome) = winners[0];
+                    assert_eq!(outcome["effect"], "applied");
+                    assert_eq!(
+                        outcome["data"]["before_sha256"],
+                        crate::workspace::digest(b"base\n")
+                    );
+                    let name = [first, second][*winner];
+                    let loser = results.iter().find(|(_, out)| out["ok"] == false).unwrap();
+                    assert_eq!(loser.1["effect"], "none");
+                    let expected_code = if name == "delete_file"
+                        && (explicit || [first, second][loser.0] != "write_file")
+                    {
+                        "not_found"
+                    } else {
+                        "stale_file"
+                    };
+                    assert_eq!(loser.1["code"], expected_code, "{results:?}");
+                    if name == "delete_file" {
+                        assert!(!dir.path().join("file").exists());
+                    } else {
+                        let expected = format!(
+                            "{winner}-{}\n",
+                            if name == "write_file" {
+                                "write"
+                            } else {
+                                "edit"
+                            }
+                        );
+                        let actual = fs::read(dir.path().join("file")).unwrap();
+                        assert_eq!(actual, expected.as_bytes());
+                        assert_eq!(
+                            outcome["data"]["after_sha256"],
+                            crate::workspace::digest(&actual)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cancelled_file_publications_wait_for_guard_then_leave_files_unchanged() {
+        use std::sync::{mpsc, Arc, Barrier};
+        use std::time::Duration;
+        for name in ["write_file", "edit_file", "delete_file"] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join("file"), "base\n").unwrap();
+            let config =
+                json!({"workspace":dir.path(),"agents":true,"session_id":crate::types::new_id()});
+            let parent = ToolState::new(&config).unwrap();
+            let mut child = ToolState::new(&config).unwrap();
+            child.share_publication_guard(&parent);
+            assert_eq!(
+                execute(&mut child, &config, "read_file", r#"{"path":"file"}"#).unwrap()["ok"],
+                true
+            );
+            let held = parent.workspace.publish_mu.lock().unwrap();
+            let start = Arc::new(Barrier::new(2));
+            let (sent, received) = mpsc::channel();
+            let (blocked, result) = std::thread::scope(|scope| {
+                let child_start = start.clone();
+                let config = &config;
+                scope.spawn(move || {
+                    child_start.wait();
+                    sent.send(
+                        execute(
+                            &mut child,
+                            config,
+                            name,
+                            &publication_args(name, 0).to_string(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                });
+                start.wait();
+                let early = received.recv_timeout(Duration::from_millis(50));
+                let blocked = early.is_err();
+                crate::cancellation::cancel(config);
+                drop(held);
+                (
+                    blocked,
+                    early
+                        .unwrap_or_else(|_| received.recv_timeout(Duration::from_secs(5)).unwrap()),
+                )
+            });
+            assert!(blocked, "{name} bypassed the publication guard");
+            let message = if name == "delete_file" {
+                "cancelled before deletion"
+            } else {
+                "cancelled before file publication"
+            };
+            assert_eq!(result, fail("not_executed", message));
+            assert_eq!(fs::read(dir.path().join("file")).unwrap(), b"base\n");
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
         }
     }
 

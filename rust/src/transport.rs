@@ -255,6 +255,10 @@ impl Transport {
             } else {
                 secrets[0].clone()
             };
+            if chatgpt {
+                // Token acquisition can rotate refresh and ID tokens as well.
+                secrets.extend(crate::auth::secrets());
+            }
             let mut refreshed = false;
             let (status, raw, retry_after, failure) = loop {
                 if self.request_cancelled(summary_deadline) {
@@ -487,9 +491,9 @@ fn backoff(attempt: u32, header: &str) -> Duration {
         Duration::from_secs_f64((2f64.powi((attempt - 1).min(7) as i32)).min(120.0) * jitter);
     let h = header.trim();
     if !h.is_empty() && h.bytes().all(|b| b.is_ascii_digit()) {
-        if let Ok(n) = h.parse::<u64>() {
+        if let Ok(n) = h.parse::<i64>() {
             if n > 0 {
-                d = d.max(Duration::from_secs(n.min(86400 * 365)));
+                d = d.max(Duration::from_secs(n.min(86400 * 365) as u64));
             }
         }
     } else if let Ok(date) = chrono::DateTime::parse_from_rfc2822(header) {

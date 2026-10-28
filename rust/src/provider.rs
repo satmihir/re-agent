@@ -244,7 +244,11 @@ impl Provider {
                 )
             })?;
             if !value.is_array() && !value.is_null() {
-                return Err(format!("parse script {}: invalid JSON value", path));
+                return Err(format!(
+                    "parse script {}: {}",
+                    path,
+                    crate::errors::field_error("value")
+                ));
             }
             responses = value.as_array().cloned().unwrap_or_default();
             let original = raw_tokens::array(&raw);
@@ -557,6 +561,18 @@ mod tests {
             crate::raw::bytes(&response["native"]["items"][0]).unwrap(),
             item
         );
+    }
+    #[test]
+    fn script_top_level_wrong_type_uses_the_declared_value_diagnostic() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("script.json");
+        for script in [r#"{}"#, r#"true"#, r#"42"#, r#""text""#] {
+            std::fs::write(&path, script).unwrap();
+            let error = Provider::new(&json!({"provider":"scripted", "scripted":path}))
+                .err()
+                .unwrap();
+            assert_eq!(error, format!("parse script {}: field \"value\" must be a value matching its declared JSON type", path.display()));
+        }
     }
     #[test]
     fn script_exhaustion() {

@@ -206,6 +206,7 @@ pub(crate) fn transition(
     let provider = provider::Provider::new(&config)?;
     let run_id = types::new_id();
     session.open_trace(&run_id);
+    session.state["last_trace"] = json!(session.trace.path());
     let started = Instant::now();
     let mut metadata = json!({"source_model":session.config["model"],"source_provider":session.config["provider"],"source_effort":session.config["reasoning_effort"],"destination_model":config["model"],"destination_provider":config["provider"],"destination_effort":config["reasoning_effort"],"fresh":fresh});
     session
@@ -411,6 +412,8 @@ mod tests {
         session.history = vec![json!({"kind":"user","user":{"text":"task"}})];
         session.state["tokens_per_byte"] = json!(0.211);
         session.state["last_request"] = types::usage_zero(true);
+        session.state["last_trace"] = json!(directory.path().join("previous-run.jsonl"));
+        let previous_trace = session.state["last_trace"].clone();
         let before = (
             session.config.clone(),
             session.history.clone(),
@@ -432,12 +435,15 @@ mod tests {
             before
         );
         assert_eq!(session.state["tokens_per_byte"], 0.211);
+        assert_ne!(session.state["last_trace"], previous_trace);
+        assert_eq!(session.state["last_trace"], session.trace.path());
         let events = std::fs::read_to_string(text(&session.state, "last_trace")).unwrap();
         let events: Vec<Value> = events
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["type"], "model.switch.requested");
         assert_eq!(events[1]["type"], "model.switch.failed");
         let mut destination = session.config.clone();
         destination["model"] = json!("gpt-6-luna");

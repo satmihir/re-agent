@@ -194,7 +194,14 @@ fn cancellation_interrupts_header_and_body_waits() {
             client.post(&url).send().err().unwrap()
         };
         assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
-        assert_eq!(error.to_string(), if headers { "context canceled".into() } else { format!("Post {url:?}: context canceled") });
+        assert_eq!(
+            error.to_string(),
+            if headers {
+                "context canceled".into()
+            } else {
+                format!("Post {url:?}: context canceled")
+            }
+        );
         cancel.join().unwrap();
         server.join().unwrap();
     }
@@ -217,7 +224,11 @@ pub(crate) fn no_accept_server(body: Vec<u8>) -> (String, thread::JoinHandle<()>
 #[test]
 fn reset_is_not_misreported_as_a_truncated_response() {
     use std::os::fd::AsRawFd;
-    let (url, server) = server(|mut stream| {
+    let addresses = Arc::new(Mutex::new(None));
+    let observed = addresses.clone();
+    let (url, server) = server(move |mut stream| {
+        *observed.lock().unwrap() =
+            Some((stream.peer_addr().unwrap(), stream.local_addr().unwrap()));
         request(&mut stream);
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
@@ -244,4 +255,9 @@ fn reset_is_not_misreported_as_a_truncated_response() {
     let error = response.read_to_end(&mut Vec::new()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::ConnectionReset, "{error:?}");
     server.join().unwrap();
+    let (client, server) = addresses.lock().unwrap().unwrap();
+    assert_eq!(
+        error.to_string(),
+        format!("read tcp {client}->{server}: read: connection reset by peer")
+    );
 }

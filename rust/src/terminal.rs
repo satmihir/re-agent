@@ -1,17 +1,26 @@
-use crate::render::{columns, display, width};
+use crate::render::{columns, display, sanitize, styled, truncate, width};
 use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::AsRawFd;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
 use std::time::{Duration, Instant};
 mod editor;
 mod region;
+use crate::tools::{WorkspaceConsent, WorkspaceConsentError, WorkspaceDestination};
 use editor::{Decoder, Editor as IdleEditor, Key, TurnInput};
 pub(crate) use region::output;
 pub use region::{Region, RegionHandle};
+use serde_json::Value;
+
+#[derive(Default)]
+struct Consent {
+    running: bool,
+    request: Option<(Value, WorkspaceDestination)>,
+    answer: Option<Result<bool, WorkspaceConsentError>>,
+}
 
 struct Raw {
     fd: i32,
@@ -56,6 +65,7 @@ pub struct Input {
     region: Option<RegionHandle>,
     decoder: Decoder,
     next: TurnInput,
+    consent: Arc<(Mutex<Consent>, Condvar)>,
 }
 /// Submission distinguishes text, interruption, and end of input.
 pub enum Submission {
@@ -90,8 +100,284 @@ impl Input {
             region,
             decoder: Decoder::default(),
             next: TurnInput::default(),
+            consent: Arc::new((Mutex::new(Consent::default()), Condvar::new())),
         }
     }
+    /// Workspace consent delegates a tool's prompt to the sole turn-input reader.
+    pub(crate) fn workspace_consent(&self) -> Box<WorkspaceConsent> {
+        let interactive = self.terminal;
+        let shared = self.consent.clone();
+        shared.0.lock().unwrap().running = interactive;
+        Box::new(move |config, destination| {
+            if !interactive {
+                return Err(WorkspaceConsentError::NotInteractive);
+            }
+            let (lock, ready) = &*shared;
+            let mut state = lock.lock().unwrap();
+            if !state.running {
+                return Err(WorkspaceConsentError::Unavailable);
+            }
+            state.answer = None;
+            state.request = Some((config.clone(), destination.clone()));
+            ready.notify_all();
+            loop {
+                if let Some(answer) = state.answer.take() {
+                    return answer;
+                }
+                if !state.running || crate::cancellation::cancelled(config) {
+                    state.request = None;
+                    return Err(WorkspaceConsentError::Unavailable);
+                }
+                state = ready
+                    .wait_timeout(state, Duration::from_millis(50))
+                    .unwrap()
+                    .0;
+            }
+        })
+    }
+    fn service_consent(
+        &mut self,
+        next: &mut TurnInput,
+        cancelled: &AtomicBool,
+    ) -> io::Result<bool> {
+        let request = self.consent.0.lock().unwrap().request.take();
+        let Some((config, destination)) = request else {
+            return Ok(false);
+        };
+        *next = TurnInput::default();
+        let result = (|| {
+            self.discard_input()?;
+            let mut disclosure = format!(
+                "Allow this location as a workspace?\nLocation: {}\n",
+                crate::errors::quote(&destination.path.to_string_lossy())
+            );
+            if destination.missing {
+                disclosure.push_str("Destination does not exist; only this exact location will be approved, not its parent.\n");
+            }
+            disclosure.push_str(&format!("Authority: {}\n", crate::render::mode(&config)));
+            if config["plan"].as_bool().unwrap_or(false) {
+                disclosure.push_str("Plan mode remains on; edits and commands are refused.\n");
+            }
+            disclosure.push_str("Duration: until this chat exits, including /reset, /model, and compaction.\nFiles read here may be sent to the provider and recorded in traces.\n");
+            output(self.region.as_ref(), 2, &disclosure);
+            let options = [
+                Choice {
+                    label: "Allow for this session".into(),
+                    detail: String::new(),
+                    note: String::new(),
+                    disabled: false,
+                },
+                Choice {
+                    label: "Deny".into(),
+                    detail: String::new(),
+                    note: String::new(),
+                    disabled: false,
+                },
+            ];
+            self.choose_options(
+                "Workspace consent",
+                &options,
+                1,
+                false,
+                "deny",
+                true,
+                Some(cancelled),
+            )
+        })();
+        let answer = match result {
+            Ok(Selection::Chosen(index)) => Ok(index == 0 && !cancelled.load(Ordering::Acquire)),
+            Ok(Selection::NotInteractive) => Err(WorkspaceConsentError::NotInteractive),
+            _ => Err(WorkspaceConsentError::Unavailable),
+        };
+        let (lock, ready) = &*self.consent;
+        lock.lock().unwrap().answer = Some(answer);
+        ready.notify_all();
+        if self.region.is_some() {
+            self.redraw(&next.editor, &next.prefix)?;
+        }
+        Ok(true)
+    }
+    fn choose_region(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        current: usize,
+        shortcuts: bool,
+        cancel_label: &str,
+        fresh: bool,
+        cancelled: Option<&AtomicBool>,
+    ) -> io::Result<Selection> {
+        let (width, height) = self.size()?;
+        if width < 2
+            || height < options.len() + if width >= 20 { 5 } else { 2 }
+            || options.is_empty()
+        {
+            return Ok(Selection::NotInteractive);
+        }
+        let mut selected = if current < options.len() && !options[current].disabled {
+            current
+        } else if let Some(index) = options.iter().position(|option| !option.disabled) {
+            index
+        } else {
+            return Ok(Selection::NotInteractive);
+        };
+        let mut header = if cancel_label.is_empty() {
+            format!("{}  ↑↓ move · enter · esc", sanitize(title))
+        } else {
+            format!(
+                "{}   ↑↓ move · enter choose · esc {}",
+                sanitize(title),
+                sanitize(cancel_label)
+            )
+        };
+        if crate::render::width(&header) > width - 1 {
+            header = if cancel_label.is_empty() {
+                format!("↑↓ move · enter · esc  {}", sanitize(title))
+            } else {
+                format!("esc {}  {}", sanitize(cancel_label), sanitize(title))
+            };
+        }
+        let header = truncate(&header, width - 1);
+        let region = self.region.as_ref().unwrap().clone();
+        let draw = |selected| {
+            let rows: Vec<String> = options
+                .iter()
+                .enumerate()
+                .map(|(index, option)| {
+                    let row = format!(
+                        "{} {}  {:<17} {:<10} {}",
+                        if index == selected { "❯" } else { " " },
+                        index + 1,
+                        sanitize(&option.label),
+                        sanitize(&option.detail),
+                        sanitize(&option.note)
+                    );
+                    let row = truncate(row.trim_end(), width - 1);
+                    if !styled(2) {
+                        row
+                    } else if option.disabled {
+                        format!("\x1b[2m{row}\x1b[0m")
+                    } else if index == selected {
+                        format!("\x1b[36m\x1b[1m{row}\x1b[0m")
+                    } else {
+                        row
+                    }
+                })
+                .collect();
+            region.lock().unwrap().picker(&header, rows, width, height)
+        };
+        draw(selected)?;
+        if fresh {
+            self.discard_input()?;
+        }
+        let result = (|| loop {
+            if cancelled.is_some_and(|token| token.load(Ordering::Acquire)) {
+                return Ok(Selection::Cancelled);
+            }
+            let key = if let Some(key) = self.decoder.next() {
+                Some(key)
+            } else {
+                let fd = self.tty.as_ref().unwrap().as_raw_fd();
+                let mut poll = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ready = unsafe { libc::poll(&mut poll, 1, 50) };
+                if ready < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                if ready == 0 {
+                    self.decoder.escape()
+                } else {
+                    let mut bytes = [0; 256];
+                    let count = self.tty.as_mut().unwrap().read(&mut bytes)?;
+                    if count == 0 {
+                        return Ok(Selection::Cancelled);
+                    }
+                    self.decoder.feed(&bytes[..count]);
+                    continue;
+                }
+            };
+            let Some(key) = key else {
+                continue;
+            };
+            match key {
+                Key::Name("up") | Key::Text('k') if shortcuts || key == Key::Name("up") => {
+                    if let Some(index) = (0..selected).rev().find(|index| !options[*index].disabled)
+                    {
+                        selected = index;
+                        draw(selected)?;
+                    }
+                }
+                Key::Name("down") | Key::Text('j') if shortcuts || key == Key::Name("down") => {
+                    if let Some(index) =
+                        (selected + 1..options.len()).find(|index| !options[*index].disabled)
+                    {
+                        selected = index;
+                        draw(selected)?;
+                    }
+                }
+                Key::Name("enter") => return Ok(Selection::Chosen(selected)),
+                Key::Name("escape" | "interrupt" | "eof") => return Ok(Selection::Cancelled),
+                Key::Text('q') if shortcuts => return Ok(Selection::Cancelled),
+                Key::Text(c @ '1'..='9') if shortcuts => {
+                    let index = c as usize - '1' as usize;
+                    if index < options.len() && !options[index].disabled {
+                        return Ok(Selection::Chosen(index));
+                    }
+                }
+                _ if !shortcuts => return Ok(Selection::Cancelled),
+                _ => {}
+            }
+        })();
+        self.decoder = Decoder::default();
+        if cancel_label == "keep planning" {
+            region.lock().unwrap().collapse()?;
+        } else {
+            let next = std::mem::take(&mut self.next);
+            let restored = self.redraw(&next.editor, &next.prefix);
+            self.next = next;
+            restored?;
+        }
+        result
+    }
+    fn discard_input(&mut self) -> io::Result<()> {
+        self.decoder = Decoder::default();
+        self.next = TurnInput::default();
+        if let Some(region) = &self.region {
+            region.lock().unwrap().queued = false;
+        }
+        let buffered = self.reader.buffer().len();
+        self.reader.consume(buffered);
+        let fd = self.tty.as_ref().map_or(0, |tty| tty.as_raw_fd());
+        if unsafe { libc::tcflush(fd, libc::TCIFLUSH) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    /// Handoff releases raw input and the region before another terminal owner runs.
+    pub(crate) fn handoff(&mut self) -> io::Result<()> {
+        if let Some(region) = &self.region {
+            region.lock().unwrap().collapse()?;
+        }
+        self.raw.take();
+        Ok(())
+    }
+
+    /// Restore reacquires raw input and immediately repaints after an editor returns.
+    pub(crate) fn restore(&mut self) -> io::Result<()> {
+        if self.region.is_none() {
+            return Ok(());
+        }
+        self.raw = Some(Raw::enter()?);
+        self.redraw(&IdleEditor::default(), "")
+    }
+
     /// Region returns the pane shared with this chat's presentation.
     pub fn region(&self) -> Option<RegionHandle> {
         self.region.clone()
@@ -113,8 +399,88 @@ impl Input {
         options: &[Choice],
         current: usize,
     ) -> io::Result<Selection> {
+        self.choose_options(title, options, current, true, "", false, None)
+    }
+    /// Choose plan discards turn type-ahead and requires an explicit highlighted choice.
+    pub(crate) fn choose_plan(&mut self) -> io::Result<Selection> {
         if let Some(region) = &self.region {
-            region.lock().unwrap().collapse()?;
+            self.next = TurnInput::default();
+            self.decoder = Decoder::default();
+            region.lock().unwrap().queued = false;
+        }
+        let options: Vec<_> = [
+            (
+                "Implement here",
+                "leaves plan mode and asks the model to implement it",
+            ),
+            (
+                "Implement fresh",
+                "starts a new session holding only the plan",
+            ),
+            ("Keep planning", ""),
+        ]
+        .into_iter()
+        .map(|(label, detail)| Choice {
+            label: label.into(),
+            detail: detail.into(),
+            note: String::new(),
+            disabled: false,
+        })
+        .collect();
+        self.choose_options(
+            "Plan ready",
+            &options,
+            2,
+            false,
+            "keep planning",
+            false,
+            None,
+        )
+    }
+    /// Write user frame records an implementation request before its generated turn.
+    pub(crate) fn write_user_frame(&self, message: &str) {
+        if let Some(region) = &self.region {
+            let columns = region.lock().unwrap().width;
+            let rule = "─".repeat(columns);
+            let rule = if styled(2) {
+                format!("\x1b[2m{rule}\x1b[0m")
+            } else {
+                rule
+            };
+            let lines = crate::render::wrap("❯ ", "  ", message, columns.saturating_sub(1));
+            let frame = if columns >= 20 {
+                format!("{rule}\r\n{}\r\n{rule}\r\n", lines.join("\r\n"))
+            } else {
+                format!("{}\r\n", lines.join("\r\n"))
+            };
+            output(Some(region), 2, &frame);
+        } else {
+            output(None, 2, &format!("> {message}\n"));
+        }
+    }
+    fn choose_options(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        current: usize,
+        shortcuts: bool,
+        cancel_label: &str,
+        fresh: bool,
+        cancelled: Option<&AtomicBool>,
+    ) -> io::Result<Selection> {
+        if fresh {
+            self.discard_input()?;
+        }
+        if self.region.is_some() {
+            return self.choose_region(
+                title,
+                options,
+                current,
+                shortcuts,
+                cancel_label,
+                fresh,
+                cancelled,
+            );
         }
         self.raw.take();
         let mut size: libc::winsize = unsafe { std::mem::zeroed() };
@@ -140,9 +506,21 @@ impl Input {
         let _raw = Raw::enter()?;
         let columns = size.ws_col as usize;
         let rows = options.len() + 1;
-        let mut header = format!("{}  ↑↓ move · enter · esc", crate::render::sanitize(title));
+        let mut header = if cancel_label.is_empty() {
+            format!("{}  ↑↓ move · enter · esc", sanitize(title))
+        } else {
+            format!(
+                "{}   ↑↓ move · enter choose · esc {}",
+                sanitize(title),
+                sanitize(cancel_label)
+            )
+        };
         if width(&header) > columns - 1 {
-            header = format!("↑↓ move · enter · esc  {}", crate::render::sanitize(title))
+            header = if cancel_label.is_empty() {
+                format!("↑↓ move · enter · esc  {}", sanitize(title))
+            } else {
+                format!("esc {}  {}", sanitize(cancel_label), sanitize(title))
+            };
         }
         header = crate::render::truncate(&header, columns - 1);
         eprint!("\x1b[?25l");
@@ -181,12 +559,12 @@ impl Input {
                 redraw = true;
                 let key = read_key(&mut self.reader)?;
                 match key.as_str() {
-                    "up" | "text:k" => {
+                    "up" | "text:k" if shortcuts || key == "up" => {
                         if let Some(next) = (0..cursor).rev().find(|i| !options[*i].disabled) {
                             cursor = next
                         }
                     }
-                    "down" | "text:j" => {
+                    "down" | "text:j" if shortcuts || key == "down" => {
                         if let Some(next) =
                             (cursor + 1..options.len()).find(|i| !options[*i].disabled)
                         {
@@ -196,6 +574,9 @@ impl Input {
                     "enter" => return Ok(Selection::Chosen(cursor)),
                     "escape" | "interrupt" | "eof" | "text:q" => return Ok(Selection::Cancelled),
                     _ => {
+                        if !shortcuts {
+                            return Ok(Selection::Cancelled);
+                        }
                         if let Some(number) = key
                             .strip_prefix("text:")
                             .and_then(|s| s.parse::<usize>().ok())
@@ -428,28 +809,33 @@ impl Input {
         stop: &AtomicBool,
         cancelled: &AtomicBool,
     ) -> io::Result<()> {
-        if self.region.is_none() {
-            return Ok(());
-        }
         let mut next = std::mem::take(&mut self.next);
-        let result = self.read_turn(&mut next, stop, cancelled);
+        let result = if self.region.is_some() {
+            self.read_turn(&mut next, stop, cancelled)
+        } else {
+            while self.terminal
+                && !stop.load(Ordering::Acquire)
+                && !cancelled.load(Ordering::Acquire)
+            {
+                if let Err(error) = self.service_consent(&mut next, cancelled) {
+                    self.consent.0.lock().unwrap().running = false;
+                    self.consent.1.notify_all();
+                    return Err(error);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(())
+        };
+        self.consent.0.lock().unwrap().running = false;
+        self.consent.1.notify_all();
+        if self.region.is_none() {
+            return result;
+        }
         if cancelled.load(Ordering::Acquire) {
             next = TurnInput::default();
             self.decoder = Decoder::default();
         }
-        let handle = self.region.as_ref().unwrap().clone();
-        {
-            let mut region = handle.lock().unwrap();
-            region.queued = next.queued.is_some();
-            let (columns, height) = self.size()?;
-            region.input(
-                &next.editor.buffer,
-                next.editor.caret,
-                &next.prefix,
-                columns,
-                height,
-            )?;
-        }
+        // Keep the last turn's pane until its result and trace have been printed.
         self.next = next;
         result
     }
@@ -462,6 +848,9 @@ impl Input {
     ) -> io::Result<()> {
         self.redraw(&next.editor, &next.prefix)?;
         while !stop.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
+            if self.service_consent(next, cancelled)? {
+                continue;
+            }
             let key = if let Some(key) = self.decoder.next() {
                 Some(key)
             } else {
@@ -530,6 +919,7 @@ impl Input {
         } else {
             eprint!("\x1b[?2004h");
         }
+        self.region.as_ref().unwrap().lock().unwrap().queued = self.next.queued.is_some();
         if self.next.exit {
             self.next = TurnInput::default();
             self.region.as_ref().unwrap().lock().unwrap().collapse()?;

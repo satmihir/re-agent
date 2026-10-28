@@ -5,12 +5,19 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, IntoRawFd};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+mod legacy;
+
 static LOCKS: OnceLock<Mutex<HashMap<String, File>>> = OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    static CLOSE_ERROR: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
 
 /// Directory returns the private cache location of a validated session ID.
 pub fn directory(id: &str) -> Result<PathBuf, String> {
@@ -186,10 +193,10 @@ fn outcome(value: &mut Value, decode: bool) -> Result<(), String> {
 fn convert_raw(cp: &mut Value, decode: bool) -> Result<(), String> {
     if let Some(entries) = cp["history"].as_array_mut() {
         for e in entries {
-            if let Some(u) = e.get_mut("user") {
+            if let Some(u) = e.get_mut("user").filter(|u| !u.is_null()) {
                 user(u, decode)?;
             }
-            if let Some(a) = e.get_mut("assistant") {
+            if let Some(a) = e.get_mut("assistant").filter(|a| !a.is_null()) {
                 if let Some(items) = a
                     .get_mut("native")
                     .and_then(|n| n.get_mut("items"))
@@ -213,7 +220,7 @@ fn convert_raw(cp: &mut Value, decode: bool) -> Result<(), String> {
                     *a = ordered(a, &["response_id", "model", "blocks", "native", "usage"]);
                 }
             }
-            if let Some(t) = e.get_mut("tool") {
+            if let Some(t) = e.get_mut("tool").filter(|t| !t.is_null()) {
                 outcome(&mut t["outcome"], decode)?;
                 if !decode {
                     *t = ordered(t, &["call_id", "name", "outcome"]);
@@ -227,7 +234,7 @@ fn convert_raw(cp: &mut Value, decode: bool) -> Result<(), String> {
             }
         }
     }
-    if let Some(u) = cp.get_mut("pending_submission") {
+    if let Some(u) = cp.get_mut("pending_submission").filter(|u| !u.is_null()) {
         user(u, decode)?;
     }
     if let Some(map) = cp
@@ -307,7 +314,8 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "active" => c["workspace"].clone(),
             "launch_instructions" => c["project_instructions"].clone(),
             "history" => {
-                if session.history.is_empty() {
+                let restored_array = s["id"] == s["session_id"] && s["history"].is_array();
+                if session.history.is_empty() && !restored_array {
                     Value::Null
                 } else {
                     json!(session.history)
@@ -485,6 +493,24 @@ fn envelope(cp: &Value) -> Result<Vec<u8>, String> {
     .into_bytes())
 }
 
+fn close_checkpoint(file: File) -> std::io::Result<()> {
+    // Close consumes the descriptor even on error; retrying could close a reused FD.
+    let error = if unsafe { libc::close(file.into_raw_fd()) } != 0 {
+        Some(std::io::Error::last_os_error())
+    } else {
+        None
+    };
+    #[cfg(test)]
+    let error = CLOSE_ERROR
+        .with(|fault| fault.take())
+        .map(std::io::Error::from_raw_os_error)
+        .or(error);
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
 /// Save persists an execution barrier without replaying any pending work.
 pub fn save(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Result<(), String> {
     if !session.config["checkpoint_enabled"]
@@ -513,7 +539,8 @@ pub fn save(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> 
             .map_err(|e| format!("write checkpoint: {}", crate::errors::stable_io(&e)))?;
         file.sync_all()
             .map_err(|e| format!("sync checkpoint: {}", crate::errors::stable_io(&e)))?;
-        drop(file);
+        close_checkpoint(file)
+            .map_err(|e| format!("close checkpoint: {}", crate::errors::stable_io(&e)))?;
         let destination = dir.join("checkpoint.json");
         // os.Rename rejects a directory destination before its rename syscall.
         if fs::symlink_metadata(&destination).is_ok_and(|metadata| metadata.is_dir()) {
@@ -541,11 +568,104 @@ struct Envelope<'a> {
     sha256: String,
 }
 
+// Match Go's declared JSON types while allowing null zero values and unknown fields.
+// RawMessage fields are checked by convert_raw after the containing shapes are valid.
+fn valid_checkpoint_type(value: &mut Value, kind: &str) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    if let Some(element) = kind.strip_prefix("[]") {
+        return value.as_array_mut().is_some_and(|items| {
+            items
+                .iter_mut()
+                .all(|item| valid_checkpoint_type(item, element))
+        });
+    }
+    if let Some(element) = kind.strip_prefix("map:") {
+        return value.as_object_mut().is_some_and(|items| {
+            items
+                .values_mut()
+                .all(|item| valid_checkpoint_type(item, element))
+        });
+    }
+    match kind {
+        "string" => return value.is_string(),
+        "bool" => return value.is_boolean(),
+        "int" => return value.as_i64().is_some(),
+        "float" => return value.as_f64().is_some_and(f64::is_finite),
+        "raw" => return true,
+        _ => {}
+    }
+    let fields = checkpoint_fields(kind);
+    let Some(object) = value.as_object_mut() else {
+        return false;
+    };
+    // Go matches tagged struct fields case-insensitively, unlike map keys.
+    let mut normalized = Map::new();
+    for (name, mut item) in std::mem::take(object) {
+        let field = fields.split_whitespace().find_map(|field| {
+            let (key, kind) = field.split_once(':').unwrap();
+            key.eq_ignore_ascii_case(&name).then_some((key, kind))
+        });
+        if let Some((key, kind)) = field {
+            if !valid_checkpoint_type(&mut item, kind) {
+                return false;
+            }
+            normalized.insert(key.into(), item);
+        } else {
+            normalized.insert(name, item);
+        }
+    }
+    *object = normalized;
+    true
+}
+
+fn checkpoint_fields(kind: &str) -> &'static str {
+    match kind {
+        "checkpoint" => "version:int id:string provider:string model:string effort:string \
+            launch:string active:string read_only:bool plan:bool no_project_instructions:bool \
+            project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
+            model_retry_window:int in_run_compact:bool context_window_tokens:int \
+            context_gc_age_steps:int context_gc_consolidate:bool context_gc:bool gc_state:gc \
+            gc_requests:int agents:bool agent_roster:[]thread agent_subtree:subtree \
+            report_friction:bool auto:bool auto_enabled:bool auto_fallback_model:string \
+            auto_fallback_effort:string auto_usage:usage auto_attempts:int auto_compact_off:bool \
+            history:[]entry pending_submission:user seen:map:bool handoff:handoff \
+            compacted_plan:string blocked:string last_trace:string last_request:usage \
+            tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt",
+        "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
+        "user" => "text:string workspace:raw roster:raw source:string plan:string",
+        "response" => "response_id:string model:string blocks:[]block native:native usage:usage",
+        "block" => "kind:string text:string call:call",
+        "call" => "call_id:string name:string arguments:string",
+        "native" => "provider:string items:[]raw",
+        "usage" => "known:bool input_tokens:int cached_input_tokens:int output_tokens:int \
+            reasoning_tokens:int unreported_attempts:int",
+        "tool" => "call_id:string name:string outcome:outcome",
+        "outcome" => "workspace:string ok:bool code:string message:string data:raw \
+            truncated:bool effect:string",
+        "shell" => "workspace:string kind:string command:string exit_code:int signal:string \
+            interrupted:bool output:string output_bytes_seen:int output_truncated:bool \
+            encoding_replaced:bool duration_ms:int",
+        "summary" => "text:string replaced_entries:int model:string",
+        "gc" => "dropped:map:drop paths:map:string last_pass:int inherited:map:outcome",
+        "drop" => "reason:string step:int placeholder:string",
+        "handoff" => "text:string plan:string entries:int native_items:int",
+        "prompt" => "text:string project:string",
+        "thread" => "id:string parent_id:string name:string state:string task:string steps:int \
+            cost:usage trace_path:string authority:string context_mode:string effects_unknown:bool",
+        "observation" => "id:string parent_id:string name:string state:string task:string steps:int \
+            cost:usage trace_path:string authority:string context_mode:string effects_unknown:bool depth:int",
+        "subtree" => "threads:[]observation total_cost:usage total_agents:int next_offset:int accounting_complete:bool",
+        _ => unreachable!("unknown checkpoint type"),
+    }
+}
+
 fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
     let corrupt = |why: &str| format!("corrupt session {id}: {why}");
     let env: Envelope =
         serde_json::from_slice(bytes).map_err(|_| corrupt("invalid checkpoint JSON"))?;
-    if env.version != 2 {
+    if env.version != 1 && env.version != 2 {
         return Err(format!(
             "session {id} has unsupported checkpoint version {}",
             env.version
@@ -554,16 +674,44 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
     if env.id != id {
         return Err(corrupt("invalid checkpoint envelope"));
     }
-    if env.sha256 != format!("{:x}", Sha256::digest(env.state.get().as_bytes())) {
+    let legacy_bytes;
+    let payload = if env.version == 1 {
+        let encoded: Option<String> = serde_json::from_str(env.state.get())
+            .map_err(|_| corrupt("invalid legacy checkpoint payload"))?;
+        legacy_bytes = match encoded {
+            Some(encoded) => {
+                // Go's standard base64 decoder ignores unused trailing bits.
+                let decoder = base64::engine::GeneralPurpose::new(
+                    &base64::alphabet::STANDARD,
+                    base64::engine::general_purpose::GeneralPurposeConfig::new()
+                        .with_decode_allow_trailing_bits(true),
+                );
+                decoder
+                    .decode(encoded.replace(['\r', '\n'], ""))
+                    .map_err(|_| corrupt("invalid legacy checkpoint payload"))?
+            }
+            None => Vec::new(),
+        };
+        legacy_bytes.as_slice()
+    } else {
+        env.state.get().as_bytes()
+    };
+    if env.sha256 != format!("{:x}", Sha256::digest(payload)) {
         return Err(corrupt("checkpoint checksum mismatch"));
     }
-    let mut cp: Value =
-        serde_json::from_str(env.state.get()).map_err(|_| corrupt("invalid checkpoint state"))?;
+    let mut cp: Value = if env.version == 1 {
+        legacy::decode(payload).map_err(|_| corrupt("invalid legacy checkpoint state"))?
+    } else {
+        serde_json::from_slice(payload).map_err(|_| corrupt("invalid checkpoint state"))?
+    };
     if !cp.is_object() {
         return Err(corrupt("invalid checkpoint state"));
     }
+    if !valid_checkpoint_type(&mut cp, "checkpoint") {
+        return Err(corrupt("invalid checkpoint state"));
+    }
     convert_raw(&mut cp, true).map_err(|e| corrupt(&e))?;
-    if cp["version"] != 2 {
+    if cp["version"] != env.version {
         return Err(corrupt("mismatched version"));
     }
     if cp["id"] != id
@@ -649,7 +797,7 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
     Ok(cp)
 }
 
-/// Load validates a canonical v2 checkpoint and returns normalized runtime state.
+/// Load validates a v2 JSON or legacy v1 gob checkpoint and returns normalized runtime state.
 pub fn load(id: &str) -> Result<Value, String> {
     let dir = open(id, false)?;
     let path = dir.join("checkpoint.json");
@@ -691,11 +839,18 @@ fn restored(id: &str, cp: Value) -> Value {
             config.insert(key.into(), v.clone());
         }
     }
+    let project = if cp["active"] == cp["launch"] {
+        &cp["project_instructions"]
+    } else {
+        &cp["launch_instructions"]
+    };
+    config.insert("project_instructions".into(), project.clone());
     config.insert("session_id".into(), json!(id));
     config.insert("reasoning_effort".into(), cp["effort"].clone());
     config.insert("workspace".into(), cp["launch"].clone());
     config.insert("checkpoint_enabled".into(), json!(true));
     let mut s = cp.clone();
+    s["launch_instructions"] = project.clone();
     s["seen_calls"] = cp["seen"].clone();
     s["session_id"] = json!(id);
     s["gc"] = cp["gc_state"].clone();
@@ -788,6 +943,62 @@ mod tests {
     fn cp() -> Value {
         json!({"version":2,"id":"0123456789abcdef","provider":"openai","model":"test","launch":"/tmp","max_steps":0,"max_tool_calls":0,"model_retry_window":0,"gc_state":{"last_pass":0},"history":[{"kind":"user","user":{"text":"<hello>","workspace":{"kind":"workspace_state"}}}],"seen":{},"phase":"terminal"})
     }
+    fn checked_envelope(state: &Value) -> Vec<u8> {
+        let bytes = canonical(state);
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        format!(
+            "{{\"version\":2,\"id\":\"0123456789abcdef\",\"state\":{},\"sha256\":\"{digest}\"}}",
+            String::from_utf8(bytes).unwrap()
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn restored_project_uses_launch_text_but_keeps_recorded_prompt() {
+        for active in ["/tmp", "/other"] {
+            for launch in [Value::Null, json!(""), json!("launch project")] {
+                let mut original = cp();
+                original["active"] = json!(active);
+                original["project_instructions"] = json!("active project");
+                original["launch_instructions"] = launch.clone();
+                original["prompt"] = json!({"text":"recorded prompt","project":"recorded project"});
+                let saved = restored("0123456789abcdef", original.clone());
+                let expected = if active == "/tmp" {
+                    json!("active project")
+                } else {
+                    launch
+                };
+                assert_eq!(saved["config"]["project_instructions"], expected);
+                assert_eq!(saved["state"]["launch_instructions"], expected);
+                assert_eq!(saved["config"]["workspace"], "/tmp");
+                assert_eq!(saved["state"]["recovery_workspace"], active);
+                assert_eq!(saved["config"]["prompt"], original["prompt"]);
+                let request =
+                    crate::context::build_context(&saved["config"], json!({}), &[], json!([]));
+                assert_eq!(request["instructions"], "recorded prompt");
+            }
+        }
+    }
+
+    #[test]
+    fn typed_state_accepts_go_nulls_and_unknown_fields() {
+        let mut persisted: Value = serde_json::from_slice(&envelope(&cp()).unwrap()).unwrap();
+        let state = &mut persisted["state"];
+        state["read_only"] = Value::Null;
+        state["history"][0]["user"]["text"] = Value::Null;
+        state["history"][0]["tool"] = Value::Null;
+        state["history"][0]["assistant"] = Value::Null;
+        state["usage"] = json!({"known":null,"input_tokens":null,"future":[]});
+        state["future"] = json!({"anything":true});
+        parse("0123456789abcdef", &checked_envelope(state)).unwrap();
+        state["history"] = Value::Null;
+        state.as_object_mut().unwrap().remove("read_only");
+        state["READ_ONLY"] = json!(true);
+        let restored = parse("0123456789abcdef", &checked_envelope(state)).unwrap();
+        assert_eq!(restored["read_only"], true);
+        assert!(restored["history"].is_null());
+    }
+
     #[test]
     fn missing_private_directory_uses_owned_filesystem_error() {
         let root = tempfile::tempdir().unwrap();
@@ -974,6 +1185,9 @@ mod tests {
             let path = directory("0123456789abcdef")
                 .unwrap()
                 .join("checkpoint.json");
+            let mut imported = state(&session, "idle", "");
+            imported["history"] = json!([]);
+            std::fs::write(&path, envelope(&imported).unwrap()).unwrap();
             let old = std::fs::metadata(&path).unwrap().ino();
             close("0123456789abcdef");
             let saved = load("0123456789abcdef").unwrap();
@@ -983,10 +1197,103 @@ mod tests {
             assert_eq!(recover(&mut session).unwrap(), "");
             save(&session, "idle", "").unwrap();
             assert_ne!(std::fs::metadata(&path).unwrap().ino(), old);
+            let rewritten: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(rewritten["state"]["history"], json!([]));
             assert_eq!(
                 std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o600
             );
+            let previous = std::fs::read(&path).unwrap();
+            let previous_inode = std::fs::metadata(&path).unwrap().ino();
+            CLOSE_ERROR.with(|fault| fault.set(Some(libc::EIO)));
+            assert_eq!(
+                save(&session, "terminal", "").unwrap_err(),
+                format!(
+                    "save session 0123456789abcdef: close checkpoint: {}",
+                    crate::errors::stable_io(&std::io::Error::from_raw_os_error(libc::EIO))
+                )
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), previous);
+            assert_eq!(std::fs::metadata(&path).unwrap().ino(), previous_inode);
+            assert!(!std::fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .any(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".checkpoint-")
+                }));
+            save(&session, "terminal", "").unwrap();
+            assert_eq!(
+                load("0123456789abcdef").unwrap()["checkpoint"]["phase"],
+                "terminal"
+            );
+            for (pointer, invalid) in [
+                ("/read_only", json!("true")),
+                ("/plan", json!(1)),
+                ("/max_steps", json!("5")),
+                ("/max_tool_calls", json!(1.5)),
+                ("/model_retry_window", json!(true)),
+                ("/context_window_tokens", json!(9223372036854775808u64)),
+                ("/history", json!({})),
+                ("/history", json!(false)),
+                ("/history", json!([{"kind":"user","user":{"text":7}}])),
+                ("/history", json!([{"kind":"assistant","assistant":true}])),
+                (
+                    "/history",
+                    json!([{"kind":"assistant","assistant":{"blocks":{}}}]),
+                ),
+                (
+                    "/history",
+                    json!([{"kind":"assistant","assistant":{"blocks":[{"kind":"text","text":true}]}}]),
+                ),
+                (
+                    "/history",
+                    json!([{"kind":"assistant","assistant":{"native":{"provider":false}}}]),
+                ),
+                (
+                    "/history",
+                    json!([{"kind":"assistant","assistant":{"usage":{"known":"true"}}}]),
+                ),
+                (
+                    "/history",
+                    json!([{"kind":"assistant","assistant":{"usage":{"input_tokens":1.5}}}]),
+                ),
+                ("/usage", json!([])),
+                ("/usage", json!({"output_tokens":"1"})),
+                ("/seen", json!({"c":"true"})),
+                ("/gc_state", json!({"paths":{"c":1}})),
+                ("/pending_submission", json!([])),
+                ("/prompt", json!({"text":true})),
+                ("/agent_roster", json!([{"steps":"1"}])),
+            ] {
+                let mut malformed = rewritten["state"].clone();
+                malformed
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(pointer[1..].into(), invalid);
+                std::fs::write(&path, checked_envelope(&malformed)).unwrap();
+                assert_eq!(
+                    load("0123456789abcdef").unwrap_err(),
+                    "corrupt session 0123456789abcdef: invalid checkpoint state",
+                    "{pointer}"
+                );
+            }
+            std::fs::write(&path, LEGACY).unwrap();
+            let legacy = load("0123456789abcdef").unwrap();
+            session.config = legacy["config"].clone();
+            session.state = legacy["state"].clone();
+            session.history = legacy["history"].as_array().unwrap().clone();
+            save(&session, "terminal", "").unwrap();
+            let migrated = load("0123456789abcdef").unwrap();
+            assert_eq!(migrated["checkpoint"]["version"], 2);
+            assert_eq!(migrated["config"]["read_only"], true);
+            assert_eq!(
+                migrated["config"]["prompt"]["text"],
+                "recorded instructions"
+            );
+            assert_eq!(migrated["history"], legacy["history"]);
             std::fs::remove_file(&path).unwrap();
             std::fs::create_dir(&path).unwrap();
             assert_eq!(
@@ -1002,6 +1309,8 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(".checkpoint-")));
             close("0123456789abcdef");
+            session.reset();
+            assert!(state(&session, "idle", "")["history"].is_null());
             return;
         }
         let root = tempfile::tempdir().unwrap();
@@ -1014,11 +1323,152 @@ mod tests {
         );
     }
 
+    const LEGACY: &[u8] = include_bytes!("../testdata/legacy_checkpoint.json");
+
+    fn legacy_envelope(payload: &[u8]) -> Vec<u8> {
+        serde_json::to_vec(&json!({"version":1,"id":"0123456789abcdef",
+            "state":STANDARD.encode(payload),"sha256":format!("{:x}", Sha256::digest(payload))}))
+        .unwrap()
+    }
+
     #[test]
-    fn legacy_is_rejected_before_payload_decode() {
-        let v = br#"{"version":1,"id":"0123456789abcdef","state":"not gob","sha256":""}"#;
-        assert!(parse("0123456789abcdef", v)
+    fn historical_go_gob_restores_and_migrates_opaque_raw_bytes() {
+        let cp = parse("0123456789abcdef", LEGACY).unwrap();
+        assert_eq!(cp["version"], 1);
+        assert_eq!(cp["read_only"], true);
+        assert_eq!(cp["max_tool_calls"], 16);
+        assert_eq!(cp["model_retry_window"], 1500000000i64);
+        assert_eq!(cp["tokens_per_byte"], 0.375);
+        assert_eq!(cp["history"].as_array().unwrap().len(), 5);
+        assert_eq!(cp["history"][3]["shell"]["exit_code"], -1);
+        assert_eq!(cp["history"][4]["summary"]["replaced_entries"], 3);
+        assert_eq!(cp["usage"]["input_tokens"], i64::MAX);
+        assert_eq!(cp["gc_state"]["dropped"]["c1"]["step"], 2);
+        assert_eq!(cp["agent_subtree"]["threads"][0]["id"], "t1");
+        assert_eq!(cp["agent_subtree"]["threads"][0]["depth"], 2);
+        assert_eq!(cp["agent_subtree"]["next_offset"], 3);
+        assert_eq!(cp["context_window_tokens"], 0);
+        assert_eq!(cp["context_gc_consolidate"], false);
+        assert!(cp.get("LegacyTime").is_none());
+        let saved = restored("0123456789abcdef", cp.clone());
+        assert_eq!(saved["config"]["project_instructions"], "launch project");
+        assert_eq!(saved["config"]["prompt"]["text"], "recorded instructions");
+        let expected = [0xff, 0, 0xfe];
+        assert_eq!(
+            crate::raw::bytes(&cp["history"][1]["assistant"]["native"]["items"][1]).unwrap(),
+            expected
+        );
+        let mut next = cp.clone();
+        next["version"] = json!(2);
+        let bytes = envelope(&next).unwrap();
+        let migrated = parse("0123456789abcdef", &bytes).unwrap();
+        assert_eq!(migrated["version"], 2);
+        for field in ["history", "gc_state", "usage", "prompt"] {
+            assert_eq!(migrated[field], cp[field], "{field}");
+        }
+        let mut expected_subtree = cp["agent_subtree"].clone();
+        expected_subtree["threads"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("trace_path");
+        assert_eq!(migrated["agent_subtree"], expected_subtree);
+        assert_eq!(
+            crate::raw::bytes(&migrated["history"][0]["user"]["workspace"]).unwrap(),
+            b" { \"kind\" : \"workspace_state\" } "
+        );
+    }
+
+    #[test]
+    fn legacy_payload_checksum_and_bounded_gob_failures() {
+        let fixture: Value = serde_json::from_slice(LEGACY).unwrap();
+        let payload = STANDARD.decode(fixture["state"].as_str().unwrap()).unwrap();
+        let mut invalid_text = payload.clone();
+        let index = invalid_text
+            .windows(6)
+            .position(|v| v == b"\x05hello")
+            .unwrap();
+        invalid_text[index + 4..index + 6].copy_from_slice(&[0xe2, 0x82]);
+        let cp = parse("0123456789abcdef", &legacy_envelope(&invalid_text)).unwrap();
+        assert_eq!(cp["history"][0]["user"]["text"], "hel\u{fffd}\u{fffd}");
+        let mut trailing_bits = fixture.clone();
+        let mut encoded = fixture["state"].as_str().unwrap().as_bytes().to_vec();
+        assert!(encoded.ends_with(b"AA=="));
+        let last = encoded.len() - 3;
+        encoded[last] = b'B';
+        trailing_bits["state"] = json!(String::from_utf8(encoded).unwrap());
+        parse(
+            "0123456789abcdef",
+            &serde_json::to_vec(&trailing_bits).unwrap(),
+        )
+        .unwrap();
+        let mut bad = fixture.clone();
+        bad["state"] = json!("not base64");
+        assert!(
+            parse("0123456789abcdef", &serde_json::to_vec(&bad).unwrap())
+                .unwrap_err()
+                .ends_with("invalid legacy checkpoint payload")
+        );
+        bad["state"] = json!(STANDARD.encode(b"different"));
+        assert!(
+            parse("0123456789abcdef", &serde_json::to_vec(&bad).unwrap())
+                .unwrap_err()
+                .ends_with("checkpoint checksum mismatch")
+        );
+        for cut in (0..payload.len())
+            .step_by(31)
+            .chain(payload.len() - 12..payload.len())
+        {
+            assert!(
+                parse("0123456789abcdef", &legacy_envelope(&payload[..cut]))
+                    .unwrap_err()
+                    .ends_with("invalid legacy checkpoint state"),
+                "cut {cut}"
+            );
+        }
+        for malformed in [
+            vec![0xff, 0xff],
+            vec![1, 2],
+            vec![2, 127, 0],
+            vec![0xf8; 20],
+        ] {
+            assert!(parse("0123456789abcdef", &legacy_envelope(&malformed))
+                .unwrap_err()
+                .ends_with("invalid legacy checkpoint state"));
+        }
+        let mut wrong_type = payload.clone();
+        let name = b"ReadOnly";
+        let index = wrong_type
+            .windows(name.len())
+            .position(|v| v == name)
+            .unwrap();
+        assert_eq!(
+            &wrong_type[index + name.len()..index + name.len() + 2],
+            &[1, 2]
+        );
+        wrong_type[index + name.len() + 1] = 12; // string instead of bool in the type declaration.
+        assert!(parse("0123456789abcdef", &legacy_envelope(&wrong_type))
             .unwrap_err()
-            .ends_with("unsupported checkpoint version 1"));
+            .ends_with("invalid legacy checkpoint state"));
+        let mut unknown = payload.clone();
+        unknown[index] = b'r'; // Gob field names, unlike JSON tags, are case-sensitive.
+        let cp = parse("0123456789abcdef", &legacy_envelope(&unknown)).unwrap();
+        assert_eq!(cp["read_only"], false);
+        let first_length = 3 + usize::from(u16::from_be_bytes([payload[1], payload[2]]));
+        let duplicate = [&payload[..first_length], payload.as_slice()].concat();
+        assert!(parse("0123456789abcdef", &legacy_envelope(&duplicate))
+            .unwrap_err()
+            .ends_with("invalid legacy checkpoint state"));
+        // Mutation smoke checks also guard the parser's non-panicking failure boundary.
+        for index in (0..payload.len()).step_by(17) {
+            let mut mutated = payload.clone();
+            mutated[index] ^= 0xff;
+            let _ = parse("0123456789abcdef", &legacy_envelope(&mutated));
+        }
+        bad["version"] = json!(3);
+        assert!(
+            parse("0123456789abcdef", &serde_json::to_vec(&bad).unwrap())
+                .unwrap_err()
+                .ends_with("unsupported checkpoint version 3")
+        );
     }
 }

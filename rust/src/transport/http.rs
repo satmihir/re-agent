@@ -3,10 +3,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming, HeaderMap, Method, Request, StatusCode};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
-use hyper_util::{
-    client::legacy::{connect::HttpConnector, Client as HyperClient},
-    rt::TokioExecutor,
-};
+use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -18,11 +15,16 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
+#[path = "proxy.rs"]
+mod proxy;
+#[path = "proxy_policy.rs"]
+mod proxy_policy;
 
 /// Client sends explicit HTTP requests without implicit Accept headers or redirects.
 pub struct Client {
     runtime: Arc<Runtime>,
-    inner: HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    inner: HyperClient<HttpsConnector<proxy::ProxyConnector>, Full<Bytes>>,
+    proxy_policy: Arc<proxy_policy::ProxyPolicy>,
     header: Duration,
     idle: Duration,
     total: Option<Duration>,
@@ -37,17 +39,20 @@ impl Client {
                 .enable_all()
                 .build()?,
         );
+        let proxy_policy = Arc::new(proxy_policy::ProxyPolicy::from_env());
+        let tls = proxy::tls_config();
         let connector = HttpsConnectorBuilder::new()
-            .with_webpki_roots()
+            .with_tls_config(tls.clone())
             .https_or_http()
             .enable_http1()
-            .build();
+            .wrap_connector(proxy::ProxyConnector::new(proxy_policy.clone(), tls));
         let inner = HyperClient::builder(TokioExecutor::new())
             .retry_canceled_requests(false)
             .build(connector);
         Ok(Self {
             runtime,
             inner,
+            proxy_policy,
             header,
             idle,
             total,
@@ -170,6 +175,15 @@ impl RequestBuilder<'_> {
             .body(Full::new(Bytes::from(self.body)))
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid HTTP request"))?;
         *request.headers_mut() = self.headers;
+        if url.scheme() == "http" {
+            if let Some(proxy) = self.client.proxy_policy.select(request.uri())? {
+                if let Some(authorization) = proxy::authorization(&proxy) {
+                    request
+                        .headers_mut()
+                        .insert(hyper::header::PROXY_AUTHORIZATION, authorization);
+                }
+            }
+        }
         let total = match (
             self.client.total.map(|duration| Instant::now() + duration),
             self.client.deadline,
@@ -222,6 +236,10 @@ impl RequestBuilder<'_> {
                     error,
                 )
             })?;
+        let connection = response
+            .extensions()
+            .get::<hyper_util::client::legacy::connect::HttpInfo>()
+            .map(|info| (info.local_addr(), info.remote_addr()));
         let status = response.status();
         let mut headers = response.headers().clone();
         let decompress = gzip && headers.get("content-encoding").is_some_and(|v| v == "gzip");
@@ -239,6 +257,7 @@ impl RequestBuilder<'_> {
             cancellation: self.client.cancellation.clone(),
             interruption: self.client.interruption,
             idle: self.client.idle,
+            connection,
         };
         Ok(Response {
             status,
@@ -365,6 +384,7 @@ struct NetworkReader {
     cancellation: Option<Arc<AtomicBool>>,
     interruption: Option<&'static AtomicBool>,
     idle: Duration,
+    connection: Option<(std::net::SocketAddr, std::net::SocketAddr)>,
 }
 impl Read for NetworkReader {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
@@ -415,7 +435,9 @@ impl Read for NetworkReader {
                             if error.kind() == io::ErrorKind::ConnectionReset {
                                 return Err(io::Error::new(
                                     io::ErrorKind::ConnectionReset,
-                                    "connection reset by peer",
+                                    self.connection.map_or_else(|| "connection reset by peer".into(), |(local, remote)| {
+                                        format!("read tcp {local}->{remote}: read: connection reset by peer")
+                                    }),
                                 ));
                             }
                         }

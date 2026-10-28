@@ -458,7 +458,18 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     if let Some(reference) = &reference {
         accepted.push(reference.clone());
     }
-    let view = history(&accepted, &json!(merged));
+    let mut view = history(&accepted, &json!(merged));
+    let mut handoff = session.state["handoff"].clone();
+    if handoff.is_object() {
+        let count = number(&handoff["entries"]) as usize;
+        let Some(prefix) = view.get(..count) else {return false;};
+        let Ok(rebuilt) = crate::chat::model_switch::handoff(prefix) else {return false;};
+        if !rebuilt.is_object() {return false;}
+        handoff = rebuilt;
+        let mut user = json!({"text":handoff["text"]});
+        if !string(&handoff["plan"]).is_empty() {user["plan"] = handoff["plan"].clone();}
+        view = std::iter::once(json!({"kind":"user","user":user})).chain(view.into_iter().skip(count)).collect();
+    }
     let after = context::build_context(
         &session.config,
         scope("", "", 0),
@@ -529,6 +540,10 @@ pub(crate) fn collect(session: &mut Session) -> bool {
             ordered.push(json!({"call_id":id,"reason":drop["reason"],"step":drop["step"]}));
         }
     }
+    if session.state["handoff"].is_object() {
+        let count = number(&session.state["handoff"]["entries"]) as usize;
+        break_entry = if break_entry<count {0} else {break_entry-count+1};
+    }
     let old_body = types::json_bytes(&old_body);
     let new_body = types::json_bytes(&new_body);
     let break_byte = old_body
@@ -537,6 +552,7 @@ pub(crate) fn collect(session: &mut Session) -> bool {
         .take_while(|(a, b)| a == b)
         .count();
     session.history = accepted;
+    session.state["handoff"] = handoff;
     session.state["gc_state"]["dropped"] = json!(merged);
     session.state["gc_state"]["last_pass"] = json!(steps);
     session.trace.write("context.gc",number(&session.state["steps"]) as usize,json!({"dropped":ordered,"bytes_freed":freed,"estimated_tokens_freed":freed_tokens.ceil() as i64,"age_steps":number(&session.config["context_gc_age_steps"]),"consolidate":flag(&session.config["context_gc_consolidate"]),"reference_entry":reference,"fixed_prefix_bytes":fixed_bytes,"rebuild_bytes":rebuild_bytes,"estimated_rebuild_tokens":rebuild_tokens.ceil() as i64,"session_requests":number(&session.state["gc_requests"]),"expected_remaining_requests":remaining,"cached_ratio":0.1,"cache_write_price":write_price,"estimated_net_saving":net,"trigger":trigger,"cache_break_entry":break_entry+1,"cache_break_byte":break_byte}));
