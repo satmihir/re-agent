@@ -313,6 +313,37 @@ impl Drop for Pty {
     }
 }
 
+fn assert_cancelled_trace_restore(output: &str) {
+    let trace = output.find("trace: ").unwrap();
+    let (before, cursor) = output[..trace].rsplit_once("\x1b[?2026h").unwrap();
+    assert!(
+        cursor.starts_with("\x1b[") && cursor.ends_with(";1H"),
+        "cancellation trace lacks its insertion cursor: {output}"
+    );
+    assert!(
+        before.rfind("\x1b[?2026l") > before.rfind("\x1b[?2026h"),
+        "cancellation trace starts inside an unpublished update: {output}"
+    );
+    let caret = before
+        .rsplit("\x1b[")
+        .find_map(|sequence| {
+            let (coordinates, _) = sequence.split_once('H')?;
+            coordinates
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch == ';')
+                .then(|| format!("\x1b[{coordinates}H"))
+        })
+        .unwrap();
+    let end = trace + output[trace..].find('\x1b').unwrap();
+    let restore = output[end..]
+        .strip_prefix("\x1b[r")
+        .unwrap_or(&output[end..]);
+    assert!(
+        restore.starts_with(&format!("{caret}\x1b[?2026l")),
+        "cancellation trace lacks its exact synchronized caret restore: {output}"
+    );
+}
+
 #[test]
 fn pty_turn_reader_preserves_draft_resize_and_one_queued_submission() {
     use std::os::fd::AsRawFd;
@@ -376,6 +407,7 @@ fn pty_turn_cancellation_discards_queued_text_before_next_request() {
     pty.wait(b"\x1b[?2004h");
     let output = String::from_utf8_lossy(&pty.raw);
     assert!(output.contains("cancelled"));
+    assert_cancelled_trace_restore(&output);
     assert!(output.contains("\x1b[2m  nothing was lost; your next message continues from the last completed step\x1b[0m"), "{output}");
     let trace = output.find("trace: ").unwrap();
     let prompt = output[..trace].rfind("❯ ").unwrap();
@@ -717,6 +749,7 @@ fn pty_exec_cancellation_prints_trace_before_changing_the_prompt_status() {
     let prompt = output[..trace].rfind("❯ ").unwrap();
     assert!(output[prompt..trace].starts_with("❯ \r\n"), "{output}");
     assert!(!output[..trace].contains("(blocked) ❯"), "{output}");
+    assert_cancelled_trace_restore(&output);
     pty.send(b"after cancelled command\r");
     let (mut stream, body) = pty.request(&listener);
     assert!(

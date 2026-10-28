@@ -827,10 +827,12 @@ pub fn result_in_region(
     macro_rules! println {
         ($($args:tt)*) => { crate::terminal::output(region, 1, &format!("{}\n", format_args!($($args)*))) };
     }
-    if let Some(region) = region {
+    let reply = text(result, "reply");
+    // Only a published reply needs its terminal summary ready before stdout is released.
+    let output_update = region.filter(|_| !reply.is_empty());
+    if let Some(region) = output_update {
         let _ = region.lock().unwrap().begin_output();
     }
-    let reply = text(result, "reply");
     if !reply.is_empty() {
         if styled(2)
             && (yes(&state["_display"], "printed")
@@ -954,7 +956,7 @@ pub fn result_in_region(
     if chat && styled(2) {
         eprintln!()
     }
-    if let Some(region) = region {
+    if let Some(region) = output_update {
         let _ = region.lock().unwrap().end_output();
     }
 }

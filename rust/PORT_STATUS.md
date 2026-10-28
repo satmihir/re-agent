@@ -1,7 +1,7 @@
 # Rust port status
 Reference: e420e346c6d662aed1c6e41e39fb40f350502e84 (worktree); suite reference: 2ab234f79d1d42ba8a969ba3f4103eeeba717967; harness: e420e346c6d662aed1c6e41e39fb40f350502e84 / 8298dbb5961ce2c1b40fafdf623ff868af813a7aae0c06873e0c682a56c8b947
 Suite: e420e346c6d662aed1c6e41e39fb40f350502e84 / b60915258a2e4414be5e8f2b4da1b215c6ac43e5806af966c97386982c63dd2b; attempt: 1; Session: 873931a9f9d5ba58
-Updated: 2026-10-28T06:03:10Z; stage: source frozen, final full approved parity certification
+Updated: 2026-10-28T06:26:27Z; stage: cancellation framing fixed; latest release awaiting CLI/full certification
 
 ## Ownership
 | Module / files | Agent ID / name | State | Next checkpoint |
@@ -43,10 +43,10 @@ Updated: 2026-10-28T06:03:10Z; stage: source frozen, final full approved parity 
 - One root context compaction observed at continuation. Reread status/contracts before work.
 
 ## Blockers and uncertain effects
-- No external blocker or unresolved uncertain execution. All writers idle; Rust fmt/test/release clean (414tests), actualRustTTY29passed before latest publication patch. Latest C18 fullfamily11/11passed with finalrelease a5621787; priorfull4140 was4125pass5fail10pending, allfivefixesnow narrow-proven. Finalfull run next. Independentreview findings fixed/reverified in scope; known compatibility limits recorded below. First600stimeout inspected no survivors; laterfullcompleted877.987s.
+- No external blocker or unresolved uncertain execution. Latest completed full4140:4128passed2failed10pending. C38/C44 cancellation-frame regression fixed and locally tested; latest release13745dee awaits approved parity. All writers idle. Independent review findings fixed/reverified in scope; known compatibility limits recorded below.
 
 ## Next work
-- Finish plan/editor/shell and in-generation live display; root test/release, narrow approved remaining cases, then full4140 with sufficient timeout. Complete independent Rust review, fix findings and reverify. Final Go/Rust gates, local checkpoint commits, suite digest and trace accounting.
+- Approved CLI area on release13745dee, then local checkpoint/full4140 with sufficient timeout. Final actual RustTTY29, Go gate, suite digest/cleanliness, local final commit and trace accounting.
 
 ## Continuation checkpoint (2026-10-28T03:12:10Z)
 - Latest approved tools SLOW=0 run: release bfbacbbe, 676 selected, 0 passed, 675 failed, 1 pending, 3464 omitted; 219.142s; /tmp/reagent-parity-cases-w_jn7287/artifacts/report.json. Suite clean/digest unchanged before and after. Most first T01 failures are now run.finished JSON field order (reply must precede steps), not missing activity.
@@ -163,3 +163,7 @@ Updated: 2026-10-28T06:03:10Z; stage: source frozen, final full approved parity 
 - Case-foldingexpected_sha reviewfalsepositive withdrawn afterrootGoinspection(tool_edit_file.go88-90/118), boundarytest32toolsfocusedpassed; uppercase-onlydigestignoredwithoutcanonicalpresence asGo. No remainingactionable findingincompletedreviewscopes; terminalpublicationparityfailure remains. Latestrootformatted/testedreleaseunchangedd4bc77c9; narrowtestchangesdonotclaimwhole4130pass.
 - C18rootcause confirmed stdoutpipevisibility outrunsPTYsummary;2026holdalone insufficient. CLIbuffersredirectedreply untilterminalresultframepublished, no fixturegates/sleeps. Backpressure128KiB actualPTYregressionpassedtwice plus4region/9render/2retryqueuefocused. Rootcargo fmt --check +cargo test --locked --offline CLEAN again354unit+60integration(414total), no warnings; releasebuildexit0(5.40s) SHA a5621787a63862247e461f3e4563f1ad300da9f9971c3952926a126f2196f700. Allwritersidle; narrowC18next, thenfreezecommit/full4140.
 - 2026-10-28T06:03:10Z approved C18 fullfamily releasea5621787:11/11passed0pending0failed(4129omitted),4.526s; /tmp/reagent-parity-cases-ql6hg8mn/artifacts/report.json. Suiteclean/launchdigestexactbeforeafter. Sourcefreeze: all7directwritersidle, no outsideRustchanges. Finalfull4140 againstthisrelease afterlocalcheckpointcommit; no aggregatecountsfromsubsetsclaimed.
+- FULL approved certification attempt commit4b1e2661fd90dd3c57405c906c1920c350988a40/releasea5621787:4140selected0omitted,4128passed2failed10pending,845.732s. /tmp/reagent-parity-cases-qpw3dn0t/artifacts/report.json; suiteclean/digestexactbeforeafter. C38.interrupt-running-command andC44.typeahead-cancellation fail exactsynchronizedrestoreframe normalizer assertion, nothiddencasefailures. Rootsourceinspection isolateswhole-result2026hold wrappingcanceltrace (Go emitsindividualclosedtraceframe). Conditionalgroupingonlyactualreplypublicationproposed; CLIownerimplements/tests nofixturegates. No finalsuccessclaim.
+
+- 2026-10-28T06:26:27Z continuation: reread status/roster; all7directagents idle, no uncertain effects. Latest fix groups terminal result publication only for nonempty replies, preserving Go's individually closed cancellation trace frames. Strengthened both actualPTY cancellation assertions; agent20cli_signals+13render/region passed. Root cargo fmt --check; cargo test --locked --offline (414tests,16.291s); cargo build --release --locked --offline (5.36s) all exit0/no warnings. Release SHA13745dee2537d2a483ff784ea232dccd019e338a97aef77a7ccc82a49bd83322; not yet parity certified.
+- 2026-10-28T06:29:19Z approved entire CLI area release13745dee:375selected375passed0failed0pending(3765omitted),145.929s. /tmp/reagent-parity-cases-e_nzt9au/artifacts/report.json. Includes C18/C38/C44; suiteclean/digestmatchingactual launch.txt before/after. Final frontend delta under independent read-only re-review; no writers active. Full4140 certification next.
