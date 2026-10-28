@@ -1,19 +1,19 @@
 # Rust port status
 Reference: e420e346c6d662aed1c6e41e39fb40f350502e84 (worktree); suite reference: 2ab234f79d1d42ba8a969ba3f4103eeeba717967; harness: e420e346c6d662aed1c6e41e39fb40f350502e84 / 8298dbb5961ce2c1b40fafdf623ff868af813a7aae0c06873e0c682a56c8b947
 Suite: e420e346c6d662aed1c6e41e39fb40f350502e84 / b60915258a2e4414be5e8f2b4da1b215c6ac43e5806af966c97386982c63dd2b; attempt: 1; Session: 873931a9f9d5ba58
-Updated: 2026-10-28T06:26:27Z; stage: cancellation framing fixed; latest release awaiting CLI/full certification
+Updated: 2026-10-28T06:48:10Z; stage: certified — 4130 passed / 10 expected pending / 0 failed
 
 ## Ownership
 | Module / files | Agent ID / name | State | Next checkpoint |
 | --- | --- | --- | --- |
-| Cargo manifest/lock, lib/main/runtime/auto/trace, integration/status | root | active | coherent root gate; approved suite; review |
-| cli/model_switch.rs, agents/context.rs, routing_packet.rs, types/raw/context | t1 / types | delivered; read-only review active | actionable review findings |
-| provider/openai/anthropic/transport/auth/jev | t2 / providers (+ ended t6) | delivered, idle | possible display tick support |
-| checkpoint.rs | t3 / files | active | direct v1 compatibility assessment; checked-close review |
-| NEW cli/editor.rs | t4 / commands | reset after cap, active | raw-byte external editor API/tests |
-| run_loop/compact/context_gc | t5 / loop | active | in-generation notice/status refresh; reminder order |
-| chat/terminal/region/editor/render/activity/cli shell; tests except flags | t7 / cli (+ ended t9) | plan delivered72focused; editor/shell active | exact missing terminal cases |
-| agents.rs | t8 / agents | delivered; read-only review active | authority/budget/delivery review |
+| Cargo manifest/lock, runtime/auto/trace, integration/status | root | verified | final report |
+| types/raw/context, routing, agent context, independent terminal review | t1 / types | delivered, idle | none |
+| providers/auth/Jev/transport/proxies | t2 / providers (+ ended t6,t10,t11) | delivered, idle | none |
+| checkpoints/legacy, flags, independent loop review | t3 / files | delivered, idle | none |
+| tools/files/exec, external editor, independent tools review | t4 / commands | delivered, idle | none |
+| run_loop/compact/context_gc, independent legacy review | t5 / loop | delivered, idle | none |
+| chat/terminal/region/editor/render/activity/shell | t7 / cli (+ ended t9) | delivered, idle | none |
+| agents lifecycle/context admission/display | t8 / agents | delivered, idle | none |
 
 ## Agreed interfaces and decisions
 - One crate; modules mirror reference concerns. JSON Value at cross-module boundaries preserves existing wire shapes without duplicate Rust schemas; typed shared records may live in types.rs.
@@ -43,10 +43,10 @@ Updated: 2026-10-28T06:26:27Z; stage: cancellation framing fixed; latest release
 - One root context compaction observed at continuation. Reread status/contracts before work.
 
 ## Blockers and uncertain effects
-- No external blocker or unresolved uncertain execution. Latest completed full4140:4128passed2failed10pending. C38/C44 cancellation-frame regression fixed and locally tested; latest release13745dee awaits approved parity. All writers idle. Independent review findings fixed/reverified in scope; known compatibility limits recorded below.
+- None unresolved. Full approved suite:4130passed0failed10expectedpending on a27deb4131e889da2c7183a66fb017522735d6c3 / release13745dee. All writers idle; independent review findings fixed/reverified. Known compatibility and verification limits below are not claims of universal equivalence.
 
 ## Next work
-- Approved CLI area on release13745dee, then local checkpoint/full4140 with sufficient timeout. Final actual RustTTY29, Go gate, suite digest/cleanliness, local final commit and trace accounting.
+- None planned. Final report only; no push, live-provider run or further feature work.
 
 ## Continuation checkpoint (2026-10-28T03:12:10Z)
 - Latest approved tools SLOW=0 run: release bfbacbbe, 676 selected, 0 passed, 675 failed, 1 pending, 3464 omitted; 219.142s; /tmp/reagent-parity-cases-w_jn7287/artifacts/report.json. Suite clean/digest unchanged before and after. Most first T01 failures are now run.finished JSON field order (reply must precede steps), not missing activity.
@@ -167,3 +167,32 @@ Updated: 2026-10-28T06:26:27Z; stage: cancellation framing fixed; latest release
 
 - 2026-10-28T06:26:27Z continuation: reread status/roster; all7directagents idle, no uncertain effects. Latest fix groups terminal result publication only for nonempty replies, preserving Go's individually closed cancellation trace frames. Strengthened both actualPTY cancellation assertions; agent20cli_signals+13render/region passed. Root cargo fmt --check; cargo test --locked --offline (414tests,16.291s); cargo build --release --locked --offline (5.36s) all exit0/no warnings. Release SHA13745dee2537d2a483ff784ea232dccd019e338a97aef77a7ccc82a49bd83322; not yet parity certified.
 - 2026-10-28T06:29:19Z approved entire CLI area release13745dee:375selected375passed0failed0pending(3765omitted),145.929s. /tmp/reagent-parity-cases-e_nzt9au/artifacts/report.json. Includes C18/C38/C44; suiteclean/digestmatchingactual launch.txt before/after. Final frontend delta under independent read-only re-review; no writers active. Full4140 certification next.
+- FULL approved suite FINAL code checkpoint a27deb4/release13745dee:4140selected0omitted,4130passed0failed10expectedpending,873.404s. /tmp/reagent-parity-cases-8c2qra5n/artifacts/report.json (5489030bytes retained). Suiteclean/launchdigestexactbeforeafter. Independent final frontend delta re-review t1 a68e3fb7af0f12ce clean: no actionableP1/P2; no writes/execution. Final actualRustTTY29 and gates/accounting remain.
+
+## Final verification and limits
+- Code commit: `a27deb4131e889da2c7183a66fb017522735d6c3`. Release binary: `rust/target/release/reagent`, SHA256 `13745dee2537d2a483ff784ea232dccd019e338a97aef77a7ccc82a49bd83322`. Cargo.lock tracked. Subsequent status-only commit does not change verified code or binary.
+- Final root Cargo gate: fmt check exit0; test exit0 in15.139s, **355unit+60integration=415tests** (enumerated per harness with `cargo test --locked --offline -- --list`; earlier414 labels were off by one); release build exit0, no warnings, SHA unchanged. Actual RustTTY benchmark `python3 bench/tty/check.py rust/target/release/reagent`: all29scenarios passed,68.057s; real screens printed,65299bytes with bounded tool middle. Go baseline `go build ./... && go vet ./... && go test ./...` all exit0: `? github.com/satmihir/re-agent/cmd/reagent [no test files]`; `ok github.com/satmihir/re-agent/internal/reagent 42.631s`. Earlier `make tty-check` Go29 also passed; latest benchmark explicitly tests Rust.
+- Final suite inspection 2026-10-28T06:48:10Z: approved checkout clean; computed digest equals actual launch.txt: `b60915258a2e4414be5e8f2b4da1b215c6ac43e5806af966c97386982c63dd2b`. Final full report `/tmp/reagent-parity-cases-8c2qra5n/artifacts/report.json`. Go source, workspace parity, approved suite and protected reference cache were not edited. No golden regeneration, UPDATE=1, push, alternate branch or worktree.
+- Independent module/cross-module reviews found issues listed chronologically above; fixes received targeted regressions and re-review, then complete root gates/parity. Final delta review clean (t1 Run a68e3fb7af0f12ce). No literal `/review` tool is exposed in this environment; independent agent reviews were used instead, not falsely reported as a slash-tool invocation.
+- Expected pending: nine W54.*.cancel-body (#195), T36.before-start. Known out-of-suite limits: legacy gob invalidUTF8 map keys rejected (no demonstrated stock-CLI producer); unsupported proxy schemes reject explicitly (supported HTTP/HTTPS/SOCKS5/SOCKS5h); excessive legacy allocation expansion rejected. No live-provider, HTTP/2, non-Linux or universal equivalence claim. No unresolved actionable finding in completed review scopes.
+
+## Final trace accounting (pre-final-response cutoff)
+- Launch 2026-10-28T02:22:18Z; observed cutoff 2026-10-28T06:48:10Z: **4h25m52s** wall time. Root still has one open Run and **no root run.finished** event; final whole-attempt usage cannot be observed before this response ends.
+- Deduplicated each `(session_id,run_id)` run.finished once across12tracefiles: **209finished descendant Runs,2266Steps; input282436953,cached input263257472,output1266289**, reasoning383455,unreported_attempts1. Root observed throughStep592 at accounting call; later finishing steps are not included. Do not add tree_cost or label descendant-only tokens whole-attempt totals. Final root usage must be obtained after run.finished is written.
+- **4compaction.finished** events at rootSteps171,351,427,580. No malformed trace lines. **11descendants+root=12actors** (7direct+4grandchildren, including dismissed agents).
+
+| Agent | Input tokens | Cached input tokens | Output tokens |
+| --- | ---: | ---: | ---: |
+| t1 types | 37633604 | 34650880 | 163667 |
+| t2 providers | 44451588 | 41740800 | 209668 |
+| t3 files | 25580651 | 23678720 | 127368 |
+| t4 commands | 22219078 | 20555008 | 141743 |
+| t5 loop | 42093850 | 39274368 | 180762 |
+| t6 auth-jev | 861123 | 791296 | 17429 |
+| t7 cli | 70257710 | 66018304 | 252941 |
+| t8 agents | 37993811 | 35310976 | 147554 |
+| t9 editor | 201866 | 169088 | 7058 |
+| t10 proxy-policy | 487020 | 462976 | 10974 |
+| t11 https-proxy-tests | 656652 | 605056 | 7125 |
+| Root | unfinished Run | unfinished Run | unfinished Run |
+- Final report metadata checked directly: `gate_success=true`, counts4140selected/4130passed/10pending/0failed/0unavailable/0not_executed, accepted_gaps=[]; `complete_suite=false` remains the runner's metadata with pending leaves and unexecuted_platforms=[darwin]. No all-platform/completely-implemented-suite claim. Git committed diff from frozen reference contains105Rust-only paths; final status changes only this document.
