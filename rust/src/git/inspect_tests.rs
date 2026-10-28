@@ -426,3 +426,45 @@ fn git_payload_order_and_encoded_output_limit_match_reference() {
         r#"state: {"branch":"main","default_branch":"main","upstream":"main","ahead_of_upstream":0"#
     ));
 }
+
+#[test]
+fn recipe_entry_without_steps_is_null_but_selection_refusal_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-q", "-b", "main"]);
+    git(dir.path(), &["config", "user.name", "Test"]);
+    git(
+        dir.path(),
+        &["config", "user.email", "test@example.invalid"],
+    );
+    fs::write(dir.path().join("a.txt"), "base\n").unwrap();
+    git(dir.path(), &["add", "a.txt"]);
+    git(dir.path(), &["commit", "-q", "-m", "Initial"]);
+    let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+    let config = json!({"git_do":"model"});
+    let selection = git_do(
+        &mut workspace,
+        &config,
+        &json!({"recipe":"status","paths":["a.txt"]}),
+    )
+    .unwrap();
+    assert_eq!(selection["code"], "declined");
+    assert_eq!(selection["data"]["steps"], json!([]));
+    let recipe = git_do(
+        &mut workspace,
+        &config,
+        &json!({"recipe":"new_branch","branch":"invalid branch"}),
+    )
+    .unwrap();
+    assert_eq!(recipe["code"], "declined");
+    assert!(recipe["data"]["steps"].is_null(), "{recipe}");
+    assert_eq!(recipe["effect"], "none");
+    fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
+    let committed = git_do(
+        &mut workspace,
+        &config,
+        &json!({"recipe":"commit","message":"Update"}),
+    )
+    .unwrap();
+    assert_eq!(committed["ok"], true, "{committed}");
+    assert!(!committed["data"]["steps"].as_array().unwrap().is_empty());
+}

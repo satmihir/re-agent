@@ -3,7 +3,15 @@ use crate::{
     types::{json_string, usage_add, usage_zero, ModelError},
 };
 use serde_json::{json, Value};
+mod display;
+#[cfg(test)]
+#[path = "transport/event_tests.rs"]
+mod event_tests;
 pub mod http;
+mod redaction;
+#[cfg(test)]
+#[path = "transport/security_tests.rs"]
+mod security_tests;
 use sha2::{Digest, Sha256};
 use std::{
     io::Read,
@@ -58,14 +66,7 @@ pub fn redacted(endpoint: &str) -> String {
     u.to_string()
 }
 pub fn redact(text: &str, secrets: &[String], endpoint: &str) -> String {
-    let mut result = text.replace(endpoint, &redacted(endpoint));
-    if let Ok(url) = reqwest::Url::parse(endpoint) {
-        if let Some(password) = url.password() {
-            if !password.is_empty() {
-                result = result.replace(password, "[redacted]");
-            }
-        }
-    }
+    let mut result = redaction::endpoint_text(text, endpoint);
     for secret in secrets {
         if !secret.is_empty() {
             result = result.replace(secret, "[redacted]");
@@ -98,11 +99,21 @@ impl Transport {
             .as_ref()
             .is_some_and(|token| token.load(std::sync::atomic::Ordering::SeqCst))
     }
+    fn request_cancelled(&self, deadline: Option<Instant>) -> bool {
+        self.cancelled() || deadline.is_some_and(|end| Instant::now() >= end)
+    }
+    fn cancelled_error(&self, message: &str) -> ModelError {
+        ModelError {
+            status: "cancelled".into(),
+            message: message.into(),
+            usage: self.retry_usage.clone(),
+        }
+    }
     fn pause(&self, duration: Duration) -> Result<(), ModelError> {
         let end = Instant::now() + duration;
         while Instant::now() < end {
             if self.cancelled() {
-                return Err(error("cancelled", "model request cancelled"));
+                return Err(self.cancelled_error("cancelled before a retry"));
             }
             std::thread::sleep(
                 end.saturating_duration_since(Instant::now())
@@ -111,11 +122,50 @@ impl Transport {
         }
         Ok(())
     }
-    fn event(&mut self, name: &str, step: usize, data: Value) {
+    fn event(
+        &mut self,
+        trace: &mut Option<&mut crate::trace::Trace>,
+        name: &str,
+        step: usize,
+        data: Value,
+    ) {
+        if let Some(trace) = trace.as_deref_mut() {
+            trace.write(name, step, data);
+            return;
+        }
         self.events
             .push(json!({"event":name,"step":step,"data":data}));
     }
     pub fn call(&mut self, request: &Value, body: &Value) -> Result<(u16, Vec<u8>), ModelError> {
+        self.call_traced(request, body, None)
+    }
+    /// call_traced writes HTTP events immediately when a recorder is borrowed.
+    pub fn call_traced(
+        &mut self,
+        request: &Value,
+        body: &Value,
+        trace: Option<&mut crate::trace::Trace>,
+    ) -> Result<(u16, Vec<u8>), ModelError> {
+        self.call_displayed(request, body, trace, None)
+    }
+    /// call_displayed borrows presentation and tracing only for this HTTP call.
+    pub fn call_displayed(
+        &mut self,
+        request: &Value,
+        body: &Value,
+        trace: Option<&mut crate::trace::Trace>,
+        region: Option<&crate::terminal::RegionHandle>,
+    ) -> Result<(u16, Vec<u8>), ModelError> {
+        self.call_generation(request, body, trace, region, None)
+    }
+    pub(crate) fn call_generation(
+        &mut self,
+        request: &Value,
+        body: &Value,
+        trace: Option<&mut crate::trace::Trace>,
+        region: Option<&crate::terminal::RegionHandle>,
+        summary_deadline: Option<Instant>,
+    ) -> Result<(u16, Vec<u8>), ModelError> {
         let provider = s(&self.config, "provider").to_owned();
         let proxied = self.config["proxied"].as_bool().unwrap_or(false);
         let endpoint = if provider == "anthropic" {
@@ -131,13 +181,35 @@ impl Transport {
                 base("REAGENT_OPENAI_BASE_URL", "https://api.openai.com/v1")
             )
         };
-        self.call_endpoint(request, body, &endpoint)
+        self.call_endpoint_displayed(request, body, &endpoint, trace, region, summary_deadline)
     }
+    #[cfg(test)]
     fn call_endpoint(
         &mut self,
         request: &Value,
         body: &Value,
         endpoint: &str,
+    ) -> Result<(u16, Vec<u8>), ModelError> {
+        self.call_endpoint_traced(request, body, endpoint, None)
+    }
+    #[cfg(test)]
+    fn call_endpoint_traced(
+        &mut self,
+        request: &Value,
+        body: &Value,
+        endpoint: &str,
+        trace: Option<&mut crate::trace::Trace>,
+    ) -> Result<(u16, Vec<u8>), ModelError> {
+        self.call_endpoint_displayed(request, body, endpoint, trace, None, None)
+    }
+    fn call_endpoint_displayed(
+        &mut self,
+        request: &Value,
+        body: &Value,
+        endpoint: &str,
+        mut trace: Option<&mut crate::trace::Trace>,
+        region: Option<&crate::terminal::RegionHandle>,
+        summary_deadline: Option<Instant>,
     ) -> Result<(u16, Vec<u8>), ModelError> {
         let provider = s(&self.config, "provider").to_owned();
         let proxied = self.config["proxied"].as_bool().unwrap_or(false);
@@ -146,9 +218,13 @@ impl Transport {
         let bytes = crate::types::json_bytes(body);
         let step = request["scope"]["step"].as_u64().unwrap_or(1) as usize;
         let started = Instant::now();
-        let window = self.config["model_retry_window"].as_u64().unwrap_or(0);
+        let window = if summary_deadline.is_some() {
+            0
+        } else {
+            self.config["model_retry_window"].as_u64().unwrap_or(0)
+        };
         let deadline = Duration::from_nanos(window);
-        let overnight = window > 0;
+        let overnight = summary_deadline.is_some() || window > 0;
         let mut attempt = 0;
         self.retry_usage = usage_zero(true);
         let mut secrets = vec![std::env::var(if provider == "anthropic" {
@@ -161,13 +237,19 @@ impl Transport {
             secrets.extend(crate::auth::secrets());
         }
         loop {
-            if self.cancelled() {
-                return Err(error("cancelled", "model request cancelled"));
+            if self.request_cancelled(summary_deadline) {
+                return Err(self.cancelled_error("cancelled during a model request"));
             }
             attempt += 1;
             let mut token = if chatgpt {
-                crate::auth::token_cancelable(false, "", self.cancellation.clone())
-                    .map_err(|m| error("provider_error", &m))?
+                crate::auth::token_until(false, "", self.cancellation.clone(), summary_deadline)
+                    .map_err(|m| {
+                        if self.request_cancelled(summary_deadline) {
+                            self.cancelled_error("cancelled during a model request")
+                        } else {
+                            error("provider_error", &m)
+                        }
+                    })?
             } else if proxied {
                 String::new()
             } else {
@@ -175,16 +257,17 @@ impl Transport {
             };
             let mut refreshed = false;
             let (status, raw, retry_after, failure) = loop {
-                if self.cancelled() {
-                    return Err(error("cancelled", "model request cancelled"));
+                if self.request_cancelled(summary_deadline) {
+                    return Err(self.cancelled_error("cancelled during a model request"));
                 }
                 if !token.is_empty() && !secrets.contains(&token) {
                     secrets.push(token.clone());
                 }
-                self.event("api.attempt.started",step,json!({"attempt":attempt,"endpoint":redact(&redacted(&endpoint),&secrets,&endpoint),"request_body":trace_utf8(&redact_bytes(&bytes,&secrets,&endpoint)),"request_sha256":format!("{:x}",Sha256::digest(&bytes))}));
+                self.event(&mut trace,"api.attempt.started",step,json!({"attempt":attempt,"endpoint":redact(&redacted(&endpoint),&secrets,&endpoint),"request_body":crate::raw::string(&redact_bytes(&bytes,&secrets,&endpoint)),"request_sha256":format!("{:x}",Sha256::digest(&bytes))}));
                 let sent = Instant::now();
                 let mut client = client().map_err(|m| error("provider_error", &m))?;
                 client.cancellation = self.cancellation.clone();
+                client.deadline = summary_deadline;
                 let mut req = client
                     .post(endpoint)
                     .header("Content-Type", "application/json")
@@ -236,19 +319,26 @@ impl Transport {
                                 let raw = redact_bytes(&raw, &secrets, &endpoint);
                                 let replaced = std::str::from_utf8(&raw).is_err();
                                 let text = trace_utf8(&raw);
-                                self.event("api.attempt.finished",step,json!({"attempt":attempt,"http_status":status,"request_id":redact(&id,&secrets,&endpoint),"duration_ms":sent.elapsed().as_millis()as u64,"response_body":text,"body_utf8_replaced":replaced}));
+                                self.event(&mut trace,"api.attempt.finished",step,json!({"attempt":attempt,"http_status":status,"request_id":redact(&id,&secrets,&endpoint),"duration_ms":sent.elapsed().as_millis()as u64,"response_body":text,"body_utf8_replaced":replaced}));
                                 if chatgpt
                                     && status == 401
                                     && !refreshed
                                     && !terminal_code(&provider_code(&raw))
                                 {
                                     refreshed = true;
-                                    token = crate::auth::token_cancelable(
+                                    token = crate::auth::token_until(
                                         true,
                                         &token,
                                         self.cancellation.clone(),
+                                        summary_deadline,
                                     )
-                                    .map_err(|m| error("provider_error", &m))?;
+                                    .map_err(|m| {
+                                        if self.request_cancelled(summary_deadline) {
+                                            self.cancelled_error("cancelled during a model request")
+                                        } else {
+                                            error("provider_error", &m)
+                                        }
+                                    })?;
                                     secrets.extend(crate::auth::secrets());
                                     continue;
                                 }
@@ -271,9 +361,13 @@ impl Transport {
                                         category.into()
                                     }
                                 };
-                                self.event("api.attempt.finished",step,json!({"attempt":attempt,"http_status":status,"duration_ms":sent.elapsed().as_millis()as u64,"error":msg}));
-                                if e.kind() == std::io::ErrorKind::ConnectionAborted {
-                                    return Err(error("cancelled", "model request cancelled"));
+                                self.event(&mut trace,"api.attempt.finished",step,json!({"attempt":attempt,"http_status":status,"duration_ms":sent.elapsed().as_millis()as u64,"error":redact(&e.to_string(),&secrets,&endpoint)}));
+                                if e.kind() == std::io::ErrorKind::ConnectionAborted
+                                    || self.request_cancelled(summary_deadline)
+                                {
+                                    return Err(
+                                        self.cancelled_error("cancelled during a model request")
+                                    );
                                 }
                                 break (0, Vec::new(), String::new(), Some(msg));
                             }
@@ -288,14 +382,19 @@ impl Transport {
                             "connection or response read failed"
                         }
                         .to_string();
-                        self.event("api.attempt.finished",step,json!({"attempt":attempt,"http_status":0,"duration_ms":sent.elapsed().as_millis()as u64,"error":msg}));
-                        if e.kind() == std::io::ErrorKind::ConnectionAborted {
-                            return Err(error("cancelled", "model request cancelled"));
+                        self.event(&mut trace,"api.attempt.finished",step,json!({"attempt":attempt,"http_status":0,"duration_ms":sent.elapsed().as_millis()as u64,"error":redact(&e.to_string(),&secrets,&endpoint)}));
+                        if e.kind() == std::io::ErrorKind::ConnectionAborted
+                            || self.request_cancelled(summary_deadline)
+                        {
+                            return Err(self.cancelled_error("cancelled during a model request"));
                         }
                         break (0, Vec::new(), String::new(), Some(msg));
                     }
                 }
             };
+            if self.request_cancelled(summary_deadline) {
+                return Err(self.cancelled_error("cancelled during a model request"));
+            }
             let (stream_reason, stream_usage) = if status == 200 && stream && (overnight || chatgpt)
             {
                 crate::openai::transient(&raw, !overnight)
@@ -334,8 +433,8 @@ impl Transport {
             }
             let reason = if !stream_reason.is_empty() {
                 stream_reason.clone()
-            } else if let Some(msg) = &failure {
-                msg.clone()
+            } else if failure.is_some() {
+                "connection or read failure".into()
             } else {
                 format!("HTTP {}", status)
             };
@@ -343,20 +442,25 @@ impl Transport {
             if !remaining.is_zero() {
                 let delay = backoff(attempt, &retry_after).min(remaining);
                 self.event(
+                    &mut trace,
                     "api.retry.scheduled",
                     step,
                     json!({"attempt":attempt,"reason":reason,"delay_ms":delay.as_millis()as u64}),
                 );
+                display::scheduled(&self.config, region, attempt, delay, &reason);
                 self.pause(delay)?;
             }
             if started.elapsed() >= deadline {
                 self.event(
+                    &mut trace,
                     "api.retry.exhausted",
                     step,
                     json!({"attempt":attempt,"http_status":status}),
                 );
                 let reason = if failure.is_none() && stream_reason.is_empty() && !raw.is_empty() {
                     provider_error(status, &raw).message
+                } else if let Some(failure) = failure {
+                    failure
                 } else {
                     reason
                 };
@@ -369,6 +473,7 @@ impl Transport {
                     usage: self.retry_usage.clone(),
                 });
             }
+            display::started(&self.config, region, attempt + 1);
         }
     }
 }
@@ -586,11 +691,21 @@ mod tests {
                 transport.call_endpoint(&request, &body, &endpoint).unwrap();
                 server.join().unwrap();
                 assert_eq!(transport.events[1]["data"]["body_utf8_replaced"], invalid);
+                let bytes = crate::types::json_bytes(&body);
+                let event = &transport.events[2];
+                assert_eq!(
+                    crate::raw::string_bytes(&event["data"]["request_body"]).unwrap(),
+                    bytes
+                );
+                let encoded = crate::types::json_string(event);
+                let external: Value = serde_json::from_str(&encoded).unwrap();
+                let expected = replace_bytes(&bytes, b"\xff\xfe", "��".as_bytes());
+                assert_eq!(
+                    external["data"]["request_body"],
+                    String::from_utf8(expected).unwrap()
+                );
                 if invalid {
-                    assert!(transport.events[2]["data"]["request_body"]
-                        .as_str()
-                        .unwrap()
-                        .contains('\u{fffd}'));
+                    assert!(encoded.contains("\\ufffd\\ufffd"));
                     assert!(crate::types::json_bytes(&body).contains(&0xff));
                 }
             }
@@ -683,6 +798,13 @@ mod tests {
             );
             assert_eq!(transport.events[1]["event"], "api.attempt.finished");
             assert_eq!(transport.events[1]["data"]["http_status"], 0);
+            let address = endpoint
+                .trim_start_matches("http://")
+                .trim_end_matches("/responses");
+            assert_eq!(
+                transport.events[1]["data"]["error"],
+                format!("Post {endpoint:?}: dial tcp {address}: connect: connection refused")
+            );
         }
     }
 
@@ -722,12 +844,7 @@ fn replace_bytes(raw: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
     out
 }
 fn redact_bytes(raw: &[u8], secrets: &[String], endpoint: &str) -> Vec<u8> {
-    let mut out = replace_bytes(raw, endpoint.as_bytes(), redacted(endpoint).as_bytes());
-    if let Ok(url) = reqwest::Url::parse(endpoint) {
-        if let Some(p) = url.password() {
-            out = replace_bytes(&out, p.as_bytes(), b"[redacted]");
-        }
-    }
+    let mut out = redaction::endpoint_body(raw, endpoint);
     for secret in secrets {
         out = replace_bytes(&out, secret.as_bytes(), b"[redacted]");
     }

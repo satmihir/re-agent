@@ -114,8 +114,12 @@ fn response_header_timeout_is_separate_from_body_idle_timeout() {
         thread::sleep(Duration::from_millis(120));
         let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     });
-    let error = client(40, 500).get(url).send().err().unwrap();
+    let error = client(40, 500).post(&url).send().err().unwrap();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(
+        error.to_string(),
+        format!("Post {url:?}: net/http: timeout awaiting response headers")
+    );
     server.join().unwrap();
 }
 #[test]
@@ -130,10 +134,9 @@ fn body_stall_keeps_headers_and_partial_body() {
     });
     let mut response = client(500, 40).get(url).send().unwrap();
     let mut body = Vec::new();
-    assert_eq!(
-        response.read_to_end(&mut body).unwrap_err().kind(),
-        io::ErrorKind::TimedOut
-    );
+    let error = response.read_to_end(&mut body).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(error.to_string(), "the provider sent nothing for 40ms");
     assert_eq!(response.status(), 200);
     assert_eq!(response.headers()["x-request-id"], "kept");
     assert_eq!(body, b"a");
@@ -185,12 +188,13 @@ fn cancellation_interrupts_header_and_body_waits() {
         let mut client = client(500, 500);
         client.cancellation = Some(token);
         let error = if headers {
-            let mut response = client.get(url).send().unwrap();
+            let mut response = client.post(&url).send().unwrap();
             response.read_to_end(&mut Vec::new()).unwrap_err()
         } else {
-            client.get(url).send().err().unwrap()
+            client.post(&url).send().err().unwrap()
         };
         assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+        assert_eq!(error.to_string(), if headers { "context canceled".into() } else { format!("Post {url:?}: context canceled") });
         cancel.join().unwrap();
         server.join().unwrap();
     }
@@ -208,4 +212,36 @@ pub(crate) fn no_accept_server(body: Vec<u8>) -> (String, thread::JoinHandle<()>
         .unwrap();
         stream.write_all(&body).unwrap();
     })
+}
+
+#[test]
+fn reset_is_not_misreported_as_a_truncated_response() {
+    use std::os::fd::AsRawFd;
+    let (url, server) = server(|mut stream| {
+        request(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+            .unwrap();
+        thread::sleep(Duration::from_millis(20));
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    stream.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_LINGER,
+                    &linger as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&linger) as libc::socklen_t,
+                )
+            },
+            0
+        );
+    });
+    let mut response = client(500, 500).get(url).send().unwrap();
+    let error = response.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::ConnectionReset, "{error:?}");
+    server.join().unwrap();
 }

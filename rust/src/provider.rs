@@ -2,6 +2,11 @@ use crate::types::{usage_add, usage_zero, ModelError};
 use serde_json::{json, Value};
 #[path = "provider/raw_tokens.rs"]
 pub(crate) mod raw_tokens;
+#[path = "provider/wire.rs"]
+pub(crate) mod wire;
+#[cfg(test)]
+#[path = "provider/wire_tests.rs"]
+mod wire_tests;
 
 pub fn s<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
@@ -290,6 +295,46 @@ impl Provider {
         self.transport.retry_usage.clone()
     }
     pub fn generate(&mut self, request: &Value) -> Result<Value, ModelError> {
+        self.generate_inner(request, None, None, None)
+    }
+    /// generate_traced records HTTP events synchronously through the borrowed recorder.
+    pub fn generate_traced(
+        &mut self,
+        request: &Value,
+        trace: &mut crate::trace::Trace,
+    ) -> Result<Value, ModelError> {
+        self.generate_inner(request, Some(trace), None, None)
+    }
+    /// generate_displayed records HTTP events and presents retries through the active region.
+    pub fn generate_displayed(
+        &mut self,
+        request: &Value,
+        trace: &mut crate::trace::Trace,
+        region: Option<&crate::terminal::RegionHandle>,
+    ) -> Result<Value, ModelError> {
+        self.generate_inner(request, Some(trace), region, None)
+    }
+    /// generate_summary disables transient retries under the reserved two-minute deadline.
+    pub fn generate_summary(
+        &mut self,
+        request: &Value,
+        trace: &mut crate::trace::Trace,
+        region: Option<&crate::terminal::RegionHandle>,
+    ) -> Result<Value, ModelError> {
+        self.generate_inner(
+            request,
+            Some(trace),
+            region,
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(120)),
+        )
+    }
+    fn generate_inner(
+        &mut self,
+        request: &Value,
+        trace: Option<&mut crate::trace::Trace>,
+        region: Option<&crate::terminal::RegionHandle>,
+        summary_deadline: Option<std::time::Instant>,
+    ) -> Result<Value, ModelError> {
         if self.name() == "scripted" {
             if self.next >= self.responses.len() {
                 return Err(error(
@@ -311,7 +356,9 @@ impl Provider {
                 &m,
             )
         })?;
-        let (status, raw) = self.transport.call(request, &body)?;
+        let (status, raw) =
+            self.transport
+                .call_generation(request, &body, trace, region, summary_deadline)?;
         let result = if status != 200 {
             Err(crate::transport::provider_error(status, &raw))
         } else if s(&self.config, "provider") == "anthropic" {

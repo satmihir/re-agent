@@ -39,6 +39,7 @@ pub(crate) fn cancelled(config: &Value) -> bool {
 }
 
 /// cancel requests cancellation of this session and agent without affecting siblings.
+#[cfg(test)]
 pub(crate) fn cancel(config: &Value) {
     token(config).store(true, Ordering::Release);
 }

@@ -4,7 +4,9 @@ use serde_json::Value;
 use std::time::Duration;
 #[path = "cli/activity.rs"]
 mod activity;
-pub use activity::{begin_turn, progress_text, tool_finished};
+pub use activity::{
+    begin_turn, progress_text, progress_text_in_region, tool_finished, tool_finished_in_region,
+};
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -106,7 +108,8 @@ fn line(text: &str) -> (String, String, String) {
     }
     (indent.into(), indent.into(), spans(content))
 }
-fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<String> {
+/// Wrap preserves styled words while fitting subsequent rows to a hanging prefix.
+pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<String> {
     if columns == 0 || width(&format!("{first}{body}")) <= columns {
         return vec![format!("{first}{body}")];
     }
@@ -277,7 +280,7 @@ pub fn markdown(text: &str, columns: usize) -> String {
     rendered.join("\n")
 }
 /// Rune width approximates East Asian terminal cell widths.
-pub fn rune_width(c: char) -> usize {
+pub(crate) fn rune_width(c: char) -> usize {
     let n = c as u32;
     static ZERO_WIDTH: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     if ZERO_WIDTH
@@ -416,16 +419,20 @@ pub fn model_presentation(cfg: &Value) -> (String, String, String) {
             .as_i64()
             .unwrap_or(window)
             .min(window);
-        effort.push_str(&format!(
-            " · window {} override",
-            if cap % 1000 == 0 {
-                format!("{}k", cap / 1000)
-            } else {
-                cap.to_string()
-            }
-        ))
+        effort.push_str(&format!(" · window {} override", window_label(cap)))
     }
     (text(cfg, "model").into(), provider, effort)
+}
+/// Window label formats a token capacity without redundant decimal zeroes.
+pub(crate) fn window_label(tokens: i64) -> String {
+    if tokens < 1_000_000 {
+        return count(tokens).replacen(".0k", "k", 1);
+    }
+    format!("{:.2}", tokens as f64 / 1_000_000.0)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+        + "M"
 }
 /// Mode labels the configured authority.
 pub fn mode(cfg: &Value) -> &'static str {
@@ -442,8 +449,102 @@ fn header_line(line: &str) {
         eprintln!("{line}")
     }
 }
+fn welcome(cfg: &Value, columns: usize) -> String {
+    let art = [
+        "      ●      ",
+        "  ▗▄▖   ▗▄▖  ",
+        "   █  B  █   ",
+        "   █ P   █   ",
+        "  ▟▘     ▝▙  ",
+        " ▟▘LLLLLLL▝▙ ",
+        "▐▌LLLL>LLLL▐▌",
+        "▝▙▄▄▄▄▄▄▄▄▄▟▘",
+    ];
+    let shades = [0, 0, 17, 18, 19, 20, 56, 57, 57, 93, 93, 0, 0];
+    let bubble = "\x1b[38;5;99m";
+    let teal = "\x1b[1;38;5;86m";
+    let room = columns - 17;
+    let dim = |s: &str| format!("{DIM}{}{RESET}", truncate(s, room));
+    let (model, provider, effort) = model_presentation(cfg);
+    let name = sanitize(&model);
+    let line = if provider.is_empty() {
+        name.clone()
+    } else {
+        format!("{name} · {} · {effort}", sanitize(&provider))
+    };
+    let line = truncate(&line, room);
+    let model_line = if line.len() > name.len() && line.starts_with(&name) {
+        format!("{BOLD}{name}{RESET}{DIM}{}{RESET}", &line[name.len()..])
+    } else {
+        format!("{BOLD}{line}{RESET}")
+    };
+    let mut mode = mode(cfg).to_string();
+    if yes(cfg, "plan") {
+        mode.push_str(" · plan mode");
+    }
+    let mode =
+        truncate(&mode, room).replacen("plan mode", &format!("{teal}plan mode\x1b[22;39m{DIM}"), 1);
+    let session = if text(cfg, "provider") != "scripted" && !text(cfg, "session_id").is_empty() {
+        dim(&format!("session ID: {}", text(cfg, "session_id")))
+    } else {
+        String::new()
+    };
+    let via = if yes(cfg, "proxied") {
+        dim(&format!(
+            "requests go to {} (API_PROXY_URL)",
+            sanitize(&crate::transport::redacted(
+                &std::env::var("API_PROXY_URL").unwrap_or_default()
+            ))
+        ))
+    } else {
+        String::new()
+    };
+    let loaded = cfg["project_instructions"]
+        .as_str()
+        .map(|s| {
+            dim(&format!(
+                "AGENTS.md loaded ({:.1} KB)",
+                s.len() as f64 / 1000.
+            ))
+        })
+        .unwrap_or_default();
+    let details = [
+        session,
+        format!("{BOLD}re{RESET}{bubble}{BOLD}:{RESET}{BOLD}agent{RESET}"),
+        model_line,
+        truncate(&sanitize(&short_path(text(cfg, "workspace"))), room),
+        format!("{DIM}{mode}{RESET}"),
+        via,
+        format!("/help{DIM} commands · {RESET}!cmd{DIM} shell · {RESET}Ctrl-D{DIM} exit{RESET}"),
+        loaded,
+    ];
+    let mut out = String::new();
+    for (row, detail) in art.iter().zip(details) {
+        for (col, c) in row.chars().enumerate() {
+            match c {
+                '●' => out.push_str(&format!("{bubble}●{RESET}")),
+                'B' => out.push_str(&format!("\x1b[38;5;63m•{RESET}")),
+                'P' => out.push_str(&format!("{bubble}•{RESET}")),
+                'L' => out.push_str(&format!("\x1b[48;5;{}m {RESET}", shades[col])),
+                '>' => out.push_str(&format!("\x1b[48;5;{}m{teal}❯{RESET}", shades[col])),
+                _ => out.push(c),
+            }
+        }
+        if !detail.is_empty() {
+            out.push_str("   ");
+            out.push_str(&detail);
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Header presents a run's model, workspace, and authority.
 pub fn header(cfg: &Value, chat: bool) {
+    if chat && styled(2) && columns(2) >= 72 {
+        eprint!("{}", welcome(cfg, columns(2)));
+        return;
+    }
     let (model, provider, effort) = model_presentation(cfg);
     let details = if provider.is_empty() {
         String::new()
@@ -509,6 +610,78 @@ pub fn header(cfg: &Value, chat: bool) {
         header_line("/help for commands · Ctrl-D to exit")
     }
 }
+/// Model started shows the active request without committing a transcript line.
+pub fn model_started(
+    region: Option<&crate::terminal::RegionHandle>,
+    model: &str,
+    step: i64,
+    max_steps: i64,
+) {
+    let mut label = format!("waiting for {} · step {step}", sanitize(model));
+    if max_steps > 0 {
+        label.push_str(&format!(" of {max_steps}"));
+    }
+    if let Some(region) = region {
+        let _ = region.lock().unwrap().set_progress(Some(&label));
+    }
+}
+
+/// Model finished removes the active operation from the input pane.
+pub fn model_finished(region: Option<&crate::terminal::RegionHandle>) {
+    if let Some(region) = region {
+        let _ = region.lock().unwrap().set_progress(None);
+    }
+}
+
+/// Tool started shows progress for an executing command.
+pub fn tool_started(region: Option<&crate::terminal::RegionHandle>, call: &Value) {
+    if text(call, "name") != "exec" {
+        return;
+    }
+    if let Some(region) = region {
+        let label = format!("running {}", activity::call_target(call));
+        let _ = region.lock().unwrap().set_progress(Some(&label));
+    }
+}
+
+/// Retry scheduled records the failed attempt and shows its backoff status.
+pub fn retry_scheduled(
+    region: Option<&crate::terminal::RegionHandle>,
+    attempt: i64,
+    delay_ms: i64,
+    reason: &str,
+) {
+    let delay = if delay_ms % 1000 == 0 {
+        format!("{}s", delay_ms / 1000)
+    } else {
+        format!("{delay_ms}ms")
+    };
+    let reason = sanitize(reason).replace('\n', "\n    ");
+    let note = format!("  · model attempt {attempt} failed ({reason}); retrying in {delay}");
+    let note = if styled(2) {
+        format!("{DIM}{note}{RESET}\n")
+    } else {
+        format!("{note}\n")
+    };
+    crate::terminal::output(region, 2, &note);
+    if let Some(region) = region {
+        let label = format!(
+            "model unavailable · retry {} in {}s",
+            attempt + 1,
+            (delay_ms + 500) / 1000
+        );
+        let _ = region.lock().unwrap().set_progress(Some(&label));
+    }
+}
+
+/// Retry started shows the request following a backoff wait.
+pub fn retry_started(region: Option<&crate::terminal::RegionHandle>, attempt: i64) {
+    if let Some(region) = region {
+        let label = format!("waiting for model · attempt {attempt}");
+        let _ = region.lock().unwrap().set_progress(Some(&label));
+    }
+}
+
 /// Usage renders a usage record for summaries and status commands.
 pub fn usage(u: &Value) -> String {
     let mut out = if yes(u, "known") {
@@ -538,13 +711,24 @@ pub(crate) fn plan_block(reply: &str) -> Option<(usize, usize)> {
     for line in reply.split_inclusive('\n') {
         let line = line.strip_suffix('\n').unwrap_or(line);
         match line {
-            "<plan>" => { open = Some(offset); found = None; }
-            "</plan>" => if let Some(start) = open.take() { found = Some((start, offset + line.len())); },
+            "<plan>" => {
+                open = Some(offset);
+                found = None;
+            }
+            "</plan>" => {
+                if let Some(start) = open.take() {
+                    found = Some((start, offset + line.len()));
+                }
+            }
             _ => {}
         }
         offset += line.len() + 1;
     }
-    if open.is_some() { None } else { found }
+    if open.is_some() {
+        None
+    } else {
+        found
+    }
 }
 
 fn reply_text(reply: &str, show_plan: bool, styled: bool, columns: usize) -> String {
@@ -552,21 +736,64 @@ fn reply_text(reply: &str, show_plan: bool, styled: bool, columns: usize) -> Str
         if let Some((start, end)) = plan_block(reply) {
             let content = &reply[start + "<plan>\n".len()..end - "</plan>".len()];
             let content = content.strip_suffix('\n').unwrap_or(content);
-            let label = if styled { format!("{DIM}plan{RESET}") } else { "plan".into() };
-            return format!("{}{label}\n{}{}", display(&reply[..start], styled, columns), display(content, styled, columns), display(&reply[end..], styled, columns));
+            let label = if styled {
+                format!("{DIM}plan{RESET}")
+            } else {
+                "plan".into()
+            };
+            return format!(
+                "{}{label}\n{}{}",
+                display(&reply[..start], styled, columns),
+                display(content, styled, columns),
+                display(&reply[end..], styled, columns)
+            );
         }
     }
     display(reply, styled, columns)
 }
 
+/// Blocked advice identifies the local command needed before another turn.
+pub fn blocked_advice(status: &str) -> &'static str {
+    if status == "limit_exceeded" {
+        "/reset to continue; /compact works before the window fills (watch the 60% warning)"
+    } else {
+        "/compact or /reset to continue"
+    }
+}
+
 /// Result prints a reply to stdout and its factual run summary to stderr.
 pub fn result(result: &Value, elapsed: Duration, cfg: &Value, state: &Value, chat: bool) {
+    result_in_region(result, elapsed, cfg, state, chat, None);
+}
+
+/// Result in region inserts presentation above a live input pane.
+pub fn result_in_region(
+    result: &Value,
+    elapsed: Duration,
+    cfg: &Value,
+    state: &Value,
+    chat: bool,
+    region: Option<&crate::terminal::RegionHandle>,
+) {
+    macro_rules! eprintln {
+        () => { crate::terminal::output(region, 2, "\n") };
+        ($($args:tt)*) => { crate::terminal::output(region, 2, &format!("{}\n", format_args!($($args)*))) };
+    }
+    macro_rules! eprint {
+        ($($args:tt)*) => { crate::terminal::output(region, 2, &format!($($args)*)) };
+    }
+    macro_rules! println {
+        ($($args:tt)*) => { crate::terminal::output(region, 1, &format!("{}\n", format_args!($($args)*))) };
+    }
     let reply = text(result, "reply");
     if !reply.is_empty() {
         if styled(2) && yes(&state["_display"], "printed") {
             eprintln!();
         }
-        println!("{}", reply_text(reply, chat, styled(1), columns(1).min(100)))
+        println!(
+            "{}",
+            reply_text(reply, chat, styled(1), columns(1).min(100))
+        )
     }
     let status = text(result, "status");
     let (mark, color) = match status {
@@ -643,6 +870,17 @@ pub fn result(result: &Value, elapsed: Duration, cfg: &Value, state: &Value, cha
             }
         }
     }
+    if chat && !text(state, "blocked").is_empty() {
+        let line = format!(
+            "  session blocked: {}",
+            blocked_advice(text(state, "blocked"))
+        );
+        if styled(2) {
+            eprintln!("{DIM}{line}{RESET}");
+        } else {
+            eprintln!("{line}");
+        }
+    }
     if !chat || status != "completed" {
         let path = text(result, "trace_path");
         eprintln!(
@@ -657,7 +895,7 @@ pub fn result(result: &Value, elapsed: Duration, cfg: &Value, state: &Value, cha
         )
     }
     eprint!("{}", router_usage_note(&result["router_usage"], styled(2)));
-    if chat && yes(result, "resumable") {
+    if chat && text(state, "blocked").is_empty() && yes(result, "resumable") {
         eprintln!("  nothing was lost; your next message continues from the last completed step")
     }
     if chat && styled(2) {
@@ -698,15 +936,64 @@ mod tests {
     }
     #[test]
     fn plan_rendering_removes_only_tag_lines_not_content_whitespace() {
-        for content in ["\u{2028}\u{2029}", "  indented\t ", "\n\nbody\n\n", "", "\u{a0}body\u{3000}"] {
+        for content in [
+            "\u{2028}\u{2029}",
+            "  indented\t ",
+            "\n\nbody\n\n",
+            "",
+            "\u{a0}body\u{3000}",
+        ] {
             let reply = format!("before\n<plan>\n{content}\n</plan>\nafter");
-            assert_eq!(reply_text(&reply, true, false, 0), format!("before\nplan\n{content}\nafter"));
+            assert_eq!(
+                reply_text(&reply, true, false, 0),
+                format!("before\nplan\n{content}\nafter")
+            );
             assert_eq!(reply_text(&reply, false, false, 0), reply);
         }
-        for reply in ["inline <plan>\nbody\n</plan>", "<plan> \nbody\n</plan>", "<plan>\nbody\n</plan> ", "<plan>\none\n</plan>\n<plan>\nunfinished"] {
+        for reply in [
+            "inline <plan>\nbody\n</plan>",
+            "<plan> \nbody\n</plan>",
+            "<plan>\nbody\n</plan> ",
+            "<plan>\none\n</plan>\n<plan>\nunfinished",
+        ] {
             assert_eq!(reply_text(reply, true, false, 0), reply);
         }
-        assert_eq!(reply_text("<plan>\none\n</plan>\n<plan>\ntwo\n</plan>", true, false, 0), "<plan>\none\n</plan>\nplan\ntwo");
+        assert_eq!(
+            reply_text("<plan>\none\n</plan>\n<plan>\ntwo\n</plan>", true, false, 0),
+            "<plan>\none\n</plan>\nplan\ntwo"
+        );
+    }
+    #[test]
+    fn welcome_keeps_eight_rows_and_fits_session_details_beside_flask() {
+        let cfg = serde_json::json!({"model":"gpt-6-luna", "provider":"openai", "auth_mode":"key", "reasoning_effort":"low", "workspace":"/work/repo", "session_id":"session", "plan":true, "project_instructions":"frozen"});
+        for columns in [72, 80, 100] {
+            let out = welcome(&cfg, columns);
+            let rows: Vec<_> = out.lines().collect();
+            assert_eq!(rows.len(), 8);
+            assert!(rows.iter().all(|row| width(row) < columns));
+            assert!(rows[0].contains("session ID: session"));
+            assert!(rows[2].contains("gpt-6-luna"));
+            assert!(rows[4].contains("\x1b[1;38;5;86mplan mode\x1b[22;39m"));
+            assert!(rows[6].contains("/help"));
+            assert!(rows[7].contains("AGENTS.md loaded"));
+        }
+        let scripted = welcome(&serde_json::json!({"provider":"scripted"}), 80);
+        assert!(!scripted.contains("session ID:"));
+        assert_eq!(scripted.lines().count(), 8);
+    }
+
+    #[test]
+    fn window_overrides_use_millions_and_respect_catalog_caps() {
+        for (tokens, label) in [
+            (100, "100"),
+            (200_000, "200k"),
+            (1_000_000, "1M"),
+            (1_050_000, "1.05M"),
+        ] {
+            assert_eq!(window_label(tokens), label);
+        }
+        let cfg = serde_json::json!({"provider":"openai","model":"gpt-6-luna","context_window_tokens":1_000_000});
+        assert!(model_presentation(&cfg).2.contains("window 1M override"));
     }
     #[test]
     fn controls_are_visible() {

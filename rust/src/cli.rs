@@ -477,6 +477,19 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         }
         _ => return usage(command, "--git-do must be jev or recipe"),
     }
+    let mut approved = Vec::new();
+    for path in cfg["allow_workspaces"].as_array().unwrap_or(&Vec::new()) {
+        match crate::tools::destination(path.as_str().unwrap_or(""), true) {
+            Ok((root, _)) => approved.push(json!(root.to_string_lossy())),
+            Err(bad) => {
+                return usage(
+                    command,
+                    &format!("--allow-workspace: {}", text(&bad, "message")),
+                )
+            }
+        }
+    }
+    cfg["allow_workspaces"] = json!(approved);
     if !resume {
         cfg["project_instructions"] = Value::Null;
         if !yes(&cfg, "no_project_instructions") {
@@ -506,13 +519,6 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         {
             return usage(command, &e);
         }
-        if e.starts_with("OPENAI_API_KEY is not set")
-            || e.starts_with("ANTHROPIC_API_KEY is not set")
-        {
-            return startup(&format!(
-                "{e}; use --scripted or --show-context to work offline"
-            ));
-        }
         return startup(&e);
     }
     if preview {
@@ -529,6 +535,23 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
                 eprintln!("error: {e}");
                 return 1;
             }
+        }
+    }
+    if yes(&cfg, "auto") && !resume {
+        let info = crate::catalog::model_info(text(&cfg, "model"));
+        let effort = text(&cfg, "reasoning_effort");
+        let accepted = info["efforts"].as_array().is_some_and(|efforts| {
+            if efforts.is_empty() {
+                effort.is_empty()
+            } else {
+                efforts.iter().any(|e| e == effort)
+            }
+        });
+        if info["context_window"].as_u64().unwrap_or(0) == 0
+            || info["provider"] != cfg["provider"]
+            || !accepted
+        {
+            return usage(command, "Auto fallback needs a catalog model with a known window and supported explicit effort");
         }
     }
     cfg["_display"] = json!(true);

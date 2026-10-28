@@ -149,16 +149,17 @@ pub(crate) fn disclosure(session: &Session) {
     if !enabled(&session.state, "auto_enabled") {
         return;
     }
-    eprintln!("auto on: https://api.typesafe.ai/v1/systemone; TypeSafe receives summaries, user requests (earlier ones may be shortened or omitted), root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header");
-    eprintln!("auto fallback: {} / {}; {} allowed route(s); /auto off or manual model/effort selection pins the current route",text(&session.state,"auto_fallback_model"),text(&session.state,"auto_fallback_effort"),session.state["auto_routes"].as_array().map_or(0,Vec::len));
-    eprintln!("auto scope: joint model/effort at user-turn start; current-model effort only within a run; router failure keeps the current pair mid-run");
+    output(session, "auto on: https://api.typesafe.ai/v1/systemone; TypeSafe receives summaries, user requests (earlier ones may be shortened or omitted), root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header");
+    output(session, &format!("auto fallback: {} / {}; {} allowed route(s); /auto off or manual model/effort selection pins the current route",text(&session.state,"auto_fallback_model"),text(&session.state,"auto_fallback_effort"),session.state["auto_routes"].as_array().map_or(0,Vec::len)));
+    output(session, "auto scope: joint model/effort at user-turn start; current-model effort only within a run; router failure keeps the current pair mid-run");
     if std::env::var("TYPESAFE_API_KEY")
         .unwrap_or_default()
         .trim()
         .is_empty()
     {
-        eprintln!(
-            "TYPESAFE_API_KEY is not set; Auto uses compatible fallback without routing calls"
+        output(
+            session,
+            "TYPESAFE_API_KEY is not set; Auto uses compatible fallback without routing calls",
         );
     }
 }
@@ -171,21 +172,21 @@ pub(crate) fn pin(session: &mut Session) {
 /// command implements the explicit chat Auto status and enable/disable commands.
 pub(crate) fn command(session: &mut Session, argument: &str) {
     if text(&session.config, "provider") == "scripted" {
-        eprintln!("Auto is unavailable in a scripted chat");
+        output(session, "Auto is unavailable in a scripted chat");
         return;
     }
     match argument {
-        "" => eprintln!(
-            "{}",
+        "" => output(
+            session,
             if enabled(&session.state, "auto_enabled") {
                 "auto on; /auto off pins the current route"
             } else {
                 "auto off; /auto on enables TypeSafe routing"
-            }
+            },
         ),
         "off" => {
             pin(session);
-            eprintln!("auto off; current model and effort pinned");
+            output(session, "auto off; current model and effort pinned");
         }
         "on" => {
             let previous = session.state.clone();
@@ -195,12 +196,12 @@ pub(crate) fn command(session: &mut Session, argument: &str) {
             session.state["auto"] = json!(true);
             if let Err(error) = initialize(session) {
                 session.state = previous;
-                eprintln!("auto unchanged: {error}");
+                output(session, &format!("auto unchanged: {error}"));
             } else {
                 disclosure(session);
             }
         }
-        _ => eprintln!("usage: /auto [on|off]"),
+        _ => output(session, "usage: /auto [on|off]"),
     }
 }
 
@@ -364,11 +365,17 @@ fn higher(config: &Value, route: &Value) -> bool {
         _ => false,
     }
 }
+fn output(session: &Session, message: &str) {
+    crate::terminal::output(session.region.as_ref(), 2, &format!("{message}\n"));
+}
 fn note(session: &Session, message: &str) {
     if enabled(&session.config, "_display") {
-        eprintln!(
-            "  · {}",
-            crate::render::sanitize(message).replace('\n', "\n    ")
+        output(
+            session,
+            &format!(
+                "  · {}",
+                crate::render::sanitize(message).replace('\n', "\n    ")
+            ),
         );
     }
 }
@@ -485,8 +492,11 @@ pub(crate) fn route_next(session: &mut Session) -> Result<(), String> {
                 ] {
                     metadata[destination] = packet[source].clone();
                 }
-                let (decision, error) =
-                    crate::jev::decide_with_metadata(text(&packet, "state"), &routes);
+                let (decision, error) = crate::jev::decide_cancelable(
+                    text(&packet, "state"),
+                    &routes,
+                    crate::cancellation::token(&session.config),
+                );
                 if enabled(&decision, "attempted") {
                     if session.state["router_usage"].is_null() {
                         session.state["router_usage"] = types::usage_zero(true);

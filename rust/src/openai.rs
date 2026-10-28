@@ -15,7 +15,10 @@ pub fn entry_texts(entry: &Value) -> Vec<Value> {
             let user = &entry["user"];
             let mut parts = vec![user.get("text").filter(|text|!text.is_null()).cloned().unwrap_or(json!(""))];
             for (key,preamble) in [("workspace","Workspace state when this message was sent, collected by re:agent:\n"),("roster","Agent roster when this message was sent, collected by re:agent:\n")] {
-                if !user[key].is_null() { parts.push(json!(format!("{}{}",preamble,raw_string(&user[key])))); }
+                if !user[key].is_null() {
+                    let bytes = crate::raw::bytes(&user[key]).unwrap_or_else(|| raw_string(&user[key]).into_bytes());
+                    parts.push(crate::raw::string(&[preamble.as_bytes(), &bytes].concat()));
+                }
             }
             match s(user, "plan") {
                 "on" => parts.push(json!(PLAN_MARKER)),
@@ -29,6 +32,9 @@ pub fn entry_texts(entry: &Value) -> Vec<Value> {
 }
 
 pub fn raw_string(value: &Value) -> String {
+    if let Some(bytes) = crate::raw::bytes(value) {
+        return String::from_utf8_lossy(&bytes).into_owned();
+    }
     value
         .as_str()
         .map(str::to_owned)
@@ -171,35 +177,8 @@ pub fn text_block(kind: &str, text: &str) -> Value {
 }
 
 pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
-    let body = crate::provider::decode_json(raw)
+    let body = crate::provider::wire::decode(raw, &crate::provider::wire::OPENAI_BODY)
         .map_err(|_| error("protocol_error", "response is not valid JSON"))?;
-    if !crate::provider::wire_fields(
-        &body,
-        &["id", "model", "status"],
-        &[],
-        &["output"],
-        &["usage", "error", "incomplete_details"],
-    ) || !crate::provider::wire_fields(
-        &body["usage"],
-        &[],
-        &["input_tokens", "output_tokens"],
-        &[],
-        &["input_tokens_details", "output_tokens_details"],
-    ) || !crate::provider::wire_fields(
-        &body["usage"]["input_tokens_details"],
-        &[],
-        &["cached_tokens"],
-        &[],
-        &[],
-    ) || !crate::provider::wire_fields(
-        &body["usage"]["output_tokens_details"],
-        &[],
-        &["reasoning_tokens"],
-        &[],
-        &[],
-    ) {
-        return Err(error("protocol_error", "response is not valid JSON"));
-    }
     let u = usage(&body);
     let fail = |status: &str, msg: String| ModelError {
         status: status.into(),
@@ -231,19 +210,10 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
         }
     }
     let mut blocks = Vec::new();
-    for item in array(&body, "output") {
-        if !crate::provider::wire_fields(
-            item,
-            &["type", "status", "call_id", "name", "arguments"],
-            &[],
-            &["content"],
-            &[],
-        ) || array(item, "content")
-            .iter()
-            .any(|c| !crate::provider::wire_fields(c, &["type", "text", "refusal"], &[], &[], &[]))
-        {
-            return Err(error("protocol_error", "output item is not valid JSON"));
-        }
+    for raw_item in raw_tokens::array(raw_tokens::field(raw, "output").unwrap_or(b"[]")) {
+        let item = crate::provider::wire::decode(raw_item, &crate::provider::wire::OPENAI_ITEM)
+            .map_err(|_| error("protocol_error", "output item is not valid JSON"))?;
+        let item = &item;
         let kind = s(item, "type");
         let status = s(item, "status");
         if !status.is_empty() && status != "completed" {
@@ -322,17 +292,8 @@ pub fn assemble(raw: &[u8]) -> Result<Value, ModelError> {
     let mut items = std::collections::BTreeMap::new();
     let mut final_body = None;
     for data in stream_data(raw) {
-        let event = crate::provider::decode_json(&data)
+        let event = crate::provider::wire::decode(&data, &crate::provider::wire::STREAM_EVENT)
             .map_err(|_| error("protocol_error", "stream event is not valid JSON"))?;
-        if !crate::provider::wire_fields(
-            &event,
-            &["type", "code", "message", "param"],
-            &["output_index"],
-            &[],
-            &["error"],
-        ) {
-            return Err(error("protocol_error", "stream event is not valid JSON"));
-        }
         match s(&event, "type") {
             "response.output_item.done" => {
                 let index = event["output_index"].as_i64().ok_or_else(|| {
@@ -375,7 +336,12 @@ pub fn assemble(raw: &[u8]) -> Result<Value, ModelError> {
                 ));
             }
             "response.failed" => {
-                let b = &event["response"];
+                let b = raw_tokens::field(&data, "response")
+                    .and_then(|raw| {
+                        crate::provider::wire::decode(raw, &crate::provider::wire::OPENAI_BODY).ok()
+                    })
+                    .unwrap_or(Value::Null);
+                let b = &b;
                 let e = &b["error"];
                 if let Some(err) =
                     crate::transport::chatgpt_error(s(e, "code"), s(e, "param"), usage(b))
@@ -395,7 +361,9 @@ pub fn assemble(raw: &[u8]) -> Result<Value, ModelError> {
                 return Err(err);
             }
             "response.completed" | "response.incomplete" => {
-                let mut response = event["response"].clone();
+                let Some(mut response) = event.get("response").cloned() else {
+                    continue;
+                };
                 if response.is_object() {
                     let original = raw_tokens::field(&data, "response").unwrap_or(b"{}");
                     if let Some(output) = raw_tokens::field(original, "output") {

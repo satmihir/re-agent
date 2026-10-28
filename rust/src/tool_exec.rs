@@ -5,16 +5,19 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     io::Read,
     os::unix::{
         io::AsRawFd,
         process::{CommandExt, ExitStatusExt},
     },
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -178,6 +181,7 @@ pub fn execute(workspace: &mut Workspace, config: &Value, args: &Value) -> Resul
             timeout,
             LIMIT,
             &cancellation,
+            config,
         );
     }
     let budget = (LIMIT - 1024) / commands.len();
@@ -195,6 +199,7 @@ pub fn execute(workspace: &mut Workspace, config: &Value, args: &Value) -> Resul
             timeout,
             budget,
             &cancellation,
+            config,
         )?;
         steps.push(step["data"].clone());
         truncated |= step["truncated"].as_bool().unwrap_or(false);
@@ -351,6 +356,124 @@ fn executable(name: &str) -> String {
     }
     name.to_owned()
 }
+struct ActiveExec {
+    workspace: PathBuf,
+    notice: Value,
+}
+
+static ACTIVE_EXECS: OnceLock<Mutex<HashMap<String, BTreeMap<String, ActiveExec>>>> =
+    OnceLock::new();
+
+struct ExecRegistration {
+    tree: String,
+    agent: String,
+}
+
+impl Drop for ExecRegistration {
+    fn drop(&mut self) {
+        let mut trees = ACTIVE_EXECS.get().unwrap().lock().unwrap();
+        if let Some(execs) = trees.get_mut(&self.tree) {
+            execs.remove(&self.agent);
+            if execs.is_empty() {
+                trees.remove(&self.tree);
+            }
+        }
+    }
+}
+
+fn start_exec(
+    config: &Value,
+    root: &Path,
+    argv: &[String],
+    cwd: &str,
+    budget: usize,
+) -> (Option<ExecRegistration>, Vec<Value>) {
+    if config["agents"] != true {
+        return (None, vec![]);
+    }
+    let tree = config["agent_tree_id"]
+        .as_str()
+        .or_else(|| config["session_id"].as_str())
+        .unwrap_or("")
+        .to_owned();
+    let agent = config["agent_id"].as_str().unwrap_or("root").to_owned();
+    let mut trees = ACTIVE_EXECS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let execs = trees.entry(tree.clone()).or_default();
+    let concurrent = execs
+        .iter()
+        .filter(|(id, active)| {
+            id.as_str() != agent
+                && (root.starts_with(&active.workspace) || active.workspace.starts_with(root))
+        })
+        .map(|(_, active)| active.notice.clone())
+        .collect();
+    execs.insert(
+        agent.clone(),
+        ActiveExec {
+            workspace: root.to_owned(),
+            notice: json!({"agent_id":agent,"argv":argv,"cwd":cwd}),
+        },
+    );
+    drop(trees);
+    (
+        Some(ExecRegistration { tree, agent }),
+        bound_concurrent_exec(concurrent, budget),
+    )
+}
+
+fn bound_concurrent_exec(mut notices: Vec<Value>, budget: usize) -> Vec<Value> {
+    if notices.is_empty() {
+        return notices;
+    }
+    let limit = 1024.min(budget / (2 * notices.len()));
+    let truncate = |text: &str, mut count: usize| {
+        count = count.min(text.len());
+        while !text.is_char_boundary(count) {
+            count -= 1;
+        }
+        text[..count].to_owned()
+    };
+    for notice in &mut notices {
+        let argv = notice["argv"].as_array().unwrap().clone();
+        let cwd = notice["cwd"].as_str().unwrap();
+        let mut truncated = argv.len() > 8 || cwd.len() > limit;
+        let cwd = truncate(cwd, limit);
+        let argv: Vec<_> = argv
+            .iter()
+            .take(8)
+            .map(|arg| {
+                let arg = arg.as_str().unwrap();
+                truncated |= arg.len() > limit;
+                truncate(arg, limit)
+            })
+            .collect();
+        notice["argv"] = json!(argv);
+        notice["cwd"] = json!(cwd);
+        if truncated {
+            notice["truncated"] = json!(true);
+        }
+        while crate::types::json_string(notice).len() > limit {
+            notice["truncated"] = json!(true);
+            let args = notice["argv"].as_array_mut().unwrap();
+            if args.len() > 1 {
+                args.truncate(1.max(args.len() / 2));
+                continue;
+            }
+            let arg = notice["argv"][0].as_str().unwrap();
+            let cwd = notice["cwd"].as_str().unwrap();
+            if cwd.len() > arg.len() {
+                notice["cwd"] = json!(truncate(cwd, cwd.len() / 2));
+            } else {
+                notice["argv"][0] = json!(truncate(arg, arg.len() / 2));
+            }
+        }
+    }
+    notices
+}
+
 fn run(
     root: &Path,
     dir: &Path,
@@ -359,6 +482,7 @@ fn run(
     timeout: u64,
     budget: usize,
     cancellation: &AtomicBool,
+    config: &Value,
 ) -> Result<Value, String> {
     let resolved = executable(&argv[0]);
     let mut command = Command::new(&resolved);
@@ -385,8 +509,12 @@ fn run(
             command.env(key, v);
         }
     }
+    let (_registration, concurrent) = start_exec(config, root, argv, cwd, budget);
     let started = Instant::now();
     let mut data = json!({"argv":argv,"resolved_executable":resolved,"cwd":cwd,"exit_code":null,"signal":null,"stdout":"","stderr":"","stdout_bytes_seen":0,"stderr_bytes_seen":0,"stdout_truncated":false,"stderr_truncated":false,"output_may_be_incomplete":false,"encoding_replaced":false,"duration_ms":0,"timeout_ms":timeout,"termination_reason":null});
+    if !concurrent.is_empty() {
+        data["concurrent_exec"] = json!(concurrent);
+    }
     // LookPath failure precedes cancellation in Go's command construction.
     let missing_executable = !argv[0].contains('/') && resolved == argv[0];
     if cancellation.load(Ordering::Acquire) && !missing_executable {
@@ -911,6 +1039,122 @@ mod cancellation_tests {
                     "descendant remains alive: {stat}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod overlap_tests {
+    use super::*;
+
+    #[test]
+    fn overlap_is_advisory_tree_scoped_canonical_and_per_chain_step() {
+        for mode in [
+            "same",
+            "descendant",
+            "ancestor",
+            "alias",
+            "disjoint",
+            "other-tree",
+            "bounds",
+            "chain",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let shared = dir.path().join("shared");
+            fs::create_dir(&shared).unwrap();
+            fs::create_dir(shared.join("nested")).unwrap();
+            fs::create_dir(dir.path().join("shared-other")).unwrap();
+            std::os::unix::fs::symlink(&shared, dir.path().join("alias")).unwrap();
+            let root = match mode {
+                "descendant" => shared.join("nested"),
+                "ancestor" => dir.path().to_owned(),
+                "alias" => dir.path().join("alias"),
+                "disjoint" => dir.path().join("shared-other"),
+                _ => shared.clone(),
+            };
+            let tree = crate::types::new_id();
+            let child_config = json!({"agents":true,"agent_tree_id":tree,"session_id":format!("{tree}-child"),"agent_id":"t1"});
+            let root_config = json!({"agents":true,"session_id":if mode == "other-tree" {format!("{tree}-other")} else {tree.clone()}});
+            let script = "touch ready; while [ ! -e release ]; do sleep 0.01; done";
+            let mut argv = vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()];
+            if mode == "bounds" {
+                argv.extend((0..10).map(|_| "é<&".repeat(1000)));
+            }
+            let args = json!({"argv":argv,"cwd":"."});
+            let child_root = shared.clone();
+            let child = thread::spawn(move || {
+                let mut workspace = Workspace::open(child_root.to_str().unwrap()).unwrap();
+                execute(&mut workspace, &child_config, &args).unwrap()
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !shared.join("ready").exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            let ready = shared.join("ready").exists();
+            let mut workspace = Workspace::open(root.to_str().unwrap()).unwrap();
+            let mut args = json!({"argv":["/bin/true"],"cwd":"."});
+            if mode == "chain" {
+                args["then"] = json!([["/bin/true"]]);
+            }
+            let observed = execute(&mut workspace, &root_config, &args).unwrap();
+            fs::write(shared.join("release"), "done").unwrap();
+            let finished = child.join().unwrap();
+            assert!(ready, "child was not ready: {mode}");
+            assert_eq!(finished["ok"], true);
+            assert_eq!(observed["ok"], true, "{mode}: {observed}");
+            let steps = if mode == "chain" {
+                observed["data"]["steps"].as_array().unwrap().clone()
+            } else {
+                vec![observed["data"].clone()]
+            };
+            for step in steps {
+                if mode == "disjoint" || mode == "other-tree" {
+                    assert!(step.get("concurrent_exec").is_none(), "{mode}: {step}");
+                    continue;
+                }
+                let notices = step["concurrent_exec"].as_array().unwrap();
+                assert_eq!(notices.len(), 1);
+                let notice = &notices[0];
+                assert_eq!(notice["agent_id"], "t1");
+                assert_eq!(notice["cwd"], ".");
+                assert_eq!(notice["argv"][0], "/bin/sh");
+                if mode == "bounds" {
+                    assert_eq!(notice["truncated"], true);
+                    assert!(notice["argv"].as_array().unwrap().len() <= 8);
+                    assert!(crate::types::json_string(notice).len() <= 1024);
+                } else {
+                    assert!(notice.get("truncated").is_none());
+                }
+            }
+            let after = execute(
+                &mut workspace,
+                &root_config,
+                &json!({"argv":["/bin/true"],"cwd":"."}),
+            )
+            .unwrap();
+            assert!(
+                after["data"].get("concurrent_exec").is_none(),
+                "completed registration remained active"
+            );
+            let failed = execute(
+                &mut workspace,
+                &root_config,
+                &json!({"argv":["/reagent/not-present"],"cwd":"."}),
+            )
+            .unwrap();
+            assert_eq!(failed["code"], "process_start_failed");
+            let mut sibling_config = root_config.clone();
+            sibling_config["agent_id"] = json!("t2");
+            let sibling = execute(
+                &mut workspace,
+                &sibling_config,
+                &json!({"argv":["/bin/true"],"cwd":"."}),
+            )
+            .unwrap();
+            assert!(
+                sibling["data"].get("concurrent_exec").is_none(),
+                "failed registration remained active"
+            );
         }
     }
 }

@@ -72,7 +72,10 @@ fn help() -> String {
     out.push_str("keys\n  Enter            send\n  !COMMAND         run COMMAND in the workspace; its output joins the conversation\n  \\ at line end    continue on the next line\n  ↑ ↓              earlier messages\n  Tab              complete a command, model, or effort\n  /model /effort   picker: ↑↓/kj move, Enter/1–9 choose, Esc/q/Ctrl-C/Ctrl-D cancel\n  Ctrl-C           cancel the running turn, or clear the line; twice to exit\n  Ctrl-L           clear the screen\n  Ctrl-A Ctrl-E    start or end of line\n  Ctrl-U Ctrl-K    erase to start or end of line\n  Ctrl-W           erase the previous word\nPasted text is sent as one message, however many lines it has.");
     out
 }
-fn plan_switch(on: bool) {
+fn plan_switch(on: bool, region: Option<&crate::terminal::RegionHandle>) {
+    macro_rules! eprintln {
+        ($($args:tt)*) => { crate::terminal::output(region, 2, &format!("{}\n", format_args!($($args)*))) };
+    }
     let label = if on {
         "plan mode on: edits and commands are refused until /plan again"
     } else {
@@ -141,6 +144,13 @@ pub fn run(mut cfg: Value) -> i32 {
         )
     }
     let mut input = Input::new();
+    let region = input.region();
+    session.region = region.clone();
+    macro_rules! eprintln {
+        () => { crate::terminal::output(region.as_ref(), 2, "\n") };
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
+    }
+    let mut checkpoint_phase = "idle";
     let mut usage = session
         .state
         .get("usage")
@@ -158,6 +168,7 @@ pub fn run(mut cfg: Value) -> i32 {
         } else {
             format!("(blocked) {prompt}")
         };
+        input.set_status(&session.config, &session.state);
         let line = match input.read_line(&prompt) {
             Ok(Submission::Eof) => break 0,
             Ok(Submission::Interrupted) => {
@@ -207,7 +218,7 @@ pub fn run(mut cfg: Value) -> i32 {
                 };
                 session.state["plan"] = json!(on);
                 session.config["plan"] = json!(on);
-                plan_switch(on);
+                plan_switch(on, region.as_ref());
                 if !arg.is_empty() {
                     turn = Some(raw_arg.to_vec())
                 }
@@ -216,16 +227,10 @@ pub fn run(mut cfg: Value) -> i32 {
                 let id = session.config["session_id"].clone();
                 model(&mut session, arg, scripted, &mut input);
                 if session.config["session_id"] != id {
+                    checkpoint_phase = "idle";
                     usage = crate::types::usage_zero(true);
                     if let Some(old_id) = id.as_str() {
                         crate::checkpoint::close(old_id);
-                    }
-                    if yes(&session.config, "checkpoint_enabled") {
-                        eprintln!(
-                            "session ID: {} · resume: reagent chat --resume {}",
-                            text(&session.config, "session_id"),
-                            text(&session.config, "session_id")
-                        );
                     }
                 }
             }
@@ -288,6 +293,7 @@ pub fn run(mut cfg: Value) -> i32 {
             "/reset" => {
                 let old = text(&session.config, "session_id").to_string();
                 session.reset();
+                checkpoint_phase = "idle";
                 session.state["usage"] = crate::types::usage_zero(true);
                 usage = crate::types::usage_zero(true);
 
@@ -345,7 +351,42 @@ pub fn run(mut cfg: Value) -> i32 {
             }
             _ => turn = Some(raw_line.to_vec()),
         }
+        if turn.is_some() && !text(&session.state, "blocked").is_empty() {
+            let blocked = text(&session.state, "blocked");
+            let trace = text(&session.state, "last_trace");
+            let location = if trace.is_empty() {
+                "the run's output above".into()
+            } else {
+                format!("the trace at {trace}")
+            };
+            eprintln!(
+                "error: the last run ended with {blocked}; inspect {location} and use {}",
+                render::blocked_advice(blocked)
+            );
+            turn = None;
+        }
+        if !text(&session.state, "persistence_error").is_empty() {
+            drop(input);
+            eprintln!(
+                "error: session checkpoint failed: {}; stop using this chat",
+                text(&session.state, "persistence_error")
+            );
+            break 1;
+        }
         if let Some(message) = turn {
+            if should_auto_compact(&session) {
+                match auto_compact(&mut session, &mut usage) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        drop(input);
+                        eprintln!(
+                            "error: session checkpoint failed: {error}; stop using this chat"
+                        );
+                        break 1;
+                    }
+                }
+            }
             let started = Instant::now();
             let was_plan = yes(&session.state, "plan");
             render::begin_turn(&mut session.state);
@@ -357,30 +398,45 @@ pub fn run(mut cfg: Value) -> i32 {
                     break 1;
                 }
             };
-            let result = session.submit_bytes(&message);
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let cancelled = crate::cancellation::token(&session.config);
+            let (result, reader_result) = std::thread::scope(|scope| {
+                let reader = scope.spawn(|| input.poll_turn(&stop, &cancelled));
+                let result = session.submit_bytes(&message);
+                stop.store(true, std::sync::atomic::Ordering::Release);
+                let reader_result = reader.join().unwrap();
+                (result, reader_result)
+            });
             drop(guard);
-            if !was_plan && yes(&session.state, "plan") {
-                plan_switch(true)
-            }
-            crate::types::usage_add(&mut usage, &result["usage"]);
-            render::result(
-                &result,
-                started.elapsed(),
-                &session.config,
-                &session.state,
-                true,
-            );
-            let blocked = text(&session.state, "blocked");
-            if !blocked.is_empty() {
-                eprintln!("  session blocked: {}", blocked_advice(blocked))
+            render::model_finished(region.as_ref());
+            if let Err(error) = reader_result {
+                eprintln!(
+                    "error: read chat input: {}",
+                    crate::errors::stable_io(&error)
+                );
             }
             if text(&result, "status") == "persistence_error" {
+                drop(input);
                 eprintln!(
                     "error: session checkpoint failed: {}; stop using this chat",
                     text(&result, "reason")
                 );
                 break 1;
             }
+            if !was_plan && yes(&session.state, "plan") {
+                plan_switch(true, region.as_ref())
+            }
+            crate::types::usage_add(&mut usage, &result["usage"]);
+            checkpoint_phase = "terminal";
+            input.set_status(&session.config, &session.state);
+            render::result_in_region(
+                &result,
+                started.elapsed(),
+                &session.config,
+                &session.state,
+                true,
+                region.as_ref(),
+            );
             if text(&result, "status") == "completed"
                 && yes(&session.state, "plan")
                 && render::plan_block(text(&result, "reply")).is_some()
@@ -390,7 +446,8 @@ pub fn run(mut cfg: Value) -> i32 {
         }
         session.state["usage"] = usage.clone();
         session.state["plan"] = json!(yes(&session.state, "plan"));
-        if let Err(e) = crate::checkpoint::save(&session, "idle", "") {
+        if let Err(e) = crate::checkpoint::save(&session, checkpoint_phase, "") {
+            drop(input);
             eprintln!("error: session checkpoint failed: {e}; stop using this chat");
             break 1;
         }
@@ -398,14 +455,11 @@ pub fn run(mut cfg: Value) -> i32 {
     crate::checkpoint::close(text(&session.config, "session_id"));
     code
 }
-fn blocked_advice(status: &str) -> &'static str {
-    if status == "limit_exceeded" {
-        "/compact or /reset starts a new run"
-    } else {
-        "inspect what happened, then /compact or /reset to continue"
-    }
-}
 fn status(s: &Session, usage: &Value, turns: i64) {
+    let region = s.region.clone();
+    macro_rules! eprintln {
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
+    }
     let (model, provider, effort) = render::model_presentation(&s.config);
     if provider.is_empty() {
         eprintln!("model      {model}")
@@ -466,13 +520,17 @@ fn status(s: &Session, usage: &Value, turns: i64) {
         eprintln!(
             "state      blocked by {}; {}",
             text(&s.state, "blocked"),
-            blocked_advice(text(&s.state, "blocked"))
+            render::blocked_advice(text(&s.state, "blocked"))
         )
     } else if !s.history.is_empty() && text(&s.config, "provider") != "scripted" {
         eprintln!("history    /compact summarizes; /reset starts over")
     }
 }
 fn effort(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
+    let region = s.region.clone();
+    macro_rules! eprintln {
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
+    }
     if scripted {
         eprintln!("a scripted run sends no requests, so reasoning effort has no effect");
         return;
@@ -537,6 +595,14 @@ fn effort(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
     }
 }
 fn model(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
+    let region = s.region.clone();
+    macro_rules! eprintln {
+        () => { crate::terminal::output(region.as_ref(), 2, "\n") };
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
+    }
+    macro_rules! eprint {
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!($($args)*)) };
+    }
     if scripted {
         eprintln!("a scripted run replays recorded responses, so it has no model to choose");
         return;
@@ -640,8 +706,18 @@ fn model(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
                 eprintln!();
                 return;
             }
+            let previous_id = s.config["session_id"].clone();
             match model_switch::transition(s, &info, words.len() == 2) {
                 Ok(handoff) => {
+                    s.region = region.clone();
+                    if s.config["session_id"] != previous_id && yes(&s.config, "checkpoint_enabled")
+                    {
+                        eprintln!(
+                            "session ID: {} · resume: reagent chat --resume {}",
+                            text(&s.config, "session_id"),
+                            text(&s.config, "session_id")
+                        );
+                    }
                     let mut route = text(&info, "provider").to_string();
                     if yes(&s.config, "proxied") {
                         route.push_str(" via API_PROXY_URL");
@@ -668,12 +744,23 @@ fn model(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
     }
 }
 fn context(s: &Session) {
+    let region = s.region.clone();
+    macro_rules! eprintln {
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
+    }
     match context_measure::measure(s) {
         Ok(body) => eprintln!("{body}"),
         Err(e) => eprintln!("error: {}", render::sanitize(&e)),
     }
 }
 fn compact(s: &mut Session, arg: &str, usage: &mut Value) {
+    let region = s.region.clone();
+    macro_rules! eprintln {
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
+    }
+    macro_rules! println {
+        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 1, &format!("{}\n", format_args!($($args)*))) };
+    }
     let verbose = arg.split_whitespace().next() == Some("-v");
     let focus = if verbose {
         arg.strip_prefix("-v").unwrap().trim()
@@ -681,11 +768,14 @@ fn compact(s: &mut Session, arg: &str, usage: &mut Value) {
         arg
     };
     let replaced = crate::types::json_string(&json!(s.history)).len();
-    match s.compact(focus) {
+    match compact_request(s, focus) {
         Err(e) => eprintln!("error: {}", render::sanitize(&e)),
         Ok(result) => {
             crate::types::usage_add(usage, &result["usage"]);
             if text(&result, "status") != "completed" {
+                if text(&result, "status") == "persistence_error" {
+                    s.state["persistence_error"] = result["reason"].clone();
+                }
                 eprintln!(
                     "compaction failed: {}",
                     render::sanitize(text(&result, "reason"))
@@ -710,6 +800,63 @@ fn compact(s: &mut Session, arg: &str, usage: &mut Value) {
             }
         }
     }
+}
+fn compact_request(s: &mut Session, focus: &str) -> Result<Value, String> {
+    crate::cancellation::begin(&s.config);
+    let _guard = crate::cancellation::install(&s.config)?;
+    s.compact(focus)
+}
+fn should_auto_compact(s: &Session) -> bool {
+    let window = crate::catalog::effective_context_window(&s.config);
+    text(&s.config, "provider") != "scripted"
+        && !yes(&s.state, "auto_compact_off")
+        && text(&s.state, "blocked").is_empty()
+        && !s.history.is_empty()
+        && window > 0
+        && yes(&s.state["last_request"], "known")
+        && i128::from(number(&s.state["last_request"], "input_tokens")) * 100
+            >= i128::from(window) * 40
+}
+fn auto_compact(s: &mut Session, usage: &mut Value) -> Result<bool, String> {
+    let region = s.region.clone();
+    let print = |line: &str| crate::terminal::output(region.as_ref(), 2, &format!("{line}\n"));
+    let percent = 100.0 * number(&s.state["last_request"], "input_tokens") as f64
+        / crate::catalog::effective_context_window(&s.config) as f64;
+    let line = format!("context {percent:.0}% of the window; compacting before this turn");
+    print(&if render::styled(2) {
+        format!("\x1b[2m{line}\x1b[0m")
+    } else {
+        line
+    });
+    let replaced = crate::types::json_string(&json!(s.history)).len();
+    let failure = match compact_request(s, "") {
+        Err(error) => error,
+        Ok(result) => {
+            crate::types::usage_add(usage, &result["usage"]);
+            match text(&result, "status") {
+                "completed" => {
+                    print(&format!(
+                        "compacted: {} summary replaces {} of history JSON",
+                        context_measure::bytes(text(&result, "reply").len() as i64),
+                        context_measure::bytes(replaced as i64)
+                    ));
+                    return Ok(true);
+                }
+                "cancelled" => {
+                    print("compaction cancelled; message not sent");
+                    return Ok(false);
+                }
+                "persistence_error" => return Err(text(&result, "reason").into()),
+                _ => text(&result, "reason").into(),
+            }
+        }
+    };
+    s.state["auto_compact_off"] = json!(true);
+    print(&format!(
+        "auto-compaction failed: {}; sending the message anyway (/compact to retry)",
+        render::sanitize(&failure)
+    ));
+    Ok(true)
 }
 fn edit() -> Result<String, String> {
     let editor = std::env::var("VISUAL")
@@ -781,6 +928,38 @@ fn suggestion(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_compaction_requires_live_unblocked_known_nonempty_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("script.json");
+        std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#).unwrap();
+        let mut session = Session::new(json!({"provider":"scripted", "scripted":script, "workspace":directory.path(), "model":"gpt-6-luna", "context_window_tokens":1000})).unwrap();
+        session.config["provider"] = json!("openai");
+        session
+            .history
+            .push(json!({"kind":"user","user":{"text":"task"}}));
+        session.state["last_request"] = json!({"known":true,"input_tokens":399});
+        assert!(!should_auto_compact(&session));
+        session.state["last_request"]["input_tokens"] = json!(400);
+        assert!(should_auto_compact(&session));
+        for (key, value) in [
+            ("blocked", json!("protocol_error")),
+            ("auto_compact_off", json!(true)),
+        ] {
+            let old = session.state[key].clone();
+            session.state[key] = value;
+            assert!(!should_auto_compact(&session));
+            session.state[key] = old;
+        }
+        session.state["last_request"]["known"] = json!(false);
+        assert!(!should_auto_compact(&session));
+        session.state["last_request"]["known"] = json!(true);
+        session.config["provider"] = json!("scripted");
+        assert!(!should_auto_compact(&session));
+        session.config["provider"] = json!("openai");
+        session.history.clear();
+        assert!(!should_auto_compact(&session));
+    }
     #[test]
     fn command_suggestions_are_unambiguous() {
         assert_eq!(suggestion("/stat"), "/status");

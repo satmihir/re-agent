@@ -269,8 +269,16 @@ fn endpoint(variable: &str, fallback: &str) -> String {
 }
 
 fn client(timeout: Duration) -> Result<Client, String> {
-    Client::new(timeout, timeout, Some(timeout))
-        .map_err(|_| "could not contact ChatGPT authorization service".into())
+    let header = crate::transport::timeout("REAGENT_RESPONSE_HEADER_TIMEOUT", 600)?;
+    let idle = crate::transport::timeout("REAGENT_RESPONSE_IDLE_TIMEOUT", 300)?;
+    let mut client = Client::new(
+        Duration::from_secs(header),
+        Duration::from_secs(idle),
+        Some(timeout),
+    )
+    .map_err(|_| "could not contact ChatGPT authorization service")?;
+    client.interruption = Some(&INTERRUPTED);
+    Ok(client)
 }
 
 enum AuthError {
@@ -413,7 +421,18 @@ pub fn token_cancelable(
     rejected: &str,
     cancellation: Option<Arc<AtomicBool>>,
 ) -> Result<String, String> {
+    token_until(force, rejected, cancellation, None)
+}
+pub(crate) fn token_until(
+    force: bool,
+    rejected: &str,
+    cancellation: Option<Arc<AtomicBool>>,
+    deadline: Option<Instant>,
+) -> Result<String, String> {
     let _guard = loop {
+        if deadline.is_some_and(|end| Instant::now() >= end) {
+            return Err("refresh ChatGPT credentials: operation timed out".into());
+        }
         if cancellation
             .as_ref()
             .is_some_and(|token| token.load(Ordering::SeqCst))
@@ -432,7 +451,9 @@ pub fn token_cancelable(
         return Ok(token);
     }
     let _lock = lock_credentials_cancelable(
-        Instant::now() + Duration::from_secs(300),
+        deadline.map_or(Instant::now() + Duration::from_secs(300), |end| {
+            end.min(Instant::now() + Duration::from_secs(300))
+        }),
         cancellation.as_deref(),
     )?;
     let mut c = read_credentials()?;
@@ -445,8 +466,12 @@ pub fn token_cancelable(
     {
         return Err("refresh ChatGPT credentials: operation cancelled".into());
     }
+    if deadline.is_some_and(|end| Instant::now() >= end) {
+        return Err("refresh ChatGPT credentials: operation timed out".into());
+    }
     // A rotating token's replacement must be persisted even if the caller cancels.
-    let client = client(Duration::from_secs(30))?;
+    let mut client = client(Duration::from_secs(30))?;
+    client.interruption = None;
     let result = form(
         &client,
         &format!("{}/api/accounts/oauth/token", issuer()),
@@ -972,7 +997,12 @@ pub fn logout(output: &mut dyn Write) -> Result<(), String> {
 }
 
 fn visible(text: &str) -> String {
-    let mut text = text.to_owned();
+    let mut text = crate::transport::redact(text, &[], &issuer());
+    text = crate::transport::redact(
+        &text,
+        &[],
+        &endpoint("REAGENT_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+    );
     for secret in secrets() {
         text = text.replace(&secret, "[redacted]");
     }
@@ -1197,5 +1227,23 @@ mod http_tests {
             "token"
         );
         server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    #[test]
+    fn credential_wait_honors_request_deadline_without_cancelling_ordinary_policy() {
+        let guard = TOKEN_LOCK.lock().unwrap();
+        let thread = std::thread::spawn(|| {
+            let started = Instant::now();
+            let error = token_until(false, "", None, Some(started + Duration::from_millis(40)))
+                .unwrap_err();
+            assert_eq!(error, "refresh ChatGPT credentials: operation timed out");
+            assert!(started.elapsed() < Duration::from_millis(250));
+        });
+        thread.join().unwrap();
+        drop(guard);
     }
 }

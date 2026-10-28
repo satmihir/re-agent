@@ -1,19 +1,19 @@
 # Rust port status
 Reference: e420e346c6d662aed1c6e41e39fb40f350502e84 (worktree); suite reference: 2ab234f79d1d42ba8a969ba3f4103eeeba717967; harness: e420e346c6d662aed1c6e41e39fb40f350502e84 / 8298dbb5961ce2c1b40fafdf623ff868af813a7aae0c06873e0c682a56c8b947
 Suite: e420e346c6d662aed1c6e41e39fb40f350502e84 / b60915258a2e4414be5e8f2b4da1b215c6ac43e5806af966c97386982c63dd2b; attempt: 1; Session: 873931a9f9d5ba58
-Updated: 2026-10-28T03:12:10Z; stage: resumed after compaction; tools trace field-order diagnostics
+Updated: 2026-10-28T04:03:05Z; stage: post-summary integration and focused release gate
 
 ## Ownership
 | Module / files | Agent ID / name | State | Next checkpoint |
 | --- | --- | --- | --- |
-| Cargo.toml, lib.rs, main.rs, runtime.rs, integration, PORT_STATUS.md | root | active | buildable crate |
-| types.rs, context.rs, trace.rs, catalog.rs; errors.rs, schemas.rs | t1 / types | reset after audit token cap; raw schema follow-up | exact cache hash input |
-| provider.rs, openai.rs, anthropic.rs, transport.rs, auth.rs, jev.rs | t2 / providers (+ ended t6/auth-jev) | initial task step limit; reset/follow-up | compile provider paths |
-| tools.rs, workspace.rs, tool_files.rs | t3 / files | initial task step limit; reset/follow-up | snapshot and file parity |
-| tool_exec.rs, tool_git.rs, git/ | t4 / commands | initial implementation; token cap reached | diagnostic tools run |
-| run_loop.rs, compact.rs, context_gc.rs | t5 / loop | follow-up token cap; reset next | fix outcome order, test loop |
-| cli.rs, chat.rs, terminal.rs, render.rs, cli/ | t7 / cli | reset after step cap; activity follow-up | tool activity stderr parity |
-| agents.rs, checkpoint.rs | t8 / agents | writing | persistence and children |
+| Cargo manifest/lock, lib/main/runtime/auto/trace/checkpoint, integration/status | root | active | root test/release and approved suites |
+| cli/model_switch.rs, agents/context.rs, routing_packet.rs | t1 / types | context/admission port active; prior focused tests pending | child first-request admission before publication |
+| provider/openai/anthropic/transport/auth/jev and submodules | t2 / providers (+ ended t6/auth-jev) | traced generation API46focusedpassed | loop direct-event durability integration |
+| tools/workspace/tool_files/errors,cli.rs,tests/cli_flags.rs | t3 / files | delivered flags4focusedpassed | next concrete suite failures |
+| tool_exec/tool_git/git/cancellation | t4 / commands | delivered28focusedpassed | exec overlap+recipe parity rerun |
+| run_loop/compact/context_gc | t5 / loop | regioncallbacks+pinfix delivered | traced provider, child caps, reservations |
+| chat/terminal/region/editor/render/activity; tests exceptcli_flags | t7 / cli | fixing first11actualPTYscreens | startup spacing, status, postturn exactness |
+| agents.rs | t8 / agents | notices/capspredicate16focusedpassed | contextmodule integration+admission |
 
 ## Agreed interfaces and decisions
 - One crate; modules mirror reference concerns. JSON Value at cross-module boundaries preserves existing wire shapes without duplicate Rust schemas; typed shared records may live in types.rs.
@@ -79,3 +79,46 @@ Updated: 2026-10-28T03:12:10Z; stage: resumed after compaction; tools trace fiel
 - Root fixed Auto review findings: exclude child init, honor OpenAI auth precedence from Anthropic fallback, use mutable plan mode, cancellation before route commit. Types fixed retained-empty preview slices; regression verification pending settled guard API.
 - serde_json float_roundtrip enabled: W42 cumulative differs one ULP with default decoder; root added exact binary64 probability regression. Build/test/parity pending this feature.
 - Cancellation guard now Result<Guard,String>; CLI hooks/real SIGINT tests, provider binding, child targeting implemented. Child tests previously blocked by transitional API mismatch; reruns pending. Jev/auth propagation active provider task.
+
+- Releasec95fa0051e331804c5d6ae9ff6a776cb66fe388db7cd88e1446f7bfe09af175e build exit0(5.97s,unused cancel warning); full tests initially198/199unit passed, new fixture lacked commit in build snapshot. Corrected fixture verified; next root cargo test exit0:201unit+6binary+4auto+3display+3input+2real SIGINT tests passed. No root PTY yet.
+- Local checkpoint commit f76db0f (`Match wire and tool serialization; add Auto routing and cancellation`) created after clean root test gate. Contains manifest+Cargo.lock. No push. Some active-writer source changes may postdate commit.
+- Jev cancelable API delivered; root auto now passes shared token. Provider focused checks39 total passed across six groups; full root reverify pending. Node double accounting fixed, focused agents10passed. Empty-plan logical handoff field identified as shared cache-key derivation cause and assigned loop.
+
+## Second full-fast diagnostic
+- 2026-10-28T03:34:12Z–03:42:34Z approved make parity UNIT=0 SLOW=0:4034selected,3546passed,478failed,10pending,106omitted. Shell501.980s. Report /tmp/reagent-parity-cases-zgwp53s_/artifacts/report.json (~870MB failure artifacts). Suite clean and approved digest unchanged before/after.
+- Release22863abc33b8f03d4b89ab204022044f0ee300751ea7de009c45892927ad620f, build exit0(4.47s), unused cancellation::cancel warning. Observed source manifest e365f2236b00052379fc0e497d39134e705d89817784e68763b7f40491445f93. Binary unchanged during suite; writers may edit source meanwhile.
+- Most wire+tools now pass. Remaining shared first mismatches: effect field order(path/operation before workspace), checkpoint phase terminal vs idle, child snapshot refs-only context, agent command outcome order(action beforeid/name), admission-byte exactness, blocked/refresh display. ~100PTY leaves still fail initial frame. New terminal milestone approved next, disjoint from pure CLI fixes delegated separately.
+
+## Terminal/remaining parity milestone (after full-fast2)
+- CLI terminal stage1/2 owns terminal.rs,new terminal/editor.rs+region.rs,chat/render/activity. Root adds runtime Session.region optional sharedRegionHandle; loop initializesNone, children stayNone. Pure flags cli.rs+cli_flags.rs moved tofiles; model_switch.rs admission moved totypes. Disjoint ownership explicit.
+- Terminal writer hit token cap, reset and continued from files; no uncertain exec. Transient terminal compile errors blocked all current focused regressions (wrap visibility,regional_line,lifetime,missing constructorfield). These are active source work, not external blockers. Avoid repeatedly rerunning until coherent checkpoint.
+- Landed pending root verification: effects order,refs-only child snapshot flag/control ordering/effort defaults,Go JSON field folding/native trace byte strings/password redaction,git nullsteps+exec overlap,CLI grant/usage failures,model-switch refusal byte metadata. Child tests currently blocked by terminal compilation; no suite claims yet.
+- Root trace.rs fixes mkdir-on-file parent category to Go ENOTDIR; new binary trace-failure/recovery regression pending compile. Root checkpoint.rs mirrors Go os.Rename directory-destination EEXIST precheck (no symlink following), adds save/refusal/temp-cleanup regression. Verification pending same build dependency.
+
+- Root cargo check exit0,no warnings after terminal checkpoint. Root fulltest235/236unit passed; stale transport test expected String instead of deliberate raw-byte String wrapper. Provider updated ONLY internal assertion; all44focusedchecks passed. Followup root test attempt compileblocked by in-progress missing event_tests.rs (now created), so dependent release skipped.
+- Root separate cargo build --release exit0(4.53s),no warnings, releaseefbadf47c7433b1d871cab4e436554451736d5c8454762c7be3b43002e446992. Full root tests pending neweventdurability module.
+- 2026-10-28T03:57:28Z approved actualPTY C29,C30,C40,C43:11selected0passed11failed0pending, /tmp/reagent-parity-cases-riz39hgu/artifacts,4.797s shell, KEEP artifacts~84MB. Initial framed prompt assertions now pass; exactscreens still fail startup DSR rows(scriptedexpected9/actual7;liveexpected10/actual9),narrowstatus,postturnscreens. Suiteclean/digestunchangedpre/post. CLI agentcorrectingthese,not claimingPTYparity.
+- Currentfocusedchecks: CLIterminal10+render9+display3+input3+signals2;loop31/GC2/compact2;filescli_flags4;commands9+Git15+cancel4;agents16. Provider new immediate borrowedTrace API generate_traced46focusedpassed;rootloopintegration pending. No fullgate claim. CLI predecessor reset aftercap,contextcompaction notnewrootcompaction.
+
+## Continuation at 04:03:05Z
+- Reread status/contracts after root summary; resumed direct-event loop and child admission integration. t5 reset after capped run8d876190cdc06134 (no edits/no uncertain exec). Contextmodule prepared bytypes, now agentsowner registers/integrates beforechildpublication. Tool whitelist delivered18focusedpassed; CLI welcome/status/paste fixes29focusedpassed, rootreverify pending.
+- Root summary retained exact remaining gaps; recorded second observed root compaction boundary (no new root Steps count available here). No unresolved uncertain command effects. Source Go/parity untouched; suite/cache read-only.
+
+- 2026-10-28T04:03Z root gate: cargo test --locked --offline exit0:244unit+7binary+4auto+3display+4flags+3input+2signals passed; trace filesystem/recovery and checkpoint directory-refusal regressions included. cargo build --release --locked --offline exit0(4.77s), no warnings. Release8f32d4ca8b025a307751f0f5a028289e6ca2ff1718ef9604b4e5ac6afe26ac00. Contextmodule still unregistered at this build; integration in progress.
+- 2026-10-28T04:04Z approved actualPTY C29/C30/C40/C43 release8f32d4ca:11/11passed0failed0pending. /tmp/reagent-parity-cases-b84jidfm/artifacts (85MB KEEP). Suite clean/digest unchanged pre/post. All first framedprompt/edit/narrow screenshots nowexact; concurrentturninput stillnotimplemented. CLI nextstage concurrentreader assigned.
+- 2026-10-28T04:08Z approved AREA=wire SLOW=0 release8f32d4ca:2667selected2597passed61failed9pending1473omitted;160.800s shell. Report/tmp/reagent-parity-cases-3wlvfn73/artifacts/report.json(110MB). Suiteclean/digestunchangedpre/post. Latest loop/admission/provider nesteddecoder sourcefixes postdatebinary, notcertified. Remainingtimeouts/userdisplay referredproviderowner.
+- Deliveredsourcechecks sincebuild: context+admissionagents27pass; directtrace/caps/notices loop34+compact2+GC2pass; nestedwireprovider49pass. Root gatepending. ExactA37calibration causeslocated: restoredpromptpin rewritten(+1byte), snapshottext lexicalwhitespacecompact(-6bytes); no numericfudge.
+- 2026-10-28T04:12Z approved AREA=tools SLOW=0 release8f32d4ca:676selected664passed11failed1pending3464omitted;193.118s. /tmp/reagent-parity-cases-q7wdla9k/artifacts/report.json(35MB). Suiteclean/digestunchangedpre/post. Missingnotice callbacks and PTYconsent accountseveral; T56empty/null initialhistoryremains.
+- Provider task hit cap5bf43fd004a4bf53 afterpartialsourceedits (displayAPI,timeouterrors,snapshot); no uncertainexec. Resetandfinishbeforegate. Loop37+context10+compact2+GC2focusedpassed, addsreservedsummaryexcept2min/zero-retryprovidercontrol. CLI35focusedpassed including3realPTYtestsconcurrentreader; loopregionhooksnotyetwired. RootAuto outputnowregionbound, unverified.
+- `python3 bench/tty/check.py --help` is NOT supported: runner interpreted --help as binary, attempted scenarios, exited1(FileNotFoundError). No valid RustTTYrun occurred from that command. InspectingrunnerCLI beforecorrectinvocation; no uncertain effects.
+- Root `make tty-check` exit0: all29referenceGoPTYscenariospassed(67.139s). Realoutput includedframedprompt,markdown,queuedinput/cancel/resize; this target buildsGo, NOT Rust. Rustactualapproved11screenspass alreadyrecorded; nextRustconcurrentregionreleasegatepending.
+- Commandsowneroverlap analysis: all6T37failures firstdiffisprivatechildactivity/missingnotices, correctoverlapdataintraces; focusedoverlap1passed. Loopdisplaygatesandagentchildconfig fixassigned.
+- 2026-10-28T04:15:47Z rootcargo test failed278/279unit; newinprogressagentschildprivacyfixturepanicked atagents.rs1205 thenactivity.rs476missingfield, ran64s. DependentreleasewasSKIPPED(no newbinary). Loopownerconcurrentlyfixed all_displaygates40focusedpassed; agentsownerfixingfixture. Providernow54focusedpass includesretryhooks/timeoutdiagnostics/zero cancelusage/rawsnapshot; summarypercallpolicy remainsnexttask. Lastrootcargocheck exit0 nowarning beforetoolsconsentedits.
+- Subsequentrootcargocheckexit0nowarnings whileconsent/summarywritersactive. Agentschildprivacyregressionnowpasses afterDisplaygatefix; agentreports earlierexec_unknown timeout (b2f8b99cfb19867b), rootinspectingprocessesbeforeanyrepeat. No newreleaseyet.
+- Root inspected process table afteragents earlieruncertaintimeout: no survivingagents-target/cargo/childprivacyprocesses. No replaybeforeinspection. Loop42+compact2+GC2focusednowpass includesmutableplan dispatch andreservedsummaryAPIintegration; nextrootgate started.
+- Nextrootfulltest compileFAILED src/provider/wire_tests.rs220 String.windows ininprogresssummarytest; dependentbuildSKIPPED. Providerowner notified. This isdefinitecompilefailure, no uncertaineffects. Rootstandaloneproductionreleasebuildnextfor diagnostic.
+- Rootstandalone cargo build --release --locked --offline exit0(5.07s)no warnings; releaseb11e586582d49713b5825eccd591c4b9946fb2f4436f2585dc44f02d45e4b489. Newsourcecompiled includesconcurrentreader,directtraces,admission,privatechildsuppression,summaryreservedpolicyandmutableplan. Fulltestnotyetgreenafternewfixtures; diagnosticonly. Agentsfocused28passed coherent.
+- Rootfull cargo test exit0:290unit+7binary+4auto+4display+4flags+3input+8signals passed(10.47sunit). Fullgatefinallyclean, productionreleaseb11e5865 alreadybuiltbeforelastfocusedtest-onlyfixes.
+- ApprovedAREAagents SLOW=0 releaseb11e5865:318selected260passed58failed0pending3822omitted;86.023s. /tmp/reagent-parity-cases-q9lqxb7v/artifacts/report.json143MB. Suiteclean/digestunchangedpre/post. Admissionbytes andtrace childdispatchmetadata stilldiffer; sourcefixownersnext. PTYagentpresentationnotyetimplemented.
+- CLIreportsGoactualautoCompactthreshold80%, contrarypriorrootbrief40%; rootinspectingGoexactbeforecorrecting (do not treatbriefasreference). Toolsconsentcallbackready23tools+4clifocusedpass, terminalsidepending.
+- RootreadfrozenGo chat.go415 confirms autoCompactPercent=80. Prior40%briefwasrooterror; CLIownercorrectsbehaviorandregressions, sourceisalwaysreference. Rootreleaseeaaf9519c478abe555121338d0945c79e24ec18900361ee266dd2038780e24eb buildexit0(4.91s)no warnings aftergreen290unittestgate; someactivewriterfixesmaypostdatebinary.

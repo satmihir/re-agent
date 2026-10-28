@@ -106,19 +106,37 @@ fn switched_workspace_warning_precedes_activity_only_when_commands_are_enabled()
             {"blocks":[{"kind":"text","text":"switched"}]}
         ])).unwrap()).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_reagent"))
-            .env_clear().env("PATH", "/usr/bin:/bin").env("HOME", directory.path())
-            .env("XDG_CACHE_HOME", directory.path().join("cache")).env("NO_COLOR", "1")
-            .args(["run", "--workspace"]).arg(launch).arg("--allow-workspace").arg(&target)
-            .arg("--scripted").arg(script).args(&flags).arg("switch twice").output().unwrap();
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", directory.path())
+            .env("XDG_CACHE_HOME", directory.path().join("cache"))
+            .env("NO_COLOR", "1")
+            .args(["run", "--workspace"])
+            .arg(launch)
+            .arg("--allow-workspace")
+            .arg(&target)
+            .arg("--scripted")
+            .arg(script)
+            .args(&flags)
+            .arg("switch twice")
+            .output()
+            .unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(output.status.success(), "{stderr}");
         assert_eq!(output.stdout, b"switched\n");
         let warning = "! exec mode: commands run as you, in ~/target, and can read, write, and use the network\n";
-        assert_eq!(stderr.matches(warning).count(), usize::from(flags.is_empty()), "{stderr}");
+        assert_eq!(
+            stderr.matches(warning).count(),
+            usize::from(flags.is_empty()),
+            "{stderr}"
+        );
         assert!(stderr.contains("  ✓ switch_workspace "));
         assert!(stderr.contains(" → already active\n"));
         if flags.is_empty() {
-            assert!(stderr.find(warning).unwrap() < stderr.find("  ✓ switch_workspace ").unwrap(), "{stderr}");
+            assert!(
+                stderr.find(warning).unwrap() < stderr.find("  ✓ switch_workspace ").unwrap(),
+                "{stderr}"
+            );
         }
     }
 }
@@ -128,17 +146,91 @@ fn chat_plan_rendering_preserves_unicode_whitespace_and_the_following_turn() {
     let directory = tempfile::tempdir().unwrap();
     let script = directory.path().join("responses.json");
     let content = "  indented plan\t \u{2028}\u{2029}";
-    std::fs::write(&script, serde_json::to_vec(&json!([
-        {"blocks":[{"kind":"text","text":format!("<plan>\n{content}\n</plan>")}]},
-        {"blocks":[{"kind":"text","text":"next reply"}]}
-    ])).unwrap()).unwrap();
+    std::fs::write(
+        &script,
+        serde_json::to_vec(&json!([
+            {"blocks":[{"kind":"text","text":format!("<plan>\n{content}\n</plan>")}]},
+            {"blocks":[{"kind":"text","text":"next reply"}]}
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_reagent"))
-        .env_clear().env("PATH", "/usr/bin:/bin").env("HOME", directory.path())
-        .env("XDG_CACHE_HOME", directory.path().join("cache")).env("NO_COLOR", "1")
-        .args(["chat", "--workspace"]).arg(directory.path()).arg("--scripted").arg(script)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(b"first\nsecond\n/exit\n").unwrap();
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", directory.path())
+        .env("XDG_CACHE_HOME", directory.path().join("cache"))
+        .env("NO_COLOR", "1")
+        .args(["chat", "--workspace"])
+        .arg(directory.path())
+        .arg("--scripted")
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"first\nsecond\n/exit\n")
+        .unwrap();
     let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert_eq!(output.stdout, format!("plan\n{content}\nnext reply\n").as_bytes());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stdout,
+        format!("plan\n{content}\nnext reply\n").as_bytes()
+    );
+}
+
+#[test]
+fn blocked_chat_advice_precedes_trace_and_resubmission_is_only_an_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("responses.json");
+    let call = json!({"blocks":[{"kind":"tool_call","call":{"call_id":"write-once","name":"write_file","arguments":"{\"path\":\"f\",\"content\":\"x\"}"}}]});
+    std::fs::write(&script, serde_json::to_vec(&json!([call, call])).unwrap()).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_reagent"))
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", directory.path())
+        .env("XDG_CACHE_HOME", directory.path().join("cache"))
+        .env("NO_COLOR", "1")
+        .args(["chat", "--workspace"])
+        .arg(directory.path())
+        .arg("--scripted")
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"first\nmust not run\n/status\n/exit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stderr.matches("✗ protocol_error").count(), 1, "{stderr}");
+    let advice = "  session blocked: /compact or /reset to continue\n";
+    assert!(
+        stderr.find(advice).unwrap() < stderr.find("trace: ").unwrap(),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("error: the last run ended with protocol_error; inspect "),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("and use /compact or /reset to continue"),
+        "{stderr}"
+    );
+    assert!(output.stdout.is_empty());
 }

@@ -233,6 +233,7 @@ pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value
             .push(json!("none"));
         run.result["decision"]["probabilities"] = json!({});
     }
+    let mut recipe_started = false;
     let execution = run.choose(&allowed).and_then(|recipe| {
         if !run.paths().is_empty()
             && !["commit", "commit_push", "ship_pr", "follow_up_pr", "amend"]
@@ -242,6 +243,7 @@ pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value
                 "paths only applies to commit, commit_push, ship_pr, follow_up_pr and amend",
             ));
         }
+        recipe_started = true;
         run.recipe(&recipe)
     });
     match execution {
@@ -280,7 +282,11 @@ pub(super) fn execute(root: &Path, config: &Value, args: &Value) -> Result<Value
             }
         }
     }
-    run.result["steps"] = json!(run.steps);
+    run.result["steps"] = if recipe_started && run.steps.is_empty() {
+        Value::Null
+    } else {
+        json!(run.steps)
+    };
     order_result(&mut run.result);
     let status = s(&run.result, "status");
     let code = match status {

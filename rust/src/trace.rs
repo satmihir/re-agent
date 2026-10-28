@@ -65,6 +65,12 @@ impl Trace {
         #[cfg(unix)]
         builder.mode(0o700);
         if let Err(err) = builder.create(parent) {
+            // Go's MkdirAll reports a non-directory component, not an existing leaf.
+            let err = if err.kind() == io::ErrorKind::AlreadyExists && parent.is_file() {
+                io::Error::from_raw_os_error(libc::ENOTDIR)
+            } else {
+                err
+            };
             self.disable(&err);
             return;
         }

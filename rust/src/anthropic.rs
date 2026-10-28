@@ -87,28 +87,8 @@ pub fn encode_request(req: &Value) -> Result<Value, String> {
 }
 
 pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
-    let body = crate::provider::decode_json(raw)
+    let body = crate::provider::wire::decode(raw, &crate::provider::wire::ANTHROPIC_BODY)
         .map_err(|_| error("protocol_error", "response is not valid JSON"))?;
-    if !crate::provider::wire_fields(
-        &body,
-        &["id", "model", "stop_reason"],
-        &[],
-        &["content"],
-        &["usage", "stop_details"],
-    ) || !crate::provider::wire_fields(
-        &body["usage"],
-        &[],
-        &[
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_read_input_tokens",
-        ],
-        &[],
-        &[],
-    ) {
-        return Err(error("protocol_error", "response is not valid JSON"));
-    }
     let u = &body["usage"];
     let mut usage = usage_zero(!u.is_null());
     usage["input_tokens"] = json!(
@@ -141,10 +121,10 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
     }
     let raw_content = raw_tokens::array(raw_tokens::field(raw, "content").unwrap_or(b"[]"));
     let mut blocks = Vec::new();
-    for (i, b) in array(&body, "content").iter().enumerate() {
-        if !crate::provider::wire_fields(b, &["type", "text", "id", "name"], &[], &[], &[]) {
-            return Err(error("protocol_error", "content block is not valid JSON"));
-        }
+    for (i, raw_block) in raw_content.iter().enumerate() {
+        let b = crate::provider::wire::decode(raw_block, &crate::provider::wire::ANTHROPIC_BLOCK)
+            .map_err(|_| error("protocol_error", "content block is not valid JSON"))?;
+        let b = &b;
         match s(b, "type") {
             "text" => blocks.push(crate::openai::text_block("text", s(b, "text"))),
             "thinking" | "redacted_thinking" => {}

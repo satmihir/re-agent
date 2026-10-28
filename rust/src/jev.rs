@@ -140,8 +140,14 @@ fn post_at(
     let remaining = Duration::from_secs(2)
         .checked_sub(started.elapsed())
         .ok_or("Jev request: operation timed out")?;
-    let mut client = Client::new(remaining, remaining, Some(remaining))
-        .map_err(|_| "could not send Jev request")?;
+    let header = crate::transport::timeout("REAGENT_RESPONSE_HEADER_TIMEOUT", 600)?;
+    let idle = crate::transport::timeout("REAGENT_RESPONSE_IDLE_TIMEOUT", 300)?;
+    let mut client = Client::new(
+        Duration::from_secs(header),
+        Duration::from_secs(idle),
+        Some(remaining),
+    )
+    .map_err(|_| "could not send Jev request")?;
     client.cancellation = cancellation.clone();
     decision["attempted"] = json!(true);
     let response = client
@@ -697,5 +703,68 @@ mod http_tests {
         .unwrap();
         assert_eq!(decision["http_status"], 200);
         server.join().unwrap();
+    }
+}
+
+#[test]
+fn configured_timeouts_interrupt_before_the_overall_jev_deadline() {
+    const ENDPOINT: &str = "REAGENT_TEST_JEV_TIMEOUT_ENDPOINT";
+    const PHASE: &str = "REAGENT_TEST_JEV_TIMEOUT_PHASE";
+    if let Ok(endpoint) = std::env::var(ENDPOINT) {
+        let mut metadata = decision();
+        let started = Instant::now();
+        let error = post_at(
+            &json!({"state":"test"}),
+            started,
+            &mut metadata,
+            &endpoint,
+            "local-key",
+            None,
+        )
+        .unwrap_err();
+        assert!(started.elapsed() >= Duration::from_millis(800));
+        assert!(started.elapsed() < Duration::from_millis(1900));
+        let body = std::env::var(PHASE).unwrap() == "body";
+        assert_eq!(metadata["http_status"], if body { 200 } else { 0 });
+        assert_eq!(
+            error,
+            if body {
+                "read Jev response: operation timed out"
+            } else {
+                "Jev request: operation timed out"
+            }
+        );
+        return;
+    }
+    use std::io::Write;
+    for phase in ["headers", "body"] {
+        let (endpoint, server) = crate::transport::http::tests::server(move |mut stream| {
+            crate::transport::http::tests::request(&mut stream);
+            if phase == "body" {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\na")
+                    .unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(1300));
+        });
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "jev::configured_timeouts_interrupt_before_the_overall_jev_deadline",
+                "--nocapture",
+            ])
+            .env(ENDPOINT, endpoint)
+            .env(PHASE, phase)
+            .env("REAGENT_RESPONSE_HEADER_TIMEOUT", "1")
+            .env("REAGENT_RESPONSE_IDLE_TIMEOUT", "1")
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{phase}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

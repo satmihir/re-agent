@@ -141,34 +141,54 @@ pub(crate) fn stage(
     history: &[Value],
     rate: f64,
 ) -> Result<(Value, usize), String> {
-    let handoff = handoff(history)?;
+    stage_measured(config, history, rate).map_err(|(_, error)| error)
+}
+
+fn stage_measured(
+    config: &Value,
+    history: &[Value],
+    rate: f64,
+) -> Result<(Value, usize), (usize, String)> {
+    let handoff = handoff(history).map_err(|error| (0, error))?;
     let projected = if handoff.is_null() {
         vec![]
     } else {
-        vec![json!({"kind":"user","user":{"text":handoff["text"],"plan":handoff["plan"]}})]
+        let mut user = json!({"text":handoff["text"]});
+        if !text(&handoff, "plan").is_empty() {
+            user["plan"] = handoff["plan"].clone();
+        }
+        vec![json!({"kind":"user","user":user})]
     };
     let req = context::build_context(
         config,
-        json!({"session_id":"","run_id":"","step":0}),
+        crate::run_loop::scope("", "", 0),
         &projected,
         crate::tools::specs(config),
     );
     let body = provider::encode_request(config, &req)
-        .map_err(|e| format!("validate destination request: {e}"))?;
-    let size = types::json_string(&body).len();
+        .map_err(|error| (0, format!("validate destination request: {error}")))?;
+    let size = types::json_bytes(&body).len();
     if !projected.is_empty() {
         let window = crate::catalog::effective_context_window(config);
         if window == 0 {
-            return Err(
+            return Err((
+                size,
                 "destination context window is unknown; use fresh to discard history explicitly"
                     .into(),
-            );
+            ));
         }
         if (size as f64 * rate).ceil() + 16000. > window as f64 {
-            return Err("handoff exceeds the estimated destination window allowance; use /compact then retry /model, or use fresh to discard history".into());
+            return Err((size, "handoff exceeds the estimated destination window allowance; use /compact then retry /model, or use fresh to discard history".into()));
         }
     }
     Ok((handoff, size))
+}
+
+fn admission_rate(session: &Session, destination_provider: &str) -> f64 {
+    if destination_provider != text(&session.config, "provider") {
+        return 0.5;
+    }
+    crate::run_loop::admission_rate(session)
 }
 
 /// Transition validates a destination locally before replacing model bindings.
@@ -203,18 +223,13 @@ pub(crate) fn transition(
             },
         )
     };
-    let measured = session.state["tokens_per_byte"].as_f64().unwrap_or(0.);
-    let rate = if config["provider"] != session.config["provider"] || measured == 0. {
-        0.5
-    } else {
-        (measured * 1.5).max(0.25)
-    };
-    let staged = stage(&config, &history, rate);
+    let rate = admission_rate(session, text(&config, "provider"));
+    let staged = stage_measured(&config, &history, rate);
     metadata["latency_ms"] = json!(started.elapsed().as_millis() as u64);
     let (handoff, size) = match staged {
         Ok(v) => v,
-        Err(error) => {
-            metadata["request_bytes"] = json!(0);
+        Err((size, error)) => {
+            metadata["request_bytes"] = json!(size);
             metadata["reason"] = json!(error);
             session.trace.write("model.switch.failed", 0, metadata);
             session.trace.close();
@@ -265,6 +280,187 @@ mod tests {
         assert!(!text(&out, "text").contains("SECRET"));
         assert!(text(&out, "text").contains("omitted_native_items"));
     }
+    fn config() -> Value {
+        json!({"provider":"openai","model":"gpt-6-luna","reasoning_effort":"low","workspace":".","prompt":{"text":""}})
+    }
+
+    #[test]
+    fn stage_matches_independent_destination_encoding_and_omits_empty_plan_and_model_fields() {
+        for (provider, model) in [("openai", "gpt-6-luna"), ("anthropic", "claude-haiku-4-5")] {
+            let mut config = config();
+            config["provider"] = json!(provider);
+            config["model"] = json!(model);
+            config["agents"] = json!(true);
+            config["read_only"] = json!(true);
+            config["context_gc"] = json!(true);
+            let history = vec![
+                json!({"kind":"user","user":{"text":"task"}}),
+                json!({"kind":"assistant","assistant":{"model":"","response_id":"","blocks":[],"native":{"provider":"","items":[]}}}),
+            ];
+            let (handoff, size) = stage(&config, &history, 0.5).unwrap();
+            assert!(!text(&handoff, "text").contains("\"model\""));
+            assert!(!text(&handoff, "text").contains("\"response_id\""));
+            let projected = vec![json!({"kind":"user","user":{"text":handoff["text"]}})];
+            let request = context::build_context(
+                &config,
+                crate::run_loop::scope("", "", 0),
+                &projected,
+                crate::tools::specs(&config),
+            );
+            let encoded = provider::encode_request(&config, &request).unwrap();
+            assert_eq!(size, types::json_bytes(&encoded).len());
+        }
+    }
+
+    #[test]
+    fn stage_reports_measured_bytes_at_window_ceiling_and_unknown_window() {
+        let history = [json!({"kind":"user","user":{"text":"task"}})];
+        for rate in [0.25, 0.5, 0.3165, 1.5] {
+            let mut config = config();
+            let (_, size) = stage(&config, &history, rate).unwrap();
+            let required = 16000 + (size as f64 * rate).ceil() as usize;
+            config["context_window_tokens"] = json!(required);
+            assert_eq!(stage(&config, &history, rate).unwrap().1, size);
+            config["context_window_tokens"] = json!(required - 1);
+            let (reported, error) = stage_measured(&config, &history, rate).unwrap_err();
+            assert_eq!(reported, size);
+            assert!(error.contains("window allowance"));
+        }
+        let mut config = config();
+        config["model"] = json!("gpt-5.6-luna");
+        let (reported, error) = stage_measured(&config, &history, 0.5).unwrap_err();
+        assert!(reported > 0);
+        assert!(error.contains("unknown"));
+        assert!(stage(&config, &[], 1000.).is_ok());
+    }
+
+    #[test]
+    fn fresh_stage_bypasses_window_not_encoded_request_limit() {
+        let mut config = config();
+        config["context_window_tokens"] = json!(1);
+        let (_, base) = stage(&config, &[], 1000.).unwrap();
+        config["prompt"]["text"] = json!("x".repeat(crate::openai::MAX_REQUEST_BYTES - base));
+        assert_eq!(
+            stage(&config, &[], 1000.).unwrap().1,
+            crate::openai::MAX_REQUEST_BYTES
+        );
+        config["prompt"]["text"] = json!(format!("{}x", text(&config["prompt"], "text")));
+        let (size, error) = stage_measured(&config, &[], 1000.).unwrap_err();
+        assert_eq!(size, 0);
+        assert!(error.starts_with("validate destination request: request is "));
+        assert!(error.contains("byte limit"));
+    }
+
+    #[test]
+    fn calibration_uses_marshaled_native_reasoning_and_only_the_outgoing_view() {
+        let config = config();
+        for kind in ["reasoning", "thinking", "redacted_thinking", "message"] {
+            let source = format!(
+                " {{ \"type\" : \"{kind}\", \"data\" : \"{}<&>\" }} ",
+                "A".repeat(1000)
+            );
+            let item = crate::raw::new(source.as_bytes());
+            let history = [
+                json!({"kind":"user","user":{"text":"task"}}),
+                json!({"kind":"assistant","assistant":{"blocks":[{"kind":"text","text":"answer"}],"native":{"provider":"openai.responses","items":[item]}}}),
+            ];
+            let request = context::build_context(
+                &config,
+                crate::run_loop::scope("", "", 0),
+                &history,
+                crate::tools::specs(&config),
+            );
+            let body = provider::encode_request(&config, &request).unwrap();
+            let whole = types::json_bytes(&body).len();
+            let expected = whole
+                - if kind == "message" {
+                    0
+                } else {
+                    types::json_bytes(&item).len()
+                };
+            assert_eq!(
+                crate::run_loop::admission_bytes(&config, &request).unwrap(),
+                expected
+            );
+            let (handoff, _) = stage(&config, &history, 0.5).unwrap();
+            let projected = [json!({"kind":"user","user":{"text":handoff["text"]}})];
+            let request = context::build_context(
+                &config,
+                crate::run_loop::scope("", "", 0),
+                &projected,
+                crate::tools::specs(&config),
+            );
+            let body = provider::encode_request(&config, &request).unwrap();
+            assert_eq!(
+                crate::run_loop::admission_bytes(&config, &request).unwrap(),
+                types::json_bytes(&body).len()
+            );
+        }
+    }
+
+    #[test]
+    fn refused_transition_reports_destination_bytes_and_keeps_source_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = config();
+        config["model"] = json!("gpt-6-sol");
+        config["workspace"] = json!(directory.path());
+        config["trace_dir"] = json!(directory.path());
+        config["show_context"] = json!(true);
+        config["context_window_tokens"] = json!(1);
+        let mut session = Session::new(config).unwrap();
+        session.history = vec![json!({"kind":"user","user":{"text":"task"}})];
+        session.state["tokens_per_byte"] = json!(0.211);
+        session.state["last_request"] = types::usage_zero(true);
+        let before = (
+            session.config.clone(),
+            session.history.clone(),
+            session.state["last_request"].clone(),
+        );
+        assert!(transition(
+            &mut session,
+            &crate::catalog::model_info("gpt-6-luna"),
+            false
+        )
+        .unwrap_err()
+        .contains("window allowance"));
+        assert_eq!(
+            (
+                session.config.clone(),
+                session.history.clone(),
+                session.state["last_request"].clone()
+            ),
+            before
+        );
+        assert_eq!(session.state["tokens_per_byte"], 0.211);
+        let events = std::fs::read_to_string(text(&session.state, "last_trace")).unwrap();
+        let events: Vec<Value> = events
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["type"], "model.switch.failed");
+        let mut destination = session.config.clone();
+        destination["model"] = json!("gpt-6-luna");
+        provider::configure(&mut destination).unwrap();
+        context::pin_instructions(&mut destination);
+        let (size, _) = stage_measured(&destination, &session.history, 0.211 * 1.5).unwrap_err();
+        assert!(size > 0);
+        assert_eq!(events[1]["data"]["request_bytes"], size);
+    }
+
+    #[test]
+    fn destination_rate_resets_across_providers_and_floors_same_provider_measurements() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = config();
+        config["workspace"] = json!(directory.path());
+        let mut session = Session::new(config).unwrap();
+        for (measured, expected) in [(0., 0.5), (0.001, 0.25), (0.211, 0.211 * 1.5), (1., 1.5)] {
+            session.state["tokens_per_byte"] = json!(measured);
+            assert_eq!(admission_rate(&session, "openai"), expected);
+            assert_eq!(admission_rate(&session, "anthropic"), 0.5);
+        }
+    }
+
     #[test]
     fn unresolved_effects_refuse_handoff() {
         let call = json!({"kind":"assistant","assistant":{"blocks":[{"kind":"tool_call","call":{"call_id":"c","name":"exec","arguments":"{}"}}]}});

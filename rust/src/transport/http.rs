@@ -26,7 +26,9 @@ pub struct Client {
     header: Duration,
     idle: Duration,
     total: Option<Duration>,
+    pub(crate) deadline: Option<Instant>,
     pub cancellation: Option<Arc<AtomicBool>>,
+    pub interruption: Option<&'static AtomicBool>,
 }
 impl Client {
     pub fn new(header: Duration, idle: Duration, total: Option<Duration>) -> io::Result<Self> {
@@ -49,7 +51,9 @@ impl Client {
             header,
             idle,
             total,
+            deadline: None,
             cancellation: None,
+            interruption: None,
         })
     }
     pub fn post(&self, url: impl AsRef<str>) -> RequestBuilder<'_> {
@@ -155,13 +159,24 @@ impl RequestBuilder<'_> {
             let length = self.body.len();
             self = self.header("content-length", length.to_string());
         }
+        let operation = if self.method == Method::POST {
+            "Post"
+        } else {
+            "Get"
+        };
         let mut request = Request::builder()
             .method(self.method)
             .uri(url.as_str())
             .body(Full::new(Bytes::from(self.body)))
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid HTTP request"))?;
         *request.headers_mut() = self.headers;
-        let total = self.client.total.map(|duration| Instant::now() + duration);
+        let total = match (
+            self.client.total.map(|duration| Instant::now() + duration),
+            self.client.deadline,
+        ) {
+            (Some(total), Some(deadline)) => Some(total.min(deadline)),
+            (total, deadline) => total.or(deadline),
+        };
         let header_end = total.map_or(Instant::now() + self.client.header, |end| {
             end.min(Instant::now() + self.client.header)
         });
@@ -172,8 +187,32 @@ impl RequestBuilder<'_> {
                 self.client.inner.request(request),
                 header_end,
                 self.client.cancellation.as_ref(),
-            ))?
+                self.client.interruption,
+            )).map_err(|error| {
+                if error.kind() == io::ErrorKind::ConnectionAborted {
+                    return io::Error::new(error.kind(), format!("{operation} {:?}: {error}", self.url));
+                }
+                if error.kind() != io::ErrorKind::TimedOut { return error }
+                let reason = if total.is_some_and(|end| Instant::now() >= end) {
+                    "context deadline exceeded"
+                } else {
+                    "net/http: timeout awaiting response headers"
+                };
+                io::Error::new(io::ErrorKind::TimedOut, format!("{operation} {:?}: {reason}", self.url))
+            })?
             .map_err(|error| {
+                use std::error::Error;
+                let mut cause = error.source();
+                while let Some(source) = cause {
+                    if source.downcast_ref::<io::Error>().is_some_and(|error| error.kind() == io::ErrorKind::ConnectionRefused) {
+                        let address = url.socket_addrs(|| None).ok().and_then(|addresses| addresses.into_iter().next());
+                        if let Some(address) = address {
+                            return io::Error::new(io::ErrorKind::ConnectionRefused,
+                                format!("{operation} {:?}: dial tcp {address}: connect: connection refused", self.url));
+                        }
+                    }
+                    cause = source.source();
+                }
                 io::Error::new(
                     if error.is_connect() {
                         io::ErrorKind::ConnectionRefused
@@ -198,6 +237,8 @@ impl RequestBuilder<'_> {
             idle_end: idle_end.clone(),
             total,
             cancellation: self.client.cancellation.clone(),
+            interruption: self.client.interruption,
+            idle: self.client.idle,
         };
         Ok(Response {
             status,
@@ -232,10 +273,13 @@ async fn wait<F: Future>(
     future: F,
     end: Instant,
     cancellation: Option<&Arc<AtomicBool>>,
+    interruption: Option<&AtomicBool>,
 ) -> io::Result<F::Output> {
     let mut future = std::pin::pin!(future);
     loop {
-        if cancellation.is_some_and(|token| token.load(Ordering::SeqCst)) {
+        if cancellation.is_some_and(|token| token.load(Ordering::SeqCst))
+            || interruption.is_some_and(|token| token.load(Ordering::SeqCst))
+        {
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 "context canceled",
@@ -286,7 +330,23 @@ impl Read for Body {
             if self.gzip.is_none() {
                 self.gzip = Some(flate2::read::GzDecoder::new(self.plain.take().unwrap()));
             }
-            self.gzip.as_mut().unwrap().read(output)
+            self.gzip.as_mut().unwrap().read(output).map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData
+                ) {
+                    let message = if error.to_string().contains("checksum") {
+                        "gzip: invalid checksum"
+                    } else {
+                        "gzip: invalid header"
+                    };
+                    io::Error::new(io::ErrorKind::Other, message)
+                } else if error.kind() == io::ErrorKind::UnexpectedEof {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF")
+                } else {
+                    error
+                }
+            })
         } else {
             self.plain.as_mut().unwrap().read(output)
         };
@@ -303,6 +363,8 @@ struct NetworkReader {
     idle_end: Arc<Mutex<Instant>>,
     total: Option<Instant>,
     cancellation: Option<Arc<AtomicBool>>,
+    interruption: Option<&'static AtomicBool>,
+    idle: Duration,
 }
 impl Read for NetworkReader {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
@@ -317,22 +379,52 @@ impl Read for NetworkReader {
             }
             let end = *self.idle_end.lock().unwrap();
             let end = self.total.map_or(end, |total| total.min(end));
-            let frame = self.runtime.block_on(wait(
-                self.incoming.frame(),
-                end,
-                self.cancellation.as_ref(),
-            ))?;
+            let frame = self
+                .runtime
+                .block_on(wait(
+                    self.incoming.frame(),
+                    end,
+                    self.cancellation.as_ref(),
+                    self.interruption,
+                ))
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::TimedOut {
+                        let message = if self.total.is_some_and(|end| Instant::now() >= end) {
+                            "context deadline exceeded".into()
+                        } else {
+                            format!(
+                                "the provider sent nothing for {}",
+                                super::display::duration(self.idle)
+                            )
+                        };
+                        return io::Error::new(io::ErrorKind::TimedOut, message);
+                    }
+                    error
+                })?;
             match frame {
                 Some(Ok(frame)) => {
                     if let Ok(data) = frame.into_data() {
                         self.buffer = data;
                     }
                 }
-                Some(Err(_)) => {
+                Some(Err(error)) => {
+                    use std::error::Error;
+                    let mut cause = error.source();
+                    while let Some(source) = cause {
+                        if let Some(error) = source.downcast_ref::<io::Error>() {
+                            if error.kind() == io::ErrorKind::ConnectionReset {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::ConnectionReset,
+                                    "connection reset by peer",
+                                ));
+                            }
+                        }
+                        cause = source.source();
+                    }
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
-                        "unexpected end of file",
-                    ))
+                        "unexpected EOF",
+                    ));
                 }
                 None => return Ok(0),
             }

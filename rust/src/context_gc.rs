@@ -23,7 +23,12 @@ pub fn history(accepted: &[Value], dropped: &Value) -> Vec<Value> {
         let mut entry=entry.clone();
         if string(&entry["user"]["source"])=="context_gc"&&Some(i)!=last{entry["user"]["text"]=json!("[consolidated references superseded by the later reference entry; original reads remain recoverable by their recall IDs]");}
         let id=string(&entry["tool"]["call_id"]);let drop=&dropped[id];
-        if drop.is_object(){let old=&entry["tool"]["outcome"];entry["tool"]["outcome"]=json!({"workspace":old["workspace"],"ok":true,"code":"context_gc","message":drop["placeholder"],"data":null,"truncated":false,"effect":old["effect"]});}
+        if drop.is_object(){
+            let old=&entry["tool"]["outcome"];
+            let mut outcome=json!({"workspace":old["workspace"],"ok":true,"code":"context_gc","message":drop["placeholder"],"data":null,"truncated":false,"effect":old["effect"]});
+            if string(&old["workspace"]).is_empty(){outcome.as_object_mut().unwrap().shift_remove("workspace");}
+            entry["tool"]["outcome"]=outcome;
+        }
         entry
     }).collect()
 }
@@ -535,6 +540,19 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     session.state["gc_state"]["dropped"] = json!(merged);
     session.state["gc_state"]["last_pass"] = json!(steps);
     session.trace.write("context.gc",number(&session.state["steps"]) as usize,json!({"dropped":ordered,"bytes_freed":freed,"estimated_tokens_freed":freed_tokens.ceil() as i64,"age_steps":number(&session.config["context_gc_age_steps"]),"consolidate":flag(&session.config["context_gc_consolidate"]),"reference_entry":reference,"fixed_prefix_bytes":fixed_bytes,"rebuild_bytes":rebuild_bytes,"estimated_rebuild_tokens":rebuild_tokens.ceil() as i64,"session_requests":number(&session.state["gc_requests"]),"expected_remaining_requests":remaining,"cached_ratio":0.1,"cache_write_price":write_price,"estimated_net_saving":net,"trigger":trigger,"cache_break_entry":break_entry+1,"cache_break_byte":break_byte}));
+    if flag(&session.config["_display"]) {
+        let note = format!(
+            "  · context GC: dropped {} results, ~{} tokens",
+            ordered.len(),
+            crate::render::count(freed_tokens.ceil() as i64)
+        );
+        let note = if crate::render::styled(2) {
+            format!("\x1b[2m{note}\x1b[0m\n")
+        } else {
+            format!("{note}\n")
+        };
+        crate::terminal::output(session.region.as_ref(), 2, &note);
+    }
     true
 }
 
@@ -581,6 +599,37 @@ pub fn recall(session: &Session, arguments: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gc_projection_omits_empty_workspace_but_keeps_required_empty_fields() {
+        for workspace in [Value::Null, json!(""), json!("/x")] {
+            let mut original = tools::outcome(true, "ok", "", json!({"stdout":"large"}), "none");
+            if !workspace.is_null() {
+                original["workspace"] = workspace.clone();
+            }
+            let accepted = vec![
+                json!({"kind":"tool","tool":{"call_id":"a","name":"exec","outcome":original}}),
+            ];
+            let view = history(&accepted, &json!({"a":{"placeholder":""}}));
+            let outcome = &view[0]["tool"]["outcome"];
+            let mut expected = Vec::new();
+            if !string(&workspace).is_empty() {
+                expected.push("workspace");
+            }
+            expected.extend(["ok", "code", "message", "data", "truncated", "effect"]);
+            assert_eq!(
+                outcome
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(outcome["message"], "");
+            assert!(outcome["data"].is_null());
+            assert_eq!(accepted[0]["tool"]["outcome"], original);
+        }
+    }
     #[test]
     fn gc_projection_preserves_accepted_evidence() {
         let accepted = vec![

@@ -7,5 +7,6 @@ pub struct Session {
     pub tools: crate::tools::ToolState,
     pub provider: crate::provider::Provider,
     pub trace: crate::trace::Trace,
+    pub region: Option<crate::terminal::RegionHandle>,
     pub state: Value,
 }

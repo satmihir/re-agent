@@ -5,12 +5,38 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+/// WorkspaceDestination describes a validated location presented for human consent.
+#[derive(Clone)]
+pub struct WorkspaceDestination {
+    /// path is the canonical workspace or the exact prospective destination.
+    pub path: PathBuf,
+    /// missing distinguishes an exact reservation from an existing directory.
+    pub missing: bool,
+    spelling: PathBuf,
+    requested: PathBuf,
+    parent: (u64, u64),
+}
+
+/// WorkspaceConsentError distinguishes missing terminal input from unavailable consent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceConsentError {
+    /// NotInteractive means input cannot grant dynamic workspace access.
+    NotInteractive,
+    /// Unavailable means the picker was cancelled or its input failed.
+    Unavailable,
+}
+
+/// WorkspaceConsent asks the human without granting access or changing authority.
+pub type WorkspaceConsent =
+    dyn FnMut(&Value, &WorkspaceDestination) -> Result<bool, WorkspaceConsentError> + Send;
+
 pub struct ToolState {
     pub workspace: Workspace,
     pub state: Value,
     handles: HashMap<PathBuf, Workspace>,
-    approved: Vec<PathBuf>,
-    prospective: HashMap<PathBuf, (u64, u64)>,
+    approved: Vec<WorkspaceDestination>,
+    /// workspace_consent is a chat-local callback, never checkpointed or model-configured.
+    pub workspace_consent: Option<Box<WorkspaceConsent>>,
 }
 impl ToolState {
     /// approved_paths returns the canonical grants in the reference's trace order.
@@ -18,7 +44,7 @@ impl ToolState {
         let mut paths: Vec<_> = self
             .approved
             .iter()
-            .map(|path| path.to_string_lossy().into_owned())
+            .map(|destination| destination.path.to_string_lossy().into_owned())
             .collect();
         paths.sort();
         paths.dedup();
@@ -27,7 +53,13 @@ impl ToolState {
 
     pub fn new(config: &Value) -> Result<Self, String> {
         let workspace = Workspace::open(config["workspace"].as_str().unwrap_or("."))?;
-        let mut approved = vec![workspace.root.clone()];
+        let mut approved = vec![WorkspaceDestination {
+            path: workspace.root.clone(),
+            missing: false,
+            spelling: workspace.root.clone(),
+            requested: workspace.root.clone(),
+            parent: (0, 0),
+        }];
         for key in [
             "allow_workspace",
             "allow_workspaces",
@@ -35,21 +67,19 @@ impl ToolState {
             "approved_workspaces",
         ] {
             if let Some(path) = config[key].as_str().filter(|path| !path.is_empty()) {
-                approved.push(crate::workspace::missing_path(Path::new(path)));
+                approved.push(
+                    workspace_destination(path, true)
+                        .map_err(|bad| bad["message"].as_str().unwrap_or("").to_owned())?,
+                );
             }
             if let Some(paths) = config[key].as_array() {
                 for path in paths {
                     if let Some(path) = path.as_str() {
-                        approved.push(crate::workspace::missing_path(Path::new(path)));
+                        approved.push(
+                            workspace_destination(path, true)
+                                .map_err(|bad| bad["message"].as_str().unwrap_or("").to_owned())?,
+                        );
                     }
-                }
-            }
-        }
-        let mut prospective = HashMap::new();
-        for path in &approved {
-            if fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
-                if let Some(parent) = path.parent().and_then(|p| fs::metadata(p).ok()) {
-                    prospective.insert(path.clone(), (parent.dev(), parent.ino()));
                 }
             }
         }
@@ -58,7 +88,7 @@ impl ToolState {
             state: json!({}),
             handles: HashMap::new(),
             approved,
-            prospective,
+            workspace_consent: None,
         })
     }
 }
@@ -89,7 +119,26 @@ pub fn specs(config: &Value) -> Value {
     {
         specs.push(json!({"name":"echo","description":"Return the given text unchanged. A test tool: it reads nothing and changes nothing.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/echo.json")).unwrap(),"effect":"read"}));
     }
-    if config["agents"].as_bool().unwrap_or(false) {
+    if config["agent"].as_bool().unwrap_or(false) {
+        specs.retain(|spec| {
+            matches!(
+                spec["name"].as_str(),
+                Some(
+                    "read_file"
+                        | "list_files"
+                        | "search_text"
+                        | "git_inspect"
+                        | "recall"
+                        | "report_friction"
+                        | "edit_file"
+                        | "write_file"
+                        | "delete_file"
+                        | "exec"
+                )
+            )
+        });
+    }
+    if config["agents"].as_bool().unwrap_or(false) || config["agent"].as_bool().unwrap_or(false) {
         specs.extend(crate::agents::specs());
     }
     if config["read_only"].as_bool().unwrap_or(false) {
@@ -197,11 +246,12 @@ pub fn execute(
     if spec.is_none() {
         let mut unrestricted = config.clone();
         unrestricted["read_only"] = json!(false);
-        let known = specs(&unrestricted)
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|spec| spec["name"] == name);
+        let known = config["agent"] != true
+            && specs(&unrestricted)
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|spec| spec["name"] == name);
         if known {
             return Ok(fail(
                 "permission_denied",
@@ -253,7 +303,12 @@ pub fn execute(
     }
 }
 
-fn destination(path: &str, prospective: bool) -> Result<(PathBuf, bool), Value> {
+pub(crate) fn destination(path: &str, prospective: bool) -> Result<(PathBuf, bool), Value> {
+    workspace_destination(path, prospective)
+        .map(|destination| (destination.path, destination.missing))
+}
+
+fn workspace_destination(path: &str, prospective: bool) -> Result<WorkspaceDestination, Value> {
     if path.trim().is_empty() || !Path::new(path).is_absolute() || path.contains('\0') {
         return Err(fail(
             "invalid_path",
@@ -266,18 +321,20 @@ fn destination(path: &str, prospective: bool) -> Result<(PathBuf, bool), Value> 
             "workspace path must not contain parent traversal or withheld names",
         ));
     }
-    let path = clean(Path::new(path));
-    let Some(parent) = path.parent() else {
+    let requested = clean(Path::new(path));
+    let Some(parent) = requested.parent() else {
         return Err(fail(
             "invalid_path",
             "the filesystem root cannot be selected",
         ));
     };
     let parent = fs::canonicalize(parent).map_err(os_outcome)?;
-    if !fs::metadata(&parent).map_err(os_outcome)?.is_dir() {
+    let parent_info = fs::metadata(&parent).map_err(os_outcome)?;
+    if !parent_info.is_dir() {
         return Err(fail("not_directory", "workspace parent is not a directory"));
     }
-    let path = parent.join(path.file_name().unwrap());
+    let spelling = parent.join(requested.file_name().unwrap());
+    let path = spelling.clone();
     let (root, missing) = match fs::symlink_metadata(&path) {
         Err(e) if prospective && e.kind() == std::io::ErrorKind::NotFound => (path, true),
         Err(e) => return Err(os_outcome(e)),
@@ -302,8 +359,51 @@ fn destination(path: &str, prospective: bool) -> Result<(PathBuf, bool), Value> 
     if !missing {
         crate::workspace::validate_destination(&root)?;
     }
-    Ok((root, missing))
+    Ok(WorkspaceDestination {
+        path: root,
+        missing,
+        spelling,
+        requested,
+        parent: (parent_info.dev(), parent_info.ino()),
+    })
 }
+
+fn permitted(state: &ToolState, destination: &WorkspaceDestination) -> Result<bool, Value> {
+    let mut permitted = false;
+    for grant in &state.approved {
+        if !destination.path.starts_with(&grant.path)
+            && !destination.spelling.starts_with(&grant.path)
+            && !destination.requested.starts_with(&grant.requested)
+        {
+            continue;
+        }
+        if grant.missing {
+            let parent = grant.path.parent().unwrap();
+            if fs::metadata(parent)
+                .map(|info| (info.dev(), info.ino()))
+                .ok()
+                != Some(grant.parent)
+            {
+                return Err(fail("workspace_validation_failed", "the approved destination's parent changed; restart to approve the changed location"));
+            }
+            if fs::canonicalize(parent).ok().as_deref() != Some(parent) {
+                return Err(fail(
+                    "workspace_validation_failed",
+                    "the approved destination's parent was redirected",
+                ));
+            }
+            if fs::symlink_metadata(&grant.path).is_ok_and(|info| info.file_type().is_symlink()) {
+                return Err(fail(
+                    "workspace_validation_failed",
+                    "the approved destination became a symlink",
+                ));
+            }
+        }
+        permitted |= destination.path.starts_with(&grant.path);
+    }
+    Ok(permitted)
+}
+
 fn workspace_tool(
     state: &mut ToolState,
     config: &Value,
@@ -314,66 +414,86 @@ fn workspace_tool(
         .as_str()
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| fail("invalid_arguments", "path must be a nonblank string"))?;
-    let(root,missing)=destination(path,name=="request_workspace_access").map_err(|mut v|{if name=="switch_workspace"&&v["code"]=="not_found"{v["message"]=json!("workspace must exist; request_workspace_access can approve the exact destination before creation");}v})?;
-    for (grant, identity) in &state.prospective {
-        if !root.starts_with(grant) && !clean(Path::new(path)).starts_with(grant) {
-            continue;
+    let request = name == "request_workspace_access";
+    let destination = workspace_destination(path, request).map_err(|mut bad| {
+        if !request && bad["code"] == "not_found" {
+            bad["message"] = json!("workspace must exist; request_workspace_access can approve the exact destination before creation");
         }
-        let parent = grant.parent().unwrap();
-        if fs::metadata(parent)
-            .map(|info| (info.dev(), info.ino()))
-            .ok()
-            .as_ref()
-            != Some(identity)
-        {
-            return Err(fail("workspace_validation_failed", "the approved destination's parent changed; restart to approve the changed location"));
-        }
-        if fs::canonicalize(parent).ok().as_deref() != Some(parent) {
-            return Err(fail(
-                "workspace_validation_failed",
-                "the approved destination's parent was redirected",
-            ));
-        }
-        if fs::symlink_metadata(grant).is_ok_and(|info| info.file_type().is_symlink()) {
-            return Err(fail(
-                "workspace_validation_failed",
-                "the approved destination became a symlink",
-            ));
-        }
+        bad
+    })?;
+    if crate::cancellation::cancelled(config) {
+        return Err(fail("permission_denied", "workspace request cancelled"));
     }
-    if !state.approved.iter().any(|p| root.starts_with(p)) {
-        return Err(fail(
-            "permission_required",
-            "workspace access needs human consent; use interactive chat or --allow-workspace PATH",
-        ));
-    }
-    if name == "request_workspace_access" {
-        if !state.approved.contains(&root) {
-            state.approved.push(root.clone());
-            if missing {
-                let parent = fs::metadata(root.parent().unwrap()).map_err(os_outcome)?;
-                state
-                    .prospective
-                    .insert(root.clone(), (parent.dev(), parent.ino()));
+    if !permitted(state, &destination)? {
+        let Some(consent) = state.workspace_consent.as_mut() else {
+            return Err(fail("permission_required", "workspace access needs human consent; use interactive chat or --allow-workspace PATH"));
+        };
+        match consent(config, &destination) {
+            Err(WorkspaceConsentError::NotInteractive) => return Err(fail("permission_required", "workspace consent needs a terminal; preapprove the exact path with --allow-workspace PATH")),
+            Err(WorkspaceConsentError::Unavailable) => return Err(fail("permission_denied", "workspace consent was cancelled or unavailable")),
+            Ok(allowed) => {
+                if !allowed || crate::cancellation::cancelled(config) {
+                    return Err(fail("permission_denied", "workspace access was not approved"));
+                }
             }
         }
+    }
+    let root = destination.path.clone();
+    let missing = destination.missing;
+    if !request && root == state.workspace.root {
         return Ok(workspace_outcome(
+            &state.workspace,
+            json!({"previous_workspace":root.to_string_lossy(),"workspace":root.to_string_lossy(),"changed":false}),
+            "none",
+        ));
+    }
+    let current = workspace_destination(
+        if request {
+            path
+        } else {
+            destination.spelling.to_str().unwrap()
+        },
+        request,
+    )?;
+    if current.path != root
+        || current.parent != destination.parent
+        || crate::cancellation::cancelled(config)
+    {
+        return Err(fail(
+            "workspace_validation_failed",
+            if request {
+                "destination changed or request was cancelled during consent"
+            } else {
+                "workspace changed or request was cancelled during consent"
+            },
+        ));
+    }
+    permitted(state, &current)?;
+    if request {
+        let out = workspace_outcome(
             &state.workspace,
             json!({"approved_path":root.to_string_lossy(),"workspace":state.workspace.root.to_string_lossy(),"missing":missing}),
             "none",
-        ));
+        );
+        if crate::types::json_bytes(&out).len() > crate::workspace::MAX_RESULT_BYTES {
+            return Err(fail(
+                "invalid_arguments",
+                "workspace approval metadata exceeds the result limit",
+            ));
+        }
+        if !state.approved.iter().any(|grant| grant.path == root) {
+            state.approved.push(destination);
+        }
+        return Ok(out);
     }
     let previous = state.workspace.root.clone();
-    if root == previous {
-        return Ok(workspace_outcome(
-            &state.workspace,
-            json!({"previous_workspace":previous.to_string_lossy(),"workspace":root.to_string_lossy(),"changed":false}),
-            "none",
-        ));
-    }
     let mut next_config = config.clone();
     next_config["workspace"] = json!(root.to_string_lossy());
-    if state.approved.first() == Some(&root) {
+    if state
+        .approved
+        .first()
+        .is_some_and(|grant| grant.path == root)
+    {
         next_config["read_only"] = json!(false);
         next_config["plan"] = json!(false);
     }
@@ -386,6 +506,9 @@ fn workspace_tool(
         Ok(Some(project))=>data["project_instructions"]=json!(project),
         _=>data["project_instructions_note"]=json!("no AGENTS.md was loaded from the new workspace (see warnings if any); earlier project instructions no longer apply"),
     }
+    }
+    if crate::cancellation::cancelled(config) {
+        return Err(fail("permission_denied", "workspace request cancelled"));
     }
     let mut out = workspace_outcome(&state.workspace, data, "none");
     if crate::types::json_string(&out).len() > crate::workspace::MAX_RESULT_BYTES {
@@ -411,8 +534,8 @@ fn workspace_tool(
         .map_err(|e| fail("io_error", &e))?;
     let old = std::mem::replace(&mut state.workspace, next);
     state.handles.insert(previous, old);
-    if !state.approved.contains(&root) {
-        state.approved.push(root);
+    if !state.approved.iter().any(|grant| grant.path == root) {
+        state.approved.push(destination);
     }
     Ok(out)
 }
@@ -474,6 +597,98 @@ fn report_friction(state: &mut ToolState, args: &Value) -> Result<Value, Value> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn child_declarations_preserve_parent_schema_bytes_and_limit_authority() {
+        for read_only in [false, true] {
+            for plan in [false, true] {
+                for context_gc in [false, true] {
+                    for friction in [false, true] {
+                        let parent = json!({"agents":true,"read_only":read_only,"plan":plan,"context_gc":context_gc,"report_friction":friction,"scripted":"responses.json","git_do":"jev"});
+                        let mut child = parent.clone();
+                        child["agent"] = json!(true);
+                        child["agents"] = json!(false);
+                        let declarations = specs(&child);
+                        let mut expected =
+                            vec!["git_inspect", "list_files", "read_file", "search_text"];
+                        if !read_only {
+                            expected.extend(["delete_file", "edit_file", "exec", "write_file"]);
+                        }
+                        if context_gc {
+                            expected.push("recall");
+                        }
+                        if friction {
+                            expected.push("report_friction");
+                        }
+                        let agent_specs = crate::agents::specs();
+                        expected.extend(
+                            agent_specs
+                                .iter()
+                                .map(|spec| spec["name"].as_str().unwrap()),
+                        );
+                        expected.sort();
+                        let actual: Vec<_> = declarations
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|spec| spec["name"].as_str().unwrap())
+                            .collect();
+                        assert_eq!(actual, expected, "{child}");
+                        let parent_specs = specs(&parent);
+                        for spec in declarations.as_array().unwrap() {
+                            let original = parent_specs
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .find(|original| original["name"] == spec["name"])
+                                .unwrap();
+                            assert_eq!(spec, original);
+                            let name = spec["name"].as_str().unwrap();
+                            assert_eq!(
+                                crate::schemas::raw_schema(name, &spec["input_schema"]),
+                                crate::schemas::raw_schema(name, &original["input_schema"])
+                            );
+                            assert!(
+                                crate::schemas::raw_schema(name, &spec["input_schema"]).is_some()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn child_dispatch_rejects_root_tools_and_respects_write_authority() {
+        let root = tempfile::tempdir().unwrap();
+        for read_only in [false, true] {
+            let config = json!({"workspace":root.path(),"agent":true,"agents":true,"read_only":read_only,"scripted":"responses.json","git_do":"recipe"});
+            let mut state = ToolState::new(&config).unwrap();
+            for name in [
+                "echo",
+                "git_do",
+                "request_workspace_access",
+                "switch_workspace",
+            ] {
+                assert_eq!(
+                    execute(&mut state, &config, name, "{}").unwrap()["code"],
+                    "tool_unavailable",
+                    "{name}"
+                );
+            }
+            let result = execute(
+                &mut state,
+                &config,
+                "write_file",
+                r#"{"path":"child","content":"created"}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                result["code"],
+                if read_only { "tool_unavailable" } else { "ok" }
+            );
+        }
+    }
+
     #[test]
     fn git_do_decodes_intent_before_mode_validation_without_changing_its_spec() {
         let dir = tempfile::tempdir().unwrap();
@@ -619,6 +834,287 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["data"]["matches"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn workspace_consent_approves_once_without_lifting_read_only_or_plan_mode() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        for read_only in [false, true] {
+            for plan in [false, true] {
+                for prospective in [false, true] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let launch = dir.path().join("launch");
+                    let target = dir.path().join("target");
+                    fs::create_dir(&launch).unwrap();
+                    if !prospective {
+                        fs::create_dir(&target).unwrap();
+                    }
+                    let config = json!({"workspace":launch,"read_only":read_only,"plan":plan,"session_id":crate::types::new_id()});
+                    let mut state = ToolState::new(&config).unwrap();
+                    let calls = Arc::new(AtomicUsize::new(0));
+                    let observed = calls.clone();
+                    let expected = target.clone();
+                    state.workspace_consent = Some(Box::new(move |config, destination| {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        assert_eq!(destination.path, expected);
+                        assert_eq!(destination.missing, prospective);
+                        assert_eq!(config["read_only"], read_only);
+                        assert_eq!(config["plan"], plan);
+                        Ok(true)
+                    }));
+                    let arguments = json!({"path":target}).to_string();
+                    let first = if prospective {
+                        "request_workspace_access"
+                    } else {
+                        "switch_workspace"
+                    };
+                    assert_eq!(
+                        execute(&mut state, &config, first, &arguments).unwrap()["ok"],
+                        true
+                    );
+                    if prospective {
+                        assert!(!target.exists());
+                        assert_eq!(state.workspace.root, launch);
+                        fs::create_dir(&target).unwrap();
+                    }
+                    let result =
+                        execute(&mut state, &config, "switch_workspace", &arguments).unwrap();
+                    assert_eq!(result["ok"], true, "{result}");
+                    assert_eq!(state.workspace.root, target);
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    assert!(state
+                        .approved_paths()
+                        .contains(&target.to_string_lossy().into_owned()));
+                    let write = execute(
+                        &mut state,
+                        &config,
+                        "write_file",
+                        r#"{"path":"file","content":"new"}"#,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        write["code"],
+                        if read_only {
+                            "permission_denied"
+                        } else if plan {
+                            "plan_mode"
+                        } else {
+                            "ok"
+                        }
+                    );
+                    assert_eq!(config["plan"], plan);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_consent_keeps_grants_across_reset_and_restricts_following_tools() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        for (read_only, plan) in [(true, false), (false, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let launch = dir.path().join("launch");
+            let target = dir.path().join("target");
+            fs::create_dir(&launch).unwrap();
+            fs::create_dir(&target).unwrap();
+            let script = dir.path().join("script.json");
+            let call = |id: &str, name: &str, arguments: Value| json!({"blocks":[{"kind":"tool_call","call":{"call_id":id,"name":name,"arguments":arguments.to_string()}}]});
+            fs::write(
+                &script,
+                json!([
+                    call("select", "switch_workspace", json!({"path":target})),
+                    call("write", "write_file", json!({"path":"forbidden","content":"bad"})),
+                    {"blocks":[{"kind":"text","text":"done"}]}
+                ])
+                .to_string(),
+            )
+            .unwrap();
+            let config = json!({"workspace":launch,"provider":"scripted","model":"scripted","scripted":script,"read_only":read_only,"plan":plan,"trace_file":dir.path().join("trace.jsonl")});
+            let mut session = crate::runtime::Session::new(config.clone()).unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observed = calls.clone();
+            session.tools.workspace_consent = Some(Box::new(move |_, _| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(true)
+            }));
+            let result = session.submit("select the workspace and try the change");
+            assert_eq!(result["status"], "completed", "{result}");
+            assert_eq!(session.tools.workspace.root, target);
+            assert!(!target.join("forbidden").exists());
+            let refused = session
+                .history
+                .iter()
+                .find(|entry| entry["tool"]["call_id"] == "write")
+                .unwrap();
+            assert_eq!(
+                refused["tool"]["outcome"]["code"],
+                if read_only {
+                    "permission_denied"
+                } else {
+                    "plan_mode"
+                }
+            );
+            session.reset();
+            assert!(session.tools.workspace_consent.is_some());
+            for path in [&launch, &target] {
+                let result = execute(
+                    &mut session.tools,
+                    &session.config,
+                    "switch_workspace",
+                    &json!({"path":path}).to_string(),
+                )
+                .unwrap();
+                assert_eq!(result["ok"], true, "{result}");
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            let fresh = ToolState::new(&config).unwrap();
+            assert!(fresh.workspace_consent.is_none());
+            assert_eq!(
+                fresh.approved_paths(),
+                vec![launch.to_string_lossy().into_owned()]
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_consent_denial_and_input_errors_leave_selection_and_grants_unchanged() {
+        for tool in ["request_workspace_access", "switch_workspace"] {
+            for (reply, code, message) in [
+                (None, "permission_required", "workspace access needs human consent; use interactive chat or --allow-workspace PATH"),
+                (Some(Ok(false)), "permission_denied", "workspace access was not approved"),
+                (Some(Err(WorkspaceConsentError::NotInteractive)), "permission_required", "workspace consent needs a terminal; preapprove the exact path with --allow-workspace PATH"),
+                (Some(Err(WorkspaceConsentError::Unavailable)), "permission_denied", "workspace consent was cancelled or unavailable"),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let launch = dir.path().join("launch");
+                let target = dir.path().join("target");
+                fs::create_dir(&launch).unwrap();
+                fs::create_dir(&target).unwrap();
+                let config = json!({"workspace":launch,"session_id":crate::types::new_id()});
+                let mut state = ToolState::new(&config).unwrap();
+                let original = state.approved_paths();
+                if let Some(reply) = reply {
+                    state.workspace_consent = Some(Box::new(move |_, _| reply));
+                }
+                let result = execute(&mut state, &config, tool, &json!({"path":target}).to_string()).unwrap();
+                assert_eq!(result["code"], code);
+                assert_eq!(result["message"], message);
+                assert_eq!(state.workspace.root, launch);
+                assert_eq!(state.approved_paths(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_consent_revalidates_parent_and_symlinks_before_publication() {
+        use std::os::unix::fs::symlink;
+        for tool in ["request_workspace_access", "switch_workspace"] {
+            for change in ["parent-swap", "leaf-redirect", "parent-redirect", "cancel"] {
+                let dir = tempfile::tempdir().unwrap();
+                let launch = dir.path().join("launch");
+                let parent = dir.path().join("parent");
+                let other = dir.path().join("other");
+                let target = parent.join("target");
+                for path in [&launch, &parent, &other] {
+                    fs::create_dir(path).unwrap();
+                }
+                fs::create_dir(&target).unwrap();
+                fs::create_dir(other.join("target")).unwrap();
+                let config = json!({"workspace":launch,"session_id":crate::types::new_id()});
+                let mut state = ToolState::new(&config).unwrap();
+                let old = dir.path().join("old");
+                let parent = parent.clone();
+                let destination = target.clone();
+                state.workspace_consent = Some(Box::new(move |config, _| {
+                    match change {
+                        "parent-swap" => {
+                            fs::rename(&parent, &old).unwrap();
+                            fs::create_dir(&parent).unwrap();
+                            fs::create_dir(&destination).unwrap();
+                        }
+                        "leaf-redirect" => {
+                            fs::remove_dir(&destination).unwrap();
+                            symlink(&other, &destination).unwrap();
+                        }
+                        "parent-redirect" => {
+                            fs::rename(&parent, &old).unwrap();
+                            symlink(&other, &parent).unwrap();
+                        }
+                        "cancel" => crate::cancellation::cancel(config),
+                        _ => unreachable!(),
+                    }
+                    Ok(true)
+                }));
+                let original = state.approved_paths();
+                let result = execute(
+                    &mut state,
+                    &config,
+                    tool,
+                    &json!({"path":target}).to_string(),
+                )
+                .unwrap();
+                assert_eq!(
+                    result["code"],
+                    if change == "cancel" {
+                        "permission_denied"
+                    } else {
+                        "workspace_validation_failed"
+                    },
+                    "{tool}: {change}: {result}"
+                );
+                assert_eq!(
+                    result["message"],
+                    if change == "cancel" {
+                        "workspace access was not approved"
+                    } else if tool == "request_workspace_access" {
+                        "destination changed or request was cancelled during consent"
+                    } else {
+                        "workspace changed or request was cancelled during consent"
+                    }
+                );
+                assert_eq!(state.workspace.root, launch);
+                assert_eq!(state.approved_paths(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_consent_does_not_prompt_for_invalid_or_cancelled_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let launch = dir.path().join("launch");
+        let target = dir.path().join("target");
+        fs::create_dir(&launch).unwrap();
+        fs::create_dir(&target).unwrap();
+        let config = json!({"workspace":launch,"session_id":crate::types::new_id()});
+        let mut state = ToolState::new(&config).unwrap();
+        state.workspace_consent = Some(Box::new(|_, _| panic!("must validate before prompting")));
+        let bad = execute(
+            &mut state,
+            &config,
+            "request_workspace_access",
+            r#"{"path":"relative"}"#,
+        )
+        .unwrap();
+        assert_eq!(bad["code"], "invalid_path");
+        crate::cancellation::cancel(&config);
+        let result = execute(
+            &mut state,
+            &config,
+            "switch_workspace",
+            &json!({"path":target}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(result["message"], "workspace request cancelled");
+        assert_eq!(
+            state.approved_paths(),
+            vec![launch.to_string_lossy().into_owned()]
+        );
     }
 
     #[test]

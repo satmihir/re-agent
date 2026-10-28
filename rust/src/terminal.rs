@@ -1,21 +1,39 @@
 use crate::render::{columns, display, width};
+use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
+use std::os::fd::AsRawFd;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
+mod editor;
+mod region;
+use editor::{Decoder, Editor as IdleEditor, Key, TurnInput};
+pub(crate) use region::output;
+pub use region::{Region, RegionHandle};
 
-struct Raw(libc::termios);
+struct Raw {
+    fd: i32,
+    previous: libc::termios,
+}
 impl Raw {
     fn enter() -> io::Result<Self> {
+        Self::enter_fd(0)
+    }
+    fn enter_fd(fd: i32) -> io::Result<Self> {
         unsafe {
             let mut old = std::mem::zeroed();
-            if libc::tcgetattr(0, &mut old) != 0 {
+            if libc::tcgetattr(fd, &mut old) != 0 {
                 return Err(io::Error::last_os_error());
             }
             let mut raw = old;
             libc::cfmakeraw(&mut raw);
-            if libc::tcsetattr(0, libc::TCSANOW, &raw) != 0 {
+            if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
                 return Err(io::Error::last_os_error());
             }
             eprint!("\x1b[?2004h");
-            Ok(Self(old))
+            Ok(Self { fd, previous: old })
         }
     }
 }
@@ -23,7 +41,7 @@ impl Drop for Raw {
     fn drop(&mut self) {
         eprint!("\x1b[?2004l");
         unsafe {
-            libc::tcsetattr(0, libc::TCSANOW, &self.0);
+            libc::tcsetattr(self.fd, libc::TCSANOW, &self.previous);
         }
     }
 }
@@ -33,6 +51,11 @@ pub struct Input {
     terminal: bool,
     history: Vec<String>,
     reader: io::BufReader<io::Stdin>,
+    tty: Option<File>,
+    raw: Option<Raw>,
+    region: Option<RegionHandle>,
+    decoder: Decoder,
+    next: TurnInput,
 }
 /// Submission distinguishes text, interruption, and end of input.
 pub enum Submission {
@@ -44,10 +67,39 @@ pub enum Submission {
 impl Input {
     /// New selects raw input only for a terminal stdin.
     pub fn new() -> Self {
+        let terminal = unsafe { libc::isatty(0) == 1 };
+        let tty = if terminal
+            && unsafe { libc::isatty(2) == 1 }
+            && std::env::var("TERM").unwrap_or_default() != "dumb"
+        {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/tty")
+                .ok()
+        } else {
+            None
+        };
+        let region = tty.as_ref().map(|_| Arc::new(Mutex::new(Region::new())));
         Self {
-            terminal: unsafe { libc::isatty(0) == 1 },
+            terminal,
             history: Vec::new(),
             reader: io::BufReader::new(io::stdin()),
+            tty,
+            raw: None,
+            region,
+            decoder: Decoder::default(),
+            next: TurnInput::default(),
+        }
+    }
+    /// Region returns the pane shared with this chat's presentation.
+    pub fn region(&self) -> Option<RegionHandle> {
+        self.region.clone()
+    }
+    /// Set status refreshes the session labels used on the next input redraw.
+    pub fn set_status(&mut self, config: &serde_json::Value, state: &serde_json::Value) {
+        if let Some(region) = &self.region {
+            let _ = region.lock().unwrap().refresh_status(config, state);
         }
     }
     /// Interactive reports whether raw terminal editing is available.
@@ -61,6 +113,10 @@ impl Input {
         options: &[Choice],
         current: usize,
     ) -> io::Result<Selection> {
+        if let Some(region) = &self.region {
+            region.lock().unwrap().collapse()?;
+        }
+        self.raw.take();
         let mut size: libc::winsize = unsafe { std::mem::zeroed() };
         if !self.terminal
             || unsafe { libc::ioctl(0, libc::TIOCGWINSZ, &mut size) } != 0
@@ -176,6 +232,12 @@ impl Input {
                 Err(error) => Submission::Bytes(error.into_bytes()),
             });
         }
+        if self.region.is_some() {
+            let result = self.regional_line();
+            eprint!("\x1b[?2004l");
+            io::stderr().flush()?;
+            return result;
+        }
         let _raw = Raw::enter()?;
         let mut line = String::new();
         let mut current_prompt = prompt;
@@ -277,6 +339,354 @@ impl Input {
             }
             draw(prompt, &editor)?;
         }
+    }
+}
+impl Input {
+    fn size(&self) -> io::Result<(usize, usize)> {
+        let fd = self.tty.as_ref().map_or(0, AsRawFd::as_raw_fd);
+        let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+        if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((usize::from(size.ws_col), usize::from(size.ws_row)))
+    }
+
+    fn cursor_row(&mut self) -> io::Result<usize> {
+        let fd = self.tty.as_ref().unwrap().as_raw_fd();
+        eprint!("\x1b[6n");
+        io::stderr().flush()?;
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let mut pending = Vec::new();
+        let mut row = 0;
+        while Instant::now() < deadline && pending.len() < 256 {
+            let mut poll = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut poll, 1, 5) } <= 0 {
+                continue;
+            }
+            let mut chunk = [0u8; 64];
+            let count = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+            if count <= 0 {
+                break;
+            }
+            pending.extend_from_slice(&chunk[..count as usize]);
+            let mut response = None;
+            for start in 0..pending.len().saturating_sub(4) {
+                if !pending[start..].starts_with(b"\x1b[") {
+                    continue;
+                }
+                let Some(end) = pending[start + 2..]
+                    .iter()
+                    .position(|b| *b == b'R')
+                    .map(|end| start + 2 + end)
+                else {
+                    continue;
+                };
+                let Ok(position) = std::str::from_utf8(&pending[start + 2..end]) else {
+                    continue;
+                };
+                if let Some((r, c)) = position
+                    .split_once(';')
+                    .and_then(|(r, c)| Some((r.parse::<usize>().ok()?, c.parse::<usize>().ok()?)))
+                {
+                    if r > 0 && c > 0 {
+                        response = Some((start, end + 1, r));
+                        break;
+                    }
+                }
+            }
+            if let Some((start, end, position)) = response {
+                pending.drain(start..end);
+                row = position;
+                break;
+            }
+        }
+        self.decoder.feed(&pending);
+        Ok(row)
+    }
+
+    fn redraw(&mut self, editor: &IdleEditor, prefix: &str) -> io::Result<()> {
+        let handle = self.region.clone().unwrap();
+        if !handle.lock().unwrap().active {
+            handle.lock().unwrap().initial_row = self.cursor_row()?;
+        }
+        let (columns, height) = self.size()?;
+        let result =
+            handle
+                .lock()
+                .unwrap()
+                .input(&editor.buffer, editor.caret, prefix, columns, height);
+        result
+    }
+
+    /// Poll turn edits type-ahead while the main thread runs the model and tools.
+    pub(crate) fn poll_turn(
+        &mut self,
+        stop: &AtomicBool,
+        cancelled: &AtomicBool,
+    ) -> io::Result<()> {
+        if self.region.is_none() {
+            return Ok(());
+        }
+        let mut next = std::mem::take(&mut self.next);
+        let result = self.read_turn(&mut next, stop, cancelled);
+        if cancelled.load(Ordering::Acquire) {
+            next = TurnInput::default();
+            self.decoder = Decoder::default();
+        }
+        let handle = self.region.as_ref().unwrap().clone();
+        {
+            let mut region = handle.lock().unwrap();
+            region.queued = next.queued.is_some();
+            let (columns, height) = self.size()?;
+            region.input(
+                &next.editor.buffer,
+                next.editor.caret,
+                &next.prefix,
+                columns,
+                height,
+            )?;
+        }
+        self.next = next;
+        result
+    }
+
+    fn read_turn(
+        &mut self,
+        next: &mut TurnInput,
+        stop: &AtomicBool,
+        cancelled: &AtomicBool,
+    ) -> io::Result<()> {
+        self.redraw(&next.editor, &next.prefix)?;
+        while !stop.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
+            let key = if let Some(key) = self.decoder.next() {
+                Some(key)
+            } else {
+                let fd = self.tty.as_ref().unwrap().as_raw_fd();
+                let mut poll = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ready = unsafe { libc::poll(&mut poll, 1, 50) };
+                if ready < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                if ready > 0 {
+                    let mut chunk = [0; 256];
+                    let count = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+                    if count == 0 {
+                        next.exit = true;
+                        return Ok(());
+                    }
+                    if count < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    self.decoder.feed(&chunk[..count as usize]);
+                    continue;
+                }
+                self.decoder.escape()
+            };
+            let handle = self.region.as_ref().unwrap().clone();
+            let (columns, height) = self.size()?;
+            let mut region = handle.lock().unwrap();
+            if stop.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire) {
+                break;
+            }
+            let mut changed = region.tick_progress();
+            if let Some(key) = key {
+                let prompt = region.prompt();
+                match next.apply(&key, &mut self.history, columns, &prompt) {
+                    Some("interrupt") => cancelled.store(true, Ordering::Release),
+                    Some("clear") => region.clear()?,
+                    _ => {}
+                }
+                region.queued = next.queued.is_some();
+                changed = true;
+            }
+            if changed || columns != region.width || height != region.height {
+                region.input(
+                    &next.editor.buffer,
+                    next.editor.caret,
+                    &next.prefix,
+                    columns,
+                    height,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn regional_line(&mut self) -> io::Result<Submission> {
+        if self.raw.is_none() {
+            self.raw = Some(Raw::enter_fd(self.tty.as_ref().unwrap().as_raw_fd())?);
+        } else {
+            eprint!("\x1b[?2004h");
+        }
+        if self.next.exit {
+            self.next = TurnInput::default();
+            self.region.as_ref().unwrap().lock().unwrap().collapse()?;
+            return Ok(Submission::Eof);
+        }
+        if let Some(line) = self.next.queued.take() {
+            self.next = TurnInput::default();
+            self.region.as_ref().unwrap().lock().unwrap().queued = false;
+            self.region
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .submit(&line)?;
+            self.redraw(&IdleEditor::default(), "")?;
+            return Ok(Submission::Text(line));
+        }
+        let mut editor = std::mem::take(&mut self.next.editor);
+        let mut prefix = std::mem::take(&mut self.next.prefix);
+        self.redraw(&editor, &prefix)?;
+        loop {
+            let key = if let Some(key) = self.decoder.next() {
+                key
+            } else {
+                let fd = self.tty.as_ref().unwrap().as_raw_fd();
+                let mut poll = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ready = unsafe { libc::poll(&mut poll, 1, 50) };
+                if ready < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                if ready == 0 {
+                    if let Some(key) = self.decoder.escape() {
+                        key
+                    } else {
+                        let (columns, height) = self.size()?;
+                        let handle = self.region.as_ref().unwrap().lock().unwrap();
+                        let resized = columns != handle.width || height != handle.height;
+                        drop(handle);
+                        if resized {
+                            self.redraw(&editor, &prefix)?;
+                        }
+                        continue;
+                    }
+                } else {
+                    let mut chunk = [0u8; 256];
+                    let count = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+                    if count == 0 {
+                        self.region.as_ref().unwrap().lock().unwrap().collapse()?;
+                        return Ok(Submission::Eof);
+                    }
+                    if count < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    self.decoder.feed(&chunk[..count as usize]);
+                    continue;
+                }
+            };
+            if matches!(key, Key::Name("tab")) {
+                let line = editor.value();
+                if editor.caret == editor.buffer.len() {
+                    let commands = [
+                        "/plan",
+                        "/model",
+                        "/effort",
+                        "/auto",
+                        "/status",
+                        "/context",
+                        "/compact",
+                        "/friction",
+                        "/review",
+                        "/trace",
+                        "/reset",
+                        "/edit",
+                        "/help",
+                        "/exit",
+                    ];
+                    let matches: Vec<_> = commands
+                        .iter()
+                        .filter(|command| command.starts_with(&line))
+                        .collect();
+                    if matches.len() == 1 {
+                        let command = *matches[0];
+                        let suffix = if matches!(
+                            command,
+                            "/plan" | "/model" | "/effort" | "/auto" | "/compact" | "/review"
+                        ) {
+                            " "
+                        } else {
+                            ""
+                        };
+                        editor.replace(&format!("{command}{suffix}"));
+                    }
+                }
+            } else {
+                let columns = self.size()?.0;
+                let prompt = self.region.as_ref().unwrap().lock().unwrap().prompt();
+                match editor.apply(&key, &self.history, columns, &prompt) {
+                    Some("enter") => {
+                        let line = editor.value();
+                        if !line.trim().is_empty() && self.history.last() != Some(&line) {
+                            self.history.push(line.clone());
+                            if self.history.len() > 500 {
+                                self.history.remove(0);
+                            }
+                        }
+                        if line.ends_with('\\') && !line.ends_with("\\\\") {
+                            prefix.push_str(&line[..line.len() - 1]);
+                            prefix.push('\n');
+                            editor.replace("");
+                            self.redraw(&editor, &prefix)?;
+                            continue;
+                        }
+                        let line = prefix + &line;
+                        self.region
+                            .as_ref()
+                            .unwrap()
+                            .lock()
+                            .unwrap()
+                            .submit(&line)?;
+                        editor.replace("");
+                        self.redraw(&editor, "")?;
+                        return Ok(Submission::Text(line));
+                    }
+                    Some("interrupt" | "eof") => {
+                        let interrupt = matches!(key, Key::Name("interrupt"));
+                        self.region.as_ref().unwrap().lock().unwrap().collapse()?;
+                        self.raw.take();
+                        self.decoder = Decoder::default();
+                        return Ok(if interrupt {
+                            Submission::Interrupted
+                        } else {
+                            Submission::Eof
+                        });
+                    }
+                    Some("clear") => self.region.as_ref().unwrap().lock().unwrap().clear()?,
+                    _ => {}
+                }
+            }
+            self.redraw(&editor, &prefix)?;
+        }
+    }
+}
+
+impl Drop for Input {
+    fn drop(&mut self) {
+        if let Some(region) = &self.region {
+            let _ = region.lock().unwrap().collapse();
+        }
+        self.raw.take();
     }
 }
 fn draw(prompt: &str, editor: &Editor) -> io::Result<()> {

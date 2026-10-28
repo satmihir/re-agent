@@ -514,7 +514,12 @@ pub fn save(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> 
         file.sync_all()
             .map_err(|e| format!("sync checkpoint: {}", crate::errors::stable_io(&e)))?;
         drop(file);
-        fs::rename(&staged, dir.join("checkpoint.json"))
+        let destination = dir.join("checkpoint.json");
+        // os.Rename rejects a directory destination before its rename syscall.
+        if fs::symlink_metadata(&destination).is_ok_and(|metadata| metadata.is_dir()) {
+            return Err("replace checkpoint: path already exists".into());
+        }
+        fs::rename(&staged, destination)
             .map_err(|e| format!("replace checkpoint: {}", crate::errors::stable_io(&e)))?;
         File::open(&dir).and_then(|f| f.sync_all()).map_err(|e| {
             format!(
@@ -982,6 +987,20 @@ mod tests {
                 std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o600
             );
+            std::fs::remove_file(&path).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            assert_eq!(
+                save(&session, "terminal", "").unwrap_err(),
+                "save session 0123456789abcdef: replace checkpoint: path already exists"
+            );
+            assert!(path.is_dir());
+            assert!(!std::fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".checkpoint-")));
             close("0123456789abcdef");
             return;
         }

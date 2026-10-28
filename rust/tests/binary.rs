@@ -36,13 +36,19 @@ fn scripted_final_reply_is_printed_and_traced() {
         json!([{"blocks":[{"kind":"text","text":"offline reply"}]}]),
         &[],
     );
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(output.stdout, b"offline reply\n");
     assert_eq!(events.first().unwrap()["type"], "run.started");
     assert_eq!(events.last().unwrap()["type"], "run.finished");
     assert_eq!(events.last().unwrap()["data"]["status"], "completed");
     assert_eq!(events.last().unwrap()["data"]["steps"], 1);
-    assert!(events.iter().all(|event| !event["type"].as_str().unwrap().starts_with("api.")));
+    assert!(events
+        .iter()
+        .all(|event| !event["type"].as_str().unwrap().starts_with("api.")));
 }
 
 #[test]
@@ -68,9 +74,19 @@ fn accepted_tool_observation_precedes_the_next_model_request() {
         ]),
         &[],
     );
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let finished = events.iter().position(|event| event["type"] == "tool.finished").unwrap();
-    let followup = events.iter().position(|event| event["type"] == "model.requested" && event["step"] == 2).unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let finished = events
+        .iter()
+        .position(|event| event["type"] == "tool.finished")
+        .unwrap();
+    let followup = events
+        .iter()
+        .position(|event| event["type"] == "model.requested" && event["step"] == 2)
+        .unwrap();
     assert!(finished < followup);
     let history = events[followup]["data"]["history"].as_array().unwrap();
     assert_eq!(history.last().unwrap()["tool"]["call_id"], "read-1");
@@ -88,7 +104,11 @@ fn read_only_preview_still_collects_a_full_workspace_snapshot() {
         .args(["--show-context", "--read-only", "preview"])
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let request: Value = serde_json::from_slice(&output.stdout).unwrap();
     let snapshot_text = request["input"][0]["content"][1]["text"].as_str().unwrap();
     let (_, snapshot) = snapshot_text.split_once('\n').unwrap();
@@ -104,16 +124,74 @@ fn command_help_includes_the_zero_retry_duration_default() {
             .output()
             .unwrap();
         assert!(output.status.success());
-        assert!(String::from_utf8(output.stdout).unwrap().contains("0 disables (default 0s)"));
+        assert!(String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("0 disables (default 0s)"));
     }
 }
 
 #[test]
 fn model_header_reports_each_auth_mode_without_changing_scripted_labels() {
-    for (mode, label) in [("key", "API key"), ("proxy", "API proxy"), ("chatgpt", "ChatGPT plan")] {
-        let (_, provider, _) = reagent::render::model_presentation(&json!({"provider":"openai","model":"gpt-6-luna","auth_mode":mode}));
+    for (mode, label) in [
+        ("key", "API key"),
+        ("proxy", "API proxy"),
+        ("chatgpt", "ChatGPT plan"),
+    ] {
+        let (_, provider, _) = reagent::render::model_presentation(
+            &json!({"provider":"openai","model":"gpt-6-luna","auth_mode":mode}),
+        );
         assert_eq!(provider, format!("openai · {label}"));
     }
-    let (_, provider, _) = reagent::render::model_presentation(&json!({"provider":"scripted","auth_mode":"key"}));
+    let (_, provider, _) =
+        reagent::render::model_presentation(&json!({"provider":"scripted","auth_mode":"key"}));
     assert!(provider.is_empty());
+}
+
+#[test]
+fn tracing_failure_keeps_answering_and_a_later_process_records_normally() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("responses.json");
+    std::fs::write(
+        &script,
+        b"[{\"blocks\":[{\"kind\":\"text\",\"text\":\"still answers\"}]}]",
+    )
+    .unwrap();
+    let blocked = directory.path().join("blocked-trace");
+    std::fs::write(&blocked, b"sentinel").unwrap();
+    let bad_trace = blocked.join("events.jsonl");
+    let good_trace = directory.path().join("recorded.jsonl");
+    for (trace, warning) in [(&bad_trace, true), (&good_trace, false)] {
+        let output = Command::new(env!("CARGO_BIN_EXE_reagent"))
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", directory.path())
+            .args(["run", "--workspace"])
+            .arg(directory.path())
+            .arg("--scripted")
+            .arg(&script)
+            .arg("--trace-file")
+            .arg(trace)
+            .arg("answer")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"still answers\n");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        if warning {
+            assert_eq!(stderr.matches("warning: tracing disabled").count(), 1);
+            assert!(
+                stderr.contains("this run is not recorded: path component is not a directory\n"),
+                "{stderr}"
+            );
+            assert!(stderr.ends_with("trace: not recorded\n"), "{stderr}");
+        } else {
+            assert!(!stderr.contains("warning: tracing disabled"));
+            assert!(trace.is_file());
+        }
+    }
+    assert_eq!(std::fs::read(blocked).unwrap(), b"sentinel");
 }

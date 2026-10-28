@@ -45,35 +45,43 @@ fn end(raw: &[u8], start: usize) -> Option<usize> {
     }
 }
 pub(crate) fn field<'a>(raw: &'a [u8], name: &str) -> Option<&'a [u8]> {
-    let mut at = skip(raw, 0);
-    if raw.get(at) != Some(&b'{') {
-        return None;
-    }
-    at += 1;
-    let mut found = None;
-    loop {
-        at = skip(raw, at);
-        if raw.get(at) == Some(&b'}') {
-            return found;
-        }
-        let key_end = end(raw, at)?;
-        let key: String = serde_json::from_slice(&raw[at..key_end]).ok()?;
-        at = skip(raw, key_end);
-        if raw.get(at) != Some(&b':') {
+    members(raw)
+        .into_iter()
+        .rev()
+        .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value))
+}
+
+pub(crate) fn members(raw: &[u8]) -> Vec<(String, &[u8])> {
+    fn scan(raw: &[u8]) -> Option<Vec<(String, &[u8])>> {
+        let mut at = skip(raw, 0);
+        if raw.get(at) != Some(&b'{') {
             return None;
         }
-        at = skip(raw, at + 1);
-        let value_end = end(raw, at)?;
-        if key == name {
-            found = Some(&raw[at..value_end]);
-        }
-        at = skip(raw, value_end);
-        match raw.get(at) {
-            Some(b',') => at += 1,
-            Some(b'}') => return found,
-            _ => return None,
+        at += 1;
+        let mut found = Vec::new();
+        loop {
+            at = skip(raw, at);
+            if raw.get(at) == Some(&b'}') {
+                return Some(found);
+            }
+            let key_end = end(raw, at)?;
+            let key: String = serde_json::from_slice(&raw[at..key_end]).ok()?;
+            at = skip(raw, key_end);
+            if raw.get(at) != Some(&b':') {
+                return None;
+            }
+            at = skip(raw, at + 1);
+            let value_end = end(raw, at)?;
+            found.push((key, &raw[at..value_end]));
+            at = skip(raw, value_end);
+            match raw.get(at) {
+                Some(b',') => at += 1,
+                Some(b'}') => return Some(found),
+                _ => return None,
+            }
         }
     }
+    scan(raw).unwrap_or_default()
 }
 pub(crate) fn array(raw: &[u8]) -> Vec<&[u8]> {
     let mut at = skip(raw, 0);

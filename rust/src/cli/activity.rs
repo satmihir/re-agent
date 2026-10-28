@@ -10,9 +10,21 @@ pub fn begin_turn(state: &mut Value) {
 
 /// Tool finished displays one outcome immediately and accumulates browsing and effects.
 pub fn tool_finished(call: &Value, outcome: &Value, config: &Value, state: &mut Value) {
+    tool_finished_in_region(call, outcome, config, state, None);
+}
+
+/// Tool finished in region inserts an outcome above retained terminal input.
+pub fn tool_finished_in_region(
+    call: &Value,
+    outcome: &Value,
+    config: &Value,
+    state: &mut Value,
+    region: Option<&crate::terminal::RegionHandle>,
+) {
     if !yes(config, "_display") {
         return;
     }
+    super::model_finished(region);
     if text(call, "name") == "switch_workspace"
         && yes(outcome, "ok")
         && yes(&outcome["data"], "changed")
@@ -20,23 +32,44 @@ pub fn tool_finished(call: &Value, outcome: &Value, config: &Value, state: &mut 
         && !yes(state, "plan")
     {
         let workspace = sanitize(&super::short_path(text(&outcome["data"], "workspace")));
-        super::header_line(&format!("! exec mode: commands run as you, in {workspace}, and can read, write, and use the network"));
+        let warning = format!("! exec mode: commands run as you, in {workspace}, and can read, write, and use the network");
+        let warning = if styled(2) {
+            format!("{DIM}{warning}{RESET}\n")
+        } else {
+            format!("{warning}\n")
+        };
+        crate::terminal::output(region, 2, &warning);
     }
-    eprint!(
-        "{}",
-        activity_text(call, outcome, state, styled(2), columns(2))
+    crate::terminal::output(
+        region,
+        2,
+        &activity_text(call, outcome, state, styled(2), columns(2)),
     );
 }
 
 /// Progress text writes intermediate model commentary to stderr, not the final reply.
 pub fn progress_text(message: &str, config: &Value, state: &mut Value) {
+    progress_text_in_region(message, config, state, None);
+}
+
+/// Progress text in region leaves model commentary above the retained caret.
+pub fn progress_text_in_region(
+    message: &str,
+    config: &Value,
+    state: &mut Value,
+    region: Option<&crate::terminal::RegionHandle>,
+) {
     if message.is_empty() || !yes(config, "_display") {
         return;
     }
     if styled(2) && yes(&state["_display"], "printed") {
-        eprintln!();
+        crate::terminal::output(region, 2, "\n");
     }
-    eprintln!("{}", display(message, styled(2), columns(2).min(100)));
+    crate::terminal::output(
+        region,
+        2,
+        &format!("{}\n", display(message, styled(2), columns(2).min(100))),
+    );
     state["_display"]["printed"] = json!(true);
 }
 
@@ -161,6 +194,11 @@ fn command(a: &Value) -> String {
         result.push_str(&format!(" in {}", one_row(text(a, "cwd"))));
     }
     result
+}
+
+/// Call target describes the command shown during live tool progress.
+pub(super) fn call_target(call: &Value) -> String {
+    target(call, args(call).as_ref())
 }
 
 fn target(call: &Value, a: Option<&Value>) -> String {
@@ -422,8 +460,10 @@ fn activity_text(
                 }
                 "request_workspace_access" => result = "approved for this conversation".into(),
                 "echo" if a.is_some() => {
-                    target =
-                        serde_json::to_string(&sanitize(text(a.as_ref().unwrap(), "text"))).unwrap()
+                    target = serde_json::to_string(&sanitize(text(a.as_ref().unwrap(), "text")))
+                        .unwrap()
+                        .replace('\u{2028}', "\\u2028")
+                        .replace('\u{2029}', "\\u2029")
                 }
                 _ => {}
             }
@@ -523,6 +563,20 @@ pub(super) fn browsing_summary(state: &Value, styled: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn echo_quotes_unicode_line_separators() {
+        let mut state = json!({});
+        let call = json!({"name":"echo","arguments":json!({"text":"a\u{2028}\u{2029}\n\t\"\\"}).to_string()});
+        let out = activity_text(
+            &call,
+            &json!({"ok":true,"effect":"none"}),
+            &mut state,
+            false,
+            0,
+        );
+        assert_eq!(out, "  ✓ echo \"a\\u2028\\u2029\\n\\t\\\"\\\\\"\n");
+    }
+
     #[test]
     fn invalid_argument_activity_matches_reference() {
         let mut state = json!({});
