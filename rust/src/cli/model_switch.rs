@@ -120,7 +120,7 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
     }
     Ok((records, native))
 }
-fn handoff(history: &[Value]) -> Result<Value, String> {
+pub(crate) fn handoff(history: &[Value]) -> Result<Value, String> {
     if history.is_empty() {
         return Ok(Value::Null);
     }

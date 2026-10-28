@@ -219,6 +219,33 @@ pub fn decode_arguments(arguments: &str, schema: &Value) -> Result<Value, Value>
                 &crate::errors::json_error(arguments, &e),
             )
         })?;
+    fn property<'a>(properties: &'a Value, key: &str) -> Option<(&'a str, &'a Value)> {
+        let properties = properties.as_object()?;
+        properties
+            .get_key_value(key)
+            .or_else(|| {
+                properties.iter().find(|(name, _)| {
+                    key.chars()
+                        .map(|ch| match ch {
+                            '\u{212a}' => 'k',
+                            '\u{17f}' => 's',
+                            _ => ch.to_ascii_lowercase(),
+                        })
+                        .eq(name.chars())
+                })
+            })
+            .map(|(name, value)| (name.as_str(), value))
+    }
+    fn raw_field(field: &str, properties: &Value, key: &str, property: &Value) -> bool {
+        field.is_empty()
+            && (matches!(property["type"].as_str(), Some("integer" | "boolean"))
+                || matches!(
+                    key,
+                    "content" | "append_text" | "details" | "related_call_ids" | "edits"
+                )
+                || key == "expected_sha256" && properties.get("old_text").is_none()
+                || key == "paths" && properties.get("query").is_some())
+    }
     fn validate(raw: &[u8], schema: &Value, field: &str) -> Option<String> {
         use crate::provider::raw_tokens;
         // Typed Go fields accept null; RawMessage null rules belong to each tool.
@@ -247,25 +274,17 @@ pub fn decode_arguments(arguments: &str, schema: &Value) -> Result<Value, Value>
         if kind == "object" {
             let properties = &schema["properties"];
             for (key, value) in raw_tokens::members(raw) {
-                let Some(property) = properties.get(&key) else {
+                let Some((name, property)) = property(properties, &key) else {
                     return Some(format!("unknown field {}", crate::errors::quote(&key)));
                 };
-                // These Go fields are RawMessage: only the final occurrence is validated by the tool.
-                if field.is_empty()
-                    && (matches!(property["type"].as_str(), Some("integer" | "boolean"))
-                        || matches!(
-                            key.as_str(),
-                            "content" | "append_text" | "details" | "related_call_ids" | "edits"
-                        )
-                        || key == "expected_sha256" && properties.get("old_text").is_none()
-                        || key == "paths" && properties.get("query").is_some())
-                {
+                // RawMessage validation belongs to the tool and sees only the final occurrence.
+                if raw_field(field, properties, name, property) {
                     continue;
                 }
                 let path = if field.is_empty() {
-                    key
+                    name.to_owned()
                 } else {
-                    format!("{field}.{key}")
+                    format!("{field}.{name}")
                 };
                 if let Some(error) = validate(value, property, &path) {
                     return Some(error);
@@ -281,7 +300,9 @@ pub fn decode_arguments(arguments: &str, schema: &Value) -> Result<Value, Value>
             && crate::provider::raw_tokens::members(raw.get().as_bytes())
                 .into_iter()
                 .rev()
-                .find(|(key, _)| key == "argv")
+                .find(|(key, _)| {
+                    property(&schema["properties"], key).is_some_and(|(name, _)| name == "argv")
+                })
                 .is_some_and(|(_, value)| !value.starts_with(b"["))
             && decoder.end().is_ok()
         {
@@ -295,12 +316,73 @@ pub fn decode_arguments(arguments: &str, schema: &Value) -> Result<Value, Value>
             "arguments must be one JSON object",
         ));
     }
-    serde_json::from_str(arguments).map_err(|error| {
+    // Validate Value's numeric limits before parsing individual spans below.
+    let _: Value = serde_json::from_str(arguments).map_err(|error| {
         fail(
             "invalid_arguments",
             &crate::errors::json_error(arguments, &error),
         )
-    })
+    })?;
+    fn normalize(raw: &[u8], schema: &Value, field: &str, previous: Value) -> Value {
+        use crate::provider::raw_tokens;
+        if raw == b"null" {
+            // Null leaves an existing Go string alone, but clears slices and pointers.
+            return if schema["type"] == "string" && previous.is_string() {
+                previous
+            } else {
+                Value::Null
+            };
+        }
+        if schema["type"] == "object" {
+            let properties = &schema["properties"];
+            let mut object = previous.as_object().cloned().unwrap_or_default();
+            let members = raw_tokens::members(raw);
+            for (key, value) in &members {
+                let (name, property) = property(properties, key).unwrap();
+                let previous = object.remove(name).unwrap_or(Value::Null);
+                let path = if field.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{field}.{name}")
+                };
+                let value = if raw_field(field, properties, name, property) {
+                    serde_json::from_slice(value).unwrap()
+                } else {
+                    normalize(value, property, &path, previous)
+                };
+                object.insert(name.to_owned(), value);
+            }
+            if field.is_empty() && properties.get("old_text").is_some() {
+                // changes also inspects an exact-key RawMessage map for these typed fields.
+                for name in ["old_text", "new_text", "expected_sha256"] {
+                    let last = members.iter().rev().find(|(key, _)| key == name);
+                    match last {
+                        None => {
+                            object.remove(name);
+                        }
+                        Some((_, value)) if *value == b"null" && name != "expected_sha256" => {
+                            object.insert(name.into(), Value::Null);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            return Value::Object(object);
+        }
+        if schema["type"] == "array" {
+            let values = raw_tokens::array(raw)
+                .into_iter()
+                .enumerate()
+                .map(|(i, value)| {
+                    let previous = previous.get(i).cloned().unwrap_or(Value::Null);
+                    normalize(value, &schema["items"], field, previous)
+                })
+                .collect();
+            return Value::Array(values);
+        }
+        serde_json::from_slice(raw).unwrap()
+    }
+    Ok(normalize(raw.get().as_bytes(), schema, "", Value::Null))
 }
 
 pub fn execute(
@@ -934,6 +1016,8 @@ mod tests {
             ),
             (&read, r#"{"unknown":0} {}"#, "unknown field \"unknown\""),
             (&exec, r#"{"argv":"echo"}"#, argv_hint),
+            (&exec, r#"{"ARGV":"echo"}"#, argv_hint),
+            (&exec, r#"{"argv":["echo"],"ARGV":null,"cwd":7}"#, argv_hint),
             (&exec, r#"{"argv":["echo"],"argv":7}"#, argv_hint),
             (&exec, r#"{"argv":[7],"argv":null}"#, argv_hint),
             (&exec, r#"{"unknown":0,"argv":"echo"}"#, argv_hint),
@@ -1028,7 +1112,7 @@ mod tests {
             (
                 &read,
                 r#"{"path":"file","path":null}"#,
-                json!({"path":null}),
+                json!({"path":"file"}),
             ),
             (
                 &read,
@@ -1072,6 +1156,213 @@ mod tests {
                 "{arguments}"
             );
         }
+    }
+
+    #[test]
+    fn argument_decoder_merges_typed_strings_but_preserves_raw_nulls() {
+        let read: Value = serde_json::from_str(include_str!("schemas/read_file.json")).unwrap();
+        let write: Value = serde_json::from_str(include_str!("schemas/write_file.json")).unwrap();
+        let edit: Value = serde_json::from_str(include_str!("schemas/edit_file.json")).unwrap();
+        let spawn: Value = serde_json::from_str(include_str!("schemas/spawn.json")).unwrap();
+        let exec: Value = serde_json::from_str(include_str!("schemas/exec.json")).unwrap();
+        let search: Value = serde_json::from_str(include_str!("schemas/search_text.json")).unwrap();
+        let friction: Value =
+            serde_json::from_str(include_str!("schemas/report_friction.json")).unwrap();
+        for (schema, arguments, expected) in [
+            (&read, r#"{"path":null}"#, json!({"path":null})),
+            (
+                &read,
+                r#"{"PATH":"good","path":null,"PaTh":null}"#,
+                json!({"path":"good"}),
+            ),
+            (
+                &read,
+                r#"{"path":"good","MAX_LINES":4,"max_lines":null}"#,
+                json!({"path":"good","max_lines":null}),
+            ),
+            (
+                &search,
+                r#"{"query":"needle","query":null,"paths":["file"],"paths":null,"regex":true,"regex":null}"#,
+                json!({"query":"needle","paths":null,"regex":null}),
+            ),
+            (
+                &friction,
+                r#"{"summary":"keep","summary":null,"details":"clear","details":null,"related_call_ids":["id"],"related_call_ids":null}"#,
+                json!({"summary":"keep","details":null,"related_call_ids":null}),
+            ),
+            (
+                &write,
+                r#"{"path":"good","path":null,"content":"x","content":null,"expected_sha256":"digest","expected_sha256":null}"#,
+                json!({"path":"good","content":null,"expected_sha256":null}),
+            ),
+            (
+                &edit,
+                r#"{"expected_sha256":"digest","expected_sha256":null,"append_text":"x","append_text":null}"#,
+                json!({"expected_sha256":"digest","append_text":null}),
+            ),
+            (
+                &edit,
+                r#"{"old_text":"old","old_text":null,"new_text":"new"}"#,
+                json!({"old_text":null,"new_text":"new"}),
+            ),
+            (
+                &edit,
+                r#"{"old_text":"old","OLD_TEXT":"last","new_text":"new"}"#,
+                json!({"old_text":"last","new_text":"new"}),
+            ),
+            (&edit, r#"{"OLD_TEXT":"old","NEW_TEXT":"new"}"#, json!({})),
+            (
+                &edit,
+                r#"{"edits":[{"old_text":"old","old_text":null,"new_text":"new"}]}"#,
+                json!({"edits":[{"old_text":null,"new_text":"new"}]}),
+            ),
+            (
+                &spawn,
+                r#"{"tasK":"work","context":{"brief":"brief","files":["file"]},"CONTEXT":{"brief":null,"files":null}}"#,
+                json!({"task":"work","context":{"brief":"brief","files":null}}),
+            ),
+            (
+                &spawn,
+                r#"{"context":{"brief":"discard"},"context":null,"context":{"files":["file"]}}"#,
+                json!({"context":{"files":["file"]}}),
+            ),
+            (
+                &exec,
+                r#"{"argv":["echo","arg"],"argv":[null,null],"then":[["echo","next"]],"then":[[null,null]]}"#,
+                json!({"argv":["echo","arg"],"then":[["echo","next"]]}),
+            ),
+            (
+                &exec,
+                r#"{"argv":["echo"],"argv":null,"then":[["echo"]],"then":null}"#,
+                json!({"argv":null,"then":null}),
+            ),
+        ] {
+            assert_eq!(
+                decode_arguments(arguments, schema).unwrap(),
+                expected,
+                "{arguments}"
+            );
+        }
+        assert_eq!(
+            decode_arguments(r#"{"PATH":7,"path":"good"}"#, &read),
+            Err(fail("invalid_arguments", "field \"path\" must be a string"))
+        );
+    }
+
+    #[test]
+    fn duplicate_null_path_keeps_authorization_and_raw_edit_failures_without_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("good"), "before\n").unwrap();
+        let config = json!({"workspace":directory.path()});
+        let mut state = ToolState::new(&config).unwrap();
+        let result = execute(
+            &mut state,
+            &config,
+            "write_file",
+            r#"{"path":"good","path":null,"content":"after"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            fail(
+                "invalid_arguments",
+                "read the file before changing it (read_file records what you have seen)"
+            )
+        );
+        let observed = execute(
+            &mut state,
+            &config,
+            "read_file",
+            r#"{"path":"good","path":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            observed,
+            execute(&mut state, &config, "read_file", r#"{"path":"good"}"#).unwrap()
+        );
+        for arguments in [
+            r#"{"path":"good","old_text":"before","old_text":null,"new_text":"after"}"#,
+            r#"{"path":"good","edits":[{"old_text":"before","old_text":null,"new_text":"after"}]}"#,
+        ] {
+            let result = execute(&mut state, &config, "edit_file", arguments).unwrap();
+            let message = if arguments.contains("edits") {
+                "edits[0]: old_text and new_text must be strings"
+            } else {
+                "old_text and new_text must be strings"
+            };
+            assert_eq!(result, fail("invalid_arguments", message));
+        }
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("good")).unwrap(),
+            "before\n"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        let written = execute(
+            &mut state,
+            &config,
+            "write_file",
+            r#"{"PATH":"good","path":null,"content":"after"}"#,
+        )
+        .unwrap();
+        assert_eq!(written["ok"], true, "{written}");
+        assert_eq!(written["effect"], "applied");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("good")).unwrap(),
+            "after"
+        );
+    }
+
+    #[test]
+    fn edit_digest_requires_exact_key_presence_but_uses_the_last_typed_value() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("file");
+        fs::write(&path, "before").unwrap();
+        let config = json!({"workspace":directory.path()});
+        let mut state = ToolState::new(&config).unwrap();
+        let current = crate::workspace::digest(b"before");
+        let unknown = "0".repeat(64);
+        let arguments = json!({
+            "path":"file", "EXPECTED_SHA256":current,
+            "old_text":"before", "new_text":"after"
+        })
+        .to_string();
+        let result = execute(&mut state, &config, "edit_file", &arguments).unwrap();
+        assert_eq!(
+            result,
+            fail(
+                "invalid_arguments",
+                "read the file before changing it (read_file records what you have seen)"
+            )
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "before");
+
+        let arguments = format!(
+            r#"{{"path":"file","expected_sha256":"{current}","EXPECTED_SHA256":"{unknown}","old_text":"before","new_text":"after"}}"#
+        );
+        let result = execute(&mut state, &config, "edit_file", &arguments).unwrap();
+        assert_eq!(result["code"], "unknown_digest", "{result}");
+        assert_eq!(result["effect"], "none");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "before");
+
+        let arguments = format!(
+            r#"{{"path":"file","expected_sha256":"{unknown}","EXPECTED_SHA256":"{current}","old_text":"before","new_text":"after"}}"#
+        );
+        let result = execute(&mut state, &config, "edit_file", &arguments).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "after");
+
+        let mut state = ToolState::new(&config).unwrap();
+        let observed = execute(&mut state, &config, "read_file", r#"{"path":"file"}"#).unwrap();
+        assert_eq!(observed["ok"], true, "{observed}");
+        let arguments = json!({
+            "path":"file", "EXPECTED_SHA256":unknown,
+            "old_text":"after", "new_text":"seen"
+        })
+        .to_string();
+        let result = execute(&mut state, &config, "edit_file", &arguments).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["effect"], "applied");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "seen");
     }
 
     #[test]

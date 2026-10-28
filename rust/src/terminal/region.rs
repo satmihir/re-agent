@@ -137,6 +137,7 @@ pub struct Region {
     pending: String,
     pub(crate) printed: bool,
     output_update: bool,
+    pending_stdout: String,
     color: bool,
 }
 
@@ -202,6 +203,7 @@ impl Region {
             pending: String::new(),
             printed: false,
             output_update: false,
+            pending_stdout: String::new(),
             color: styled(2),
         }
     }
@@ -212,10 +214,11 @@ impl Region {
         emit("\x1b[?2026h")
     }
 
-    /// End output publishes the completed reply, summary, and restored caret together.
+    /// End output publishes the terminal frame before releasing any redirected reply.
     pub(crate) fn end_output(&mut self) -> io::Result<()> {
         self.output_update = false;
-        emit("\x1b[?2026l")
+        emit("\x1b[?2026l")?;
+        write_stdout(&std::mem::take(&mut self.pending_stdout))
     }
 
     fn update_end(&self) -> &str {
@@ -349,6 +352,9 @@ impl Region {
 
     /// Set progress replaces the current live operation, or removes it on completion.
     pub(crate) fn set_progress(&mut self, label: Option<&str>) -> io::Result<()> {
+        if label.is_none() && self.progress.is_none() {
+            return Ok(());
+        }
         self.progress = label.map(|label| Progress {
             label: label.into(),
             started: Instant::now(),
@@ -559,19 +565,32 @@ fn same_terminal() -> bool {
     }
 }
 
+fn write_stdout(text: &str) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(text.as_bytes())?;
+    stdout.flush()
+}
+
 /// Output inserts complete terminal lines above the pane while leaving redirected stdout literal.
 pub(crate) fn output(region: Option<&RegionHandle>, fd: i32, text: &str) {
-    let result = if let Some(region) = region.filter(|_| fd == 2 || same_terminal()) {
-        region.lock().unwrap().write_text(text)
-    } else if fd == 1 {
-        let mut stdout = io::stdout().lock();
-        stdout
-            .write_all(text.as_bytes())
-            .and_then(|_| stdout.flush())
+    if let Some(region) = region {
+        let shared = fd == 2 || same_terminal();
+        let mut region = region.lock().unwrap();
+        if shared {
+            let _ = region.write_text(text);
+            return;
+        }
+        if region.output_update {
+            // A pipe reader can observe a reply before the PTY consumes its summary.
+            region.pending_stdout.push_str(text);
+            return;
+        }
+    }
+    let _ = if fd == 1 {
+        write_stdout(text)
     } else {
         emit(text)
     };
-    let _ = result;
 }
 
 #[cfg(test)]

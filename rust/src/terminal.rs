@@ -557,7 +557,7 @@ impl Input {
                 }
                 io::stderr().flush()?;
                 redraw = true;
-                let key = read_key(&mut self.reader)?;
+                let key = read_key(&mut self.reader, &mut self.decoder)?;
                 match key.as_str() {
                     "up" | "text:k" if shortcuts || key == "up" => {
                         if let Some(next) = (0..cursor).rev().find(|i| !options[*i].disabled) {
@@ -640,13 +640,12 @@ impl Input {
     }
     fn physical(&mut self, prompt: &str) -> io::Result<Submission> {
         let mut editor = Editor::default();
-        let mut paste = false;
         let mut history = 0;
         let mut draft = String::new();
         eprint!("{prompt}");
         io::stderr().flush()?;
         loop {
-            let key = read_key(&mut self.reader)?;
+            let key = read_key(&mut self.reader, &mut self.decoder)?;
             match key.as_str() {
                 "eof" => {
                     if editor.buffer.is_empty() {
@@ -658,9 +657,7 @@ impl Input {
                     eprint!("^C\r\n");
                     return Ok(Submission::Interrupted);
                 }
-                "paste-start" => paste = true,
-                "paste-end" => paste = false,
-                "enter" if paste => editor.insert('\n'),
+                "paste-start" | "paste-end" => {}
                 "enter" => {
                     let text = editor.value();
                     if !text.is_empty() && self.history.last() != Some(&text) {
@@ -1092,85 +1089,42 @@ fn draw(prompt: &str, editor: &Editor) -> io::Result<()> {
     }
     io::stderr().flush()
 }
-fn read_key(reader: &mut io::BufReader<io::Stdin>) -> io::Result<String> {
-    let mut byte = [0];
-    if reader.read(&mut byte)? == 0 {
-        return Ok("eof".into());
-    }
-    let b = byte[0];
-    if b == 27 {
-        let mut seq = vec![b];
-        let mut poll = libc::pollfd {
-            fd: 0,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        if reader.buffer().is_empty() && unsafe { libc::poll(&mut poll, 1, 20) } <= 0 {
-            return Ok("escape".into());
+fn read_key(reader: &mut io::BufReader<io::Stdin>, decoder: &mut Decoder) -> io::Result<String> {
+    loop {
+        if let Some(key) = decoder.next() {
+            return Ok(match key {
+                Key::Name(name) => name.into(),
+                Key::Text(c) => format!("text:{c}"),
+            });
         }
-        reader.read_exact(&mut byte)?;
-        seq.push(byte[0]);
-        if matches!(byte[0], b'[' | b'O') {
-            loop {
-                reader.read_exact(&mut byte)?;
-                seq.push(byte[0]);
-                if (0x40..=0x7e).contains(&byte[0]) {
-                    break;
+        if reader.buffer().is_empty() {
+            let mut poll = libc::pollfd {
+                fd: 0,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut poll, 1, 20) };
+            if ready < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
                 }
+                return Err(error);
+            }
+            if ready == 0 {
+                if let Some(Key::Name(name)) = decoder.escape() {
+                    return Ok(name.into());
+                }
+                continue;
             }
         }
-        return Ok(match seq.as_slice() {
-            b"\x1b[A" | b"\x1bOA" => "up",
-            b"\x1b[B" | b"\x1bOB" => "down",
-            b"\x1b[C" | b"\x1bOC" => "right",
-            b"\x1b[D" | b"\x1bOD" => "left",
-            b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" => "home",
-            b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" => "end",
-            b"\x1b[3~" => "delete",
-            b"\x1b[200~" => "paste-start",
-            b"\x1b[201~" => "paste-end",
-            b"\x1bb" | b"\x1bB" | b"\x1b[1;3D" => "word-left",
-            b"\x1bf" | b"\x1bF" | b"\x1b[1;3C" => "word-right",
-            _ => "unknown",
+        let mut bytes = [0; 256];
+        let count = reader.read(&mut bytes)?;
+        if count == 0 {
+            return Ok("eof".into());
         }
-        .into());
+        decoder.feed(&bytes[..count]);
     }
-    let name = match b {
-        b'\r' | b'\n' => Some("enter"),
-        b'\t' => Some("tab"),
-        3 => Some("interrupt"),
-        4 => Some("eof"),
-        8 | 127 => Some("backspace"),
-        1 => Some("home"),
-        5 => Some("end"),
-        11 => Some("kill-end"),
-        21 => Some("kill-start"),
-        23 => Some("kill-word"),
-        25 => Some("yank"),
-        12 => Some("clear"),
-        _ => None,
-    };
-    if let Some(name) = name {
-        return Ok(name.into());
-    }
-    if b < 32 {
-        return Ok("unknown".into());
-    }
-    let mut bytes = vec![b];
-    let len = if b < 128 {
-        1
-    } else if b < 224 {
-        2
-    } else if b < 240 {
-        3
-    } else {
-        4
-    };
-    for _ in 1..len {
-        reader.read_exact(&mut byte)?;
-        bytes.push(byte[0]);
-    }
-    Ok(format!("text:{}", String::from_utf8_lossy(&bytes)))
 }
 #[derive(Default)]
 struct Editor {

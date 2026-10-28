@@ -959,6 +959,7 @@ open(path,'wb').write(b'\t \n' if mode=='empty' else b'edited \xff text\nline2\n
         let mut pty = Pty::start_output(&mut command, stdout_tty);
         pty.wait("❯ ".as_bytes());
         let start = pty.raw.len();
+        let mut next_sent = false;
         pty.send(b"/edit\r");
         let marker = match mode {
             "accept" => "  · … 1 more lines",
@@ -978,10 +979,52 @@ open(path,'wb').write(b'\t \n' if mode=='empty' else b'edited \xff text\nline2\n
             assert!(raw.contains("\x1b[2m  · edited � text\x1b[0m"), "{raw}");
             let (mut stream, body) = pty.request(&listener);
             assert!(body.to_string().contains("edited � text"), "{body}");
-            respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
-            pty.wait(b"\x1b[?2004h");
+            // Backpressure makes the pipe/PTY ordering boundary deterministic.
+            let reply = if stdout_tty {
+                "editor reply".into()
+            } else {
+                "x".repeat(128 * 1024)
+            };
+            respond_with(
+                &mut stream,
+                body["stream"].as_bool().unwrap_or(false),
+                &reply,
+                13,
+            );
             if !stdout_tty {
+                use std::os::fd::AsRawFd;
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut pipe = libc::pollfd {
+                    fd: pty.child.stdout.as_ref().unwrap().as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                while unsafe { libc::poll(&mut pipe, 1, 0) } == 0 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "reply pipe never became readable"
+                    );
+                    pty.pump();
+                }
+                // Snapshot the PTY bytes already queued when the reply is observable,
+                // rather than waiting for the later read_line bracketed-paste marker.
+                let mut terminal = libc::pollfd {
+                    fd: pty.terminal.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                while unsafe { libc::poll(&mut terminal, 1, 0) } > 0 {
+                    pty.pump();
+                }
                 let output = String::from_utf8_lossy(&pty.raw);
+                assert!(
+                    output.contains("completed"),
+                    "pipe exposed a reply before its terminal summary: {output}"
+                );
+                assert!(
+                    output.ends_with("\x1b[22;3H\x1b[?2026l"),
+                    "pipe exposed a reply without a completed prompt frame: {output}"
+                );
                 let summary = output.find("completed").unwrap();
                 let caret = output[..summary].rfind("0% of context").unwrap();
                 assert!(
@@ -992,12 +1035,25 @@ open(path,'wb').write(b'\t \n' if mode=='empty' else b'edited \xff text\nline2\n
                     output[summary..].contains("\x1b[?2026l"),
                     "result never published its final pane: {output}"
                 );
+                pty.send(b"next ordinary question\r");
+                next_sent = true;
+                let mut bytes = vec![0; reply.len() + 1];
+                pty.child
+                    .stdout
+                    .as_mut()
+                    .unwrap()
+                    .read_exact(&mut bytes)
+                    .unwrap();
+                assert_eq!(bytes, format!("{reply}\n").as_bytes());
             }
+            pty.wait(b"\x1b[?2004h");
         } else {
             pty.wait(b"\x1b[?2004h");
             assert!(listener.accept().is_err());
         }
-        pty.send(b"next ordinary question\r");
+        if !next_sent {
+            pty.send(b"next ordinary question\r");
+        }
         let (mut stream, body) = pty.request(&listener);
         assert!(
             body.to_string().contains("next ordinary question"),
@@ -1056,5 +1112,149 @@ fn pty_retry_notice_separates_the_redirected_reply_before_the_summary() {
     assert!(body.to_string().contains("next question"), "{body}");
     respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
     pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_dumb_invalid_utf8_does_not_swallow_interrupt_or_the_next_question() {
+    for invalid in [
+        b"\xff".as_slice(),
+        b"\x80",
+        b"\xe2",
+        b"\xe2\x82",
+        b"\xf0\x9f",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut command = command(&directory, "chat");
+        command
+            .env("TERM", "dumb")
+            .env("OPENAI_API_KEY", "offline-key")
+            .env(
+                "REAGENT_OPENAI_BASE_URL",
+                format!("http://{}", listener.local_addr().unwrap()),
+            );
+        let mut pty = Pty::start(&mut command);
+        pty.wait(b"> ");
+        pty.send(invalid);
+        pty.send(b"\x03");
+        // No subsequent keystrokes may be needed to finish an invalid rune.
+        pty.wait(b"(Ctrl-C again to exit, or Ctrl-D)");
+        assert!(listener.accept().is_err());
+        pty.send(b"next ordinary question\r");
+        let (mut stream, body) = pty.request(&listener);
+        let user = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|entry| entry["role"] == "user")
+            .unwrap();
+        assert_eq!(user["content"][0]["text"], "next ordinary question");
+        respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+        pty.wait(b"> ");
+        pty.send(b"/exit\r");
+    }
+}
+
+#[test]
+fn pty_dumb_invalid_utf8_preserves_enter_and_eof() {
+    for invalid in [
+        b"\xff".as_slice(),
+        b"\x80",
+        b"\xe2",
+        b"\xe2\x82",
+        b"\xf0\x9f",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut command = command(&directory, "chat");
+        command
+            .env("TERM", "dumb")
+            .env("OPENAI_API_KEY", "offline-key")
+            .env(
+                "REAGENT_OPENAI_BASE_URL",
+                format!("http://{}", listener.local_addr().unwrap()),
+            );
+        let mut pty = Pty::start(&mut command);
+        pty.wait(b"> ");
+        pty.send(invalid);
+        pty.send(b"\r");
+        let (mut stream, body) = pty.request(&listener);
+        let user = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|entry| entry["role"] == "user")
+            .unwrap();
+        assert_eq!(user["content"][0]["text"], "�".repeat(invalid.len()));
+        respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+        pty.wait(b"> ");
+        pty.send(invalid);
+        // Ctrl-D is ignored on nonempty input, then exits after Ctrl-U clears it.
+        pty.send(b"\x04\x15\x04");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = pty.child.try_wait().unwrap() {
+                assert!(status.success(), "{status}");
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Ctrl-D did not exit the fallback editor"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(listener.accept().is_err());
+    }
+}
+
+#[test]
+fn pty_dumb_paste_normalizes_split_crlf_and_accepts_the_following_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command
+        .env("TERM", "dumb")
+        .env("OPENAI_API_KEY", "offline-key")
+        .env(
+            "REAGENT_OPENAI_BASE_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+    let mut pty = Pty::start(&mut command);
+    pty.wait(b"> ");
+    pty.send(b"\x1b[200~a\r");
+    pty.wait("a↵".as_bytes());
+    pty.send("\nb\rc\nd\t界\x1b[201~".as_bytes());
+    pty.wait("a↵b↵c↵d⇥界".as_bytes());
+    assert!(listener.accept().is_err(), "paste submitted before Enter");
+    pty.send(b"\r\n");
+    let (mut stream, body) = pty.request(&listener);
+    let user = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|entry| entry["role"] == "user")
+        .unwrap();
+    assert_eq!(user["content"][0]["text"], "a\nb\nc\nd\t界");
+    respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+    pty.wait(b"> ");
+    pty.send(b"following question\r\n");
+    let (mut stream, body) = pty.request(&listener);
+    let user = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|entry| entry["role"] == "user")
+        .unwrap();
+    assert_eq!(user["content"][0]["text"], "following question");
+    respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
+    pty.wait(b"> ");
     pty.send(b"/exit\r");
 }

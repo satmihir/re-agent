@@ -31,11 +31,14 @@ fn borrowed_recorder_keeps_retry_events_ordered_and_out_of_the_buffer() {
         let encoded = std::fs::read_to_string(&observed_path).unwrap();
         assert!(encoded.contains("\\ufffd\\ufffd"));
         stream
-            .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 2\r\n\r\n{}")
+            .write_all(
+                b"HTTP/1.1 503 Unavailable\r\nRetry-After: 60\r\nContent-Length: 2\r\n\r\n{}",
+            )
             .unwrap();
     });
+    // A server delay larger than the window keeps one attempt without a 100ms race.
     let mut transport = Transport::new(
-        &json!({"provider":"openai","proxied":true,"model_retry_window":100_000_000}),
+        &json!({"provider":"openai","proxied":true,"model_retry_window":2_000_000_000}),
     );
     let error = transport
         .call_endpoint_traced(
@@ -232,7 +235,11 @@ fn cancellation_trace_wraps_only_header_errors_and_masks_endpoint_password() {
 #[test]
 fn retry_after_signed_overflow_falls_back_and_reaches_the_second_request() {
     use std::net::TcpListener;
-    for header in ["9223372036854775808", "18446744073709551615", "18446744073709551616"] {
+    for header in [
+        "9223372036854775808",
+        "18446744073709551615",
+        "18446744073709551616",
+    ] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -248,21 +255,32 @@ fn retry_after_signed_overflow_falls_back_and_reaches_the_second_request() {
                     }
                     std::thread::sleep(Duration::from_millis(5));
                 };
-                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
                 http::tests::request(&mut stream);
                 if attempt == 0 {
                     write!(stream, "HTTP/1.1 503 Unavailable\r\nRetry-After: {header}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
                 } else {
-                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                        )
+                        .unwrap();
                 }
             }
             2
         });
-        let mut transport = Transport::new(&json!({"provider":"openai","model_retry_window":2_000_000_000u64}));
+        let mut transport =
+            Transport::new(&json!({"provider":"openai","model_retry_window":2_000_000_000u64}));
         let result = transport.call_endpoint(&json!({}), &json!({}), &endpoint);
         assert_eq!(server.join().unwrap(), 2, "header {header}");
         assert!(result.is_ok(), "header {header}: {result:?}");
-        let scheduled = transport.events.iter().find(|event| event["event"] == "api.retry.scheduled").unwrap();
+        let scheduled = transport
+            .events
+            .iter()
+            .find(|event| event["event"] == "api.retry.scheduled")
+            .unwrap();
         let delay = scheduled["data"]["delay_ms"].as_u64().unwrap();
         assert!((800..=1200).contains(&delay), "header {header}: {delay}");
     }

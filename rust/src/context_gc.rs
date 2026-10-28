@@ -462,13 +462,23 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     let mut handoff = session.state["handoff"].clone();
     if handoff.is_object() {
         let count = number(&handoff["entries"]) as usize;
-        let Some(prefix) = view.get(..count) else {return false;};
-        let Ok(rebuilt) = crate::chat::model_switch::handoff(prefix) else {return false;};
-        if !rebuilt.is_object() {return false;}
+        let Some(prefix) = view.get(..count) else {
+            return false;
+        };
+        let Ok(rebuilt) = crate::chat::model_switch::handoff(prefix) else {
+            return false;
+        };
+        if !rebuilt.is_object() {
+            return false;
+        }
         handoff = rebuilt;
         let mut user = json!({"text":handoff["text"]});
-        if !string(&handoff["plan"]).is_empty() {user["plan"] = handoff["plan"].clone();}
-        view = std::iter::once(json!({"kind":"user","user":user})).chain(view.into_iter().skip(count)).collect();
+        if !string(&handoff["plan"]).is_empty() {
+            user["plan"] = handoff["plan"].clone();
+        }
+        view = std::iter::once(json!({"kind":"user","user":user}))
+            .chain(view.into_iter().skip(count))
+            .collect();
     }
     let after = context::build_context(
         &session.config,
@@ -542,7 +552,11 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     }
     if session.state["handoff"].is_object() {
         let count = number(&session.state["handoff"]["entries"]) as usize;
-        break_entry = if break_entry<count {0} else {break_entry-count+1};
+        break_entry = if break_entry < count {
+            0
+        } else {
+            break_entry - count + 1
+        };
     }
     let old_body = types::json_bytes(&old_body);
     let new_body = types::json_bytes(&new_body);
@@ -646,6 +660,105 @@ mod tests {
             assert_eq!(accepted[0]["tool"]["outcome"], original);
         }
     }
+    #[test]
+    fn switched_gc_commits_the_measured_handoff_and_keeps_recall_evidence() {
+        for provider in ["openai", "anthropic"] {
+            for prefix in [1, 3] {
+                let root = tempfile::tempdir().unwrap();
+                let script = root.path().join("script.json");
+                std::fs::write(
+                    &script,
+                    br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+                )
+                .unwrap();
+                let mut session = Session::new(json!({"workspace":root.path(),"provider":"scripted","model":"scripted","scripted":script,"context_gc":true,"context_window_tokens":100000,"trace_file":root.path().join("gc.jsonl"),"no_project_instructions":true})).unwrap();
+                session.config["provider"] = json!(provider);
+                session.config["model"] = json!("test");
+                session
+                    .history
+                    .push(json!({"kind":"user","user":{"text":"task","plan":"on"}}));
+                let native_provider = if provider == "openai" {
+                    "openai.responses"
+                } else {
+                    "anthropic.messages"
+                };
+                for (id, message) in [("old", "OBSOLETE".repeat(8000)), ("new", "current".into())] {
+                    let item = if provider == "openai" {
+                        json!({"type":"function_call","call_id":id,"name":"exec","arguments":"{\"argv\":[\"same\"],\"cwd\":\".\"}"})
+                    } else {
+                        json!({"type":"tool_use","id":id,"name":"exec","input":{"argv":["same"],"cwd":"."}})
+                    };
+                    session.history.push(json!({"kind":"assistant","assistant":{"native":{"provider":native_provider,"items":[crate::raw::new(&types::json_bytes(&item))]},"blocks":[{"kind":"tool_call","call":{"call_id":id,"name":"exec","arguments":"{\"argv\":[\"same\"],\"cwd\":\".\"}"}}]}}));
+                    session.history.push(json!({"kind":"tool","tool":{"call_id":id,"name":"exec","outcome":tools::outcome(true,"ok",&message,Value::Null,"none")}}));
+                }
+                let settled = if provider == "openai" {
+                    json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"settled"}]})
+                } else {
+                    json!({"type":"text","text":"settled"})
+                };
+                for _ in 2..16 {
+                    session.history.push(json!({"kind":"assistant","assistant":{"native":{"provider":native_provider,"items":[crate::raw::new(&types::json_bytes(&settled))]},"blocks":[{"kind":"text","text":"settled"}]}}));
+                }
+                session.state["handoff"] =
+                    crate::chat::model_switch::handoff(&session.history[..prefix]).unwrap();
+                let original_handoff = session.state["handoff"].clone();
+                let accepted = session.history.clone();
+                let size = |session: &Session| {
+                    admission_bytes(
+                        &session.config,
+                        &context::build_context(
+                            &session.config,
+                            scope("", "", 0),
+                            &session.request_history(),
+                            tools::specs(&session.config),
+                        ),
+                    )
+                    .unwrap()
+                };
+                let before = size(&session);
+                assert!(types::json_string(&json!(session.request_history())).contains("OBSOLETE"));
+                session.state["steps"] = json!(16);
+                session.state["tokens_per_byte"] = json!(0.5);
+                session.state["gc_requests"] = json!(32);
+                session.state["last_request"] = json!({"known":true,"input_tokens":100000000});
+                assert!(!collect(&mut session));
+                assert_eq!(session.state["handoff"], original_handoff);
+                assert!(session.state["gc_state"]["dropped"].is_null());
+                session.state["last_request"] = json!({"known":true,"input_tokens":10000});
+                session.open_trace("switched-gc");
+                assert!(collect(&mut session), "{provider} prefix={prefix}");
+                assert_eq!(session.history, accepted);
+                assert_eq!(session.state["handoff"]["entries"], prefix);
+                assert_eq!(session.state["handoff"]["plan"], "on");
+                assert_eq!(
+                    session.state["handoff"]["native_items"],
+                    if prefix == 3 { 1 } else { 0 }
+                );
+                let after = size(&session);
+                assert!(after + 60000 < before, "{provider}: {before} -> {after}");
+                let projected = types::json_string(&json!(session.request_history()));
+                assert!(!projected.contains("OBSOLETE"));
+                assert!(projected.contains("recall old"));
+                let recalled = recall(&session, r#"{"id":"old"}"#);
+                assert!(types::json_string(&recalled).contains("OBSOLETE"));
+                let event = std::fs::read_to_string(root.path().join("gc.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .find(|event| event["type"] == "context.gc")
+                    .unwrap();
+                assert_eq!(event["data"]["bytes_freed"], before - after);
+                assert_eq!(
+                    event["data"]["cache_break_entry"],
+                    if prefix == 3 { 1 } else { 3 }
+                );
+                let handoff = session.state["handoff"].clone();
+                assert!(!collect(&mut session));
+                assert_eq!(session.state["handoff"], handoff);
+            }
+        }
+    }
+
     #[test]
     fn gc_projection_preserves_accepted_evidence() {
         let accepted = vec![

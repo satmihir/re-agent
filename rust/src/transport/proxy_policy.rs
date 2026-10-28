@@ -72,6 +72,12 @@ impl ProxyPolicy {
         {
             return Ok(None);
         }
+        if !matches!(proxy.scheme(), "http" | "https" | "socks5" | "socks5h") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsupported proxy scheme {:?}", proxy.scheme()),
+            ));
+        }
         Ok(Some(proxy.clone()))
     }
 }
@@ -84,7 +90,7 @@ fn parse_proxy(value: &str) -> Option<Url> {
         .ok()
         .filter(|url| url.has_host())
         .or_else(|| Url::parse(&format!("http://{value}")).ok())?;
-    (matches!(url.scheme(), "http" | "https") && url.has_host()).then_some(url)
+    url.has_host().then_some(url)
 }
 
 fn ascii_host(host: &str) -> String {
@@ -359,6 +365,36 @@ mod tests {
                 result.is_none(),
                 expected_bypass,
                 "{no_proxy:?} {destination}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_proxy_schemes_do_not_become_direct_connections() {
+        for scheme in ["socks4", "gopher", "custom"] {
+            let proxy = format!("{scheme}://user:private@proxy:9000");
+            for destination in ["http://example.com", "https://example.com"] {
+                let error = policy(&[("HTTP_PROXY", &proxy), ("HTTPS_PROXY", &proxy)])
+                    .select(&destination.parse().unwrap())
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+                assert_eq!(
+                    error.to_string(),
+                    format!("unsupported proxy scheme {scheme:?}")
+                );
+                assert!(!error.to_string().contains("private"));
+            }
+            for destination in ["http://localhost", "http://127.0.0.1"] {
+                assert!(policy(&[("HTTP_PROXY", &proxy)])
+                    .select(&destination.parse().unwrap())
+                    .unwrap()
+                    .is_none());
+            }
+            assert!(
+                policy(&[("HTTP_PROXY", &proxy), ("NO_PROXY", "example.com")])
+                    .select(&"http://example.com".parse().unwrap())
+                    .unwrap()
+                    .is_none()
             );
         }
     }

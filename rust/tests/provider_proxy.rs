@@ -16,7 +16,13 @@ fn proxy_request_process() {
     let Ok(url) = std::env::var("REAGENT_PROXY_TEST_URL") else {
         return;
     };
-    let client = Client::new(Duration::from_secs(2), Duration::from_secs(2), None).unwrap();
+    let stalled = std::env::var_os("REAGENT_PROXY_TEST_STALL").is_some();
+    let header = if stalled {
+        Duration::from_millis(100)
+    } else {
+        Duration::from_secs(2)
+    };
+    let client = Client::new(header, Duration::from_secs(2), None).unwrap();
     let result = client
         .post(&url)
         .header("authorization", "Bearer origin-secret")
@@ -25,6 +31,9 @@ fn proxy_request_process() {
         .send();
     if std::env::var_os("REAGENT_PROXY_TEST_REJECT").is_some() {
         assert!(result.is_err());
+        if stalled {
+            assert_eq!(result.err().unwrap().kind(), std::io::ErrorKind::TimedOut);
+        }
         return;
     }
     let mut body = Vec::new();
@@ -172,4 +181,167 @@ fn assert_origin_request(request: &str) {
     assert!(request.contains("content-type: application/json\r\n"));
     assert!(request.contains("accept-encoding: gzip\r\n"));
     assert!(!request.contains("\r\naccept:"));
+}
+
+#[test]
+fn socks5_keeps_dns_remote_and_authentication_out_of_origin_headers() {
+    for (scheme, tls, credentials, method) in [
+        ("socks5", false, false, 0),
+        ("socks5h", false, true, 0),
+        ("socks5", false, true, 2),
+        ("socks5h", true, true, 2),
+        ("socks5", false, true, 255),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let proxy = format!(
+            "{scheme}://{}{}",
+            if credentials { "user:p%40ss@" } else { "" },
+            listener.local_addr().unwrap()
+        );
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                if let Ok((stream, _)) = listener.accept() {
+                    break stream;
+                }
+                assert!(Instant::now() < deadline, "SOCKS proxy not reached");
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut greeting = [0; 2];
+            stream.read_exact(&mut greeting).unwrap();
+            assert_eq!(greeting, [5, if credentials { 2 } else { 1 }]);
+            let mut methods = vec![0; greeting[1] as usize];
+            stream.read_exact(&mut methods).unwrap();
+            assert_eq!(methods, if credentials { vec![0, 2] } else { vec![0] });
+            stream.write_all(&[5, method]).unwrap();
+            if method == 255 {
+                return;
+            }
+            if method == 2 {
+                let mut authentication = [0; 2];
+                stream.read_exact(&mut authentication).unwrap();
+                assert_eq!(authentication, [1, 4]);
+                let mut user = [0; 4];
+                stream.read_exact(&mut user).unwrap();
+                assert_eq!(&user, b"user");
+                let mut length = [0];
+                stream.read_exact(&mut length).unwrap();
+                let mut password = vec![0; length[0] as usize];
+                stream.read_exact(&mut password).unwrap();
+                assert_eq!(password, b"p@ss");
+                stream.write_all(&[1, 0]).unwrap();
+            }
+            let mut connect = [0; 5];
+            stream.read_exact(&mut connect).unwrap();
+            assert_eq!(connect, [5, 1, 0, 3, 16]);
+            let mut host = [0; 16];
+            stream.read_exact(&mut host).unwrap();
+            assert_eq!(&host, b"provider.invalid");
+            let mut port = [0; 2];
+            stream.read_exact(&mut port).unwrap();
+            assert_eq!(u16::from_be_bytes(port), 8443);
+            stream.write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0]).unwrap();
+            if !tls {
+                let request = request(&mut stream);
+                assert!(request.starts_with("POST /path HTTP/1.1\r\n"));
+                assert!(!request.to_lowercase().contains("proxy-authorization"));
+                assert_origin_request(&request);
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .unwrap();
+                return;
+            }
+            let config = rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from_pem_slice(CERT).unwrap()],
+                    PrivateKeyDer::from_pem_slice(KEY).unwrap(),
+                )
+                .unwrap();
+            let mut stream = rustls::StreamOwned::new(
+                rustls::ServerConnection::new(Arc::new(config)).unwrap(),
+                stream,
+            );
+            let request = request(&mut stream);
+            assert!(request.starts_with("POST /path HTTP/1.1\r\n"));
+            assert!(!request.to_lowercase().contains("proxy-authorization"));
+            assert_origin_request(&request);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .unwrap();
+            stream.flush().unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let certificate = directory.path().join("root.pem");
+        std::fs::write(&certificate, CERT).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .env_clear()
+            .args(["--exact", "proxy_request_process", "--nocapture"])
+            .env(
+                "REAGENT_PROXY_TEST_URL",
+                format!(
+                    "{}://provider.invalid:8443/path",
+                    if tls { "https" } else { "http" }
+                ),
+            )
+            .env(if tls { "HTTPS_PROXY" } else { "HTTP_PROXY" }, proxy)
+            .env("SSL_CERT_FILE", certificate)
+            .env("SSL_CERT_DIR", directory.path());
+        if method == 255 {
+            child.env("REAGENT_PROXY_TEST_REJECT", "1");
+        }
+        let output = child.output().unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{scheme} TLS={tls} method={method}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn socks5_stalled_handshake_uses_the_existing_header_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let proxy = format!("socks5://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut stream = loop {
+            if let Ok((stream, _)) = listener.accept() {
+                break stream;
+            }
+            assert!(Instant::now() < deadline, "SOCKS proxy not reached");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut greeting = [0; 3];
+        stream.read_exact(&mut greeting).unwrap();
+        assert_eq!(greeting, [5, 1, 0]);
+        assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+    });
+    let output = Command::new(std::env::current_exe().unwrap())
+        .env_clear()
+        .args(["--exact", "proxy_request_process", "--nocapture"])
+        .env("HTTP_PROXY", proxy)
+        .env("REAGENT_PROXY_TEST_URL", "http://provider.invalid/path")
+        .env("REAGENT_PROXY_TEST_REJECT", "1")
+        .env("REAGENT_PROXY_TEST_STALL", "1")
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

@@ -421,6 +421,107 @@ mod tests {
         }
     }
     #[test]
+    fn reset_and_compaction_forget_observations_in_every_retained_workspace() {
+        for boundary in ["reset", "manual", "within_run"] {
+            let roots = [
+                tempfile::tempdir().unwrap(),
+                tempfile::tempdir().unwrap(),
+                tempfile::tempdir().unwrap(),
+            ];
+            for root in &roots {
+                for name in ["write", "edit", "delete"] {
+                    std::fs::write(root.path().join(name), "old").unwrap();
+                }
+            }
+            let script = roots[0].path().join("script.json");
+            std::fs::write(
+                &script,
+                br#"[{"blocks":[{"kind":"text","text":"handoff"}]}]"#,
+            )
+            .unwrap();
+            let grants: Vec<_> = roots.iter().map(|root| root.path()).collect();
+            let mut session = Session::new(json!({"workspace":roots[0].path(),"allow_workspaces":grants,"provider":"scripted","model":"scripted","scripted":script,"no_project_instructions":true,"in_run_compact":true,"context_window_tokens":100000})).unwrap();
+            let call = |session: &mut Session, name: &str, args: Value| {
+                tools::execute(
+                    &mut session.tools,
+                    &session.config,
+                    name,
+                    &types::json_string(&args),
+                )
+                .unwrap()
+            };
+            let switch = |session: &mut Session, path: &std::path::Path| {
+                let outcome = call(session, "switch_workspace", json!({"path":path}));
+                assert_eq!(outcome["ok"], true, "{outcome}");
+                session.config["workspace"] = outcome["data"]["workspace"].clone();
+            };
+            for root in &roots {
+                switch(&mut session, root.path());
+                for name in ["write", "edit", "delete"] {
+                    assert_eq!(
+                        call(&mut session, "read_file", json!({"path":name}))["ok"],
+                        true
+                    );
+                }
+            }
+            session.history =
+                vec![json!({"kind":"user","user":{"text":"large prior context ".repeat(4000)}})];
+            match boundary {
+                "reset" => session.reset(),
+                "manual" => assert_eq!(session.compact("").unwrap()["status"], "completed"),
+                _ => {
+                    session.state["steps"] = json!(1);
+                    session.state["task"] = json!({"text":"continue"});
+                    session.state["last_request"] = json!({"known":true,"input_tokens":50000});
+                    session.state["tokens_per_byte"] = json!(0.5);
+                    assert!(within_run(&mut session, false).is_none());
+                    assert_eq!(session.history[1]["kind"], "summary");
+                }
+            }
+            for root in &roots {
+                switch(&mut session, root.path());
+                assert!(
+                    session.tools.workspace.seen.is_empty(),
+                    "{boundary}: {}",
+                    root.path().display()
+                );
+                for (name, args) in [
+                    ("write_file", json!({"path":"write","content":"new"})),
+                    (
+                        "edit_file",
+                        json!({"path":"edit","old_text":"old","new_text":"new"}),
+                    ),
+                    ("delete_file", json!({"path":"delete"})),
+                ] {
+                    let outcome = call(&mut session, name, args);
+                    assert_eq!(
+                        outcome["code"], "invalid_arguments",
+                        "{boundary}: {name}: {outcome}"
+                    );
+                }
+                for name in ["write", "edit", "delete"] {
+                    assert_eq!(
+                        std::fs::read_to_string(root.path().join(name)).unwrap(),
+                        "old"
+                    );
+                }
+                assert_eq!(
+                    call(&mut session, "read_file", json!({"path":"write"}))["ok"],
+                    true
+                );
+                assert_eq!(
+                    call(
+                        &mut session,
+                        "write_file",
+                        json!({"path":"write","content":"new"})
+                    )["ok"],
+                    true
+                );
+            }
+        }
+    }
+
+    #[test]
     fn summaries_preserve_block_order() {
         assert_eq!(
             text(&json!({"blocks":[{"kind":"text","text":" A "},{"kind":"text","text":"B "}]}))

@@ -2,7 +2,6 @@ use base64::Engine;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming, HeaderMap, Method, Request, StatusCode};
-use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
 use std::{
     collections::BTreeMap,
@@ -19,11 +18,13 @@ use tokio::runtime::Runtime;
 mod proxy;
 #[path = "proxy_policy.rs"]
 mod proxy_policy;
+#[path = "socks.rs"]
+mod socks;
 
 /// Client sends explicit HTTP requests without implicit Accept headers or redirects.
 pub struct Client {
     runtime: Arc<Runtime>,
-    inner: HyperClient<HttpsConnector<proxy::ProxyConnector>, Full<Bytes>>,
+    inner: HyperClient<proxy::Connector, Full<Bytes>>,
     proxy_policy: Arc<proxy_policy::ProxyPolicy>,
     header: Duration,
     idle: Duration,
@@ -40,12 +41,7 @@ impl Client {
                 .build()?,
         );
         let proxy_policy = Arc::new(proxy_policy::ProxyPolicy::from_env());
-        let tls = proxy::tls_config();
-        let connector = HttpsConnectorBuilder::new()
-            .with_tls_config(tls.clone())
-            .https_or_http()
-            .enable_http1()
-            .wrap_connector(proxy::ProxyConnector::new(proxy_policy.clone(), tls));
+        let connector = proxy::Connector::new(proxy_policy.clone());
         let inner = HyperClient::builder(TokioExecutor::new())
             .retry_canceled_requests(false)
             .build(connector);
@@ -177,7 +173,9 @@ impl RequestBuilder<'_> {
         *request.headers_mut() = self.headers;
         if url.scheme() == "http" {
             if let Some(proxy) = self.client.proxy_policy.select(request.uri())? {
-                if let Some(authorization) = proxy::authorization(&proxy) {
+                if let Some(authorization) = proxy::authorization(&proxy)
+                    .filter(|_| matches!(proxy.scheme(), "http" | "https"))
+                {
                     request
                         .headers_mut()
                         .insert(hyper::header::PROXY_AUTHORIZATION, authorization);

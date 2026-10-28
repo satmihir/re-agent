@@ -13,6 +13,15 @@ enum Wire {
 
 struct Reader<'a>(&'a [u8]);
 
+struct Budget(usize);
+
+impl Budget {
+    fn spend(&mut self, bytes: usize) -> Result<(), ()> {
+        self.0 = self.0.checked_sub(bytes).ok_or(())?;
+        Ok(())
+    }
+}
+
 impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], ()> {
         let result = self.0.get(..n).ok_or(())?;
@@ -83,35 +92,18 @@ fn bootstrap() -> HashMap<i64, Wire> {
     types
 }
 
-fn go_string(mut bytes: &[u8]) -> String {
-    let mut text = String::new();
-    while !bytes.is_empty() {
-        match std::str::from_utf8(bytes) {
-            Ok(valid) => {
-                text.push_str(valid);
-                break;
-            }
-            Err(error) => {
-                let n = error.valid_up_to();
-                text.push_str(std::str::from_utf8(&bytes[..n]).unwrap());
-                // encoding/json replaces each invalid Go string byte, not each sequence.
-                text.push('\u{fffd}');
-                bytes = &bytes[n + 1..];
-            }
-        }
-    }
-    text
-}
-
 fn value(
     r: &mut Reader<'_>,
     types: &HashMap<i64, Wire>,
     id: i64,
     depth: usize,
+    kind: Option<&str>,
+    budget: &mut Budget,
 ) -> Result<Value, ()> {
     if depth > 128 {
         return Err(());
     }
+    budget.spend(96)?;
     match id {
         1 => return Ok(json!(r.uint()? != 0)),
         2 => return Ok(json!(r.int()?)),
@@ -123,17 +115,23 @@ fn value(
         5 | 6 => {
             let n = r.count()?;
             let bytes = r.take(n)?;
+            budget.spend(n.checked_mul(2).ok_or(())?)?;
             return Ok(if id == 5 {
                 json!(STANDARD.encode(bytes))
+            } else if kind.is_some() {
+                crate::raw::string(bytes)
             } else {
-                json!(go_string(bytes))
+                json!(std::str::from_utf8(bytes).map_err(|_| ())?)
             });
         }
         _ => {}
     }
     match types.get(&id).ok_or(())? {
         Wire::Struct(fields) => {
-            let mut object = Map::new();
+            let mut object = match kind {
+                Some(kind) => defaults(kind, budget)?,
+                None => Map::new(),
+            };
             let mut index: i64 = -1;
             loop {
                 let delta = r.uint()?;
@@ -146,7 +144,25 @@ fn value(
                 let (name, field) = fields
                     .get(usize::try_from(index).map_err(|_| ())?)
                     .ok_or(())?;
-                object.insert(name.clone(), value(r, types, *field, depth + 1)?);
+                let selected = match kind {
+                    Some("observation") if name == "AgentThread" => Some(("", "thread")),
+                    Some(kind) => self::field(kind, name),
+                    None => Some((name.as_str(), "")),
+                };
+                let Some((key, inner)) = selected else {
+                    skip(r, types, *field, depth + 1)?;
+                    continue;
+                };
+                budget.spend(key.len() + 96)?;
+                let item = value(r, types, *field, depth + 1, kind.map(|_| inner), budget)?;
+                if key.is_empty() && kind == Some("observation") {
+                    let Value::Object(item) = item else {
+                        return Err(());
+                    };
+                    object.extend(item);
+                } else {
+                    object.insert(key.into(), item);
+                }
             }
             Ok(Value::Object(object))
         }
@@ -159,7 +175,14 @@ fn value(
             }
             let mut items = Vec::new();
             for _ in 0..n {
-                items.push(value(r, types, *elem, depth + 1)?);
+                items.push(value(
+                    r,
+                    types,
+                    *elem,
+                    depth + 1,
+                    kind.and_then(|k| k.strip_prefix("[]")),
+                    budget,
+                )?);
             }
             Ok(Value::Array(items))
         }
@@ -167,25 +190,96 @@ fn value(
             let n = r.count()?;
             let mut items = Map::new();
             for _ in 0..n {
-                let key = value(r, types, *key, depth + 1)?;
-                let key = key
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| key.to_string());
-                items.insert(key, value(r, types, *elem, depth + 1)?);
+                let key = value(r, types, *key, depth + 1, None, budget)?;
+                let key = key.as_str().ok_or(())?;
+                budget.spend(key.len() + 96)?;
+                let item = value(
+                    r,
+                    types,
+                    *elem,
+                    depth + 1,
+                    kind.and_then(|k| k.strip_prefix("map:")),
+                    budget,
+                )?;
+                items.insert(key.into(), item);
             }
             Ok(Value::Object(items))
         }
         Wire::External => {
             // GobEncoder/BinaryMarshaler values (including time.Time) are byte strings.
-            // None is a declared checkpoint field; retain their bytes while skipping it.
             let n = r.count()?;
+            budget.spend(n.checked_mul(2).ok_or(())?)?;
             Ok(json!(STANDARD.encode(r.take(n)?)))
         }
     }
 }
 
-fn definition(wire: Value, id: i64) -> Result<Wire, ()> {
+// Unknown values are consumed without allocating names, containers or JSON numbers.
+fn skip(r: &mut Reader<'_>, types: &HashMap<i64, Wire>, id: i64, depth: usize) -> Result<(), ()> {
+    if depth > 128 {
+        return Err(());
+    }
+    match id {
+        1..=4 => {
+            r.uint()?;
+            return Ok(());
+        }
+        7 => {
+            r.uint()?;
+            r.uint()?;
+            return Ok(());
+        }
+        5 | 6 => {
+            let n = r.count()?;
+            r.take(n)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+    match types.get(&id).ok_or(())? {
+        Wire::Struct(fields) => {
+            let mut index: i64 = -1;
+            loop {
+                let delta = r.uint()?;
+                if delta == 0 {
+                    break;
+                }
+                index = index
+                    .checked_add(i64::try_from(delta).map_err(|_| ())?)
+                    .ok_or(())?;
+                let (_, field) = fields
+                    .get(usize::try_from(index).map_err(|_| ())?)
+                    .ok_or(())?;
+                skip(r, types, *field, depth + 1)?;
+            }
+        }
+        Wire::Slice(elem) | Wire::Array(elem, _) => {
+            let n = r.count()?;
+            if let Wire::Array(_, length) = types.get(&id).unwrap() {
+                if n != *length {
+                    return Err(());
+                }
+            }
+            for _ in 0..n {
+                skip(r, types, *elem, depth + 1)?;
+            }
+        }
+        Wire::Map(key, elem) => {
+            let n = r.count()?;
+            for _ in 0..n {
+                skip(r, types, *key, depth + 1)?;
+                skip(r, types, *elem, depth + 1)?;
+            }
+        }
+        Wire::External => {
+            let n = r.count()?;
+            r.take(n)?;
+        }
+    }
+    Ok(())
+}
+
+fn definition(wire: Value, id: i64, budget: &mut Budget) -> Result<Wire, ()> {
     let object = wire.as_object().ok_or(())?;
     if object.len() != 1 {
         return Err(());
@@ -201,7 +295,9 @@ fn definition(wire: Value, id: i64) -> Result<Wire, ()> {
             let mut names = HashSet::new();
             if let Some(items) = item.get("Field") {
                 for field in items.as_array().ok_or(())? {
-                    let name = field["Name"].as_str().ok_or(())?.to_string();
+                    let name = field["Name"].as_str().ok_or(())?;
+                    budget.spend(name.len().checked_mul(2).ok_or(())? + 96)?;
+                    let name = name.to_string();
                     if !names.insert(name.clone()) {
                         return Err(());
                     }
@@ -295,7 +391,12 @@ fn compatible(
     }
 }
 
-fn default_field(parent: &str, key: &str, kind: &str) -> Option<Value> {
+fn default_field(
+    parent: &str,
+    key: &str,
+    kind: &str,
+    budget: &mut Budget,
+) -> Result<Option<Value>, ()> {
     let pointer = match parent {
         "checkpoint" => [
             "project_instructions",
@@ -314,61 +415,44 @@ fn default_field(parent: &str, key: &str, kind: &str) -> Option<Value> {
         _ => false,
     };
     if pointer {
-        return None;
+        return Ok(None);
     }
-    Some(match kind {
+    budget.spend(key.len() + 192)?;
+    Ok(Some(match kind {
         "bool" => json!(false),
         "int" => json!(0),
         "float" => json!(0.0),
         "string" => json!(""),
         "raw" => Value::Null,
         _ if kind.starts_with("[]") || kind.starts_with("map:") => Value::Null,
-        _ => normalize(&json!({}), kind),
-    })
+        _ => Value::Object(defaults(kind, budget)?),
+    }))
 }
 
-fn normalize(input: &Value, kind: &str) -> Value {
-    if let Some(elem) = kind.strip_prefix("[]") {
-        return Value::Array(
-            input
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|v| normalize(v, elem))
-                .collect(),
-        );
-    }
-    if let Some(elem) = kind.strip_prefix("map:") {
-        return Value::Object(
-            input
-                .as_object()
-                .unwrap()
-                .iter()
-                .map(|(k, v)| (k.clone(), normalize(v, elem)))
-                .collect(),
-        );
-    }
-    if ["bool", "int", "float", "raw", "string"].contains(&kind) {
-        return input.clone();
-    }
+fn defaults(kind: &str, budget: &mut Budget) -> Result<Map<String, Value>, ()> {
     let mut output = Map::new();
     for item in checkpoint_fields(kind).split_whitespace() {
         let (key, inner) = item.split_once(':').unwrap();
-        if let Some(value) = default_field(kind, key, inner) {
+        if let Some(value) = default_field(kind, key, inner, budget)? {
             output.insert(key.into(), value);
         }
     }
-    for (name, value) in input.as_object().unwrap() {
-        if kind == "observation" && name == "AgentThread" {
-            output.extend(normalize(value, "thread").as_object().unwrap().clone());
-        } else if let Some((key, inner)) = field(kind, name) {
-            output.insert(key.into(), normalize(value, inner));
-        }
-    }
-    Value::Object(output)
+    Ok(output)
 }
 
 pub(super) fn decode(bytes: &[u8]) -> Result<Value, ()> {
+    // Account cumulatively, including discarded descriptor copies and typed defaults.
+    // Input-proportional credit prevents tiny zero-filled slices expanding without bound.
+    let limit = bytes
+        .len()
+        .checked_mul(128)
+        .and_then(|n| n.checked_add(64 * 1024))
+        .ok_or(())?;
+    decode_budget(bytes, limit)
+}
+
+fn decode_budget(bytes: &[u8], limit: usize) -> Result<Value, ()> {
+    let mut budget = Budget(limit);
     let mut stream = Reader(bytes);
     let mut types = bootstrap();
     while !stream.0.is_empty() {
@@ -380,20 +464,160 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Value, ()> {
             if id < 64 || types.contains_key(&id) {
                 return Err(());
             }
-            let wire = value(&mut message, &types, 16, 0)?;
+            let wire = value(&mut message, &types, 16, 0, None, &mut budget)?;
             if !message.0.is_empty() {
                 return Err(());
             }
-            types.insert(id, definition(wire, id)?);
+            types.insert(id, definition(wire, id, &mut budget)?);
             continue;
         }
         compatible(&types, id, "checkpoint", &mut HashSet::new())?;
-        let cp = value(&mut message, &types, id, 0)?;
+        let cp = value(&mut message, &types, id, 0, Some("checkpoint"), &mut budget)?;
         if !message.0.is_empty() {
             return Err(());
         }
         // Go Decode consumes one value and leaves subsequent stream messages unread.
-        return Ok(normalize(&cp, "checkpoint"));
+        return Ok(cp);
     }
     Err(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uint(out: &mut Vec<u8>, n: u64) {
+        if n < 128 {
+            out.push(n as u8);
+            return;
+        }
+        let bytes = n.to_be_bytes();
+        let first = bytes.iter().position(|b| *b != 0).unwrap();
+        out.push((256 - (8 - first)) as u8);
+        out.extend_from_slice(&bytes[first..]);
+    }
+
+    fn int(out: &mut Vec<u8>, n: i64) {
+        uint(out, ((n as u64) << 1) ^ if n < 0 { u64::MAX } else { 0 });
+    }
+
+    fn string(out: &mut Vec<u8>, bytes: &[u8]) {
+        uint(out, bytes.len() as u64);
+        out.extend_from_slice(bytes);
+    }
+
+    fn message(out: &mut Vec<u8>, bytes: &[u8]) {
+        uint(out, bytes.len() as u64);
+        out.extend_from_slice(bytes);
+    }
+
+    fn structure(out: &mut Vec<u8>, id: i64, fields: &[(&str, i64)]) {
+        let mut body = Vec::new();
+        int(&mut body, -id);
+        body.extend_from_slice(&[3, 1, 2]); // StructT, CommonType, Id (Name omitted).
+        int(&mut body, id);
+        body.extend_from_slice(&[0, 1]);
+        uint(&mut body, fields.len() as u64);
+        for (name, id) in fields {
+            body.push(1);
+            string(&mut body, name.as_bytes());
+            body.push(1);
+            int(&mut body, *id);
+            body.push(0);
+        }
+        body.extend_from_slice(&[0, 0]);
+        message(out, &body);
+    }
+
+    fn slice(out: &mut Vec<u8>, id: i64, elem: i64) {
+        let mut body = Vec::new();
+        int(&mut body, -id);
+        body.extend_from_slice(&[2, 1, 2]); // SliceT, CommonType, Id.
+        int(&mut body, id);
+        body.extend_from_slice(&[0, 1]);
+        int(&mut body, elem);
+        body.extend_from_slice(&[0, 0]);
+        message(out, &body);
+    }
+
+    #[test]
+    fn unknown_non_json_numbers_are_skipped_but_still_require_complete_encoding() {
+        for kind in [4, 7] {
+            let mut bytes = Vec::new();
+            structure(&mut bytes, 64, &[("Version", 2), ("Future", kind)]);
+            let mut body = Vec::new();
+            int(&mut body, 64);
+            body.extend_from_slice(&[1, 2, 1]);
+            uint(&mut body, f64::NAN.to_bits().swap_bytes());
+            if kind == 7 {
+                uint(&mut body, f64::INFINITY.to_bits().swap_bytes());
+            }
+            body.push(0);
+            let mut valid = bytes.clone();
+            message(&mut valid, &body);
+            let cp = decode(&valid).unwrap();
+            assert_eq!(cp["version"], 1);
+            assert!(cp.get("Future").is_none());
+            for cut in 1..body.len() {
+                let mut truncated = bytes.clone();
+                message(&mut truncated, &body[..cut]);
+                assert!(decode(&truncated).is_err(), "kind {kind}, cut {cut}");
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_repeated_long_field_names_do_not_amplify_allocations() {
+        let mut bytes = Vec::new();
+        structure(&mut bytes, 64, &[("Version", 2), ("Future", 66)]);
+        structure(&mut bytes, 65, &[(&"X".repeat(8192), 6)]);
+        slice(&mut bytes, 66, 65);
+        let mut body = Vec::new();
+        int(&mut body, 64);
+        body.extend_from_slice(&[1, 2, 1]);
+        uint(&mut body, 8192);
+        for _ in 0..8192 {
+            body.extend_from_slice(&[1, 1, b'x', 0]);
+        }
+        body.push(0);
+        message(&mut bytes, &body);
+        // Materializing names for every element would allocate at least 64 MiB.
+        let cp = decode_budget(&bytes, 128 * 1024).unwrap();
+        assert_eq!(cp["version"], 1);
+        assert!(cp.get("Future").is_none());
+        assert!(decode_budget(&bytes, 1024).is_err());
+    }
+
+    #[test]
+    fn aggregate_budget_bounds_typed_zero_value_expansion() {
+        let mut bytes = Vec::new();
+        structure(&mut bytes, 64, &[("Version", 2), ("History", 66)]);
+        structure(&mut bytes, 65, &[("Kind", 6)]);
+        slice(&mut bytes, 66, 65);
+        let mut body = Vec::new();
+        int(&mut body, 64);
+        body.extend_from_slice(&[1, 2, 1]);
+        uint(&mut body, 8192);
+        body.extend(std::iter::repeat_n(0, 8192));
+        body.push(0);
+        message(&mut bytes, &body);
+        assert!(decode(&bytes).is_err());
+        // A caller-specified larger budget demonstrates this is a resource bound,
+        // not a per-container count limit or invalid gob encoding.
+        let cp = decode_budget(&bytes, 8 * 1024 * 1024).unwrap();
+        assert_eq!(cp["history"].as_array().unwrap().len(), 8192);
+    }
+
+    #[test]
+    fn unknown_field_descriptors_are_fully_parsed() {
+        let mut bytes = Vec::new();
+        structure(&mut bytes, 64, &[("Version", 2), ("Future", 65)]);
+        let mut descriptor = Vec::new();
+        structure(&mut descriptor, 65, &[("Ignored", 6)]);
+        // An unterminated wireType cannot be ignored merely because no
+        // checkpoint field uses this type; the outer frame remains complete.
+        *descriptor.last_mut().unwrap() = 1;
+        bytes.extend_from_slice(&descriptor);
+        assert!(decode(&bytes).is_err());
+    }
 }

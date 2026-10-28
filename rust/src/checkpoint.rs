@@ -676,10 +676,17 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
     }
     let legacy_bytes;
     let payload = if env.version == 1 {
-        let encoded: Option<String> = serde_json::from_str(env.state.get())
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Bytes {
+            Base64(String),
+            Array(Vec<Option<u8>>),
+            Null,
+        }
+        let encoded: Bytes = serde_json::from_str(env.state.get())
             .map_err(|_| corrupt("invalid legacy checkpoint payload"))?;
         legacy_bytes = match encoded {
-            Some(encoded) => {
+            Bytes::Base64(encoded) => {
                 // Go's standard base64 decoder ignores unused trailing bits.
                 let decoder = base64::engine::GeneralPurpose::new(
                     &base64::alphabet::STANDARD,
@@ -690,7 +697,8 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
                     .decode(encoded.replace(['\r', '\n'], ""))
                     .map_err(|_| corrupt("invalid legacy checkpoint payload"))?
             }
-            None => Vec::new(),
+            Bytes::Array(bytes) => bytes.into_iter().map(|b| b.unwrap_or(0)).collect(),
+            Bytes::Null => Vec::new(),
         };
         legacy_bytes.as_slice()
     } else {
@@ -707,7 +715,9 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
     if !cp.is_object() {
         return Err(corrupt("invalid checkpoint state"));
     }
-    if !valid_checkpoint_type(&mut cp, "checkpoint") {
+    // The gob decoder already checks the schema and may retain invalid string bytes
+    // in internal wrappers, which are deliberately not accepted as v2 JSON strings.
+    if env.version == 2 && !valid_checkpoint_type(&mut cp, "checkpoint") {
         return Err(corrupt("invalid checkpoint state"));
     }
     convert_raw(&mut cp, true).map_err(|e| corrupt(&e))?;
@@ -1379,6 +1389,56 @@ mod tests {
     }
 
     #[test]
+    fn legacy_numeric_byte_arrays_match_base64_and_reject_malformed_payloads() {
+        let mut fixture: Value = serde_json::from_slice(LEGACY).unwrap();
+        let payload = STANDARD.decode(fixture["state"].as_str().unwrap()).unwrap();
+        fixture["state"] = json!(payload);
+        let expected = parse("0123456789abcdef", LEGACY).unwrap();
+        assert_eq!(
+            parse("0123456789abcdef", &serde_json::to_vec(&fixture).unwrap()).unwrap(),
+            expected
+        );
+        let zero = payload.iter().position(|b| *b == 0).unwrap();
+        fixture["state"][zero] = Value::Null; // Go leaves null byte elements zeroed.
+        assert_eq!(
+            parse("0123456789abcdef", &serde_json::to_vec(&fixture).unwrap()).unwrap(),
+            expected
+        );
+        for malformed in [
+            json!([-1]),
+            json!([256]),
+            json!([1.0]),
+            json!(["1"]),
+            json!({}),
+            json!(true),
+        ] {
+            fixture["state"] = malformed;
+            assert!(
+                parse("0123456789abcdef", &serde_json::to_vec(&fixture).unwrap())
+                    .unwrap_err()
+                    .ends_with("invalid legacy checkpoint payload")
+            );
+        }
+        for empty in [Value::Null, json!([])] {
+            fixture["state"] = empty;
+            fixture["sha256"] = json!(format!("{:x}", Sha256::digest([])));
+            assert!(
+                parse("0123456789abcdef", &serde_json::to_vec(&fixture).unwrap())
+                    .unwrap_err()
+                    .ends_with("invalid legacy checkpoint state")
+            );
+        }
+        let truncated = &payload[..payload.len() - 1];
+        fixture["state"] = json!(truncated);
+        fixture["sha256"] = json!(format!("{:x}", Sha256::digest(truncated)));
+        assert!(
+            parse("0123456789abcdef", &serde_json::to_vec(&fixture).unwrap())
+                .unwrap_err()
+                .ends_with("invalid legacy checkpoint state")
+        );
+    }
+
+    #[test]
     fn legacy_payload_checksum_and_bounded_gob_failures() {
         let fixture: Value = serde_json::from_slice(LEGACY).unwrap();
         let payload = STANDARD.decode(fixture["state"].as_str().unwrap()).unwrap();
@@ -1389,7 +1449,45 @@ mod tests {
             .unwrap();
         invalid_text[index + 4..index + 6].copy_from_slice(&[0xe2, 0x82]);
         let cp = parse("0123456789abcdef", &legacy_envelope(&invalid_text)).unwrap();
-        assert_eq!(cp["history"][0]["user"]["text"], "hel\u{fffd}\u{fffd}");
+        assert_eq!(
+            crate::raw::string_bytes(&cp["history"][0]["user"]["text"]).unwrap(),
+            b"hel\xe2\x82"
+        );
+        let history = cp["history"].as_array().unwrap();
+        let request = crate::context::build_context(
+            &json!({"provider":"openai","model":"gpt-5"}),
+            json!({}),
+            &history[..1],
+            json!([]),
+        );
+        let body = crate::openai::encode_request(&request, false).unwrap();
+        let quoted = br#""hel\ufffd\ufffd""#;
+        let wire = crate::types::json_bytes(&body);
+        assert!(wire.windows(quoted.len()).any(|w| w == quoted));
+        let cache_request = json!({"model":"m","instructions":"i","history":[
+            {"kind":"user","user":{"text":cp["history"][0]["user"]["text"]}}
+        ]});
+        let mut hash = Sha256::new();
+        hash.update(b"m\0i\0");
+        hash.update(br#"{"kind":"user","user":{"text":"hel\ufffd\ufffd"}}"#);
+        assert_eq!(
+            crate::openai::cache_key(&cache_request),
+            format!("{:x}", hash.finalize())[..32]
+        );
+        let mut next = cp.clone();
+        next["version"] = json!(2);
+        let migrated = envelope(&next).unwrap();
+        assert!(migrated.windows(quoted.len()).any(|w| w == quoted));
+        assert_eq!(
+            parse("0123456789abcdef", &migrated).unwrap()["history"][0]["user"]["text"],
+            "hel\u{fffd}\u{fffd}"
+        );
+        let marker = b"__reagent_raw_string_v1";
+        assert!(!migrated.windows(marker.len()).any(|w| w == marker));
+        assert_eq!(
+            crate::raw::bytes(&cp["history"][1]["assistant"]["native"]["items"][1]).unwrap(),
+            [0xff, 0, 0xfe]
+        );
         let mut trailing_bits = fixture.clone();
         let mut encoded = fixture["state"].as_str().unwrap().as_bytes().to_vec();
         assert!(encoded.ends_with(b"AA=="));

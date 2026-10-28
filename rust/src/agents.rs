@@ -1,7 +1,6 @@
 mod context;
 
 use crate::runtime::Session;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -196,57 +195,149 @@ fn decode(name: &str, args: &str) -> Result<Value, String> {
         return Err("arguments must be one JSON object".into());
     }
     let mut decoder = serde_json::Deserializer::from_str(args);
-    let a = Value::deserialize(&mut decoder).map_err(|e| crate::errors::json_error(args, &e))?;
+    let raw: &serde_json::value::RawValue = serde::Deserialize::deserialize(&mut decoder)
+        .map_err(|e| crate::errors::json_error(args, &e))?;
+    let mut a = json!({});
+    let mut first_error = None;
+    decode_fields(
+        name,
+        raw.get().as_bytes(),
+        &mut a,
+        &mut first_error,
+        &mut HashMap::new(),
+    )?;
+    if let Some(error) = first_error {
+        return Err(error);
+    }
     if decoder.end().is_err() {
         return Err("arguments must be one JSON object".into());
     }
+    Ok(a)
+}
+
+fn decode_fields(
+    name: &str,
+    raw: &[u8],
+    a: &mut Value,
+    first_error: &mut Option<String>,
+    string_slices: &mut HashMap<String, Vec<Value>>,
+) -> Result<(), String> {
+    use crate::provider::raw_tokens;
     let keys: &[&str] = match name {
         "spawn" => &["task", "context", "name", "model", "authority"],
+        "context" => &["brief", "files", "fork", "entries"],
         "send" => &["id", "name", "message"],
         "wait" => &["ids", "timeout"],
         "threads" => &["subtree", "offset"],
         _ => &["id", "name"],
     };
-    for key in a.as_object().unwrap().keys() {
-        if !keys.contains(&key.as_str()) {
-            return Err(format!("unknown field {}", crate::errors::quote(key)));
-        }
-    }
-    for key in ["id", "name", "message", "task", "model", "authority"] {
-        if let Some(v) = a.get(key) {
-            if !v.is_null() && !v.is_string() {
-                return Err(crate::errors::field_error(key));
+    for (spelling, raw) in raw_tokens::members(raw) {
+        let Some(&key) = keys.iter().find(|key| key.eq_ignore_ascii_case(&spelling)) else {
+            first_error.get_or_insert_with(|| {
+                format!("unknown field {}", crate::errors::quote(&spelling))
+            });
+            continue;
+        };
+        let field = if name == "context" {
+            format!("context.{key}")
+        } else {
+            key.to_owned()
+        };
+        match key {
+            "context" if raw == b"null" => {
+                a[key] = Value::Null;
+                string_slices.remove("context.files");
+            }
+            "context" if raw.starts_with(b"{") => {
+                if !a[key].is_object() {
+                    a[key] = json!({});
+                }
+                decode_fields("context", raw, &mut a[key], first_error, string_slices)?;
+            }
+            "context" => {
+                first_error.get_or_insert_with(|| crate::errors::field_error(&field));
+            }
+            // RawMessage fields are replaced, then validated by the tool, not the struct decoder.
+            "timeout" | "subtree" | "offset" => {
+                a[key] = serde_json::from_slice(raw)
+                    .unwrap_or_else(|_| json!(String::from_utf8_lossy(raw)));
+            }
+            "fork" => {
+                let value = match raw {
+                    b"null" => return Err("fork must be omitted rather than null".into()),
+                    b"true" => true,
+                    b"false" => false,
+                    _ => return Err("fork must be a boolean".into()),
+                };
+                a[key] = json!(value);
+            }
+            "entries" => {
+                if raw == b"null" {
+                    return Err("entries must be omitted rather than null".into());
+                }
+                if !raw.starts_with(b"[") {
+                    return Err("entries must be an array of integer indices".into());
+                }
+                let mut indices = Vec::new();
+                for item in raw_tokens::array(raw) {
+                    let index = if item == b"null" {
+                        0
+                    } else {
+                        std::str::from_utf8(item)
+                            .unwrap()
+                            .parse::<i64>()
+                            .map_err(|_| "entries must be an array of integer indices".to_owned())?
+                    };
+                    indices.push(index);
+                }
+                a[key] = json!(indices);
+            }
+            "files" | "ids" if raw == b"null" => {
+                a[key] = Value::Null;
+                string_slices.remove(&field);
+            }
+            "files" | "ids" if raw.starts_with(b"[") => {
+                // Go reuses slice elements, including the tail after a shorter duplicate array.
+                let old = string_slices.entry(field.clone()).or_default();
+                let mut values = Vec::new();
+                for (index, item) in raw_tokens::array(raw).into_iter().enumerate() {
+                    let previous = old.get(index).cloned().unwrap_or_else(|| json!(""));
+                    if item == b"null" {
+                        values.push(previous);
+                    } else if item.starts_with(b"\"") {
+                        values.push(
+                            serde_json::from_slice(item)
+                                .map_err(|_| "invalid JSON value".to_owned())?,
+                        );
+                    } else {
+                        first_error.get_or_insert_with(|| crate::errors::field_error(&field));
+                        values.push(previous);
+                    }
+                }
+                if values.is_empty() {
+                    old.clear();
+                } else {
+                    if old.len() < values.len() {
+                        old.resize(values.len(), json!(""));
+                    }
+                    old[..values.len()].clone_from_slice(&values);
+                }
+                a[key] = json!(values);
+            }
+            "files" | "ids" => {
+                first_error.get_or_insert_with(|| crate::errors::field_error(&field));
+            }
+            _ if raw == b"null" => {}
+            _ if raw.starts_with(b"\"") => {
+                a[key] =
+                    serde_json::from_slice(raw).map_err(|_| "invalid JSON value".to_owned())?;
+            }
+            _ => {
+                first_error.get_or_insert_with(|| crate::errors::field_error(&field));
             }
         }
     }
-    if let Some(context) = a.get("context").filter(|v| !v.is_null()) {
-        if !context.is_object() {
-            return Err(crate::errors::field_error("context"));
-        }
-        if context
-            .get("brief")
-            .is_some_and(|v| !v.is_null() && !v.is_string())
-        {
-            return Err(crate::errors::field_error("context.brief"));
-        }
-        if context.get("files").is_some_and(|v| {
-            !v.is_null()
-                && !v
-                    .as_array()
-                    .is_some_and(|a| a.iter().all(|v| v.is_null() || v.is_string()))
-        }) {
-            return Err(crate::errors::field_error("context.files"));
-        }
-    }
-    if a.get("ids").is_some_and(|v| {
-        !v.is_null()
-            && !v
-                .as_array()
-                .is_some_and(|a| a.iter().all(|v| v.is_null() || v.is_string()))
-    }) {
-        return Err(crate::errors::field_error("ids"));
-    }
-    Ok(a)
+    Ok(())
 }
 
 /// Execute routes an agent lifecycle invocation or leaves other tools untouched.
@@ -2937,6 +3028,276 @@ mod tests {
         if let Some(server) = server {
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn agent_decode_retains_occurrence_errors_without_starting_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new(
+            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+        )
+        .unwrap();
+        for (tool, raw, expected) in [
+            (
+                "spawn",
+                r#"{"task":42,"task":"valid","context":{}}"#,
+                "field \"task\" must be a string",
+            ),
+            (
+                "spawn",
+                r#"{"task":"valid","context":{"brief":42,"brief":"valid"}}"#,
+                "field \"context.brief\" must be a string",
+            ),
+            (
+                "spawn",
+                r#"{"task":"valid","context":{"brief":false},"context":null,"context":{"brief":"valid"}}"#,
+                "field \"context.brief\" must be a string",
+            ),
+            (
+                "spawn",
+                r#"{"context":{"files":[42]},"context":{"files":["valid"]},"task":"valid"}"#,
+                "field \"context.files\" must be an array of strings",
+            ),
+            (
+                "spawn",
+                r#"{"context":false,"context":{},"task":"valid"}"#,
+                "field \"context\" must be an object",
+            ),
+            (
+                "spawn",
+                r#"{"name":42,"task":false,"context":{}}"#,
+                "field \"name\" must be a string",
+            ),
+            (
+                "spawn",
+                r#"{"extra":1,"task":42,"context":{}}"#,
+                "unknown field \"extra\"",
+            ),
+            (
+                "spawn",
+                r#"{"task":42,"extra":1,"context":{}}"#,
+                "field \"task\" must be a string",
+            ),
+            (
+                "spawn",
+                r#"{"context":{"extra":1},"context":{"brief":"valid"},"task":"valid"}"#,
+                "unknown field \"extra\"",
+            ),
+            // A custom UnmarshalJSON error stops decoding, even after a saved struct error.
+            (
+                "spawn",
+                r#"{"task":42,"context":{"fork":null},"task":"valid"}"#,
+                "fork must be omitted rather than null",
+            ),
+            (
+                "spawn",
+                r#"{"extra":1,"context":{"fork":42,"fork":false}}"#,
+                "fork must be a boolean",
+            ),
+            (
+                "spawn",
+                r#"{"context":{"fork":null,"entries":false}}"#,
+                "fork must be omitted rather than null",
+            ),
+            (
+                "spawn",
+                r#"{"context":{"entries":false,"fork":null}}"#,
+                "entries must be an array of integer indices",
+            ),
+            (
+                "spawn",
+                r#"{"context":{"entries":null},"context":{"entries":[]}}"#,
+                "entries must be omitted rather than null",
+            ),
+            (
+                "spawn",
+                r#"{"context":{"entries":[1.0],"entries":[]}}"#,
+                "entries must be an array of integer indices",
+            ),
+            (
+                "spawn",
+                r#"{"context":{"entries":[9223372036854775808],"entries":[]}}"#,
+                "entries must be an array of integer indices",
+            ),
+            (
+                "spawn",
+                r#"{"task":42,"task":"valid"} {}"#,
+                "field \"task\" must be a string",
+            ),
+            (
+                "wait",
+                r#"{"ids":[42],"ids":["valid"],"timeout":0}"#,
+                "field \"ids\" must be an array of strings",
+            ),
+            (
+                "send",
+                r#"{"name":"worker","message":42,"message":"valid"}"#,
+                "field \"message\" must be a string",
+            ),
+            (
+                "cancel",
+                r#"{"id":true,"id":"t1"}"#,
+                "field \"id\" must be a string",
+            ),
+        ] {
+            let out = execute(&mut session, tool, raw).unwrap().unwrap();
+            assert_eq!(out["code"], "invalid_arguments", "{tool}: {raw}: {out}");
+            assert_eq!(out["message"], expected, "{tool}: {raw}");
+            assert_eq!(snapshot(&session).1["total_agents"], 0, "{raw}");
+        }
+    }
+
+    #[test]
+    fn agent_decode_merges_context_and_preserves_typed_null_values() {
+        for (tool, raw, expected) in [
+            (
+                "spawn",
+                r#"{"task":"valid","task":null,"name":"worker","name":null,"model":"gpt-6-sol","model":null,"authority":"write","authority":null,"context":{"brief":"kept","files":["a"],"fork":false},"context":{"brief":null,"entries":[]}}"#,
+                json!({"task":"valid","name":"worker","model":"gpt-6-sol","authority":"write","context":{"brief":"kept","files":["a"],"fork":false,"entries":[]}}),
+            ),
+            (
+                "spawn",
+                r#"{"context":{"brief":"discarded","fork":true},"context":null,"context":{"files":["new"]},"task":"valid"}"#,
+                json!({"task":"valid","context":{"files":["new"]}}),
+            ),
+            (
+                "spawn",
+                r#"{"context":{"files":["a","b"],"files":[null,"c"],"entries":[null,2]}}"#,
+                json!({"context":{"files":["a","c"],"entries":[0,2]}}),
+            ),
+            (
+                "spawn",
+                r#"{"context":{"files":["a"],"files":null}}"#,
+                json!({"context":{"files":null}}),
+            ),
+            (
+                "spawn",
+                r#"{"context":{"files":["a","b"]},"context":{"files":["c"]},"context":{"files":[null,null]}}"#,
+                json!({"context":{"files":["c","b"]}}),
+            ),
+            (
+                "spawn",
+                r#"{"context":{"files":["a","b"]},"context":null,"context":{"files":[null,null]}}"#,
+                json!({"context":{"files":["",""]}}),
+            ),
+            (
+                "wait",
+                r#"{"ids":["a","b"],"ids":[],"ids":[null,null]}"#,
+                json!({"ids":["",""]}),
+            ),
+            (
+                "spawn",
+                r#"{"context":{"entries":[-0,null]}}"#,
+                json!({"context":{"entries":[0,0]}}),
+            ),
+            (
+                "send",
+                r#"{"id":"t1","id":null,"message":"kept","message":null}"#,
+                json!({"id":"t1","message":"kept"}),
+            ),
+            (
+                "wait",
+                r#"{"ids":["t1","worker"],"ids":[null,null],"timeout":"bad","timeout":0}"#,
+                json!({"ids":["t1","worker"],"timeout":0}),
+            ),
+            (
+                "threads",
+                r#"{"subtree":"bad","subtree":false,"offset":{},"offset":0}"#,
+                json!({"subtree":false,"offset":0}),
+            ),
+            (
+                "spawn",
+                r#"{"TASK":"valid","Context":{"BRIEF":"kept"},"CONTEXT":{"fork":false}}"#,
+                json!({"task":"valid","context":{"brief":"kept","fork":false}}),
+            ),
+        ] {
+            assert_eq!(decode(tool, raw).unwrap(), expected, "{raw}");
+        }
+        // RawMessage null is retained, not given the typed-string null behavior.
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new(
+            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+        )
+        .unwrap();
+        for (tool, raw, message) in [
+            (
+                "wait",
+                r#"{"ids":["worker"],"timeout":0,"timeout":null}"#,
+                "timeout must be omitted rather than null",
+            ),
+            (
+                "wait",
+                r#"{"ids":["worker"],"timeout":0,"timeout":false}"#,
+                "timeout must be an integer",
+            ),
+            (
+                "threads",
+                r#"{"subtree":true,"subtree":null}"#,
+                "subtree must be omitted rather than null",
+            ),
+            (
+                "threads",
+                r#"{"subtree":true,"offset":0,"offset":null}"#,
+                "offset must be omitted rather than null",
+            ),
+        ] {
+            let out = execute(&mut session, tool, raw).unwrap().unwrap();
+            assert_eq!(out["code"], "invalid_arguments", "{raw}");
+            assert_eq!(out["message"], message, "{raw}");
+        }
+        assert_eq!(
+            execute(&mut session, "threads", r#"{"subtree":42,"subtree":false}"#)
+                .unwrap()
+                .unwrap()["ok"],
+            true
+        );
+    }
+
+    #[test]
+    fn merged_duplicate_context_reaches_the_child_and_send_keeps_null_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("script.json");
+        std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"first"}]},{"blocks":[{"kind":"text","text":"next"}]}]"#).unwrap();
+        std::fs::write(dir.path().join("evidence"), "live").unwrap();
+        let mut session = Session::new(json!({"provider":"scripted","model":"scripted","scripted":script,"workspace":dir.path(),"trace_dir":dir.path(),"agents":true})).unwrap();
+        let spawned = execute(&mut session, "spawn", r#"{"task":"report","task":null,"name":"worker","name":null,"context":{"brief":"merged canary","files":["evidence"]},"context":{"brief":null,"fork":false}}"#).unwrap().unwrap();
+        assert_eq!(spawned["ok"], true, "{spawned}");
+        assert_eq!(
+            wait(&session, &json!({"ids":["worker"],"timeout":5}))["data"]["timed_out"],
+            false
+        );
+        {
+            let shared = tree(&session);
+            let t = shared.tree.lock().unwrap();
+            let child = t.nodes["t1"].session.as_ref().unwrap();
+            let task = text(&child.history[0]["user"]["text"]);
+            assert!(task.contains("merged canary"), "{task}");
+            assert!(task.contains(r#""files":["evidence"]"#), "{task}");
+        }
+        let sent = execute(
+            &mut session,
+            "send",
+            r#"{"name":"worker","name":null,"message":"followup canary","message":null}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(sent["ok"], true, "{sent}");
+        assert_eq!(
+            wait(&session, &json!({"ids":["worker"],"timeout":5}))["data"]["timed_out"],
+            false
+        );
+        {
+            let shared = tree(&session);
+            let t = shared.tree.lock().unwrap();
+            assert!(t.nodes["t1"]
+                .session
+                .as_ref()
+                .unwrap()
+                .history
+                .iter()
+                .any(|entry| entry["user"]["text"] == "followup canary"));
+        }
+        stop(&session, true);
     }
 
     #[test]

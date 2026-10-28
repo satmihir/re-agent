@@ -99,15 +99,27 @@ mod tests {
     fn opaque_json_retains_whitespace_escapes_duplicate_keys_and_invalid_bytes() {
         let input = b"{ \"x\" : 1e+02, \"x\":\"\\u003c\xff\xfe\" }";
         assert_eq!(bytes(&new(input)).unwrap(), input);
-        assert_eq!(compact(input, true), b"{\"x\":1e+02,\"x\":\"\\u003c\xff\xfe\"}");
+        assert_eq!(
+            compact(input, true),
+            b"{\"x\":1e+02,\"x\":\"\\u003c\xff\xfe\"}"
+        );
         assert!(bytes(&json!({"ordinary":true})).is_none());
-        assert_eq!(parse(&new(b"{\"text\":\"\xff\xfe\"}")).unwrap()["text"], "\u{fffd}\u{fffd}");
+        assert_eq!(
+            parse(&new(b"{\"text\":\"\xff\xfe\"}")).unwrap()["text"],
+            "\u{fffd}\u{fffd}"
+        );
     }
 
     #[test]
     fn compact_does_not_change_string_whitespace_or_double_escape() {
         let input = " [ \"a b\\\" \\u003c <&>\u{2028}\", 1 ] ";
-        assert_eq!(String::from_utf8(compact(input.as_bytes(), true)).unwrap(), "[\"a b\\\" \\u003c \\u003c\\u0026\\u003e\\u2028\",1]");
-        assert_eq!(String::from_utf8(compact(input.as_bytes(), false)).unwrap(), "[\"a b\\\" \\u003c <&>\u{2028}\",1]");
+        assert_eq!(
+            String::from_utf8(compact(input.as_bytes(), true)).unwrap(),
+            "[\"a b\\\" \\u003c \\u003c\\u0026\\u003e\\u2028\",1]"
+        );
+        assert_eq!(
+            String::from_utf8(compact(input.as_bytes(), false)).unwrap(),
+            "[\"a b\\\" \\u003c <&>\u{2028}\",1]"
+        );
     }
 }
