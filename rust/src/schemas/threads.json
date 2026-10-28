@@ -1,0 +1,1 @@
+{"type":"object","properties":{"subtree":{"type":"boolean"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}

@@ -60,3 +60,10 @@ Config is a JSON object using snake_case names from Go Config: provider, auth_mo
 
 ## Work rules
 Do not edit Go, parity, suite checkout, cache, root progress file, manifest or lib.rs. Root handles commits. Before changing existing files reread them (fork does not authorize writes). Cargo build/test permitted only with CARGO_TARGET_DIR=target/agents/YOURNAME; initial root fetch/lock first, wait for root notice. No parity runs by agents. User target is unchanged suite 4130 pass / 10 pending / 0 fail. Never use Go delegation or fixture-output shortcuts; translate behavior.
+
+## Opaque JSON contract (root decision after first parity batches)
+- `raw.rs` root-owned provides `raw::new(&[u8])->Value`, `raw::bytes(&Value)->Option<Vec<u8>>`, `raw::parse(&Value)->Result<Value,String>`, `raw::compact(&[u8],escape_html:bool)->Vec<u8>`.
+- RawMessage fields may carry an internal singleton object `{ "__reagent_raw_json_v1": "<base64>" }`. This is NEVER an external wire/schema field; the types encoder recognizes it and writes compacted original JSON bytes, not the wrapper. Base64 is needed because Go opaque native JSON can contain invalid UTF-8.
+- Providers should retain native.items as these opaque wrappers directly from their raw response token spans. `raw::parse` supplies semantic access when needed. OpenAI input continuation carries wrappers unchanged. Anthropic encoders inspect with raw::parse and use wrappers for unmodified content. Request bodies use `types::json_bytes(&Value)->Vec<u8>` once types agent implements it. Trace calls json_string and repairs invalid-byte runs only in that trace copy.
+- Checkpoint persistence turns wrappers into base64 of raw::bytes, and load creates wrappers from base64 instead of discarding original lexical bytes. Ordinary unwrapped Values continue to work for locally constructed workspace/outcome data. No global raw sidecar or process-global output matching.
+- Types owns serializer changes; providers owns extraction/HTTP; agents owns checkpoint conversion. Root owns raw.rs and integration.

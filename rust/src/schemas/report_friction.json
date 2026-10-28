@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "category": {"type": "string", "enum": ["misleading_error", "missing_capability", "unclear_description", "harness_bug", "other"], "description": "Kind of rough edge in the harness."},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 300, "description": "One nonblank line describing what happened, at most 300 Unicode characters."},
+    "details": {"type": "string", "maxLength": 4000, "description": "Optional explanation, at most 4000 Unicode characters."},
+    "related_call_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Optional IDs of up to 20 calls involved; their existence is not checked."}
+  },
+  "required": ["category", "summary"],
+  "additionalProperties": false
+}
