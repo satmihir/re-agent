@@ -35,6 +35,35 @@ class GoldenTest(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
 
+    def test_cli_checks_resolved_python_before_capture_or_lock_reuse(self):
+        alias = self.root / "python3"
+        alias.symlink_to(Path(sys.executable).resolve())
+        for arguments in ([], ["--update"]):
+            for state in ("alias", "wrong", "missing"):
+                with self.subTest(arguments=arguments, state=state):
+                    manifest = fixture_manifest()
+                    if state == "wrong":
+                        manifest["platforms"]["linux/amd64"]["python_executable"] = str(self.root / "other-python3.11")
+                    if state == "missing":
+                        del manifest["platforms"]["linux/amd64"]["python_executable"]
+                    (self.suite / "manifest.json").write_text(json.dumps(manifest))
+                    with patch("sys.platform", "linux"), patch("platform.machine", return_value="x86_64"), \
+                            patch("sys.executable", str(alias)), \
+                            patch("parity.golden.__file__", str(self.suite / "golden.py")), \
+                            patch("parity.run.collect_cases", return_value=[]) as collect, \
+                            patch("parity.golden.read_lock", return_value={}) as lock, \
+                            patch("parity.golden.regenerate", return_value=self.root / "lane") as regenerate, \
+                            patch("sys.stdout", new_callable=io.StringIO), \
+                            patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                        self.assertEqual(golden.main(arguments), 0 if state == "alias" else 2)
+                    if state == "alias":
+                        regenerate.assert_called_once()
+                    else:
+                        self.assertIn("reference Python executable", stderr.getvalue())
+                        collect.assert_not_called()
+                        lock.assert_not_called()
+                        regenerate.assert_not_called()
+
     def test_cache_guard_exempts_only_exact_owned_namespace(self):
         lane = golden.cache_path(self.manifest)
         self.assertEqual(golden.guard_cache(lane, self.manifest), lane)
@@ -272,6 +301,13 @@ class GoldenTest(unittest.TestCase):
         with patch("parity.golden.build_reference", side_effect=build), patch("parity.golden.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.locks.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.run.collect_cases", return_value=cases), patch("parity.observe.finish", side_effect=observe), patch("parity.samples.verify_samples") as verify_samples:
             lane = golden.regenerate(self.suite, self.manifest, cases, lock, jobs=2)
             self.assertEqual(set(path.name for path in lane.iterdir()), {"W99", "inventory.json", "cache.json", "reference", golden.STAMP})
+            retained, = lane.parent.glob('capture-*')
+            self.assertEqual(json.loads((retained / 'report.json').read_bytes())['results'][0]['status'], 'passed')
+            self.assertTrue((retained / 'artifacts/W99/substitutions.json').is_file())
+            golden.regenerate(self.suite, self.manifest, cases, lock, jobs=2)
+            previous, = lane.parent.glob('previous-*')
+            self.assertTrue((previous / 'W99/metadata.json').is_file())
+            self.assertEqual(golden.verify_cache(previous, self.suite, self.manifest, cases, lock), previous)
             self.assertEqual(golden.verify_cache(lane, self.suite, self.manifest, cases, lock), lane)
             self.assertGreaterEqual(verify_samples.call_count, 2)
             original = (lane / "cache.json").read_bytes()
@@ -382,7 +418,9 @@ class GoldenTest(unittest.TestCase):
         self.manifest["platforms"][identity.current_platform()]["normalized_tree_sha256"] = packed["normalized_tree_sha256"]
         manifest = {**self.manifest, "suite_digest": run.suite_digest(self.suite)}
         self.assertEqual(golden.read_lock(self.suite, manifest)["cases"], {"W99": expected})
-        for change, message in (("missing", "missing: W99"), ("extra", "extra: W98"), ("digest", "invalid normalized lock for W99")):
+        # Darwin reports a missing new leaf as needing its own capture.
+        missing = "new leaves need a Darwin capture" if golden.sys.platform == "darwin" else "missing: W99"
+        for change, message in (("missing", missing), ("extra", "extra: W98"), ("digest", "invalid normalized lock for W99")):
             changed = json.loads(json.dumps(packed))
             if change == "missing":
                 changed["cases"].pop("W99")
@@ -465,6 +503,52 @@ class GoldenTest(unittest.TestCase):
                 golden.verify_cache(lane, self.suite, self.manifest, [], {"cases": {}})
         verify.assert_called_once_with(lane, self.suite)
         refresh.assert_not_called()
+
+    def test_cli_update_preflight_uses_private_prepared_darwin_manifest(self):
+        from contextlib import redirect_stderr
+        manifest = fixture_manifest(reference_commit=locks.REPIN_REFERENCE)
+        entry = manifest['platforms']['darwin/arm64']
+        entry.update(capture_status='required', reference_commit='60fda0d3f3eabc76fa11deed72aed7850532c97e')
+        path = self.suite / 'manifest.json'
+        (self.suite / 'expected').mkdir()
+        (self.suite / 'expected/darwin.json').write_text(json.dumps(dict(reference_identity={
+            'reference_commit': entry['reference_commit'],
+            'reference_binary_sha256': entry['reference_binary_sha256']})))
+        with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'), \
+                patch('parity.golden.__file__', str(self.suite / 'golden.py')), \
+                patch('parity.run.collect_cases', return_value=[]), \
+                patch('parity.golden.regenerate', return_value=self.root / 'lane') as regenerate, \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(golden._main(['--update']), 2)
+            regenerate.assert_not_called()
+            entry['reference_commit'] = locks.REPIN_REFERENCE
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(golden._main([]), 2)
+            regenerate.assert_not_called()
+            self.assertEqual(golden._main(['--update']), 2)
+            regenerate.assert_not_called()
+            entry['reference_binary_sha256'] = 'e' * 64
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(golden._main(['--update']), 0)
+            supplied = regenerate.call_args.args[1]
+            self.assertEqual(supplied, manifest)
+            self.assertEqual(supplied['platforms']['darwin/arm64']['capture_status'], 'required')
+            self.assertEqual(json.loads(path.read_bytes()), manifest)
+
+    def test_failed_prepared_darwin_capture_never_publishes_ready(self):
+        manifest = fixture_manifest(reference_commit=locks.REPIN_REFERENCE)
+        entry = manifest['platforms']['darwin/arm64']
+        entry.update(capture_status='required', reference_commit=locks.REPIN_REFERENCE)
+        original = json.loads(json.dumps(manifest))
+        def build(suite, prepared, destination, update=False):
+            self.assertEqual(prepared['platforms']['darwin/arm64']['capture_status'], 'ready')
+            raise run.HarnessError('build failure sentinel')
+        with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'), \
+                patch('parity.golden.build_reference', side_effect=build):
+            with self.assertRaisesRegex(run.HarnessError, 'build failure sentinel'):
+                golden.regenerate(self.suite, manifest, [], None, update=True)
+        self.assertEqual(manifest, original)
 
 
 if __name__ == "__main__":

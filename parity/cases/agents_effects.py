@@ -169,7 +169,7 @@ def finish_rule(ctx, mode):
     assert len(requests) == 3, requests
     text = json.dumps(requests[-1]['data']['history'], ensure_ascii=False)
     assert 'premature root answer' in text
-    assert ('worker witnessed' if mode != 'child' else 'child final after leaf') in text
+    assert ('worker witnessed' if mode != 'child' else 'child final after leaf') in text, 'finish-rule continuation omitted held descendant data'
     assert any('still running; wait for their results before finishing.' in e.get('user', {}).get('text', '')
                for e in requests[-1]['data']['history']) or mode == 'ready', requests[-1]
     assert traces(ctx, 'run.finished', 'root')[-1]['data']['reply'] == 'root final after data'

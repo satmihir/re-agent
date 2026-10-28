@@ -1,26 +1,29 @@
 {
   "schema_version": 1,
   "freeze_status": "ready",
-  "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
+  "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
   "reference_build_flags": [
     "-trimpath",
     "-buildvcs=false"
   ],
-  "reference_build": "git archive 60fda0d3f3eabc76fa11deed72aed7850532c97e; go build -trimpath -buildvcs=false -o reference ./cmd/reagent",
+  "reference_build": "git archive 2ab234f79d1d42ba8a969ba3f4103eeeba717967; go build -trimpath -buildvcs=false -o reference ./cmd/reagent",
   "platforms": {
     "darwin/arm64": {
-      "reference_binary_sha256": "b8d7e8cea619cba3f0f3d233e6e2898723a7100677c58b73ebd501d853bd64ed",
+      "capture_status": "ready",
+      "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+      "reference_binary_sha256": "8d9b9cf977ba8b5abbf2c08bb070267e469a396bde244abeadf26f82b9d04524",
       "go_version": "go version go1.23.3 darwin/arm64",
       "python_version": "Python 3.11.5",
       "normalized_lock": "expected/darwin.json",
-      "normalized_tree_sha256": "459eeffb85ef2a45bb2b0598baf5b478292a7a218a025d9cb31f1486018c4a95"
+      "normalized_tree_sha256": "1c3970d1ba28e6909b898fab171309fd6a5de6cea6ef74957dd07178e4630281"
     },
     "linux/amd64": {
-      "reference_binary_sha256": "ddc9ae6eb978a7231b3a97cb4adb117c1d078f4421540483f50164f3ebb5b35a",
+      "reference_binary_sha256": "9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06",
       "go_version": "go version go1.23.3 linux/amd64",
       "python_version": "Python 3.11.5",
+      "python_executable": "/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin/python3.11",
       "normalized_lock": "expected/linux.json",
-      "normalized_tree_sha256": "0ddd4da339b78c9b1f52824513f9a530b43d8db1abb753114722226a09b32d5a"
+      "normalized_tree_sha256": "2cd7554ee837f92fb4fbbf93d6f33be5f70f013f703c797ecc6d2d6c69be5d75"
     }
   },
   "exploratory_only": [
@@ -29,10 +32,10 @@
   ],
   "goldens_frozen": true,
   "inventory_status": "audited",
-  "inventory_scope": "Named W01-W54, T01-T60, C01-C44 and A01-A40 executable clauses against the unchanged pin. Pending: C18/C43/C44 (#185) and T36.before-start's unavailable dispatch barrier. Darwin entries pending the Mac capture.",
+  "inventory_scope": "Named W01-W54, T01-T60, C01-C44 and A01-A40 executable clauses against 2ab234f7. C18/C43/C44 enabled. Pending: T36.before-start's unavailable dispatch barrier and nine W54 cancel-during-body client-header witnesses. Darwin capture and acceptance pending on the Mac.",
   "leaf_inventory": {
     "path": "inventory.json",
-    "metadata_sha256": "0e5a02d4f621ff3edbe8ece2e29ee1a3c440c31dffba2b5e37fd5baa78d23da7",
+    "metadata_sha256": "a8eb2cdc3c17aa9f008785c8d4ef5b18676071b6f1f630509b6255d0fa7bb873",
     "metadata_fields": [
       "id",
       "description",
@@ -46,8 +49,8 @@
   },
   "counts": {
     "total": 4140,
-    "runnable": 4111,
-    "pending": 29,
+    "runnable": 4130,
+    "pending": 10,
     "slow": 106,
     "by_area": {
       "wire": 2761,
@@ -270,34 +273,15 @@
     }
   },
   "pending": {
-    "C18.editor-accept": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.editor-default": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.editor-editor": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.editor-empty": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.editor-missing": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.editor-nonzero": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.editor-visual": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.piped-default": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.piped-editor": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.piped-missing": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C18.piped-visual": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C43.clear-screen": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C43.clear-start": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C43.history": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C43.home-end": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C43.kill-end": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C43.kill-word": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C43.unicode": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C43.unknown-escape": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C44.idle-clear": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.idle-eof": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.idle-twice": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.typeahead-cancellation": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.workspace-allow": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.workspace-ctrl-c": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.workspace-ctrl-d": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.workspace-deny": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
-    "C44.workspace-escape": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules",
+    "W54.openai.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
+    "W54.anthropic.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
+    "W54.proxy.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
+    "W54.chatgpt.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
+    "W54.jev.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt); cancel timing otherwise races router_http_status 200/0",
+    "W54.auth-discovery.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
+    "W54.auth-refresh.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
+    "W54.auth-models.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
+    "W54.auth-revoke.cancel-body": "cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can\u2019t prove receipt)",
     "T36.before-start": "Area 4 agent/dispatch barrier required: chat.go:939 installs signal.NotifyContext before provider I/O, so CLI/provider readiness proves handler installation but cannot stop between model acceptance and loop.go:369 dispatch ctx.Err(); tool.started at loop.go:408 is already after admission. --scripted exposes no earlier handshake"
   },
   "reference_blockers": {},
@@ -305,10 +289,9 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "1cd17eb10ae9d88ff8bc3dc312d0368cf4455daf3859cabb5f41d8d640f3ff25",
-  "verification_evidence": "agents-area4.md (area 4 and retained evidence); linux-lane.md and cli-acceptance.json are historical",
+  "suite_digest": "b60915258a2e4414be5e8f2b4da1b215c6ac43e5806af966c97386982c63dd2b",
+  "verification_evidence": "repin-2ab234f7-linux.md (current re-pin and acceptance, including diagnosed prior failures); agents-area4.md, linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
-    "Darwin entries pending the Mac capture",
-    "Final whole-suite coverage and repeated determinism gates under #139 are not claimed by area 4"
+    "Darwin capture and acceptance pending on the Mac"
   ]
 }

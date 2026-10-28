@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "reference_commit": "60fda0d3f3eabc76fa11deed72aed7850532c97e",
+  "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
   "scope": "All 36 design section 6 mutations are applicable. Each patch independently targets git archive REF_COMMIT, never HEAD or the working tree. Historical catches and current area-4 evidence are reported separately; this manifest does not claim a completed 36/36 campaign.",
   "later_pending": [],
   "mutations": [

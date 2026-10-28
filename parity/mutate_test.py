@@ -138,6 +138,20 @@ class MutationTests(unittest.TestCase):
         rows = [{'id': 'W99.exact', 'status': 'failed', 'reason': reason, 'leak_check': 'clean'}]
         self.assertEqual(self.classify(rows)[0], 'panic')
 
+    def test_mutation33_requires_intended_terminal_assertions_in_both_catchers(self):
+        mutation = next(row for row in json.loads(mutate.MANIFEST.read_bytes())['mutations'] if row['id'] == 33)
+        messages = ['premature root completion omitted finish-rule continuation',
+                    'finish-rule continuation omitted held descendant data']
+        rows = [{'id': case_id, 'status': 'failed', 'leak_check': 'clean',
+                 'reason': 'Traceback (most recent call last):\n    assert descendant_data in text\nAssertionError: ' + message}
+                for case_id, message in zip(mutation['cases'], messages)]
+        report = {'selected': mutation['cases']}
+        status, assertions = mutate.classify({'exit_code': 1}, report, rows, mutation, self.root)
+        self.assertEqual((status, len(assertions)), ('caught', 2))
+        rows[1]['reason'] = rows[1]['reason'].replace(messages[1], 'transport missing')
+        self.assertEqual(mutate.classify({'exit_code': 1}, report, rows, mutation, self.root)[0],
+                         'unrelated_assertion')
+
     def test_case_runs_keep_baseline_and_mutant_evidence_for_classification(self):
         with patch.object(mutate, "command", return_value=({"exit_code": 0}, b"")) as command, patch.object(mutate, "load_report", return_value=({}, [])):
             mutate.run_cases(Path(sys.executable), ["W99.exact"], self.root / "cases", 10)
@@ -422,13 +436,49 @@ class MutationTests(unittest.TestCase):
         check.assert_not_called()
         self.assertFalse((self.root / "not-created").exists())
 
+    def test_cli_checks_resolved_python_before_archive_or_mutation(self):
+        from parity.identity_test import fixture_manifest
+        executable = Path(sys.executable).resolve()
+        alias = self.root / "python3"
+        alias.symlink_to(executable)
+        for state in ("alias", "wrong", "missing"):
+            with self.subTest(state=state):
+                oracle = fixture_manifest(goldens_frozen=True, reference_commit=mutate.REF_COMMIT,
+                                          reference_binary_sha256=mutate.sha256(executable.read_bytes()))
+                if state == "wrong":
+                    oracle["platforms"]["linux/amd64"]["python_executable"] = str(self.root / "other-python3.11")
+                if state == "missing":
+                    del oracle["platforms"]["linux/amd64"]["python_executable"]
+                destination = self.root / ("guard-" + state)
+                with patch.object(mutate.json, "loads", side_effect=[self.manifest, oracle]), \
+                        patch("sys.platform", "linux"), patch("platform.machine", return_value="x86_64"), \
+                        patch("sys.executable", str(alias)), \
+                        patch.object(mutate, "archive_reference", side_effect=ValueError("stop before build")) as archive, \
+                        patch.object(mutate, "check_mutation") as check, \
+                        patch("sys.stderr", new_callable=io.StringIO) as stderr, \
+                        patch("sys.stdout", new_callable=io.StringIO):
+                    arguments = ["--bin", str(executable), "--reference-tree", str(mutate.SUITE),
+                                 "--artifacts", str(destination), "--mutation", "3"]
+                    if state == "alias":
+                        self.assertEqual(mutate.main(arguments), 1)
+                        archive.assert_called_once()
+                    else:
+                        with self.assertRaises(SystemExit) as result:
+                            mutate.main(arguments)
+                        self.assertEqual(result.exception.code, 2)
+                        self.assertIn("reference Python executable", stderr.getvalue())
+                        archive.assert_not_called()
+                        self.assertFalse(destination.exists())
+                    check.assert_not_called()
+
     def test_reference_binary_must_match_selected_lane_not_the_other_platform(self):
         digest = mutate.sha256(Path(sys.executable).resolve().read_bytes())
         for matches in (False, True):
             with self.subTest(matches=matches):
                 lane = {"reference_binary_sha256": digest if matches else "0" * 64,
                         "go_version": "go version go1.23.3 linux/amd64",
-                        "python_version": "Python 3.11.5", "normalized_lock": "expected/linux.json"}
+                        "python_version": "Python 3.11.5", "python_executable": str(Path(sys.executable).resolve()),
+                        "normalized_lock": "expected/linux.json"}
                 oracle = {"goldens_frozen": True, "reference_commit": mutate.REF_COMMIT,
                           "platforms": {"linux/amd64": lane,
                                         "darwin/arm64": {**lane, "reference_binary_sha256": digest}}}

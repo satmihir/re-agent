@@ -19,7 +19,7 @@ from parity.provider import Response
 from parity.model import Case
 from parity.observe_agents_checkpoints import STATE_FIELDS, encode, envelope, opaque, validate
 from parity.cases.cli_commands import expect, live, texts
-from parity.cases.wire_input import _call, _openai, SUMMARY
+from parity.cases.wire_input import _call, _compact_prompt, _openai, SUMMARY
 
 
 ID = '0123456789abcdef'
@@ -657,9 +657,13 @@ def inrun_compact(ctx, variant):
     assert len(requests) == rounds + wanted + 1, (variant, len(requests))
     if wanted:
         assert [item['summary'] for item in summaries] == ['stage summary %d' % index for index in range(rounds)]
-        assert len(events(ctx, 'compaction.requested')) == rounds
+        requested = events(ctx, 'compaction.requested')
+        assert len(requested) == rounds
         assert not events(ctx, 'compaction.failed') and not events(ctx, 'compaction.skipped')
+        assert not events(ctx, 'compaction.shorten')
         for index in range(rounds):
+            assert texts(requests[2 * index + 1].json())[-1] == _compact_prompt()
+            assert requested[index]['history'][-1]['user']['text'] == _compact_prompt()
             following = texts(requests[2 * index + 2].json())
             assert 'inrun original task' in following
             assert SUMMARY + 'stage summary %d' % index in following

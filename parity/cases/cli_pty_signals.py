@@ -6,7 +6,7 @@ from pathlib import Path
 from functools import partial
 
 from parity.model import Case
-from parity.cases.cli_pty import (answer, lack, next_turn, reply, require, scripted, settled,
+from parity.cases.cli_pty import (answer, lack, native, native_reply, next_turn, reply, require, scripted, settled,
                                   submit, tool)
 
 
@@ -67,7 +67,9 @@ def _cancel_exec(ctx):
 
 
 def _idle(ctx, key):
-    with scripted(ctx, [reply("Next ordinary turn works.")]) as terminal:
+    if key == "clear":
+        ctx.server.expect("/openai/v1/responses", native_reply("Next ordinary turn works."))
+    with native(ctx) as terminal:
         terminal.wait_prompt()
         if key == "clear":
             terminal.send(b"discard this input")
@@ -84,6 +86,7 @@ def _idle(ctx, key):
         elif key == "twice":
             terminal.send(b"\x03")
             terminal.wait_text("Ctrl-C again to exit")
+            terminal.wait_prompt()
             terminal.send(b"\x03")
             terminal.wait_text("resume: reagent chat --resume")
             assert terminal.finish().returncode == 0
@@ -128,6 +131,4 @@ def collect():
                                ("escape", b"\x1b", False), ("ctrl-c", b"\x03", False),
                                ("ctrl-d", b"\x04", False)):
         cases.append(Case("C44.workspace-" + name, "Fresh human consent controls workspace authority and subsequent turn", partial(_consent, key=key, allowed=allowed), "P"))
-    cases.append(Case("C44.typeahead-cancellation", "Queued keys during cancellation are discarded", None, "P",
-                      pending="needs cancellation-safe held-provider response delivery accounting and correlated next-request assertions; queued output-pressure path is covered by C34"))
     return cases

@@ -719,7 +719,20 @@ def _cache_changes(ctx, variant):
         assert bodies[-1]["input"][-1]["content"][-1]["text"].startswith("re:agent plan mode is on")
 
 
+def _compact_prompt(target=24576, shortening=0, summary_bytes=32769):
+    prompt = (Path(__file__).parents[1] / "fixtures/compaction_prompt.txt").read_text().removesuffix("\n")
+    focus = ("Keep the current task and constraints, stage, unresolved findings or uncertain effects, "
+             "exact artifact/checkpoint references, verification evidence and remaining work. "
+             "Do not suggest repeating completed tool calls. Keep the summary within %d bytes (UTF-8); "
+             "drop transcript detail already captured in files or checkpoints first." % target)
+    if shortening:
+        focus = ("Shorten the existing %d byte summary to at most %d bytes (UTF-8); "
+                 "the hard limit is 32768 bytes. " % (summary_bytes, target)) + focus
+    return prompt + "\n\nFocus: " + focus
+
+
 def _in_run_oversized(ctx, twice):
+    # Keep the historical "twice" leaf ID; exhausting two shortenings now needs three oversized replies.
     prompt = "compact-oversized-task"
     flags = ("--model", OPENAI[0], "--in-run-compact", "--max-steps", "8")
     ctx.env["REAGENT_CONTEXT_WINDOW_TOKENS"] = "100000"
@@ -733,11 +746,12 @@ def _in_run_oversized(ctx, twice):
     def last_text(raw):
         return json.loads(raw)["input"][-1].get("content", [{}])[0].get("text", "")
 
+    prompts = [_compact_prompt(), _compact_prompt(shortening=1),
+               _compact_prompt(target=12288, shortening=2)]
     script = [(lambda raw: len(json.loads(raw)["input"]) == 1, first),
-              (lambda raw: "32768 bytes (UTF-8)" in last_text(raw) and "Shorten the existing" not in last_text(raw),
-               _openai(oversized)),
-              (lambda raw: "Shorten the existing 32769 byte summary to at most 32768 bytes" in last_text(raw),
-               _openai(oversized if twice else shortened)),
+              (lambda raw: last_text(raw) == prompts[0], _openai(oversized)),
+              (lambda raw: last_text(raw) == prompts[1], _openai(oversized)),
+              (lambda raw: last_text(raw) == prompts[2], _openai(oversized if twice else shortened)),
               ((lambda raw: json.loads(raw)["input"][-1].get("type") == "function_call_output") if twice else
                (lambda raw: last_text(raw) == SUMMARY + shortened), _openai("compaction complete"))]
     for marker, response in script:
@@ -746,36 +760,48 @@ def _in_run_oversized(ctx, twice):
     _ok(result)
     assert result.stdout == b"compaction complete\n"
     bodies = [_body(record) for record in ctx.server.requests]
-    assert len(bodies) == 4, len(bodies)
-    assert "32768 bytes (UTF-8)" in bodies[1]["input"][-1]["content"][0]["text"]
-    assert bodies[2]["input"][0]["content"][0]["text"] == SUMMARY + oversized
-    assert "32769 byte summary to at most 32768 bytes" in bodies[2]["input"][-1]["content"][0]["text"]
-    assert bodies[0]["prompt_cache_key"] == bodies[1]["prompt_cache_key"] == bodies[3]["prompt_cache_key"]
-    assert bodies[2]["prompt_cache_key"] != bodies[0]["prompt_cache_key"]
+    assert len(bodies) == 5, len(bodies)
+    for body, expected in zip(bodies[1:4], prompts):
+        assert body["input"][-1]["content"][0]["text"] == expected
+    for body in bodies[2:4]:
+        assert len(body["input"]) == 2
+        assert body["input"][0]["content"][0]["text"] == SUMMARY + oversized
+    assert bodies[0]["prompt_cache_key"] == bodies[1]["prompt_cache_key"] == bodies[4]["prompt_cache_key"]
+    assert bodies[2]["prompt_cache_key"] == bodies[3]["prompt_cache_key"] != bodies[0]["prompt_cache_key"]
     for index, body in enumerate(bodies):
-        summary = {"text": oversized, "replaced_entries": 0, "model": ""} if index == 2 else None
+        summary = {"text": oversized, "replaced_entries": 0, "model": ""} if index in (2, 3) else None
         _cache_key(body, summary)
     events = [json.loads(line) for path in ctx.trace_paths for line in path.read_bytes().splitlines()]
     requested = [event for event in events if event["type"] == "compaction.requested"]
-    assert [event["step"] for event in requested] == [2, 3], "shortening did not stay in the same attempt"
-    failed = [event for event in events if event["type"] == "compaction.failed"]
-    skipped = [event for event in events if event["type"] == "compaction.skipped"]
-    finished = [event for event in events if event["type"] == "compaction.finished"]
+    assert [event["step"] for event in requested] == [2, 3, 4], "shortening did not stay in the same attempt"
+    assert len({event["run_id"] for event in requested}) == 1
+    for event, expected in zip(requested, prompts):
+        assert event["data"]["history"][-1]["user"]["text"] == expected
+    compaction = [event for event in events if event["type"].startswith("compaction.")]
+    expected_events = [("compaction.requested", 2), ("compaction.shorten", 2),
+                       ("compaction.requested", 3), ("compaction.shorten", 3),
+                       ("compaction.requested", 4)]
+    expected_events += [("compaction.failed", 4), ("compaction.skipped", 4)] if twice else [("compaction.finished", 4)]
+    assert [(event["type"], event["step"]) for event in compaction] == expected_events
+    shortenings = [event["data"] for event in compaction if event["type"] == "compaction.shorten"]
+    assert all(type(value) is int for data in shortenings for value in data.values())
+    assert shortenings == [{"summary_bytes": 32769, "target_bytes": target,
+                            "limit_bytes": 32768, "shortening": index}
+                           for index, target in enumerate((24576, 12288), 1)]
     if twice:
-        assert len(failed) == len(skipped) == 1 and not finished
-        assert skipped[0]["data"]["consecutive_failures"] == 1
-        assert skipped[0]["data"]["disabled"] is False
-        assert skipped[0]["data"]["retry_after_step"] == 5
-        assert bodies[3]["input"] == bodies[1]["input"][:-1], "failed summary changed retained history"
+        reason = "within-run summary exceeds the 32768 byte handoff limit"
+        assert compaction[-2]["data"] == {"reason": reason}
+        assert compaction[-1]["data"] == {"reason": reason, "consecutive_failures": 1,
+                                          "disabled": False, "retry_after_step": 6}
+        assert bodies[4]["input"] == bodies[1]["input"][:-1], "failed summary changed retained history"
     else:
-        assert not failed and not skipped and len(finished) == 1
-        assert finished[0]["data"]["summary"] == shortened
-        assert len(bodies[3]["input"]) == 2
-        assert bodies[3]["input"][0]["content"][0]["text"] == prompt
-        assert bodies[3]["input"][1]["content"][0]["text"] == SUMMARY + shortened
+        assert compaction[-1]["data"]["summary"] == shortened
+        assert len(bodies[4]["input"]) == 2
+        assert bodies[4]["input"][0]["content"][0]["text"] == prompt
+        assert bodies[4]["input"][1]["content"][0]["text"] == SUMMARY + shortened
     completed = [event["data"] for event in events if event["type"] == "run.finished"]
     assert len(completed) == 1 and completed[0]["status"] == "completed"
-    assert completed[0]["steps"] == 4 and completed[0]["tool_calls"] == 1
+    assert completed[0]["steps"] == 5 and completed[0]["tool_calls"] == 1
 
 
 def _cache_markers(body):

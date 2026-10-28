@@ -2,11 +2,7 @@
   "schema_version": 1,
   "format": "Deterministic gzip tar: case.json and artifacts/<logical path>; every normalized artifact is complete.",
   "review": "tar -tzf parity/samples/<case>.tar.gz; tar -xOzf parity/samples/<case>.tar.gz artifacts/<path>. Opaque/binary artifacts are not converted to text.",
-  "pending_families": {
-    "C18": "pinned Go defect: C18 stopped after editor accept/prompt recovery lost the first byte of the following human turn (next -> ext); reproduction cli_pty_commands.edit(ctx, 'visual'); fix/re-pin deferred by task rules",
-    "C43": "pinned Go defect: C43 stopped after Ctrl-L produced no redraw; editor.go decodes clear but editor.apply has no clear handler; reproduction cli_pty_render._edit(ctx, clear-screen); fix/re-pin deferred",
-    "C44": "pinned Go defect: C44 stopped after queued input survived a trace-confirmed cancelled run; reproduction cli_pty_races._cancel_typeahead; fix and re-pin deferred by task rules"
-  },
+  "pending_families": {},
   "cases": [
     {
       "id": "C01.unknown",
@@ -197,6 +193,16 @@
       "normalized_bytes": 68058,
       "normalized_sha256": "e85393d5c100684a2bc9e65161063596565d976089412a8a4bea83bd79e99f39",
       "bundle_sha256": "50e9d7e3802fa978caf0cbc32d4de271f38929678de85841aef33e69acde613d"
+    },
+    {
+      "id": "C18.editor-visual",
+      "description": "Controlling-terminal editor selection, exact bytes, cleanup and recovery",
+      "why": "Editor handoff preserves the first byte of the following human turn.",
+      "path": "C18.editor-visual.tar.gz",
+      "artifacts": 21,
+      "normalized_bytes": 1762680,
+      "normalized_sha256": "a8fe3bac59776b2e85c7cbe7bc89f1c3852a89da2f4a8e592758445d2f1ac278",
+      "bundle_sha256": "33b953a6a8cdac7df043ac88eb0c25c53903c915f4740bac5a57a033d0dc24c2"
     },
     {
       "id": "C21.context-gc",
@@ -417,6 +423,26 @@
       "normalized_bytes": 1307281,
       "normalized_sha256": "d3e922c186cf5b2bb8544403f19b18e14e0621e6d06c987af5fca0e4891542f4",
       "bundle_sha256": "f7b13325b4e2a74919304bbba162a0f55d76b2745a79e2577041400829c264d1"
+    },
+    {
+      "id": "C43.clear-screen",
+      "description": "Editor keys preserve exact request bytes and cursor",
+      "why": "Ctrl-L redraws edited input at the top of the terminal.",
+      "path": "C43.clear-screen.tar.gz",
+      "artifacts": 20,
+      "normalized_bytes": 1780162,
+      "normalized_sha256": "c8d0817ab0a69104769734878fd7862df40df6da471322edb7839e3dcb98c9b7",
+      "bundle_sha256": "6ac3e7f73264cf023e7e2856ea0be6c60076478dfdff6c02d7244da9a01d2cf7"
+    },
+    {
+      "id": "C44.typeahead-cancellation",
+      "description": "Held request cancellation discards queued input before the next turn",
+      "why": "A cancelled turn discards queued typeahead before the next human turn.",
+      "path": "C44.typeahead-cancellation.tar.gz",
+      "artifacts": 20,
+      "normalized_bytes": 1339131,
+      "normalized_sha256": "aca397fb36c608345f2f81a9c126cf30b1a1e1383f1049dde9ef278f5faca046",
+      "bundle_sha256": "4721b70189266054f38ab944bcf778e10bcdbd5226d9458c406eda6e137f15c0"
     },
     {
       "id": "W01.catalog-gpt-6-sol-model",
@@ -957,16 +983,6 @@
       "normalized_bytes": 823,
       "normalized_sha256": "634f03bba2aff2ff470448532760134ac40e823ec2394e1b46b4adcc76b73390",
       "bundle_sha256": "f48ee32e62f8fc642986c27c39ceef92b9760ac375f906256c31d3bf5001d1c2"
-    },
-    {
-      "id": "W54.anthropic.cancel-body",
-      "description": "SIGINT after headers and a flushed body chunk; refresh rotation survives",
-      "why": "Narrow fixture-input delivery projection, preserving every Go output.",
-      "path": "W54.anthropic.cancel-body.tar.gz",
-      "artifacts": 11,
-      "normalized_bytes": 64763,
-      "normalized_sha256": "0fc9731c5409354e7767fd0d4791d1abb55a9268feeeb914814ede254d17e24b",
-      "bundle_sha256": "ac4f3fd58f3c6e181b330a9dc6315c7712d05256988edf2381349a0677472e33"
     },
     {
       "id": "W54.anthropic.progress",
@@ -1585,8 +1601,8 @@
       "path": "A02.accept-entries128.tar.gz",
       "artifacts": 33,
       "normalized_bytes": 1045071,
-      "normalized_sha256": "44be7f33e1caa3ffa44a7c4e7781d86cffbbfe214a2029fcada502c2507c8311",
-      "bundle_sha256": "fd99ec383d808e64dd2619f1ff5ecd8f90945ba77d5ed6f0e7364163113493f8"
+      "normalized_sha256": "65e3f3d12bbae226a997e8f364790977341d731abfcc947a52c5c04d64675491",
+      "bundle_sha256": "9c597b800eba521f5127a91acd1e818fe4f32207bd710fbe6a2cc6747d8a6e48"
     },
     {
       "id": "A03.fresh-live",
@@ -1704,9 +1720,9 @@
       "why": "Named Session reuse versus anonymous collection.",
       "path": "A14.anonymous-named.tar.gz",
       "artifacts": 48,
-      "normalized_bytes": 461670,
-      "normalized_sha256": "c0e7aa1a0ac106add17b44bcca2609d5e7557c3702f2d4990cd4d50fa0c03376",
-      "bundle_sha256": "8820da26b078971d1aefdfc7c6096a568f6a9cf645b02c3a61204e29929e2efb"
+      "normalized_bytes": 465185,
+      "normalized_sha256": "a382382554512dab84a8e483789e7eca0960341eb3de4f31f0fda1e400ed978f",
+      "bundle_sha256": "54b52030c410f924fb314eae459f19ac90ebaf9ef1b86787ddb371cccd13cd7b"
     },
     {
       "id": "A15.root-finish",
@@ -1764,9 +1780,9 @@
       "why": "Independent sibling observations and stale edits; mutation 31.",
       "path": "A20.competing.tar.gz",
       "artifacts": 84,
-      "normalized_bytes": 862214,
-      "normalized_sha256": "a536e283d130546dc1b9b0fbefa68e8f76c24c7637288a7d3da8573596c83ca0",
-      "bundle_sha256": "898b9070153b277b2a9f117404e29e470a8077004b2a2eb39a847fbd14a3f7b8"
+      "normalized_bytes": 864553,
+      "normalized_sha256": "9f747695a13adaf34cfdb89ac906f4b26642e7e3ea88d5c811099f2582a3f53a",
+      "bundle_sha256": "5c2367386357d6444fd1ab1b40ec3fdf0aff5eade6a4e97d68ee77ed22c8d969"
     },
     {
       "id": "A21.ledger",
@@ -1845,8 +1861,8 @@
       "path": "A28.inrun-at.tar.gz",
       "artifacts": 29,
       "normalized_bytes": 2498980,
-      "normalized_sha256": "f1e3ef46fc71eeefe52fa81bf3f098de469cee8e3dcdd207be19ccf0a0f4a4ba",
-      "bundle_sha256": "039bc359fb132d6654457ac8a110561459279d2533d9c9080c325e74ef6c3f31"
+      "normalized_sha256": "2a070e3d7f99f346fdd56854bc2dcc2a21d548867b5ce9ddbab02dbed81bc46a",
+      "bundle_sha256": "8f3f16d8decaf2b54b6c12394aa14305aa571cb84ffe2e71902dd89110e8b1b3"
     },
     {
       "id": "A29.gc-on-redundant-recent-three",
@@ -1904,9 +1920,9 @@
       "why": "Live helper/child crash, repeated recovery and fresh name reuse.",
       "path": "A34.live-crash-child-helper.tar.gz",
       "artifacts": 55,
-      "normalized_bytes": 476062,
-      "normalized_sha256": "2db5ff37334d7891ab4c9447d13706833de8c66e034af77e5b2aeb9035977ea3",
-      "bundle_sha256": "a131309baa9c80336354c32bbb4034b6b12ff49e22fd04d83852b6ca26b18b9c"
+      "normalized_bytes": 475691,
+      "normalized_sha256": "6949b175de5fdfe6b47a1fbae33a74e8cb02fced51efff4d5c38562667f732ed",
+      "bundle_sha256": "452f0b4007110135f64ec8865e5e22ea5fbb1ed3e3d01f5ac3ec67cef1f4161e"
     },
     {
       "id": "A35.schema-agents",
@@ -1974,9 +1990,9 @@
       "why": "Settled lexical delivery despite reverse completion; mutation 32.",
       "path": "A39.reverse-release.tar.gz",
       "artifacts": 48,
-      "normalized_bytes": 462115,
-      "normalized_sha256": "955539bdafc2d6e06404865795f6cdd60c20b0c5094ef00791dd40337c6dc229",
-      "bundle_sha256": "cf2d8fd3adea6f4cb478967e88d8d47334c33c14175239a0fd7e5b58bf1e8437"
+      "normalized_bytes": 465715,
+      "normalized_sha256": "1321e657748c386281ed9bd5ddf82df44a31037afb8fcc043a8e2bec914991b9",
+      "bundle_sha256": "1b41f44478dbca952f95456bb6bc66174e11603e5435526f2aa01b9bca50105e"
     },
     {
       "id": "A40.call-ledger-compact",
@@ -2004,9 +2020,9 @@
       "why": "Admitted helper sabotages pre-model checkpoint publication.",
       "path": "C20.persistence-barriers.tar.gz",
       "artifacts": 16,
-      "normalized_bytes": 74320,
-      "normalized_sha256": "2e7bfc5990bf11e7eaef4154eafd2d11105de8d19fac6c41557fbb5e2db66874",
-      "bundle_sha256": "a5262e276537ecb006e59e211b61fe8da70f9b43d3aeda1aa8b2e8cdc02287ad"
+      "normalized_bytes": 74216,
+      "normalized_sha256": "ddcddfcb0b90eb0a9d73d2e114dbf6c90a443fa662ab32bfd8219ab8043c1ad8",
+      "bundle_sha256": "a2b98bd94e4643b0b97fe6969e7033541f90348c0a2d782c237a297015da856c"
     },
     {
       "id": "W13.native-fork",
@@ -2015,8 +2031,8 @@
       "path": "W13.native-fork.tar.gz",
       "artifacts": 33,
       "normalized_bytes": 342749,
-      "normalized_sha256": "10bc13d037c4dcc08d13254bfa8803d8801072c482b9297e946cfe403c80f3ee",
-      "bundle_sha256": "7284307786340eacc4af2bf806b5dbb700434f92ee4e5f86a55de9881a8edc9b"
+      "normalized_sha256": "c4b0f8e214fa047fc837242d90df87215f8f7620a52838c513633e6b05c909f3",
+      "bundle_sha256": "bca592a4834bd07e44682de4820f2366eea028c26f45b4297ffe4de53717da45"
     },
     {
       "id": "T37.same-root",
@@ -2027,6 +2043,14 @@
       "normalized_bytes": 481631,
       "normalized_sha256": "f647d13938c4c87cc50e85daf18792ca835d6afb6f54519a2c94a0a11a3cb6ed",
       "bundle_sha256": "857e0b994d5d93f39e4ab18db9c0378736f4e505b3437c67d71191e683a83d82"
+    }
+  ],
+  "historical_cases": [
+    {
+      "id": "W54.anthropic.cancel-body",
+      "path": "W54.anthropic.cancel-body.tar.gz",
+      "bundle_sha256": "ac4f3fd58f3c6e181b330a9dc6315c7712d05256988edf2381349a0677472e33",
+      "reason": "Retained historical bytes; body cancellation is pending, not current reference evidence."
     }
   ]
 }

@@ -43,17 +43,27 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(entry['normalized_lock'], 'expected/' + name.split('/')[0] + '.json')
             self.assertEqual(entry['go_version'], 'go version go1.23.3 ' + name)
             self.assertEqual(entry['python_version'], 'Python 3.11.5')
-            self.assertNotIn('reference_commit', entry)
+            if name == 'linux/amd64':
+                self.assertNotIn('reference_commit', entry)
+                self.assertEqual(entry['python_executable'],
+                    '/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin/python3.11')
+            elif entry.get('capture_status') == 'required':
+                self.assertEqual(entry['reference_commit'], '60fda0d3f3eabc76fa11deed72aed7850532c97e')
+            else:
+                self.assertEqual(entry['capture_status'], 'ready')
+                self.assertEqual(entry['reference_commit'], manifest['reference_commit'])
         document = json.loads((suite / 'expected/darwin.json').read_bytes())
         missing = {case.id for case in collect() if not case.pending} - document['cases'].keys()
         with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'):
-            if missing:
+            if manifest['platforms']['darwin/arm64'].get('capture_status') == 'required':
                 from parity.run import HarnessError
-                with self.assertRaisesRegex(HarnessError, '^new leaves need a Darwin capture$'):
+                with self.assertRaisesRegex(HarnessError, '^Darwin capture required$'):
                     locks.read_lock(suite, manifest)
             else:
+                self.assertFalse(missing, 'ready Darwin capture must contain every runnable leaf')
                 locks.read_lock(suite, manifest)
-        self.assertEqual(document['reference_identity']['reference_commit'], manifest['reference_commit'])
+        self.assertEqual(document['reference_identity']['reference_commit'],
+                         manifest['platforms']['darwin/arm64']['reference_commit'])
         self.assertEqual(document['normalized_tree_sha256'],
                          manifest['platforms']['darwin/arm64']['normalized_tree_sha256'])
 

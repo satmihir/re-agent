@@ -115,21 +115,29 @@ def _cancel_typeahead(ctx):
         terminal.wait(lambda _: any(e["type"] == "run.finished" and e["data"].get("status") == "cancelled"
                                      for e in events(ctx)), "cancelled run completion")
         settled(terminal, "typeahead-cancelled")
+        assert terminal.terminal.line(terminal.terminal.row).strip() == "❯", "cancelled input survived in the prompt"
+        assert len(server.requests) == 1, "cancelled queued input was submitted before the next human turn"
         response = server.requests[0].response
-        assert not response.chunks and not response.completed
+        assert response is not None and not response.segments and not response.chunks and not response.completed
         following_turn(terminal, "fresh normal question")
         lack(terminal, "Cancelled answer must not appear.")
+        assert b"Cancelled answer must not appear." not in terminal.stdout + terminal.raw
         assert len(server.requests) == 2, "cancelled queued input was submitted"
-        second = json.dumps(server.requests[1].json())
-        assert "fresh normal question" in second and "stale cancelled input" not in second, server.requests[1].json()["input"]
+        second = server.requests[1].json()
+        users = [entry for entry in second["input"] if entry.get("role") == "user"]
+        assert [entry["content"][0]["text"] for entry in users] == ["hold this request", "fresh normal question"], users
+        assert "stale cancelled input" not in json.dumps(second), second["input"]
+        assert not response.segments and not response.chunks and not response.completed
         requested = [e for e in events(ctx) if e["type"] == "model.requested"]
         assert len(requested) == 2 and "stale cancelled input" not in json.dumps(requested), requested
+        finished = [e for e in events(ctx) if e["type"] == "run.finished"]
+        assert [e["data"]["status"] for e in finished] == ["cancelled", "completed"], finished
+        assert [e["run_id"] for e in finished] == [e["run_id"] for e in requested], (finished, requested)
 
 
 def collect():
     return [
         Case("C27.model-retry", "Retry-wait state, recovered response and unreported billing attempt", _retry, "P"),
         Case("C37.interrupt-shell-command", "Foreground process barrier, interrupt record and prompt recovery", _shell, "P"),
-        Case("C44.typeahead-cancellation", "Held request cancellation discards queued input before the next turn", None, "P",
-             pending="pinned Go defect: queued typeahead survives a confirmed cancelled run and submits stale input before the next human turn; minimal repro _cancel_typeahead"),
+        Case("C44.typeahead-cancellation", "Held request cancellation discards queued input before the next turn", _cancel_typeahead, "P"),
     ]

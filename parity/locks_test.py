@@ -466,3 +466,382 @@ class TerminalProjectionLockTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepinLockTest(unittest.TestCase):
+    def setUp(self):
+        self.old = {'W01.listed': {'value': 'old'}}
+        self.new = {'W01.listed': {'value': 'new'}}
+        self.previous_identity = dict(reference_commit='60fda0d3f3eabc76fa11deed72aed7850532c97e',
+                                      reference_platform='linux/amd64')
+        self.new_identity = dict(self.previous_identity, reference_commit=locks.REPIN_REFERENCE)
+        self.allowlist = dict(schema_version=1, previous_reference_commit=self.previous_identity['reference_commit'],
+                              reference_commit=locks.REPIN_REFERENCE,
+                              platforms={'linux/amd64': {'W01.listed': '#192 explicit prompt change'}})
+
+    def verify(self):
+        return locks.verify_repin(self.old, self.new, Path('stage'), self.allowlist,
+                                  self.previous_identity, self.new_identity)
+
+    def test_listed_change_and_addition_require_replay_and_receipt(self):
+        for addition in (False, True):
+            with self.subTest(addition=addition):
+                if addition:
+                    self.old.clear()
+                with patch('parity.locks.frozen_lock', return_value=self.new['W01.listed']) as replay:
+                    receipt = self.verify()
+                replay.assert_called_once_with(Path('stage/W01.listed'))
+                update, = receipt['updates']
+                self.assertEqual(update['old_case_sha256'], locks.digest(self.old['W01.listed']) if self.old else None)
+                self.assertEqual(update['new_case_sha256'], locks.digest(self.new['W01.listed']))
+                self.assertTrue(update['full_replay_verified'])
+
+    def test_unlisted_changes_additions_and_deletions_fail_before_replay(self):
+        for mutation in ('change', 'add', 'delete'):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                if mutation == 'change':
+                    self.old['W99.unlisted'] = {'value': 'old'}
+                    self.new['W99.unlisted'] = {'value': 'new'}
+                elif mutation == 'add':
+                    self.new['W99.unlisted'] = {'value': 'new'}
+                else:
+                    del self.new['W01.listed']
+                with patch('parity.locks.frozen_lock') as replay:
+                    with self.assertRaisesRegex(AssertionError, 'unlisted re-pin change'):
+                        self.verify()
+                replay.assert_not_called()
+
+    def test_tampered_entry_and_failed_raw_replay_never_approve(self):
+        with patch('parity.locks.frozen_lock', return_value={'tampered': True}):
+            with self.assertRaisesRegex(AssertionError, 'replay evidence differs'):
+                self.verify()
+        with patch('parity.locks.frozen_lock', side_effect=AssertionError('raw replay failed')):
+            with self.assertRaisesRegex(AssertionError, 'raw replay failed'):
+                self.verify()
+
+    def test_each_platform_has_its_own_explicit_allowlist(self):
+        self.previous_identity['reference_platform'] = 'darwin/arm64'
+        self.new_identity['reference_platform'] = 'darwin/arm64'
+        with self.assertRaisesRegex(AssertionError, 'invalid re-pin platform allowlist'):
+            self.verify()
+        self.allowlist['platforms']['darwin/arm64'] = {'W01.listed': '#193 Darwin-only change'}
+        with patch('parity.locks.frozen_lock', return_value=self.new['W01.listed']):
+            self.assertEqual(self.verify()['platform'], 'darwin/arm64')
+
+    def test_committed_allowlist_has_no_family_or_wildcard_authorizations(self):
+        suite = Path(__file__).resolve().parent
+        allowlist = json.loads((suite / 'fixtures/repin-2ab234f7.json').read_bytes())
+        from parity import run
+        executable_ids = {case.id for case in run.collect_cases()}
+        self.assertEqual(allowlist['reference_commit'], locks.REPIN_REFERENCE)
+        for platform, cases in allowlist['platforms'].items():
+            self.assertIn(platform, ('linux/amd64', 'darwin/arm64'))
+            self.assertTrue(set(cases) <= executable_ids)
+            self.assertTrue(all(isinstance(reason, dict) or reason.startswith(('#191 ', '#192 ', '#193 '))
+                                for reason in cases.values()))
+
+    def test_publication_uses_only_repin_allowlist_and_retains_platform_receipt(self):
+        from contextlib import ExitStack, redirect_stdout
+        import io
+        from parity import identity, run, samples
+        from parity.identity_test import fixture_manifest
+        from parity.model import Case
+        for system, machine in (('linux', 'x86_64'), ('darwin', 'arm64')):
+            with self.subTest(platform=system), tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+                stack.enter_context(patch('sys.platform', system))
+                stack.enter_context(patch('platform.machine', return_value=machine))
+                manifest = fixture_manifest()
+                manifest['reference_commit'] = locks.REPIN_REFERENCE
+                platform = identity.current_platform()
+                old = locks.case_lock({'out': b'old'}, {'out': 'N'}, [])
+                new = locks.case_lock({'out': b'new'}, {'out': 'N'}, [])
+                suite, stage = Path(temporary) / 'suite', Path(temporary) / 'stage'
+                (suite / 'fixtures').mkdir(parents=True)
+                (suite / 'expected').mkdir()
+                (stage / 'W01.listed').mkdir(parents=True)
+                pending_id = 'W54.jev.cancel-body'
+                pending_reason = 'client-side header-receipt observability required'
+                cases = [Case('W01.listed', 'test', lambda context: None),
+                         Case(pending_id, 'body cancellation', None, pending=pending_reason)]
+                inventory = locks.canonical(run.leaf_inventory(cases, manifest))
+                (stage / 'inventory.json').write_bytes(inventory)
+                (suite / 'inventory.json').write_bytes(inventory)
+                (suite / 'policy.json').write_bytes(Path(__file__).with_name('policy.json').read_bytes())
+                old_identity = dict(identity.reference(manifest), reference_commit=self.previous_identity['reference_commit'])
+                if system == 'darwin':
+                    old_identity['reference_binary_sha256'] = 'd' * 64
+                old_document = dict(locks.pack({'W01.listed': old, pending_id: old}), reference_identity=old_identity)
+                lock_path = suite / ('expected/' + system + '.json')
+                lock_path.write_bytes(locks.canonical(old_document))
+                historical_identity = dict(old_identity, reference_platform='darwin/arm64',
+                                           reference_binary_sha256='d' * 64)
+                darwin_path = suite / 'expected/darwin.json'
+                darwin_path.write_bytes(locks.canonical(dict(locks.pack({'W01.listed': old}),
+                                                            reference_identity=historical_identity)))
+                if system == 'darwin':
+                    lock_path.write_bytes(locks.canonical(old_document))
+                historical_inventory = json.loads(inventory)
+                historical_inventory.update(platform='darwin', reference_commit=self.previous_identity['reference_commit'],
+                                            reference_binary_sha256='d' * 64)
+                (suite / 'inventory.json').write_bytes(locks.canonical(historical_inventory))
+                (suite / 'samples').mkdir()
+                (suite / 'samples/W01.listed.tar.gz').write_bytes(b'old Darwin sample')
+                (suite / 'samples/W99.unlisted.tar.gz').write_bytes(b'unlisted sentinel')
+                if system == 'linux':
+                    manifest['platforms']['darwin/arm64'].update(historical_identity, capture_status='required')
+                    (suite / 'samples/linux').mkdir()
+                    (suite / 'samples/linux/W01.listed.tar.gz').write_bytes(b'old Linux sample')
+                selected_before = samples.sample_directory(suite)
+                selected_before.mkdir(parents=True, exist_ok=True)
+                (selected_before / (pending_id + '.tar.gz')).write_bytes(b'retained pending sample')
+                (suite / 'samples/index.json').write_bytes(b'old Darwin index')
+                def refresh(lane, destination):
+                    selected = samples.sample_directory(destination)
+                    self.assertFalse((selected / 'W01.listed.tar.gz').exists())
+                    selected.mkdir(parents=True, exist_ok=True)
+                    (selected / 'W01.listed.tar.gz').write_bytes(b'new selected sample')
+                    (selected / 'index.json').write_text('{}')
+                    return ['W01.listed']
+                allowlist = dict(self.allowlist, platforms={platform: {}})
+                allowlist_path = suite / 'fixtures/repin-2ab234f7.json'
+                allowlist_path.write_bytes(locks.canonical(allowlist))
+                stack.enter_context(patch.object(locks, 'frozen_lock', return_value=new))
+                refresh_mock = stack.enter_context(patch.object(samples, 'refresh_samples', side_effect=refresh))
+                for guard in ('approved_zero_exec_timing_updates', 'approved_shell_timing_updates',
+                              'approved_exec_ledger_updates', 'approved_race_fixture_updates'):
+                    stack.enter_context(patch.object(locks, guard, side_effect=AssertionError('legacy guard used')))
+                before = lock_path.read_bytes()
+                with self.assertRaisesRegex(AssertionError, 'unlisted re-pin change'):
+                    locks.update_lock(suite, manifest, stage, cases, jobs=1)
+                self.assertEqual(lock_path.read_bytes(), before)
+                self.assertFalse((stage / locks.REPIN_RECEIPT).exists())
+                allowlist['platforms'][platform]['W01.listed'] = '#192 explicit prompt change'
+                allowlist['platforms'][platform][pending_id] = dict(change='pending', reason=pending_reason)
+                allowlist_path.write_bytes(locks.canonical(allowlist))
+                originals = {str(path.relative_to(suite)): path.read_bytes()
+                             for path in suite.rglob('*') if path.is_file()}
+                for mutation in ('unlisted', 'missing', 'other-platform', 'other-platform-index'):
+                    if mutation.startswith('other-platform') and system != 'linux':
+                        continue
+                    def tamper(lane, destination):
+                        refresh(lane, destination)
+                        target = destination / 'samples' / ('W99.unlisted.tar.gz' if mutation == 'unlisted'
+                                                            else 'W01.listed.tar.gz')
+                        if mutation == 'other-platform-index':
+                            (destination / 'samples/index.json').write_bytes(b'unauthorized index change')
+                        elif mutation == 'missing':
+                            (samples.sample_directory(destination) / 'W01.listed.tar.gz').unlink()
+                        else:
+                            target.write_bytes(b'unauthorized change')
+                        return ['W01.listed']
+                    refresh_mock.side_effect = tamper
+                    with self.subTest(sample_mutation=mutation), self.assertRaisesRegex(AssertionError, 'existing sample.*identity violation'):
+                        locks.update_lock(suite, manifest, stage, cases, jobs=1)
+                    self.assertEqual({str(path.relative_to(suite)): path.read_bytes()
+                                      for path in suite.rglob('*') if path.is_file()}, originals)
+                refresh_mock.side_effect = refresh
+                with redirect_stdout(io.StringIO()):
+                    result = locks.update_lock(suite, manifest, stage, cases, jobs=1)
+                receipt = json.loads((stage / locks.REPIN_RECEIPT).read_bytes())
+                self.assertEqual(receipt, result['repin_receipt'])
+                self.assertEqual(receipt['updates'][0]['old_case_sha256'], locks.digest(old))
+                self.assertEqual(receipt['updates'][0]['new_case_sha256'], locks.digest(new))
+                pending_update = receipt['updates'][1]
+                self.assertEqual(pending_update['id'], pending_id)
+                self.assertEqual(pending_update['status'], 'pending')
+                self.assertFalse(pending_update['full_replay_verified'])
+                self.assertEqual((samples.sample_directory(suite) / (pending_id + '.tar.gz')).read_bytes(),
+                                 b'retained pending sample')
+                self.assertEqual(locks.read_lock(suite, manifest)['cases'], {'W01.listed': new})
+                self.assertEqual(json.loads((suite / 'inventory.json').read_bytes()), json.loads(inventory))
+                self.assertEqual((suite / 'samples/W99.unlisted.tar.gz').read_bytes(), b'unlisted sentinel')
+                if system == 'linux':
+                    self.assertEqual(json.loads(darwin_path.read_bytes())['reference_identity'], historical_identity)
+                    self.assertEqual((suite / 'samples/W01.listed.tar.gz').read_bytes(), b'old Darwin sample')
+                    self.assertEqual((suite / 'samples/index.json').read_bytes(), b'old Darwin index')
+                self.assertEqual((samples.sample_directory(suite) / 'W01.listed.tar.gz').read_bytes(), b'new selected sample')
+
+    def test_compaction_allowlist_exactly_matches_enumerated_changes_not_controls(self):
+        suite = Path(__file__).resolve().parent
+        enumeration = json.loads((suite / 'fixtures/compaction-cases-2ab234f7.json').read_bytes())
+        allowlist = json.loads((suite / 'fixtures/repin-2ab234f7.json').read_bytes())
+        expected = (set(enumeration['oversized_behavior']) | set(enumeration['inrun_prompt_only'])
+                    | set(enumeration['other_compaction_prompt_only']))
+        for platform, approved in allowlist['platforms'].items():
+            with self.subTest(platform=platform):
+                self.assertEqual({key for key, reason in approved.items()
+                                  if isinstance(reason, str) and reason.startswith('#192 ')}, expected)
+                self.assertFalse(set(enumeration['nonrequest_controls']) & approved.keys())
+                for key, reason in enumeration['oversized_behavior'].items():
+                    self.assertEqual(approved[key], '#192 ' + reason)
+
+    def test_previous_inventory_rejects_wrong_commit_hash_and_platform(self):
+        from parity import run
+        from parity.identity_test import fixture_manifest
+        manifest = fixture_manifest(reference_commit=locks.REPIN_REFERENCE)
+        old_identity = dict(self.previous_identity, reference_platform='darwin/arm64',
+                            reference_binary_sha256='d' * 64)
+        manifest['platforms']['darwin/arm64'].update(old_identity, capture_status='required')
+        inventory = dict(platform='darwin', reference_commit=old_identity['reference_commit'],
+                         reference_binary_sha256='d' * 64)
+        with tempfile.TemporaryDirectory() as temporary:
+            suite = Path(temporary)
+            (suite / 'expected').mkdir()
+            (suite / 'expected/darwin.json').write_text(json.dumps(dict(reference_identity=old_identity)))
+            locks.verify_previous_inventory(suite, inventory, manifest, self.allowlist)
+            with self.assertRaisesRegex(run.HarnessError, 'mislabels'):
+                locks.verify_previous_inventory(suite, dict(inventory, reference_commit=locks.REPIN_REFERENCE),
+                                                manifest, self.allowlist)
+            for field, wrong in (('reference_commit', 'c' * 40), ('reference_binary_sha256', 'e' * 64),
+                                 ('platform', 'unknown')):
+                with self.subTest(field=field), self.assertRaises(run.HarnessError):
+                    locks.verify_previous_inventory(suite, dict(inventory, **{field: wrong}), manifest, self.allowlist)
+
+
+class RepinPendingTest(unittest.TestCase):
+    def setUp(self):
+        from parity import run
+        from parity.identity_test import fixture_manifest
+        from parity.model import Case
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.stage = Path(temporary.name)
+        self.case_id = 'W54.jev.cancel-body'
+        self.reason = 'cancel-during-body needs client-side header-receipt observability (no trace event at this pin; server flush can’t prove receipt); cancel timing otherwise races router_http_status 200/0'
+        self.cases = [Case(self.case_id, 'body cancellation', None, pending=self.reason)]
+        self.manifest = fixture_manifest(reference_commit=locks.REPIN_REFERENCE)
+        self.inventory = run.leaf_inventory(self.cases, self.manifest)
+        from parity.identity import current_platform
+        self.platform = current_platform()
+        self.new_identity = dict(reference_commit=locks.REPIN_REFERENCE, reference_platform=self.platform,
+                                 reference_binary_sha256=self.inventory['reference_binary_sha256'])
+        self.previous_identity = dict(self.new_identity, reference_commit='60fda0d3f3eabc76fa11deed72aed7850532c97e')
+        self.allowlist = dict(schema_version=1, reference_commit=locks.REPIN_REFERENCE,
+                              previous_reference_commit=self.previous_identity['reference_commit'],
+                              platforms={self.platform: {self.case_id: dict(change='pending', reason=self.reason)}})
+        self.old = {self.case_id: {'value': 'previous runnable lock'}}
+        self.new = {}
+        self.write_inventory()
+
+    def write_inventory(self):
+        (self.stage / 'inventory.json').write_bytes(locks.canonical(self.inventory))
+
+    def verify(self):
+        return locks.verify_repin(self.old, self.new, self.stage, self.allowlist,
+                                  self.previous_identity, self.new_identity, cases=self.cases)
+
+    def test_pending_receipt_hashes_metadata_without_claiming_execution(self):
+        with patch.object(locks, 'frozen_lock', side_effect=AssertionError('pending replay forbidden')):
+            receipt = self.verify()
+        update, = receipt['updates']
+        self.assertEqual(update['old_case_sha256'], locks.digest(self.old[self.case_id]))
+        self.assertEqual(update['new_case_sha256'], locks.digest(self.inventory['cases'][0]))
+        self.assertEqual(update['after'], self.inventory['cases'][0])
+        self.assertEqual(update['status'], 'pending')
+        self.assertFalse(update['full_replay_verified'])
+        self.assertEqual(receipt['replayed_cases'], 0)
+        self.old.clear()
+        self.assertEqual(self.verify()['updates'], [])
+
+    def test_pending_needs_exact_staged_metadata_and_nonrunnable_declaration(self):
+        from dataclasses import replace
+        for mutation in ('reason', 'status', 'platform', 'capture-platform', 'reference', 'missing-row',
+                         'duplicate-row', 'callable', 'missing-case', 'declaration-reason', 'still-runnable',
+                         'allowlist-reason', 'metadata-fields', 'metadata-digest', 'missing-inventory'):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                row = self.inventory['cases'][0]
+                if mutation == 'reason':
+                    row['pending'] = 'tampered'
+                elif mutation == 'status':
+                    row['status'] = 'implemented'
+                elif mutation == 'platform':
+                    row['platforms'] = ['darwin']
+                elif mutation == 'capture-platform':
+                    self.inventory['platform'] = 'linux' if self.platform.startswith('darwin') else 'darwin'
+                elif mutation == 'reference':
+                    self.inventory['reference_binary_sha256'] = 'f' * 64
+                elif mutation == 'missing-row':
+                    self.inventory['cases'].clear()
+                elif mutation == 'duplicate-row':
+                    self.inventory['cases'].append(dict(row))
+                elif mutation == 'callable':
+                    self.cases[0] = replace(self.cases[0], run=lambda _: None)
+                elif mutation == 'missing-case':
+                    self.cases.clear()
+                elif mutation == 'declaration-reason':
+                    self.cases[0] = replace(self.cases[0], pending='tampered')
+                elif mutation == 'still-runnable':
+                    self.new = dict(self.old)
+                elif mutation == 'allowlist-reason':
+                    self.allowlist['platforms'][self.platform][self.case_id]['reason'] = 'tampered'
+                elif mutation == 'metadata-fields':
+                    self.inventory['metadata_fields'] = ['id']
+                if mutation != 'metadata-fields':
+                    fields = self.inventory['metadata_fields']
+                    self.inventory['metadata_sha256'] = locks.digest([{key: row[key] for key in fields}
+                                                                     for row in self.inventory['cases']])
+                if mutation == 'metadata-digest':
+                    self.inventory['metadata_sha256'] = '0' * 64
+                self.write_inventory()
+                if mutation == 'missing-inventory':
+                    (self.stage / 'inventory.json').unlink()
+                with patch.object(locks, 'frozen_lock') as replay, self.assertRaisesRegex(AssertionError, 're-pin pending'):
+                    self.verify()
+                replay.assert_not_called()
+
+    def test_pending_is_not_raw_deletion_or_runnable_replacement_authorization(self):
+        for mutation in ('string-reason', 'unlisted-removal', 'runnable-replacement', 'delete-shape'):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                if mutation == 'string-reason':
+                    self.allowlist['platforms'][self.platform][self.case_id] = self.reason
+                elif mutation == 'unlisted-removal':
+                    self.old['T01.unlisted'] = {'value': 'old'}
+                elif mutation == 'runnable-replacement':
+                    self.new[self.case_id] = {'value': 'new'}
+                else:
+                    self.allowlist['platforms'][self.platform][self.case_id]['change'] = 'delete'
+                with patch.object(locks, 'frozen_lock') as replay, self.assertRaises(AssertionError):
+                    self.verify()
+                replay.assert_not_called()
+
+    def test_committed_pending_authorizations_are_exactly_nine_body_leaves_per_platform(self):
+        from parity import run
+        approved = json.loads(Path(__file__).with_name('fixtures').joinpath('repin-2ab234f7.json').read_bytes())
+        expected = {'W54.' + kind + '.cancel-body' for kind in
+                    ('openai', 'anthropic', 'proxy', 'chatgpt', 'jev', 'auth-discovery', 'auth-refresh', 'auth-models', 'auth-revoke')}
+        collected = {case.id: case for case in run.collect_cases()}
+        for platform, entries in approved['platforms'].items():
+            pending = {key: value for key, value in entries.items() if isinstance(value, dict)}
+            self.assertEqual(set(pending), expected)
+            for case_id, entry in pending.items():
+                reason = self.reason if case_id == 'W54.jev.cancel-body' else self.reason.split('; cancel timing')[0]
+                self.assertEqual(entry, dict(change='pending', reason=reason))
+                self.assertEqual(collected[case_id].pending, reason)
+                self.assertIsNone(collected[case_id].run)
+
+    def test_nine_pending_transitions_on_each_platform_use_real_leaf_inventory(self):
+        from parity import identity, run
+        from parity.identity_test import fixture_manifest
+        from parity.model import Case
+        approved = json.loads(Path(__file__).with_name('fixtures').joinpath('repin-2ab234f7.json').read_bytes())
+        for system, machine in (('linux', 'x86_64'), ('darwin', 'arm64')):
+            with self.subTest(platform=system), patch('sys.platform', system), patch('platform.machine', return_value=machine):
+                manifest = fixture_manifest(reference_commit=locks.REPIN_REFERENCE)
+                reference = identity.reference(manifest)
+                previous = dict(reference, reference_commit=approved['previous_reference_commit'])
+                pending = {key: entry for key, entry in approved['platforms'][reference['reference_platform']].items()
+                           if isinstance(entry, dict)}
+                cases = [Case(key, 'body cancellation', None, pending=entry['reason']) for key, entry in pending.items()]
+                inventory = run.leaf_inventory(cases, manifest)
+                (self.stage / 'inventory.json').write_bytes(locks.canonical(inventory))
+                old = {case.id: {'value': 'previous runnable lock'} for case in cases}
+                with patch.object(locks, 'frozen_lock') as replay:
+                    receipt = locks.verify_repin(old, {}, self.stage, approved, previous, reference, cases=cases)
+                replay.assert_not_called()
+                self.assertEqual(len(receipt['updates']), 9)
+                self.assertEqual({row['id'] for row in receipt['updates']}, set(old))
+                self.assertTrue(all(row['status'] == 'pending' and row['full_replay_verified'] is False
+                                    for row in receipt['updates']))

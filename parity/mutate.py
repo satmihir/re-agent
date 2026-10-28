@@ -25,7 +25,7 @@ import time
 
 SUITE = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).with_name("mutations.json")
-REF_COMMIT = "60fda0d3f3eabc76fa11deed72aed7850532c97e"
+REF_COMMIT = "2ab234f79d1d42ba8a969ba3f4103eeeba717967"
 
 
 def sha256(data):
@@ -389,12 +389,13 @@ def main(argv=None):
     manifest_bytes = MANIFEST.read_bytes()
     manifest = json.loads(manifest_bytes)
     from parity.run import HarnessError
-    from parity.identity import select
+    from parity.identity import guard_python, select
     try:
         validate_manifest(manifest)
         oracle = json.loads(MANIFEST.with_name("manifest.json").read_bytes())
         if oracle.get("goldens_frozen") is not True:
             raise ValueError("mutation execution blocked: goldens are not frozen")
+        guard_python(oracle)
         if oracle.get("reference_commit") != REF_COMMIT or select(oracle)["reference_binary_sha256"] != sha256(reference.read_bytes()):
             raise ValueError("reference binary/commit does not match frozen oracle")
         selected = manifest["mutations"]

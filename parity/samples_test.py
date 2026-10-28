@@ -12,7 +12,7 @@ import unittest
 from parity.locks import unpack
 from parity.identity import current_platform
 from parity.observe_delivery import _PLANS
-from parity.samples import SELECTIONS, bundle, normalized_digest
+from parity.samples import RETIRED_SELECTIONS, SELECTIONS, bundle, normalized_digest
 
 
 class SampleTests(unittest.TestCase):
@@ -54,11 +54,14 @@ class SampleTests(unittest.TestCase):
         selected = {row['id'] for row in index['cases']}
         self.assertEqual(len(selected), len(index['cases']))
         # Each platform owns its captured coverage; Linux cannot add Darwin evidence.
-        self.assertEqual(selected, set(SELECTIONS) & locks.keys())
+        self.assertEqual(selected, (SELECTIONS.keys() | RETIRED_SELECTIONS.keys()) & locks.keys())
         captured_families = {case_id[:3] for case_id in locks}
         self.assertEqual({case_id[:3] for case_id in selected}, captured_families)
         runnable = {case_id for case_id, case in cases.items() if not case['pending']}
-        self.assertLessEqual(locks.keys(), runnable)
+        # Old platform captures remain valid against their own frozen locks, even
+        # when a formerly runnable leaf is now pending in the shared inventory.
+        if platform == 'linux' and 'historical_cases' in index:
+            self.assertLessEqual(locks.keys(), runnable)
         self.assertTrue(all(1 <= count <= 3 for count in Counter(case_id[:3] for case_id in selected).values()))
         families = {case_id[:3] for case_id in cases}
         pending_families = {family for family in families
@@ -68,6 +71,15 @@ class SampleTests(unittest.TestCase):
             self.assertEqual(set(index['pending_families']), pending_families)
         else:
             self.assertLessEqual(set(index['pending_families']), families - captured_families)
+        historical = index.get('historical_cases', [])
+        self.assertEqual({path.name for path in directory.iterdir() if path.is_file()},
+                         {'index.json', *(row['path'] for row in index['cases']),
+                          *(row['path'] for row in historical)})
+        if historical:
+            from unittest.mock import patch
+            from parity.samples import historical_rows
+            with patch('parity.samples.current_platform', return_value=platform + ('/amd64' if platform == 'linux' else '/arm64')):
+                self.assertEqual(historical, historical_rows(directory))
         for row in index['cases']:
             with self.subTest(case=row['id']):
                 raw = (directory / row['path']).read_bytes()
@@ -78,8 +90,12 @@ class SampleTests(unittest.TestCase):
                                  for item in archive.getmembers() if item.name.startswith('artifacts/')}
                 self.assertEqual(metadata['id'], row['id'])
                 self.assertEqual(artifacts.keys(), metadata['artifact_policies'].keys())
-                self.assertEqual(row['description'], cases[row['id']]['description'])
-                self.assertEqual(row['why'], SELECTIONS[row['id']])
+                if row['id'] in RETIRED_SELECTIONS:
+                    self.assertEqual(row['description'],
+                        'SIGINT after headers and a flushed body chunk; refresh rotation survives')
+                else:
+                    self.assertEqual(row['description'], cases[row['id']]['description'])
+                self.assertEqual(row['why'], (SELECTIONS | RETIRED_SELECTIONS)[row['id']])
                 self.assertEqual(len(artifacts), row['artifacts'])
                 self.assertEqual(sum(map(len, artifacts.values())), row['normalized_bytes'])
                 self.assertEqual(normalized_digest(artifacts), row['normalized_sha256'])
@@ -112,6 +128,7 @@ class SampleTests(unittest.TestCase):
             capture = {'normalized': {'stdout': b'Linux bytes'}}
             with patch('sys.platform', 'linux'), patch('platform.machine', return_value='x86_64'), \
                  patch.object(samples, 'SELECTIONS', {'W00.test': 'fixture'}), \
+                 patch.object(samples, 'RETIRED_BUNDLES', {'linux/amd64': {}}), \
                  patch('parity.run.read_frozen_case', return_value=(documents, [], capture)), \
                  patch('parity.run.read_metadata', return_value=documents), \
                  patch('parity.run.load_golden', return_value=capture['normalized']):
@@ -133,6 +150,67 @@ class SampleTests(unittest.TestCase):
                 (suite / 'samples/linux').symlink_to(suite / 'samples', target_is_directory=True)
                 with self.assertRaisesRegex(run.HarnessError, 'sample directory must not be a symlink'):
                     samples.sample_directory(suite)
+
+    def test_pending_sample_is_retained_only_as_pinned_history(self):
+        import tempfile
+        from unittest.mock import patch
+        from parity import samples, run
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lane, suite = root / 'lane', root / 'suite'
+            lane.mkdir()
+            directory = suite / 'samples/linux'
+            directory.mkdir(parents=True)
+            retired = directory / 'W54.anthropic.cancel-body.tar.gz'
+            raw = bundle('W54.anthropic.cancel-body', {'stdout': b'historical'}, {'stdout': 'B'})
+            retired.write_bytes(raw)
+            digest = hashlib.sha256(raw).hexdigest()
+            inventory = {'platform': 'linux', 'cases': [
+                {'id': 'W54.anthropic.progress', 'description': 'live', 'status': 'implemented'},
+                {'id': 'W54.anthropic.cancel-body', 'description': 'old', 'status': 'pending', 'pending': 'unsettled'},
+            ]}
+            (lane / 'inventory.json').write_text(json.dumps(inventory))
+            documents = {'artifact-policies.json': b'{"stdout":"B"}'}
+            with patch('parity.samples.current_platform', return_value='linux/amd64'), \
+                 patch.object(samples, 'SELECTIONS', {'W54.anthropic.progress': 'fixture'}), \
+                 patch.object(samples, 'RETIRED_BUNDLES', {'linux/amd64': {'W54.anthropic.cancel-body': digest}}), \
+                 patch('parity.run.read_frozen_case', return_value=(documents, [], {})) as read, \
+                 patch('parity.run.read_metadata', return_value=documents), \
+                 patch('parity.run.load_golden', return_value={'stdout': b'live'}):
+                self.assertEqual(samples.refresh_samples(lane, suite), ['W54.anthropic.progress'])
+                self.assertEqual(read.call_args.args[0], lane / 'W54.anthropic.progress')
+                self.assertEqual(read.call_count, 1)
+                self.assertEqual(retired.read_bytes(), raw)
+                index_path = directory / 'index.json'
+                index = json.loads(index_path.read_bytes())
+                self.assertEqual([row['id'] for row in index['cases']], ['W54.anthropic.progress'])
+                self.assertEqual(index['historical_cases'], samples.historical_rows(directory))
+                samples.verify_samples(lane, suite)
+                self.assertIn('samples/linux/' + retired.name, samples.generated_paths(suite))
+                self.assertEqual(samples.refresh_samples(lane, suite), [])
+                index['historical_cases'] = []
+                index_path.write_text(json.dumps(index))
+                with self.assertRaisesRegex(run.HarnessError, 'historical sample inventory'):
+                    samples.verify_samples(lane, suite)
+                samples.refresh_samples(lane, suite)
+                extra = directory / 'W54.unowned.tar.gz'
+                extra.write_bytes(raw)
+                with self.assertRaisesRegex(run.HarnessError, 'sample file inventory'):
+                    samples.verify_samples(lane, suite)
+                with self.assertRaisesRegex(run.HarnessError, 'extra sample files'):
+                    samples.refresh_samples(lane, suite)
+                extra.unlink()
+                retired.write_bytes(raw + b'changed')
+                for operation in (samples.refresh_samples, samples.verify_samples):
+                    with self.assertRaisesRegex(run.HarnessError, 'historical sample identity'):
+                        operation(lane, suite)
+                retired.unlink()
+                retired.symlink_to(directory / 'W54.anthropic.progress.tar.gz')
+                with self.assertRaisesRegex(run.HarnessError, 'historical sample identity'):
+                    samples.verify_samples(lane, suite)
+                with patch.object(samples, 'SELECTIONS', {'W54.anthropic.cancel-body': 'old'}):
+                    with self.assertRaisesRegex(run.HarnessError, 'selections must be runnable'):
+                        samples.refresh_samples(lane, suite)
 
     def test_linux_standalone_inventory_migration_cannot_replace_shared_capture(self):
         from unittest.mock import patch

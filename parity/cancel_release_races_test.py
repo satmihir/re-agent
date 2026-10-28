@@ -186,10 +186,11 @@ class CancelReleaseRacesTest(unittest.TestCase):
             terminal.send.assert_called_once_with(b'\x03')
             server.assert_complete()
 
-    def test_pending_typeahead_reproducer_does_not_release_cancelled_reply(self):
+    def test_typeahead_cancellation_does_not_release_cancelled_reply(self):
         server = MagicMock()
-        server.requests = [SimpleNamespace(response=SimpleNamespace(chunks=[], completed=False))]
+        server.requests = [SimpleNamespace(response=SimpleNamespace(segments=[], chunks=[], completed=False))]
         terminal = MagicMock()
+        terminal.terminal.line.return_value = '❯ '
         ctx = SimpleNamespace(server=server)
         with patch.object(cli_pty_races, 'native') as native, \
                 patch.object(cli_pty_races, 'submit'), patch.object(cli_pty_races, 'settled'), \
@@ -199,8 +200,8 @@ class CancelReleaseRacesTest(unittest.TestCase):
                 cli_pty_races._cancel_typeahead(ctx)
         server.release.assert_not_called()
         case = next(case for case in cli_pty_races.collect() if case.id == 'C44.typeahead-cancellation')
-        self.assertIsNone(case.run)
-        self.assertIn('pinned Go defect', case.pending)
+        self.assertTrue(callable(case.run))
+        self.assertIsNone(case.pending)
 
 
 if __name__ == '__main__':

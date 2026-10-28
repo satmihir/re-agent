@@ -1,0 +1,9309 @@
+{
+  "coverage_invocation_directories": 4547,
+  "batch_directories": 31,
+  "internal_reagent": {
+    "covered_statements": 8831,
+    "total_statements": 10701,
+    "statement_percent": 82.52499766376974
+  },
+  "largest_uncovered_ranges": [
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 247,
+      "end": 256,
+      "statements": 9
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 86,
+      "end": 93,
+      "statements": 7
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 156,
+      "end": 161,
+      "statements": 5
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 99,
+      "end": 103,
+      "statements": 5
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 148,
+      "end": 152,
+      "statements": 5
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 344,
+      "end": 353,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 261,
+      "end": 266,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 110,
+      "end": 115,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 507,
+      "end": 512,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 211,
+      "end": 215,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 229,
+      "end": 233,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 236,
+      "end": 240,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 265,
+      "end": 269,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 331,
+      "end": 335,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 314,
+      "end": 317,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 112,
+      "end": 115,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/endpoint_redaction.go",
+      "start": 63,
+      "end": 66,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 57,
+      "end": 60,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 298,
+      "end": 301,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 100,
+      "end": 103,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 326,
+      "end": 329,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 97,
+      "end": 106,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 333,
+      "end": 340,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 127,
+      "end": 132,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 50,
+      "end": 55,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 249,
+      "end": 253,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 178,
+      "end": 182,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 260,
+      "end": 264,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 243,
+      "end": 247,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 413,
+      "end": 417,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 187,
+      "end": 191,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 106,
+      "end": 110,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 137,
+      "end": 141,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 142,
+      "end": 146,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 158,
+      "end": 162,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 312,
+      "end": 316,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 383,
+      "end": 387,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 827,
+      "end": 831,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 559,
+      "end": 563,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 61,
+      "end": 65,
+      "statements": 3
+    }
+  ],
+  "all_uncovered_ranges": [
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 247,
+      "end": 256,
+      "statements": 9
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 86,
+      "end": 93,
+      "statements": 7
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 156,
+      "end": 161,
+      "statements": 5
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 99,
+      "end": 103,
+      "statements": 5
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 148,
+      "end": 152,
+      "statements": 5
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 344,
+      "end": 353,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 261,
+      "end": 266,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 110,
+      "end": 115,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 507,
+      "end": 512,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 211,
+      "end": 215,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 229,
+      "end": 233,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 236,
+      "end": 240,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 265,
+      "end": 269,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 331,
+      "end": 335,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 314,
+      "end": 317,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 112,
+      "end": 115,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/endpoint_redaction.go",
+      "start": 63,
+      "end": 66,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 57,
+      "end": 60,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 298,
+      "end": 301,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 100,
+      "end": 103,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 326,
+      "end": 329,
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 97,
+      "end": 106,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 333,
+      "end": 340,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 127,
+      "end": 132,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 50,
+      "end": 55,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 249,
+      "end": 253,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 178,
+      "end": 182,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 260,
+      "end": 264,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 243,
+      "end": 247,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 413,
+      "end": 417,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 187,
+      "end": 191,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 106,
+      "end": 110,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 137,
+      "end": 141,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 142,
+      "end": 146,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 158,
+      "end": 162,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 312,
+      "end": 316,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 383,
+      "end": 387,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 827,
+      "end": 831,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 559,
+      "end": 563,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 61,
+      "end": 65,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 295,
+      "end": 299,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 257,
+      "end": 261,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 40,
+      "end": 43,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 56,
+      "end": 59,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 66,
+      "end": 69,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 161,
+      "end": 164,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 49,
+      "end": 52,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 156,
+      "end": 159,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 200,
+      "end": 203,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 215,
+      "end": 218,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 206,
+      "end": 209,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 208,
+      "end": 211,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 386,
+      "end": 389,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 561,
+      "end": 564,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 792,
+      "end": 795,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 281,
+      "end": 284,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 48,
+      "end": 50,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 109,
+      "end": 111,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 193,
+      "end": 195,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 209,
+      "end": 211,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 328,
+      "end": 330,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 353,
+      "end": 355,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 362,
+      "end": 364,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 372,
+      "end": 374,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 503,
+      "end": 505,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 136,
+      "end": 138,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 198,
+      "end": 200,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 214,
+      "end": 216,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 371,
+      "end": 373,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 818,
+      "end": 820,
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 164,
+      "end": 170,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 245,
+      "end": 249,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 90,
+      "end": 94,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 381,
+      "end": 385,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 59,
+      "end": 63,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 47,
+      "end": 50,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 51,
+      "end": 54,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 92,
+      "end": 95,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 615,
+      "end": 618,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 769,
+      "end": 772,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 396,
+      "end": 399,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 168,
+      "end": 171,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 176,
+      "end": 179,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 357,
+      "end": 360,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 391,
+      "end": 394,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 443,
+      "end": 446,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 531,
+      "end": 534,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 538,
+      "end": 541,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 578,
+      "end": 581,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 743,
+      "end": 746,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 963,
+      "end": 966,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 987,
+      "end": 990,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1063,
+      "end": 1066,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 157,
+      "end": 160,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 161,
+      "end": 164,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 198,
+      "end": 201,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 202,
+      "end": 205,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 374,
+      "end": 377,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 499,
+      "end": 502,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 324,
+      "end": 327,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 383,
+      "end": 386,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 466,
+      "end": 469,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 675,
+      "end": 678,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 106,
+      "end": 109,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 192,
+      "end": 195,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 186,
+      "end": 189,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 65,
+      "end": 68,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 68,
+      "end": 71,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 180,
+      "end": 183,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 247,
+      "end": 250,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 75,
+      "end": 78,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 263,
+      "end": 266,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 548,
+      "end": 551,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 631,
+      "end": 634,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 150,
+      "end": 153,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 369,
+      "end": 372,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 404,
+      "end": 407,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 538,
+      "end": 541,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 546,
+      "end": 549,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/region_output.go",
+      "start": 51,
+      "end": 54,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/region_output.go",
+      "start": 59,
+      "end": 62,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/region_picker.go",
+      "start": 37,
+      "end": 40,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 187,
+      "end": 190,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 68,
+      "end": 71,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 80,
+      "end": 83,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 93,
+      "end": 96,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 169,
+      "end": 172,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 342,
+      "end": 345,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 134,
+      "end": 137,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 150,
+      "end": 153,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 172,
+      "end": 175,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 176,
+      "end": 179,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 198,
+      "end": 201,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 134,
+      "end": 137,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 138,
+      "end": 141,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 149,
+      "end": 152,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 51,
+      "end": 54,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 288,
+      "end": 291,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 292,
+      "end": 295,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 317,
+      "end": 320,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1257,
+      "end": 1260,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_read_file.go",
+      "start": 19,
+      "end": 22,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 198,
+      "end": 201,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 221,
+      "end": 224,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 279,
+      "end": 282,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 36,
+      "end": 39,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 247,
+      "end": 250,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 254,
+      "end": 257,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 261,
+      "end": 264,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 265,
+      "end": 268,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 269,
+      "end": 272,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 475,
+      "end": 478,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 479,
+      "end": 482,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 488,
+      "end": 491,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 492,
+      "end": 495,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 71,
+      "end": 74,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 127,
+      "end": 130,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 179,
+      "end": 182,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 358,
+      "end": 361,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 300,
+      "end": 303,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 304,
+      "end": 307,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 75,
+      "end": 77,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 378,
+      "end": 380,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 385,
+      "end": 387,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/agent_exec.go",
+      "start": 69,
+      "end": 71,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 239,
+      "end": 241,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 241,
+      "end": 243,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 443,
+      "end": 445,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 200,
+      "end": 202,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/catalog.go",
+      "start": 175,
+      "end": 177,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/catalog.go",
+      "start": 189,
+      "end": 191,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 135,
+      "end": 137,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 278,
+      "end": 280,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 325,
+      "end": 327,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 361,
+      "end": 363,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 438,
+      "end": 440,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 669,
+      "end": 671,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 877,
+      "end": 879,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 969,
+      "end": 971,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 980,
+      "end": 982,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1055,
+      "end": 1057,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1070,
+      "end": 1072,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 25,
+      "end": 27,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 43,
+      "end": 45,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 123,
+      "end": 125,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 221,
+      "end": 223,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 233,
+      "end": 235,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 515,
+      "end": 517,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 372,
+      "end": 374,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 92,
+      "end": 94,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 159,
+      "end": 161,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 202,
+      "end": 204,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 207,
+      "end": 209,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 302,
+      "end": 304,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 398,
+      "end": 400,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 15,
+      "end": 17,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 22,
+      "end": 24,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 57,
+      "end": 59,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 138,
+      "end": 140,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 174,
+      "end": 176,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 178,
+      "end": 180,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 162,
+      "end": 164,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 180,
+      "end": 182,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 129,
+      "end": 131,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 156,
+      "end": 158,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 128,
+      "end": 130,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 120,
+      "end": 122,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 269,
+      "end": 271,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 293,
+      "end": 295,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 323,
+      "end": 325,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 344,
+      "end": 346,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 358,
+      "end": 360,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 608,
+      "end": 610,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 611,
+      "end": 613,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 647,
+      "end": 649,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 380,
+      "end": 382,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/plan.go",
+      "start": 74,
+      "end": 76,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 90,
+      "end": 92,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 92,
+      "end": 94,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 275,
+      "end": 277,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 319,
+      "end": 321,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 697,
+      "end": 699,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 749,
+      "end": 751,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 289,
+      "end": 291,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 148,
+      "end": 150,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 204,
+      "end": 206,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 96,
+      "end": 98,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 336,
+      "end": 338,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 46,
+      "end": 47,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 62,
+      "end": 63,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 72,
+      "end": 73,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 268,
+      "end": 269,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 787,
+      "end": 788,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 116,
+      "end": 117,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 143,
+      "end": 144,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 148,
+      "end": 149,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 167,
+      "end": 168,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 171,
+      "end": 172,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 186,
+      "end": 187,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 206,
+      "end": 207,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 228,
+      "end": 229,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 259,
+      "end": 260,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 307,
+      "end": 308,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 320,
+      "end": 321,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 324,
+      "end": 325,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 358,
+      "end": 359,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 388,
+      "end": 389,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 393,
+      "end": 394,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 397,
+      "end": 398,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 520,
+      "end": 521,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 547,
+      "end": 548,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 56,
+      "end": 57,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 95,
+      "end": 96,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 128,
+      "end": 129,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 155,
+      "end": 156,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 162,
+      "end": 163,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 167,
+      "end": 168,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 173,
+      "end": 174,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 206,
+      "end": 207,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 211,
+      "end": 212,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 221,
+      "end": 222,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 224,
+      "end": 225,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 384,
+      "end": 385,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 388,
+      "end": 389,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 64,
+      "end": 65,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 214,
+      "end": 215,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 221,
+      "end": 222,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 229,
+      "end": 230,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/endpoint_redaction.go",
+      "start": 71,
+      "end": 72,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 215,
+      "end": 216,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 63,
+      "end": 64,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 68,
+      "end": 69,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 155,
+      "end": 156,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 161,
+      "end": 162,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 184,
+      "end": 185,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 304,
+      "end": 305,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 380,
+      "end": 381,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 385,
+      "end": 386,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 444,
+      "end": 445,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 460,
+      "end": 461,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 533,
+      "end": 534,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 541,
+      "end": 542,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/plan.go",
+      "start": 79,
+      "end": 80,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 97,
+      "end": 98,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 357,
+      "end": 358,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 778,
+      "end": 779,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 859,
+      "end": 860,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 101,
+      "end": 102,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 332,
+      "end": 333,
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 41,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 209,
+      "end": 212,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 218,
+      "end": 221,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 178,
+      "end": 181,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 119,
+      "end": 122,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai.go",
+      "start": 199,
+      "end": 202,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1078,
+      "end": 1081,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1089,
+      "end": 1092,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 43,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 59,
+      "end": 61,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 63,
+      "end": 65,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 69,
+      "end": 71,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 73,
+      "end": 75,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 77,
+      "end": 79,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 82,
+      "end": 84,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 88,
+      "end": 90,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 105,
+      "end": 107,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 185,
+      "end": 187,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 189,
+      "end": 191,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 215,
+      "end": 217,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 217,
+      "end": 219,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 304,
+      "end": 306,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 316,
+      "end": 318,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 367,
+      "end": 369,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 370,
+      "end": 372,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 54,
+      "end": 56,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 58,
+      "end": 60,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 75,
+      "end": 77,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 89,
+      "end": 91,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 101,
+      "end": 103,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 112,
+      "end": 114,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 120,
+      "end": 122,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 124,
+      "end": 126,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_context.go",
+      "start": 127,
+      "end": 129,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 119,
+      "end": 121,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 127,
+      "end": 129,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 151,
+      "end": 153,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 154,
+      "end": 156,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 164,
+      "end": 166,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 173,
+      "end": 175,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 183,
+      "end": 185,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 199,
+      "end": 201,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 218,
+      "end": 220,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 234,
+      "end": 236,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 244,
+      "end": 246,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 269,
+      "end": 271,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 301,
+      "end": 303,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 355,
+      "end": 357,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 506,
+      "end": 508,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 513,
+      "end": 515,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 516,
+      "end": 518,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 549,
+      "end": 551,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 597,
+      "end": 599,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 623,
+      "end": 625,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 638,
+      "end": 640,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 750,
+      "end": 752,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 761,
+      "end": 763,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 763,
+      "end": 765,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 766,
+      "end": 768,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 75,
+      "end": 77,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 110,
+      "end": 112,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 123,
+      "end": 125,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 144,
+      "end": 146,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 202,
+      "end": 204,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 213,
+      "end": 215,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 219,
+      "end": 221,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 44,
+      "end": 46,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 105,
+      "end": 107,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 111,
+      "end": 113,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 115,
+      "end": 117,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 147,
+      "end": 149,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 194,
+      "end": 196,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 250,
+      "end": 252,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 267,
+      "end": 269,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 348,
+      "end": 350,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 386,
+      "end": 388,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/banner.go",
+      "start": 43,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/banner.go",
+      "start": 83,
+      "end": 85,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/banner.go",
+      "start": 107,
+      "end": 109,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/banner.go",
+      "start": 111,
+      "end": 113,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/catalog.go",
+      "start": 114,
+      "end": 116,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/catalog.go",
+      "start": 185,
+      "end": 187,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/catalog.go",
+      "start": 191,
+      "end": 193,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 153,
+      "end": 155,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 183,
+      "end": 185,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 227,
+      "end": 229,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 256,
+      "end": 258,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 273,
+      "end": 275,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 296,
+      "end": 298,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 300,
+      "end": 302,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 305,
+      "end": 307,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 321,
+      "end": 323,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 327,
+      "end": 329,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 337,
+      "end": 339,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 342,
+      "end": 344,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 364,
+      "end": 366,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 396,
+      "end": 398,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 429,
+      "end": 431,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 461,
+      "end": 463,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 636,
+      "end": 638,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 641,
+      "end": 643,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 644,
+      "end": 646,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 653,
+      "end": 655,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 671,
+      "end": 673,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 705,
+      "end": 707,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 879,
+      "end": 881,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 888,
+      "end": 890,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 928,
+      "end": 930,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 971,
+      "end": 973,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 982,
+      "end": 984,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1047,
+      "end": 1049,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1072,
+      "end": 1074,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1076,
+      "end": 1078,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1105,
+      "end": 1107,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 56,
+      "end": 58,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 60,
+      "end": 62,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 69,
+      "end": 71,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 75,
+      "end": 77,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 82,
+      "end": 84,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 87,
+      "end": 89,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 90,
+      "end": 92,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 93,
+      "end": 95,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 101,
+      "end": 103,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 105,
+      "end": 107,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 109,
+      "end": 111,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 114,
+      "end": 116,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 117,
+      "end": 119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 120,
+      "end": 122,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 123,
+      "end": 125,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 126,
+      "end": 128,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 130,
+      "end": 132,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 134,
+      "end": 136,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 142,
+      "end": 144,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 145,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 149,
+      "end": 151,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 194,
+      "end": 196,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 207,
+      "end": 209,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 224,
+      "end": 226,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 243,
+      "end": 245,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 258,
+      "end": 260,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 262,
+      "end": 264,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 267,
+      "end": 269,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 282,
+      "end": 284,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 285,
+      "end": 287,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 288,
+      "end": 290,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 298,
+      "end": 300,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 302,
+      "end": 304,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 309,
+      "end": 311,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 322,
+      "end": 324,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 330,
+      "end": 332,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 336,
+      "end": 338,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 340,
+      "end": 342,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 343,
+      "end": 345,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 354,
+      "end": 356,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 361,
+      "end": 363,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 364,
+      "end": 366,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 373,
+      "end": 375,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 376,
+      "end": 378,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 27,
+      "end": 29,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 35,
+      "end": 37,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 45,
+      "end": 47,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 63,
+      "end": 65,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 78,
+      "end": 80,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 94,
+      "end": 96,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 106,
+      "end": 108,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 111,
+      "end": 113,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 113,
+      "end": 115,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 117,
+      "end": 119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 120,
+      "end": 122,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 125,
+      "end": 127,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 140,
+      "end": 142,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 145,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 149,
+      "end": 151,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 164,
+      "end": 166,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 168,
+      "end": 170,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 172,
+      "end": 174,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 175,
+      "end": 177,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 183,
+      "end": 185,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 187,
+      "end": 189,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 190,
+      "end": 192,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 215,
+      "end": 217,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 217,
+      "end": 219,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 223,
+      "end": 225,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 256,
+      "end": 258,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 269,
+      "end": 271,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 272,
+      "end": 274,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 282,
+      "end": 284,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 288,
+      "end": 290,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 293,
+      "end": 295,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 300,
+      "end": 302,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 308,
+      "end": 310,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 311,
+      "end": 313,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 317,
+      "end": 319,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 321,
+      "end": 323,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 325,
+      "end": 327,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 330,
+      "end": 332,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 340,
+      "end": 342,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 343,
+      "end": 345,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 346,
+      "end": 348,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 349,
+      "end": 351,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 355,
+      "end": 357,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 359,
+      "end": 361,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 364,
+      "end": 366,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 369,
+      "end": 371,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 377,
+      "end": 379,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 385,
+      "end": 387,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 389,
+      "end": 391,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 394,
+      "end": 396,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 398,
+      "end": 400,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 406,
+      "end": 408,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 411,
+      "end": 413,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 424,
+      "end": 426,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 445,
+      "end": 447,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 484,
+      "end": 486,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 491,
+      "end": 493,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 505,
+      "end": 507,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 512,
+      "end": 514,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 517,
+      "end": 519,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 528,
+      "end": 530,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 536,
+      "end": 538,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/checkpoint_json.go",
+      "start": 14,
+      "end": 16,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 136,
+      "end": 138,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 139,
+      "end": 141,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 158,
+      "end": 160,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 211,
+      "end": 213,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 227,
+      "end": 229,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 292,
+      "end": 294,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 295,
+      "end": 297,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 306,
+      "end": 308,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 357,
+      "end": 359,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 374,
+      "end": 376,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 396,
+      "end": 398,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 401,
+      "end": 403,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 406,
+      "end": 408,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 410,
+      "end": 412,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 459,
+      "end": 461,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 643,
+      "end": 645,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 683,
+      "end": 685,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 694,
+      "end": 696,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 707,
+      "end": 709,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 710,
+      "end": 712,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 752,
+      "end": 754,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 762,
+      "end": 764,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 774,
+      "end": 776,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 783,
+      "end": 785,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 790,
+      "end": 792,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 40,
+      "end": 42,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 58,
+      "end": 60,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 69,
+      "end": 71,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 86,
+      "end": 88,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 89,
+      "end": 91,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 94,
+      "end": 96,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 109,
+      "end": 111,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 142,
+      "end": 144,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 145,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 204,
+      "end": 206,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 45,
+      "end": 47,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 90,
+      "end": 92,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 94,
+      "end": 96,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 117,
+      "end": 119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 121,
+      "end": 123,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 135,
+      "end": 137,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 151,
+      "end": 153,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 185,
+      "end": 187,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 218,
+      "end": 220,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 236,
+      "end": 238,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 244,
+      "end": 246,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 249,
+      "end": 251,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 252,
+      "end": 254,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 257,
+      "end": 259,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 261,
+      "end": 263,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 280,
+      "end": 282,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 285,
+      "end": 287,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 289,
+      "end": 291,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 296,
+      "end": 298,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 304,
+      "end": 306,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 311,
+      "end": 313,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 316,
+      "end": 318,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 320,
+      "end": 322,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 324,
+      "end": 326,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 328,
+      "end": 330,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 332,
+      "end": 334,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 339,
+      "end": 341,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 353,
+      "end": 355,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 370,
+      "end": 372,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 372,
+      "end": 374,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 400,
+      "end": 402,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 403,
+      "end": 405,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 406,
+      "end": 408,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 411,
+      "end": 413,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 423,
+      "end": 425,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 427,
+      "end": 429,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 17,
+      "end": 19,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 24,
+      "end": 26,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 29,
+      "end": 31,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 63,
+      "end": 65,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 67,
+      "end": 69,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 96,
+      "end": 98,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 104,
+      "end": 106,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 107,
+      "end": 109,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 117,
+      "end": 119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 130,
+      "end": 132,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 149,
+      "end": 151,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 159,
+      "end": 161,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 170,
+      "end": 172,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 195,
+      "end": 197,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 203,
+      "end": 205,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 208,
+      "end": 210,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 217,
+      "end": 219,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 142,
+      "end": 144,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 145,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 166,
+      "end": 168,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 190,
+      "end": 192,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 212,
+      "end": 214,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 218,
+      "end": 220,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 385,
+      "end": 387,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 389,
+      "end": 391,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 462,
+      "end": 464,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 476,
+      "end": 478,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 39,
+      "end": 41,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 74,
+      "end": 76,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 102,
+      "end": 104,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 115,
+      "end": 117,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 119,
+      "end": 121,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 131,
+      "end": 133,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 134,
+      "end": 136,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 138,
+      "end": 140,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 141,
+      "end": 143,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 153,
+      "end": 155,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 182,
+      "end": 184,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 184,
+      "end": 186,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 203,
+      "end": 205,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 211,
+      "end": 213,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 222,
+      "end": 224,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 225,
+      "end": 227,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 240,
+      "end": 242,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 250,
+      "end": 252,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 257,
+      "end": 259,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/endpoint_redaction.go",
+      "start": 16,
+      "end": 18,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 64,
+      "end": 66,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 187,
+      "end": 189,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 197,
+      "end": 199,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 212,
+      "end": 214,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 221,
+      "end": 223,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 228,
+      "end": 230,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 239,
+      "end": 241,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 24,
+      "end": 26,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 37,
+      "end": 39,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 42,
+      "end": 44,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 46,
+      "end": 48,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 50,
+      "end": 52,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 60,
+      "end": 62,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 69,
+      "end": 71,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 109,
+      "end": 111,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 133,
+      "end": 135,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 142,
+      "end": 144,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 152,
+      "end": 154,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 162,
+      "end": 164,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 165,
+      "end": 167,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_diff.go",
+      "start": 19,
+      "end": 21,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_diff.go",
+      "start": 22,
+      "end": 24,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_diff.go",
+      "start": 61,
+      "end": 63,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_diff.go",
+      "start": 72,
+      "end": 74,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 48,
+      "end": 50,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 52,
+      "end": 54,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 65,
+      "end": 67,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 69,
+      "end": 71,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 78,
+      "end": 80,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 82,
+      "end": 84,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 85,
+      "end": 87,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 89,
+      "end": 91,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 96,
+      "end": 98,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 111,
+      "end": 113,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 143,
+      "end": 145,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 150,
+      "end": 152,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 158,
+      "end": 160,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 164,
+      "end": 166,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 181,
+      "end": 183,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 198,
+      "end": 200,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 216,
+      "end": 218,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 236,
+      "end": 238,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 265,
+      "end": 267,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 268,
+      "end": 270,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 272,
+      "end": 274,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 275,
+      "end": 277,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 281,
+      "end": 283,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 284,
+      "end": 286,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 288,
+      "end": 290,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 291,
+      "end": 293,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 323,
+      "end": 325,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 335,
+      "end": 337,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 342,
+      "end": 344,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 346,
+      "end": 348,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 350,
+      "end": 352,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 365,
+      "end": 367,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 434,
+      "end": 436,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 450,
+      "end": 452,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 454,
+      "end": 456,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 469,
+      "end": 471,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 472,
+      "end": 474,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 478,
+      "end": 480,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 481,
+      "end": 483,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 486,
+      "end": 488,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 490,
+      "end": 492,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 496,
+      "end": 498,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 500,
+      "end": 502,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 505,
+      "end": 507,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 509,
+      "end": 511,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 513,
+      "end": 515,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 525,
+      "end": 527,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 529,
+      "end": 531,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 538,
+      "end": 540,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 542,
+      "end": 544,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 556,
+      "end": 558,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 565,
+      "end": 567,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 571,
+      "end": 573,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 97,
+      "end": 99,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 103,
+      "end": 105,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 135,
+      "end": 137,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 150,
+      "end": 152,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 154,
+      "end": 156,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 180,
+      "end": 182,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 207,
+      "end": 209,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 211,
+      "end": 213,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 215,
+      "end": 217,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 218,
+      "end": 220,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 223,
+      "end": 225,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 229,
+      "end": 231,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 234,
+      "end": 236,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 252,
+      "end": 254,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 260,
+      "end": 262,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/jev.go",
+      "start": 269,
+      "end": 271,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/limits.go",
+      "start": 41,
+      "end": 43,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 69,
+      "end": 71,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 106,
+      "end": 108,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 129,
+      "end": 131,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 151,
+      "end": 153,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 157,
+      "end": 159,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 211,
+      "end": 213,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 216,
+      "end": 218,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 244,
+      "end": 246,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 271,
+      "end": 273,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 290,
+      "end": 292,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 295,
+      "end": 297,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 301,
+      "end": 303,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 310,
+      "end": 312,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 320,
+      "end": 322,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 325,
+      "end": 327,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 332,
+      "end": 334,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 335,
+      "end": 337,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 346,
+      "end": 348,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 349,
+      "end": 351,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 360,
+      "end": 362,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 373,
+      "end": 375,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 377,
+      "end": 379,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 381,
+      "end": 383,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 389,
+      "end": 391,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 391,
+      "end": 393,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 395,
+      "end": 397,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 397,
+      "end": 399,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 401,
+      "end": 403,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 403,
+      "end": 405,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 407,
+      "end": 409,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 423,
+      "end": 425,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 437,
+      "end": 439,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 446,
+      "end": 448,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 452,
+      "end": 454,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 457,
+      "end": 459,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 461,
+      "end": 463,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 475,
+      "end": 477,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 503,
+      "end": 505,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 509,
+      "end": 511,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 519,
+      "end": 521,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 530,
+      "end": 532,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 564,
+      "end": 566,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 574,
+      "end": 576,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 590,
+      "end": 592,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 600,
+      "end": 602,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 621,
+      "end": 623,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 626,
+      "end": 628,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 649,
+      "end": 651,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 145,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 166,
+      "end": 168,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 169,
+      "end": 171,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 172,
+      "end": 174,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 249,
+      "end": 251,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 306,
+      "end": 308,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 497,
+      "end": 499,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 53,
+      "end": 55,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 76,
+      "end": 78,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 86,
+      "end": 88,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 101,
+      "end": 103,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 117,
+      "end": 119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 134,
+      "end": 136,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 154,
+      "end": 156,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 169,
+      "end": 171,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 178,
+      "end": 180,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 190,
+      "end": 192,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 196,
+      "end": 198,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 241,
+      "end": 243,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai.go",
+      "start": 100,
+      "end": 102,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai.go",
+      "start": 149,
+      "end": 151,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai.go",
+      "start": 190,
+      "end": 192,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai.go",
+      "start": 203,
+      "end": 205,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai.go",
+      "start": 211,
+      "end": 213,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai_stream.go",
+      "start": 93,
+      "end": 95,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai_stream.go",
+      "start": 98,
+      "end": 100,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai_stream.go",
+      "start": 208,
+      "end": 210,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai_stream.go",
+      "start": 227,
+      "end": 229,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai_stream.go",
+      "start": 237,
+      "end": 239,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/picker.go",
+      "start": 89,
+      "end": 91,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/picker.go",
+      "start": 117,
+      "end": 119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/plan.go",
+      "start": 38,
+      "end": 40,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/plan.go",
+      "start": 67,
+      "end": 69,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/plan.go",
+      "start": 76,
+      "end": 78,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 208,
+      "end": 210,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 60,
+      "end": 62,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 94,
+      "end": 96,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 123,
+      "end": 125,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 128,
+      "end": 130,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 131,
+      "end": 133,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 182,
+      "end": 184,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 261,
+      "end": 263,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 14,
+      "end": 16,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 18,
+      "end": 20,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 48,
+      "end": 50,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 58,
+      "end": 60,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 62,
+      "end": 64,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_output.go",
+      "start": 88,
+      "end": 90,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_picker.go",
+      "start": 29,
+      "end": 31,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_picker.go",
+      "start": 62,
+      "end": 64,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 84,
+      "end": 86,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 101,
+      "end": 103,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 176,
+      "end": 178,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 215,
+      "end": 217,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 321,
+      "end": 323,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 466,
+      "end": 468,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/routing_packet.go",
+      "start": 45,
+      "end": 47,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/routing_packet.go",
+      "start": 71,
+      "end": 73,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/routing_packet.go",
+      "start": 91,
+      "end": 93,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 27,
+      "end": 29,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 156,
+      "end": 158,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/scripted.go",
+      "start": 38,
+      "end": 40,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 137,
+      "end": 139,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 152,
+      "end": 154,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 190,
+      "end": 192,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 230,
+      "end": 232,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 264,
+      "end": 266,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 286,
+      "end": 288,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 313,
+      "end": 315,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 326,
+      "end": 328,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 335,
+      "end": 337,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 353,
+      "end": 355,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 367,
+      "end": 369,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 396,
+      "end": 398,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 428,
+      "end": 430,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 83,
+      "end": 85,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 87,
+      "end": 89,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 91,
+      "end": 93,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 99,
+      "end": 101,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 104,
+      "end": 106,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 107,
+      "end": 109,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 115,
+      "end": 117,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 119,
+      "end": 121,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 123,
+      "end": 125,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 127,
+      "end": 129,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 131,
+      "end": 133,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 156,
+      "end": 158,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 160,
+      "end": 162,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 164,
+      "end": 166,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 168,
+      "end": 170,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 180,
+      "end": 182,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 187,
+      "end": 189,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 191,
+      "end": 193,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 205,
+      "end": 207,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 208,
+      "end": 210,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 212,
+      "end": 214,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 227,
+      "end": 229,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 235,
+      "end": 237,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 239,
+      "end": 241,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 296,
+      "end": 298,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/shell.go",
+      "start": 43,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/shell.go",
+      "start": 62,
+      "end": 64,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/shell.go",
+      "start": 72,
+      "end": 74,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/snapshot.go",
+      "start": 89,
+      "end": 91,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/snapshot.go",
+      "start": 94,
+      "end": 96,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/snapshot.go",
+      "start": 101,
+      "end": 103,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/snapshot.go",
+      "start": 138,
+      "end": 140,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/snapshot.go",
+      "start": 168,
+      "end": 170,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/snapshot.go",
+      "start": 172,
+      "end": 174,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/snapshot.go",
+      "start": 176,
+      "end": 178,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 13,
+      "end": 15,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 16,
+      "end": 18,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 20,
+      "end": 22,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 33,
+      "end": 35,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 51,
+      "end": 53,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 54,
+      "end": 56,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 58,
+      "end": 60,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 67,
+      "end": 69,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 70,
+      "end": 72,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 20,
+      "end": 22,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 37,
+      "end": 39,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 80,
+      "end": 82,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 99,
+      "end": 101,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 131,
+      "end": 133,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 142,
+      "end": 144,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 145,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 163,
+      "end": 165,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 173,
+      "end": 175,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 177,
+      "end": 179,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 186,
+      "end": 188,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 195,
+      "end": 197,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 202,
+      "end": 204,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 215,
+      "end": 217,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 219,
+      "end": 221,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 228,
+      "end": 230,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 240,
+      "end": 242,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 250,
+      "end": 252,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_turn.go",
+      "start": 254,
+      "end": 256,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_agents.go",
+      "start": 81,
+      "end": 83,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_agents.go",
+      "start": 102,
+      "end": 104,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_agents.go",
+      "start": 121,
+      "end": 123,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_agents.go",
+      "start": 191,
+      "end": 193,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_agents.go",
+      "start": 195,
+      "end": 197,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_agents.go",
+      "start": 201,
+      "end": 203,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 99,
+      "end": 101,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 103,
+      "end": 105,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 155,
+      "end": 157,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 159,
+      "end": 161,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 230,
+      "end": 232,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 247,
+      "end": 249,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 261,
+      "end": 263,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 276,
+      "end": 278,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 279,
+      "end": 281,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 283,
+      "end": 285,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 297,
+      "end": 299,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 306,
+      "end": 308,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 187,
+      "end": 189,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 206,
+      "end": 208,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 223,
+      "end": 225,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 229,
+      "end": 231,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 325,
+      "end": 327,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 343,
+      "end": 345,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 364,
+      "end": 366,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 375,
+      "end": 377,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 399,
+      "end": 401,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 406,
+      "end": 408,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 194,
+      "end": 196,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 204,
+      "end": 206,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 225,
+      "end": 227,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 338,
+      "end": 340,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 446,
+      "end": 448,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 517,
+      "end": 519,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 527,
+      "end": 529,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 593,
+      "end": 595,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 600,
+      "end": 602,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 649,
+      "end": 651,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 657,
+      "end": 659,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 659,
+      "end": 661,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 699,
+      "end": 701,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 706,
+      "end": 708,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 735,
+      "end": 737,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 740,
+      "end": 742,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 766,
+      "end": 768,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 770,
+      "end": 772,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 774,
+      "end": 776,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 779,
+      "end": 781,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 795,
+      "end": 797,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 810,
+      "end": 812,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 824,
+      "end": 826,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 834,
+      "end": 836,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 838,
+      "end": 840,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 845,
+      "end": 847,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 850,
+      "end": 852,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 860,
+      "end": 862,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 869,
+      "end": 871,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 879,
+      "end": 881,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 890,
+      "end": 892,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 897,
+      "end": 899,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 922,
+      "end": 924,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 949,
+      "end": 951,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 968,
+      "end": 970,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 981,
+      "end": 983,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1004,
+      "end": 1006,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1011,
+      "end": 1013,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1014,
+      "end": 1016,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1024,
+      "end": 1026,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1032,
+      "end": 1034,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1035,
+      "end": 1037,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1053,
+      "end": 1055,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1072,
+      "end": 1074,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1093,
+      "end": 1095,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1100,
+      "end": 1102,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1107,
+      "end": 1109,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1117,
+      "end": 1119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1120,
+      "end": 1122,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1132,
+      "end": 1134,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1140,
+      "end": 1142,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1143,
+      "end": 1145,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1147,
+      "end": 1149,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1151,
+      "end": 1153,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1163,
+      "end": 1165,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1180,
+      "end": 1182,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1187,
+      "end": 1189,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1189,
+      "end": 1191,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1192,
+      "end": 1194,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1203,
+      "end": 1205,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1272,
+      "end": 1274,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1276,
+      "end": 1278,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1282,
+      "end": 1284,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1290,
+      "end": 1292,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1293,
+      "end": 1295,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 1296,
+      "end": 1298,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 68,
+      "end": 70,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 71,
+      "end": 73,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 90,
+      "end": 92,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 95,
+      "end": 97,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 112,
+      "end": 114,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 116,
+      "end": 118,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 123,
+      "end": 125,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 141,
+      "end": 143,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 162,
+      "end": 164,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 173,
+      "end": 175,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 180,
+      "end": 182,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 254,
+      "end": 256,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 346,
+      "end": 348,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_inspect.go",
+      "start": 349,
+      "end": 351,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_list_files.go",
+      "start": 80,
+      "end": 82,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_list_files.go",
+      "start": 82,
+      "end": 84,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_list_files.go",
+      "start": 88,
+      "end": 90,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_list_files.go",
+      "start": 113,
+      "end": 115,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_read_file.go",
+      "start": 113,
+      "end": 115,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_recall.go",
+      "start": 26,
+      "end": 28,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_recall.go",
+      "start": 39,
+      "end": 41,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_recall.go",
+      "start": 44,
+      "end": 46,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_request_workspace_access.go",
+      "start": 48,
+      "end": 50,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_request_workspace_access.go",
+      "start": 59,
+      "end": 61,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_request_workspace_access.go",
+      "start": 62,
+      "end": 64,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_request_workspace_access.go",
+      "start": 70,
+      "end": 72,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_request_workspace_access.go",
+      "start": 73,
+      "end": 75,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 142,
+      "end": 144,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 150,
+      "end": 152,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 170,
+      "end": 172,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 234,
+      "end": 236,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 330,
+      "end": 332,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 346,
+      "end": 348,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_switch_workspace.go",
+      "start": 43,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 114,
+      "end": 116,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 131,
+      "end": 133,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 144,
+      "end": 146,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 153,
+      "end": 155,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 170,
+      "end": 172,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 173,
+      "end": 175,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 175,
+      "end": 177,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 180,
+      "end": 182,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 186,
+      "end": 188,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 198,
+      "end": 200,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 205,
+      "end": 207,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 228,
+      "end": 230,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 238,
+      "end": 240,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 243,
+      "end": 245,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 300,
+      "end": 302,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 316,
+      "end": 318,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 341,
+      "end": 343,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 345,
+      "end": 347,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 348,
+      "end": 350,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 352,
+      "end": 354,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 355,
+      "end": 357,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 363,
+      "end": 365,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 366,
+      "end": 368,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 374,
+      "end": 376,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 379,
+      "end": 381,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 382,
+      "end": 384,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 388,
+      "end": 390,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 396,
+      "end": 398,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 412,
+      "end": 414,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 415,
+      "end": 417,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 431,
+      "end": 433,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 439,
+      "end": 441,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 448,
+      "end": 450,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 503,
+      "end": 505,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 513,
+      "end": 515,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 521,
+      "end": 523,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 523,
+      "end": 525,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 547,
+      "end": 549,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 595,
+      "end": 597,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 625,
+      "end": 627,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 639,
+      "end": 641,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 648,
+      "end": 650,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 652,
+      "end": 654,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tools.go",
+      "start": 179,
+      "end": 181,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 98,
+      "end": 100,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 102,
+      "end": 104,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 135,
+      "end": 137,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 70,
+      "end": 72,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 110,
+      "end": 112,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 200,
+      "end": 202,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 227,
+      "end": 229,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 237,
+      "end": 239,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 281,
+      "end": 283,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 283,
+      "end": 285,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 317,
+      "end": 319,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 329,
+      "end": 331,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 338,
+      "end": 340,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 345,
+      "end": 347,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 405,
+      "end": 407,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 414,
+      "end": 416,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 418,
+      "end": 420,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 526,
+      "end": 528,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 543,
+      "end": 545,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 571,
+      "end": 573,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 33,
+      "end": 35,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 41,
+      "end": 43,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 62,
+      "end": 64,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 84,
+      "end": 86,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 159,
+      "end": 161,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 175,
+      "end": 177,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 186,
+      "end": 188,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 282,
+      "end": 284,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_permission.go",
+      "start": 12,
+      "end": 14,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_permission.go",
+      "start": 15,
+      "end": 17,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_permission.go",
+      "start": 25,
+      "end": 27,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_permission.go",
+      "start": 29,
+      "end": 31,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 30,
+      "end": 32,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 86,
+      "end": 88,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 89,
+      "end": 91,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 102,
+      "end": 104,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 107,
+      "end": 109,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 116,
+      "end": 118,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 139,
+      "end": 141,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 154,
+      "end": 156,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 170,
+      "end": 172,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 184,
+      "end": 186,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 201,
+      "end": 203,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 205,
+      "end": 207,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 209,
+      "end": 211,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 213,
+      "end": 215,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 216,
+      "end": 218,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 220,
+      "end": 222,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 244,
+      "end": 246,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 247,
+      "end": 249,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 250,
+      "end": 252,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 267,
+      "end": 269,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 278,
+      "end": 280,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 284,
+      "end": 286,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 288,
+      "end": 290,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 302,
+      "end": 304,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 354,
+      "end": 355,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 243,
+      "end": 244,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 248,
+      "end": 249,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 257,
+      "end": 258,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 258,
+      "end": 259,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 448,
+      "end": 449,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 467,
+      "end": 468,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 614,
+      "end": 615,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 730,
+      "end": 731,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 363,
+      "end": 364,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 436,
+      "end": 437,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 592,
+      "end": 593,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 849,
+      "end": 850,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 875,
+      "end": 876,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 883,
+      "end": 884,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 885,
+      "end": 886,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 887,
+      "end": 888,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 968,
+      "end": 969,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 193,
+      "end": 194,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 308,
+      "end": 309,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 139,
+      "end": 140,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 144,
+      "end": 145,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 197,
+      "end": 198,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 235,
+      "end": 236,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 342,
+      "end": 343,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 217,
+      "end": 218,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 458,
+      "end": 459,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 701,
+      "end": 702,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 703,
+      "end": 704,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 828,
+      "end": 829,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 846,
+      "end": 847,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/compact.go",
+      "start": 41,
+      "end": 42,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 43,
+      "end": 44,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 117,
+      "end": 118,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 119,
+      "end": 120,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 139,
+      "end": 140,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 146,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 155,
+      "end": 156,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 161,
+      "end": 162,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 171,
+      "end": 172,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 172,
+      "end": 173,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 240,
+      "end": 241,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 369,
+      "end": 370,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 409,
+      "end": 410,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 410,
+      "end": 411,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 52,
+      "end": 53,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 53,
+      "end": 54,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 103,
+      "end": 104,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 116,
+      "end": 117,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 123,
+      "end": 124,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 124,
+      "end": 125,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 125,
+      "end": 126,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 129,
+      "end": 130,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 140,
+      "end": 141,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 143,
+      "end": 144,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 146,
+      "end": 147,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 152,
+      "end": 153,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 164,
+      "end": 165,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 176,
+      "end": 177,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 177,
+      "end": 178,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 184,
+      "end": 185,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 185,
+      "end": 186,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 207,
+      "end": 208,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 216,
+      "end": 217,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 114,
+      "end": 115,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 118,
+      "end": 119,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 130,
+      "end": 131,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 137,
+      "end": 138,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 166,
+      "end": 167,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 176,
+      "end": 177,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 177,
+      "end": 178,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 218,
+      "end": 219,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/endpoint_redaction.go",
+      "start": 52,
+      "end": 53,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/endpoint_redaction.go",
+      "start": 56,
+      "end": 57,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 30,
+      "end": 31,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 42,
+      "end": 43,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 44,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 46,
+      "end": 47,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 48,
+      "end": 49,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 50,
+      "end": 51,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 52,
+      "end": 53,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 56,
+      "end": 57,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 109,
+      "end": 110,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 111,
+      "end": 112,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 115,
+      "end": 116,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 119,
+      "end": 120,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 121,
+      "end": 122,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 125,
+      "end": 126,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 127,
+      "end": 128,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 132,
+      "end": 133,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 134,
+      "end": 135,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 136,
+      "end": 137,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 150,
+      "end": 151,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 152,
+      "end": 153,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 156,
+      "end": 157,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 158,
+      "end": 159,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 160,
+      "end": 161,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 162,
+      "end": 163,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 164,
+      "end": 165,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 179,
+      "end": 180,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 204,
+      "end": 205,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 205,
+      "end": 206,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 227,
+      "end": 228,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 64,
+      "end": 65,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 65,
+      "end": 66,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 158,
+      "end": 159,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_diff.go",
+      "start": 226,
+      "end": 227,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 147,
+      "end": 148,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 180,
+      "end": 181,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 260,
+      "end": 261,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 380,
+      "end": 381,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 376,
+      "end": 377,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 394,
+      "end": 395,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 445,
+      "end": 446,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 451,
+      "end": 452,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 474,
+      "end": 475,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 518,
+      "end": 519,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 572,
+      "end": 573,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 573,
+      "end": 574,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 625,
+      "end": 626,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 630,
+      "end": 631,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 321,
+      "end": 322,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 105,
+      "end": 106,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/model_switch.go",
+      "start": 129,
+      "end": 130,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/picker.go",
+      "start": 49,
+      "end": 50,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/plan.go",
+      "start": 31,
+      "end": 32,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 179,
+      "end": 180,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 181,
+      "end": 182,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 265,
+      "end": 266,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 267,
+      "end": 268,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 269,
+      "end": 270,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 52,
+      "end": 53,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 33,
+      "end": 34,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_output.go",
+      "start": 50,
+      "end": 51,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 210,
+      "end": 211,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 355,
+      "end": 356,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 357,
+      "end": 358,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 151,
+      "end": 152,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 226,
+      "end": 227,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session_store.go",
+      "start": 234,
+      "end": 235,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 30,
+      "end": 31,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 32,
+      "end": 33,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 37,
+      "end": 38,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_edit_file.go",
+      "start": 323,
+      "end": 324,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 354,
+      "end": 355,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 683,
+      "end": 684,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 684,
+      "end": 685,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 687,
+      "end": 688,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 791,
+      "end": 792,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 820,
+      "end": 821,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 823,
+      "end": 824,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 868,
+      "end": 869,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 141,
+      "end": 142,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 161,
+      "end": 162,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 185,
+      "end": 186,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 277,
+      "end": 278,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 278,
+      "end": 279,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 279,
+      "end": 280,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tools.go",
+      "start": 42,
+      "end": 43,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tools.go",
+      "start": 44,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tools.go",
+      "start": 46,
+      "end": 47,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 413,
+      "end": 414,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 128,
+      "end": 129,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 224,
+      "end": 225,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 51,
+      "end": 51,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 55,
+      "end": 55,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 80,
+      "end": 80,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 82,
+      "end": 82,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/activity.go",
+      "start": 229,
+      "end": 229,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_exec.go",
+      "start": 29,
+      "end": 29,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_exec.go",
+      "start": 69,
+      "end": 69,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agent_exec.go",
+      "start": 73,
+      "end": 73,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 248,
+      "end": 248,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 257,
+      "end": 257,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/agents.go",
+      "start": 261,
+      "end": 261,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 205,
+      "end": 205,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/anthropic_client.go",
+      "start": 46,
+      "end": 46,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/auto.go",
+      "start": 173,
+      "end": 173,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/catalog.go",
+      "start": 194,
+      "end": 194,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 368,
+      "end": 368,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 629,
+      "end": 629,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 674,
+      "end": 674,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 882,
+      "end": 882,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 892,
+      "end": 892,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 911,
+      "end": 911,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 975,
+      "end": 975,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 985,
+      "end": 985,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1070,
+      "end": 1070,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 1075,
+      "end": 1075,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 157,
+      "end": 157,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 161,
+      "end": 161,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 197,
+      "end": 197,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 312,
+      "end": 312,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 30,
+      "end": 30,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 87,
+      "end": 87,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 120,
+      "end": 120,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 123,
+      "end": 123,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 128,
+      "end": 128,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 130,
+      "end": 130,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 175,
+      "end": 175,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 178,
+      "end": 178,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 183,
+      "end": 183,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 190,
+      "end": 190,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 197,
+      "end": 197,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 202,
+      "end": 202,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 217,
+      "end": 217,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 219,
+      "end": 219,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 221,
+      "end": 221,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 226,
+      "end": 226,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 242,
+      "end": 242,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 265,
+      "end": 265,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 272,
+      "end": 272,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 298,
+      "end": 298,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 311,
+      "end": 311,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 346,
+      "end": 346,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 349,
+      "end": 349,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 369,
+      "end": 369,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 401,
+      "end": 401,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 499,
+      "end": 499,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 508,
+      "end": 508,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 377,
+      "end": 377,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/cli.go",
+      "start": 866,
+      "end": 866,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context.go",
+      "start": 88,
+      "end": 88,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 97,
+      "end": 97,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 122,
+      "end": 122,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 142,
+      "end": 142,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 145,
+      "end": 145,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_breakdown.go",
+      "start": 164,
+      "end": 164,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 202,
+      "end": 202,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 207,
+      "end": 207,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 266,
+      "end": 266,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 307,
+      "end": 307,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 356,
+      "end": 356,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 403,
+      "end": 403,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 406,
+      "end": 406,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 409,
+      "end": 409,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 416,
+      "end": 416,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 20,
+      "end": 20,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 27,
+      "end": 27,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 67,
+      "end": 67,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 72,
+      "end": 72,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 107,
+      "end": 107,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 110,
+      "end": 110,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 116,
+      "end": 116,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 121,
+      "end": 121,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 123,
+      "end": 123,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 143,
+      "end": 143,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 146,
+      "end": 146,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 149,
+      "end": 149,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 152,
+      "end": 152,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 164,
+      "end": 164,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 170,
+      "end": 170,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 184,
+      "end": 184,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 191,
+      "end": 191,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 193,
+      "end": 193,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 195,
+      "end": 195,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 166,
+      "end": 166,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 288,
+      "end": 288,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/display.go",
+      "start": 392,
+      "end": 392,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 72,
+      "end": 72,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 134,
+      "end": 134,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 141,
+      "end": 141,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 180,
+      "end": 180,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 211,
+      "end": 211,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/editor.go",
+      "start": 225,
+      "end": 225,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 99,
+      "end": 99,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 184,
+      "end": 184,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 212,
+      "end": 212,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 231,
+      "end": 231,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/errors.go",
+      "start": 245,
+      "end": 245,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 72,
+      "end": 72,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 74,
+      "end": 74,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 115,
+      "end": 115,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 165,
+      "end": 165,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/exec_processes.go",
+      "start": 169,
+      "end": 169,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/git_inspect_worktree.go",
+      "start": 312,
+      "end": 312,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 32,
+      "end": 32,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 85,
+      "end": 85,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 274,
+      "end": 274,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 310,
+      "end": 310,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 328,
+      "end": 328,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 349,
+      "end": 349,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 376,
+      "end": 376,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 394,
+      "end": 394,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 400,
+      "end": 400,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 401,
+      "end": 401,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 403,
+      "end": 403,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 407,
+      "end": 407,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 449,
+      "end": 449,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 451,
+      "end": 451,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 455,
+      "end": 455,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 457,
+      "end": 457,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 464,
+      "end": 464,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 478,
+      "end": 478,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 522,
+      "end": 522,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 530,
+      "end": 530,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 567,
+      "end": 567,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 577,
+      "end": 577,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 635,
+      "end": 635,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 652,
+      "end": 652,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 559,
+      "end": 559,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai.go",
+      "start": 91,
+      "end": 91,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/openai_client.go",
+      "start": 56,
+      "end": 56,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/picker.go",
+      "start": 89,
+      "end": 89,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 250,
+      "end": 250,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 272,
+      "end": 272,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 45,
+      "end": 45,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_cursor.go",
+      "start": 53,
+      "end": 53,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_output.go",
+      "start": 55,
+      "end": 55,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/region_picker.go",
+      "start": 69,
+      "end": 69,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/render.go",
+      "start": 324,
+      "end": 324,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/run_compact.go",
+      "start": 97,
+      "end": 97,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/session.go",
+      "start": 338,
+      "end": 338,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 36,
+      "end": 36,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/terminal_input.go",
+      "start": 42,
+      "end": 42,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 297,
+      "end": 297,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 304,
+      "end": 304,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 662,
+      "end": 662,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 666,
+      "end": 666,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 683,
+      "end": 683,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 692,
+      "end": 692,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 774,
+      "end": 774,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 782,
+      "end": 782,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 799,
+      "end": 799,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 823,
+      "end": 823,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 827,
+      "end": 827,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 832,
+      "end": 832,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 834,
+      "end": 834,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 872,
+      "end": 872,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 949,
+      "end": 949,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_git_do.go",
+      "start": 952,
+      "end": 952,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 145,
+      "end": 145,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_search_text.go",
+      "start": 153,
+      "end": 153,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 189,
+      "end": 189,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 261,
+      "end": 261,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 265,
+      "end": 265,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 269,
+      "end": 269,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 105,
+      "end": 105,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 275,
+      "end": 275,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 341,
+      "end": 341,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 539,
+      "end": 539,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace.go",
+      "start": 53,
+      "end": 53,
+      "statements": 1
+    },
+    {
+      "path": "internal/reagent/workspace_selection.go",
+      "start": 231,
+      "end": 231,
+      "statements": 1
+    }
+  ],
+  "source": "/tmp/reagent-parity-repin-2ab234f7/coverage-12-final",
+  "profile": "/tmp/reagent-parity-repin-2ab234f7/coverage-merged-final-safe/profile.out",
+  "merged": "/tmp/reagent-parity-repin-2ab234f7/coverage-merged-final-safe/merged",
+  "duration_seconds": 0.742,
+  "unit_test_counters_merged": false,
+  "largest_uncovered_functions": [
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 156,
+      "end": 274,
+      "function": "waitChatGPTCallback",
+      "statements": 93
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 90,
+      "end": 130,
+      "function": "validateChatGPTIDToken",
+      "statements": 23
+    },
+    {
+      "path": "internal/reagent/context_gc_experiments.go",
+      "start": 49,
+      "end": 72,
+      "function": "gcLastReferences",
+      "statements": 15
+    },
+    {
+      "path": "internal/reagent/context_gc.go",
+      "start": 398,
+      "end": 416,
+      "function": "copyGC",
+      "statements": 12
+    },
+    {
+      "path": "internal/reagent/region.go",
+      "start": 90,
+      "end": 103,
+      "function": "regionContinuationRows",
+      "statements": 11
+    },
+    {
+      "path": "internal/reagent/chat.go",
+      "start": 875,
+      "end": 892,
+      "function": "completionArguments",
+      "statements": 10
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 139,
+      "end": 151,
+      "function": "Read",
+      "statements": 9
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 96,
+      "end": 105,
+      "function": "DefaultTracePath",
+      "statements": 7
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 43,
+      "end": 50,
+      "function": "openChatGPTBrowser",
+      "statements": 6
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 561,
+      "end": 567,
+      "function": "drawUserBand",
+      "statements": 5
+    },
+    {
+      "path": "internal/reagent/chatgpt_login.go",
+      "start": 25,
+      "end": 30,
+      "function": "chatGPTRandom",
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 572,
+      "end": 577,
+      "function": "writeUserBand",
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/lineinput.go",
+      "start": 647,
+      "end": 652,
+      "function": "Read",
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/provider.go",
+      "start": 265,
+      "end": 272,
+      "function": "booleanSetting",
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/region_output.go",
+      "start": 50,
+      "end": 55,
+      "function": "insert",
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 336,
+      "end": 341,
+      "function": "chatGPTTokenError",
+      "statements": 4
+    },
+    {
+      "path": "internal/reagent/chatgpt_auth.go",
+      "start": 193,
+      "end": 197,
+      "function": "Error",
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 277,
+      "end": 280,
+      "function": "removeEmptyDirs",
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/trace.go",
+      "start": 61,
+      "end": 65,
+      "function": "OpenTrace",
+      "statements": 3
+    },
+    {
+      "path": "internal/reagent/loop.go",
+      "start": 546,
+      "end": 549,
+      "function": "persistenceFailure",
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_exec.go",
+      "start": 51,
+      "end": 54,
+      "function": "withWorkspace",
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_read_file.go",
+      "start": 19,
+      "end": 22,
+      "function": "withWorkspace",
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/tool_write_file.go",
+      "start": 36,
+      "end": 39,
+      "function": "withWorkspace",
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/transport.go",
+      "start": 179,
+      "end": 182,
+      "function": "call",
+      "statements": 2
+    },
+    {
+      "path": "internal/reagent/anthropic.go",
+      "start": 144,
+      "end": 146,
+      "function": "encodeAnthropicHistory",
+      "statements": 1
+    }
+  ]
+}

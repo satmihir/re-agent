@@ -4,8 +4,11 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import MagicMock, patch
 
+from parity.cases import cli_pty_races
 from parity.cases.cli_pty_races import collect
 from parity.observe import Normalizer
 from parity.observe_cli_races import CASE, PREAMBLE, Races, validate_shell
@@ -92,10 +95,71 @@ class RaceSlotsTest(unittest.TestCase):
         self.assertEqual(races.text(footer, "http-1.response.body"), footer)
         self.assertEqual(len(normal.ledger), 1)
 
-    def test_case_counts_and_defect_stays_explicit(self):
+    def test_case_counts_and_cancellation_is_runnable(self):
         cases = collect()
-        self.assertEqual((len(cases), sum(not c.pending for c in cases)), (3, 2))
-        self.assertIn("pinned Go defect", cases[-1].pending)
+        self.assertEqual((len(cases), sum(not c.pending for c in cases)), (3, 3))
+        self.assertEqual(cases[-1].id, 'C44.typeahead-cancellation')
+        self.assertIs(cases[-1].run, cli_pty_races._cancel_typeahead)
+
+    def test_cancellation_oracle_rejects_stale_input_and_missing_evidence(self):
+        for defect in (None, 'queued-submission', 'stale-prompt', 'request-leak', 'trace-leak',
+                       'cancelled-reply', 'delivered-response', 'missing-completion', 'wrong-run'):
+            with self.subTest(defect=defect):
+                response = SimpleNamespace(segments=[], chunks=[], completed=False)
+                server = SimpleNamespace(requests=[], expect=lambda *_args: None)
+                context = SimpleNamespace(server=server)
+                trace = []
+                session = MagicMock()
+                session.__enter__.return_value = session
+                session.stdout = b''
+                session.raw = b''
+                session.terminal.line.return_value = '❯'
+                session.terminal.screen.return_value = []
+                session.terminal.text.return_value = []
+
+                def request(texts):
+                    body = {'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': text}]}
+                                      for text in texts]}
+                    return SimpleNamespace(response=response, json=lambda: body)
+
+                def send(data):
+                    if data == b'hold this request\r':
+                        server.requests.append(request(['hold this request']))
+                        trace.append({'type': 'model.requested', 'run_id': 'cancel', 'data': {'history': []}})
+                    elif data == b'\x03':
+                        trace.append({'type': 'run.finished', 'run_id': 'cancel', 'data': {'status': 'cancelled'}})
+                        if defect == 'queued-submission':
+                            server.requests.append(request(['stale cancelled input']))
+                        if defect == 'stale-prompt':
+                            session.terminal.line.return_value = '❯ stale cancelled input'
+                        if defect == 'delivered-response':
+                            response.segments.append(b'HTTP/1.1 200 OK\r\n')
+                    elif data == b'fresh normal question\r':
+                        texts = ['hold this request', 'fresh normal question']
+                        if defect == 'request-leak':
+                            texts.append('stale cancelled input')
+                        server.requests.append(request(texts))
+                        trace.append({'type': 'model.requested', 'run_id': 'fresh', 'data': {
+                            'history': ['stale cancelled input'] if defect == 'trace-leak' else []}})
+                        if defect != 'missing-completion':
+                            trace.append({'type': 'run.finished', 'run_id': 'wrong' if defect == 'wrong-run' else 'fresh',
+                                          'data': {'status': 'completed'}})
+                        session.stdout = b'Next ordinary turn works.'
+                        if defect == 'cancelled-reply':
+                            session.stdout += b'Cancelled answer must not appear.'
+
+                session.send.side_effect = send
+                session.wait.side_effect = lambda predicate, _description: self.assertTrue(predicate(session.terminal))
+                with patch.object(cli_pty_races, 'native', return_value=session), \
+                     patch.object(cli_pty_races, 'events', return_value=trace):
+                    if defect is None:
+                        cli_pty_races._cancel_typeahead(context)
+                        self.assertEqual(len(server.requests), 2)
+                        session.snapshot.assert_any_call('typeahead-cancelled')
+                        session.snapshot.assert_any_call('next-turn')
+                    else:
+                        with self.assertRaises(AssertionError):
+                            cli_pty_races._cancel_typeahead(context)
 
     @unittest.skipUnless(os.environ.get("PARITY_RACES_BIN"), "set PARITY_RACES_BIN for offline executable probes")
     def test_executable_retry_and_foreground_interrupt(self):

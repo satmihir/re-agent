@@ -5,7 +5,8 @@
 Current proof: [`agents-comparison-repair.md`](agents-comparison-repair.md).
 The earlier publication failures below remain historical evidence.
 
-Darwin entries pending the Mac capture
+Historical area-4 status; superseded by the 2ab234f7 re-pin.
+Darwin capture and acceptance pending on the Mac.
 
 The approved continuation published retained raw evidence, adding one complete
 sample each for C23/C24/C25 and the minimal-policy certificate. Only changed A28
