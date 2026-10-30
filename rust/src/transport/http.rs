@@ -1,0 +1,457 @@
+use base64::Engine;
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Incoming, HeaderMap, Method, Request, StatusCode};
+use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    io::{self, Read},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+use tokio::runtime::Runtime;
+#[path = "proxy.rs"]
+mod proxy;
+#[path = "proxy_policy.rs"]
+mod proxy_policy;
+#[path = "socks.rs"]
+mod socks;
+
+/// Client sends explicit HTTP requests without implicit Accept headers or redirects.
+pub struct Client {
+    runtime: Arc<Runtime>,
+    inner: HyperClient<proxy::Connector, Full<Bytes>>,
+    proxy_policy: Arc<proxy_policy::ProxyPolicy>,
+    header: Duration,
+    idle: Duration,
+    total: Option<Duration>,
+    pub(crate) deadline: Option<Instant>,
+    pub cancellation: Option<Arc<AtomicBool>>,
+    pub interruption: Option<&'static AtomicBool>,
+}
+impl Client {
+    pub fn new(header: Duration, idle: Duration, total: Option<Duration>) -> io::Result<Self> {
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
+        );
+        let proxy_policy = Arc::new(proxy_policy::ProxyPolicy::from_env());
+        let connector = proxy::Connector::new(proxy_policy.clone());
+        let inner = HyperClient::builder(TokioExecutor::new())
+            .retry_canceled_requests(false)
+            .build(connector);
+        Ok(Self {
+            runtime,
+            inner,
+            proxy_policy,
+            header,
+            idle,
+            total,
+            deadline: None,
+            cancellation: None,
+            interruption: None,
+        })
+    }
+    pub fn post(&self, url: impl AsRef<str>) -> RequestBuilder<'_> {
+        self.request(Method::POST, url.as_ref())
+    }
+    pub fn get(&self, url: impl AsRef<str>) -> RequestBuilder<'_> {
+        self.request(Method::GET, url.as_ref())
+    }
+    fn request(&self, method: Method, url: &str) -> RequestBuilder<'_> {
+        RequestBuilder {
+            client: self,
+            method,
+            url: url.into(),
+            headers: HeaderMap::new(),
+            body: Vec::new(),
+            invalid: false,
+        }
+    }
+}
+
+pub struct RequestBuilder<'a> {
+    client: &'a Client,
+    method: Method,
+    url: String,
+    headers: HeaderMap,
+    body: Vec<u8>,
+    invalid: bool,
+}
+impl RequestBuilder<'_> {
+    pub fn header(mut self, name: &str, value: impl AsRef<str>) -> Self {
+        match (
+            hyper::header::HeaderName::from_bytes(name.as_bytes()),
+            hyper::header::HeaderValue::from_str(value.as_ref()),
+        ) {
+            (Ok(name), Ok(value)) => {
+                self.headers.insert(name, value);
+            }
+            _ => self.invalid = true,
+        }
+        self
+    }
+    pub fn bearer_auth(self, token: impl AsRef<str>) -> Self {
+        self.header("authorization", format!("Bearer {}", token.as_ref()))
+    }
+    pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
+        self.body = body.into();
+        self
+    }
+    pub fn form(self, fields: &BTreeMap<&str, &str>) -> Self {
+        let mut url = reqwest::Url::parse("http://localhost/").unwrap();
+        url.query_pairs_mut().extend_pairs(fields.iter());
+        self.header("content-type", "application/x-www-form-urlencoded")
+            .body(url.query().unwrap_or("").as_bytes().to_vec())
+    }
+    pub fn send(mut self) -> io::Result<Response> {
+        if self.invalid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid HTTP header",
+            ));
+        }
+        let mut url = reqwest::Url::parse(&self.url)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid HTTP endpoint"))?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid HTTP endpoint",
+            ));
+        }
+        if (!url.username().is_empty() || url.password().is_some())
+            && !self.headers.contains_key("authorization")
+        {
+            let credentials = [
+                unescape(url.username()),
+                b":".to_vec(),
+                unescape(url.password().unwrap_or("")),
+            ]
+            .concat();
+            self = self.header(
+                "authorization",
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(credentials)
+                ),
+            );
+        }
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_fragment(None);
+        if !self.headers.contains_key("user-agent") {
+            self = self.header("user-agent", "Go-http-client/1.1");
+        }
+        let gzip = !self.headers.contains_key("accept-encoding")
+            && !self.headers.contains_key("range")
+            && self.method != Method::HEAD;
+        if gzip {
+            self = self.header("accept-encoding", "gzip");
+        }
+        if self.method != Method::GET
+            && self.method != Method::HEAD
+            && !self.headers.contains_key("content-length")
+        {
+            let length = self.body.len();
+            self = self.header("content-length", length.to_string());
+        }
+        let operation = if self.method == Method::POST {
+            "Post"
+        } else {
+            "Get"
+        };
+        let mut request = Request::builder()
+            .method(self.method)
+            .uri(url.as_str())
+            .body(Full::new(Bytes::from(self.body)))
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid HTTP request"))?;
+        *request.headers_mut() = self.headers;
+        if url.scheme() == "http" {
+            if let Some(proxy) = self.client.proxy_policy.select(request.uri())? {
+                if let Some(authorization) = proxy::authorization(&proxy)
+                    .filter(|_| matches!(proxy.scheme(), "http" | "https"))
+                {
+                    request
+                        .headers_mut()
+                        .insert(hyper::header::PROXY_AUTHORIZATION, authorization);
+                }
+            }
+        }
+        let total = match (
+            self.client.total.map(|duration| Instant::now() + duration),
+            self.client.deadline,
+        ) {
+            (Some(total), Some(deadline)) => Some(total.min(deadline)),
+            (total, deadline) => total.or(deadline),
+        };
+        let header_end = total.map_or(Instant::now() + self.client.header, |end| {
+            end.min(Instant::now() + self.client.header)
+        });
+        let response = self
+            .client
+            .runtime
+            .block_on(wait(
+                self.client.inner.request(request),
+                header_end,
+                self.client.cancellation.as_ref(),
+                self.client.interruption,
+            )).map_err(|error| {
+                if error.kind() == io::ErrorKind::ConnectionAborted {
+                    return io::Error::new(error.kind(), format!("{operation} {:?}: {error}", self.url));
+                }
+                if error.kind() != io::ErrorKind::TimedOut { return error }
+                let reason = if total.is_some_and(|end| Instant::now() >= end) {
+                    "context deadline exceeded"
+                } else {
+                    "net/http: timeout awaiting response headers"
+                };
+                io::Error::new(io::ErrorKind::TimedOut, format!("{operation} {:?}: {reason}", self.url))
+            })?
+            .map_err(|error| {
+                use std::error::Error;
+                let mut cause = error.source();
+                while let Some(source) = cause {
+                    if source.downcast_ref::<io::Error>().is_some_and(|error| error.kind() == io::ErrorKind::ConnectionRefused) {
+                        let address = url.socket_addrs(|| None).ok().and_then(|addresses| addresses.into_iter().next());
+                        if let Some(address) = address {
+                            return io::Error::new(io::ErrorKind::ConnectionRefused,
+                                format!("{operation} {:?}: dial tcp {address}: connect: connection refused", self.url));
+                        }
+                    }
+                    cause = source.source();
+                }
+                io::Error::new(
+                    if error.is_connect() {
+                        io::ErrorKind::ConnectionRefused
+                    } else {
+                        io::ErrorKind::Other
+                    },
+                    error,
+                )
+            })?;
+        let connection = response
+            .extensions()
+            .get::<hyper_util::client::legacy::connect::HttpInfo>()
+            .map(|info| (info.local_addr(), info.remote_addr()));
+        let status = response.status();
+        let mut headers = response.headers().clone();
+        let decompress = gzip && headers.get("content-encoding").is_some_and(|v| v == "gzip");
+        if decompress {
+            headers.remove("content-encoding");
+            headers.remove("content-length");
+        }
+        let idle_end = Arc::new(Mutex::new(Instant::now() + self.client.idle));
+        let reader = NetworkReader {
+            runtime: self.client.runtime.clone(),
+            incoming: response.into_body(),
+            buffer: Bytes::new(),
+            idle_end: idle_end.clone(),
+            total,
+            cancellation: self.client.cancellation.clone(),
+            interruption: self.client.interruption,
+            idle: self.client.idle,
+            connection,
+        };
+        Ok(Response {
+            status,
+            headers,
+            body: Body {
+                plain: Some(reader),
+                gzip: None,
+                decompress,
+                idle: self.client.idle,
+                idle_end,
+            },
+        })
+    }
+}
+fn unescape(value: &str) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut bytes = value.as_bytes().iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            if let (Some(a), Some(b)) = (bytes.next(), bytes.next()) {
+                if let (Some(a), Some(b)) = ((a as char).to_digit(16), (b as char).to_digit(16)) {
+                    output.push((a * 16 + b) as u8);
+                    continue;
+                }
+            }
+        }
+        output.push(byte);
+    }
+    output
+}
+async fn wait<F: Future>(
+    future: F,
+    end: Instant,
+    cancellation: Option<&Arc<AtomicBool>>,
+    interruption: Option<&AtomicBool>,
+) -> io::Result<F::Output> {
+    let mut future = std::pin::pin!(future);
+    loop {
+        if cancellation.is_some_and(|token| token.load(Ordering::SeqCst))
+            || interruption.is_some_and(|token| token.load(Ordering::SeqCst))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "context canceled",
+            ));
+        }
+        let remaining = end
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "operation timed out"))?;
+        match tokio::time::timeout(remaining.min(Duration::from_millis(20)), future.as_mut()).await
+        {
+            Ok(result) => return Ok(result),
+            Err(_) => {}
+        }
+    }
+}
+/// Response retains headers even if a later body read fails.
+pub struct Response {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Body,
+}
+impl Response {
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+    pub fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+}
+impl Read for Response {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.body.read(bytes)
+    }
+}
+struct Body {
+    plain: Option<NetworkReader>,
+    gzip: Option<flate2::read::GzDecoder<NetworkReader>>,
+    decompress: bool,
+    idle: Duration,
+    idle_end: Arc<Mutex<Instant>>,
+}
+impl Read for Body {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        let read = if self.decompress {
+            if self.gzip.is_none() {
+                self.gzip = Some(flate2::read::GzDecoder::new(self.plain.take().unwrap()));
+            }
+            self.gzip.as_mut().unwrap().read(output).map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData
+                ) {
+                    let message = if error.to_string().contains("checksum") {
+                        "gzip: invalid checksum"
+                    } else {
+                        "gzip: invalid header"
+                    };
+                    io::Error::new(io::ErrorKind::Other, message)
+                } else if error.kind() == io::ErrorKind::UnexpectedEof {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected EOF")
+                } else {
+                    error
+                }
+            })
+        } else {
+            self.plain.as_mut().unwrap().read(output)
+        };
+        if matches!(read,Ok(n) if n>0) {
+            *self.idle_end.lock().unwrap() = Instant::now() + self.idle;
+        }
+        read
+    }
+}
+struct NetworkReader {
+    runtime: Arc<Runtime>,
+    incoming: Incoming,
+    buffer: Bytes,
+    idle_end: Arc<Mutex<Instant>>,
+    total: Option<Instant>,
+    cancellation: Option<Arc<AtomicBool>>,
+    interruption: Option<&'static AtomicBool>,
+    idle: Duration,
+    connection: Option<(std::net::SocketAddr, std::net::SocketAddr)>,
+}
+impl Read for NetworkReader {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if !self.buffer.is_empty() {
+                let count = output.len().min(self.buffer.len());
+                output[..count].copy_from_slice(&self.buffer.split_to(count));
+                return Ok(count);
+            }
+            let end = *self.idle_end.lock().unwrap();
+            let end = self.total.map_or(end, |total| total.min(end));
+            let frame = self
+                .runtime
+                .block_on(wait(
+                    self.incoming.frame(),
+                    end,
+                    self.cancellation.as_ref(),
+                    self.interruption,
+                ))
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::TimedOut {
+                        let message = if self.total.is_some_and(|end| Instant::now() >= end) {
+                            "context deadline exceeded".into()
+                        } else {
+                            format!(
+                                "the provider sent nothing for {}",
+                                super::display::duration(self.idle)
+                            )
+                        };
+                        return io::Error::new(io::ErrorKind::TimedOut, message);
+                    }
+                    error
+                })?;
+            match frame {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        self.buffer = data;
+                    }
+                }
+                Some(Err(error)) => {
+                    use std::error::Error;
+                    let mut cause = error.source();
+                    while let Some(source) = cause {
+                        if let Some(error) = source.downcast_ref::<io::Error>() {
+                            if error.kind() == io::ErrorKind::ConnectionReset {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::ConnectionReset,
+                                    self.connection.map_or_else(|| "connection reset by peer".into(), |(local, remote)| {
+                                        format!("read tcp {local}->{remote}: read: connection reset by peer")
+                                    }),
+                                ));
+                            }
+                        }
+                        cause = source.source();
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "unexpected EOF",
+                    ));
+                }
+                None => return Ok(0),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "http_tests.rs"]
+pub(crate) mod tests;
