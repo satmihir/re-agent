@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {"type": "string", "description": "Workspace-relative UTF-8 text file to change."},
+    "expected_sha256": {"type": "string", "description": "Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version."},
+    "old_text": {"type": "string", "description": "Single edit: exact text occurring once in the file."},
+    "new_text": {"type": "string", "description": "Single edit: replacement text; empty deletes."},
+    "edits": {"type": "array", "description": "Several non-overlapping replacements in one call.", "minItems": 1, "items": {
+      "type": "object", "properties": {
+        "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean", "description": "Replace every non-overlapping occurrence of old_text."}
+      }, "required": ["old_text", "new_text"], "additionalProperties": false
+    }},
+    "append_text": {"type": "string", "description": "Text added after all replacements; no automatic newline."}
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}

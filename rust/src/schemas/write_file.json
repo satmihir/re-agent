@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {"type": "string", "description": "Workspace-relative UTF-8 text file to create or replace."},
+    "content": {"type": "string", "description": "Complete new UTF-8 text for the file."},
+    "expected_sha256": {"type": "string", "description": "Optional. Omit it to use the version you last read or wrote; pass a digest only to name a specific version."}
+  },
+  "required": ["path", "content"],
+  "additionalProperties": false
+}
