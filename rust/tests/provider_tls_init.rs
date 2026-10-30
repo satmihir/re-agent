@@ -154,6 +154,7 @@ fn accept(listener: &TcpListener) -> Option<TcpStream> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if let Ok((stream, _)) = listener.accept() {
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();

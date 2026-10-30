@@ -1433,8 +1433,9 @@ mod tests {
             for plan in [false, true] {
                 for prospective in [false, true] {
                     let dir = tempfile::tempdir().unwrap();
-                    let launch = dir.path().join("launch");
-                    let target = dir.path().join("target");
+                    let root = dir.path().canonicalize().unwrap();
+                    let launch = root.join("launch");
+                    let target = root.join("target");
                     fs::create_dir(&launch).unwrap();
                     if !prospective {
                         fs::create_dir(&target).unwrap();
@@ -1506,8 +1507,9 @@ mod tests {
         };
         for (read_only, plan) in [(true, false), (false, true)] {
             let dir = tempfile::tempdir().unwrap();
-            let launch = dir.path().join("launch");
-            let target = dir.path().join("target");
+            let root = dir.path().canonicalize().unwrap();
+            let launch = root.join("launch");
+            let target = root.join("target");
             fs::create_dir(&launch).unwrap();
             fs::create_dir(&target).unwrap();
             let script = dir.path().join("script.json");
@@ -1579,8 +1581,9 @@ mod tests {
                 (Some(Err(WorkspaceConsentError::Unavailable)), "permission_denied", "workspace consent was cancelled or unavailable"),
             ] {
                 let dir = tempfile::tempdir().unwrap();
-                let launch = dir.path().join("launch");
-                let target = dir.path().join("target");
+                let root = dir.path().canonicalize().unwrap();
+                let launch = root.join("launch");
+                let target = root.join("target");
                 fs::create_dir(&launch).unwrap();
                 fs::create_dir(&target).unwrap();
                 let config = json!({"workspace":launch,"session_id":crate::types::new_id()});
@@ -1604,8 +1607,9 @@ mod tests {
         for tool in ["request_workspace_access", "switch_workspace"] {
             for change in ["parent-swap", "leaf-redirect", "parent-redirect", "cancel"] {
                 let dir = tempfile::tempdir().unwrap();
-                let launch = dir.path().join("launch");
-                let parent = dir.path().join("parent");
+                let root = dir.path().canonicalize().unwrap();
+                let launch = root.join("launch");
+                let parent = root.join("parent");
                 let other = dir.path().join("other");
                 let target = parent.join("target");
                 for path in [&launch, &parent, &other] {
@@ -1674,8 +1678,9 @@ mod tests {
     #[test]
     fn workspace_consent_does_not_prompt_for_invalid_or_cancelled_requests() {
         let dir = tempfile::tempdir().unwrap();
-        let launch = dir.path().join("launch");
-        let target = dir.path().join("target");
+        let root = dir.path().canonicalize().unwrap();
+        let launch = root.join("launch");
+        let target = root.join("target");
         fs::create_dir(&launch).unwrap();
         fs::create_dir(&target).unwrap();
         let config = json!({"workspace":launch,"session_id":crate::types::new_id()});
@@ -1708,8 +1713,9 @@ mod tests {
     fn workspace_grants_are_sorted_canonical_and_keep_exact_reservations() {
         use std::os::unix::fs::symlink;
         let dir = tempfile::tempdir().unwrap();
-        let launch = dir.path().join("z_launch");
-        let target = dir.path().join("a_target");
+        let root = dir.path().canonicalize().unwrap();
+        let launch = root.join("z_launch");
+        let target = root.join("a_target");
         let alias = dir.path().join("alias");
         fs::create_dir(&launch).unwrap();
         fs::create_dir(&target).unwrap();
@@ -1739,8 +1745,9 @@ mod tests {
         use std::os::unix::fs::symlink;
         for symlink_metadata in [false, true] {
             let dir = tempfile::tempdir().unwrap();
-            let launch = dir.path().join("launch");
-            let target = dir.path().join("unapproved");
+            let root = dir.path().canonicalize().unwrap();
+            let launch = root.join("launch");
+            let target = root.join("unapproved");
             fs::create_dir(&launch).unwrap();
             fs::create_dir(&target).unwrap();
             if symlink_metadata {

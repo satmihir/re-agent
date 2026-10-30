@@ -188,7 +188,11 @@ printf '%s\n' "$@" > "$REPORT"
 for file do :; done
 test -f "$file"
 test ! -s "$file"
-test "$(stat -c %a "$file")" = 600
+case "$(uname -s)" in
+  Darwin) mode=$(stat -f %Lp "$file");;
+  *) mode=$(stat -c %a "$file");;
+esac
+test "$mode" = 600
 case "$file" in */reagent-*.md) ;; *) exit 91;; esac
 printf 'editor stdout\n'
 printf 'editor stderr\n' >&2

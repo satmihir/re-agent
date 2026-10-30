@@ -139,7 +139,12 @@ mod tests {
         let config = json!({"provider":"anthropic","model":"claude-haiku-4-5","reasoning_effort":"low","workspace":"/tmp/example","max_steps":20,"max_tool_calls":40});
         let plain = instructions(&config);
         let runtime = plain.split_once("# Runtime").unwrap().1;
-        assert_eq!(runtime, format!("\n\nProvider: anthropic\nModel: claude-haiku-4-5\nReasoning effort: low\nPlatform: {}\nWorkspace: /tmp/example\nMode: read, write, and execute\nBudget: 20 model requests and 40 tool calls per run\nA successful switch_workspace result names the new active workspace and carries its AGENTS.md, which then replaces the workspace and project instructions given here.\n", std::env::consts::OS));
+        let platform = if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            std::env::consts::OS
+        };
+        assert_eq!(runtime, format!("\n\nProvider: anthropic\nModel: claude-haiku-4-5\nReasoning effort: low\nPlatform: {}\nWorkspace: /tmp/example\nMode: read, write, and execute\nBudget: 20 model requests and 40 tool calls per run\nA successful switch_workspace result names the new active workspace and carries its AGENTS.md, which then replaces the workspace and project instructions given here.\n", platform));
         let mut extra = config.clone();
         extra["report_friction"] = true.into();
         extra["project_instructions"] = "".into();

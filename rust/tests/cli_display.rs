@@ -94,8 +94,9 @@ fn recaps_follow_the_flag_and_failure_status_in_run_and_chat() {
 fn switched_workspace_warning_precedes_activity_only_when_commands_are_enabled() {
     for flags in [vec![], vec!["--read-only"], vec!["--plan"]] {
         let directory = tempfile::tempdir().unwrap();
-        let launch = directory.path().join("launch");
-        let target = directory.path().join("target");
+        let root = directory.path().canonicalize().unwrap();
+        let launch = root.join("launch");
+        let target = root.join("target");
         std::fs::create_dir(&launch).unwrap();
         std::fs::create_dir(&target).unwrap();
         let script = directory.path().join("responses.json");
@@ -108,7 +109,7 @@ fn switched_workspace_warning_precedes_activity_only_when_commands_are_enabled()
         let output = Command::new(env!("CARGO_BIN_EXE_reagent"))
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .env("HOME", directory.path())
+            .env("HOME", &root)
             .env("XDG_CACHE_HOME", directory.path().join("cache"))
             .env("NO_COLOR", "1")
             .args(["run", "--workspace"])
@@ -238,9 +239,10 @@ fn blocked_chat_advice_precedes_trace_and_resubmission_is_only_an_error() {
 #[test]
 fn status_lists_launch_and_preapproved_workspaces_in_sorted_order() {
     let directory = tempfile::tempdir().unwrap();
-    let launch = directory.path().join("launch");
-    let first = directory.path().join("aaa");
-    let last = directory.path().join("zzz");
+    let root = directory.path().canonicalize().unwrap();
+    let launch = root.join("launch");
+    let first = root.join("aaa");
+    let last = root.join("zzz");
     for path in [&launch, &first, &last] {
         std::fs::create_dir(path).unwrap();
     }

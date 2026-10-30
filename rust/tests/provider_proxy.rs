@@ -72,6 +72,7 @@ fn environment_proxy_preserves_wire_and_connect_uses_native_trust() {
                 assert!(Instant::now() < deadline, "proxy not reached");
                 std::thread::sleep(Duration::from_millis(5));
             };
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
@@ -208,6 +209,7 @@ fn socks5_keeps_dns_remote_and_authentication_out_of_origin_headers() {
                 assert!(Instant::now() < deadline, "SOCKS proxy not reached");
                 std::thread::sleep(Duration::from_millis(5));
             };
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
@@ -320,6 +322,7 @@ fn socks5_stalled_handshake_uses_the_existing_header_deadline() {
             assert!(Instant::now() < deadline, "SOCKS proxy not reached");
             std::thread::sleep(Duration::from_millis(5));
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();

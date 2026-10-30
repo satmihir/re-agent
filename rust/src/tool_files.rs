@@ -871,8 +871,12 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
                 }
                 delete_path(ws, &p.to_string_lossy())?;
                 let current = fs::symlink_metadata(&p).map_err(os_outcome)?;
-                if (old.dev(), old.ino(), old.mode() & libc::S_IFMT)
-                    != (current.dev(), current.ino(), current.mode() & libc::S_IFMT)
+                if (old.dev(), old.ino(), old.mode() & u32::from(libc::S_IFMT))
+                    != (
+                        current.dev(),
+                        current.ino(),
+                        current.mode() & u32::from(libc::S_IFMT),
+                    )
                 {
                     return Err(fail("stale_file", "path changed after preflight"));
                 }
@@ -951,9 +955,15 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
         return Err(fail("not_executed", "cancelled before deletion"));
     }
     let current = fs::symlink_metadata(&abs).map_err(os_outcome)?;
-    if (current.dev(), current.ino(), current.mode() & libc::S_IFMT)
-        != (info.dev(), info.ino(), info.mode() & libc::S_IFMT)
-    {
+    if (
+        current.dev(),
+        current.ino(),
+        current.mode() & u32::from(libc::S_IFMT),
+    ) != (
+        info.dev(),
+        info.ino(),
+        info.mode() & u32::from(libc::S_IFMT),
+    ) {
         return Err(fail("stale_file", "path changed while preparing deletion"));
     }
     let canonical = fs::canonicalize(&abs).map_err(os_outcome)?;

@@ -1753,6 +1753,7 @@ mod boundary_tests {
                             }
                         }
                     };
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                         .unwrap();
@@ -1772,9 +1773,11 @@ mod boundary_tests {
                         .unwrap();
                     let mut body = vec![0; length];
                     stream.read_exact(&mut body).unwrap();
-                    let checkpoint = dir
-                        .path()
-                        .join("cache/reagent/sessions/0123456789abcdef/checkpoint.json");
+                    let checkpoint = dir.path().join(if cfg!(target_os = "macos") {
+                        "Library/Caches/reagent/sessions/0123456789abcdef/checkpoint.json"
+                    } else {
+                        "cache/reagent/sessions/0123456789abcdef/checkpoint.json"
+                    });
                     let pending: Value =
                         serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
                     assert_eq!(pending["state"]["phase"], "model");
@@ -1877,7 +1880,12 @@ mod boundary_tests {
                     assert_eq!(outcome["ok"], true, "{outcome}");
                     assert_eq!(
                         session.config["workspace"],
-                        target.path().to_string_lossy().as_ref()
+                        target
+                            .path()
+                            .canonicalize()
+                            .unwrap()
+                            .to_string_lossy()
+                            .as_ref()
                     );
                     let expected = if disabled {
                         None
@@ -1910,7 +1918,7 @@ mod boundary_tests {
                         if disabled { None } else { Some(original) }
                     );
                     assert!(context::instructions(&session.config)
-                        .contains(target.path().to_str().unwrap()));
+                        .contains(target.path().canonicalize().unwrap().to_str().unwrap()));
                     assert!(!context::instructions(&session.config).contains(original));
                 }
             }
@@ -1973,7 +1981,7 @@ mod boundary_tests {
         );
         assert_eq!(
             restored["config"]["workspace"],
-            launch.path().to_str().unwrap()
+            launch.path().canonicalize().unwrap().to_str().unwrap()
         );
         assert_eq!(restored["config"]["prompt"], recorded_pin);
         crate::checkpoint::close(id);
@@ -3393,7 +3401,7 @@ mod boundary_tests {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let (mut master, mut slave) = (-1, -1);
-            let size = libc::winsize {
+            let mut size = libc::winsize {
                 ws_row: 24,
                 ws_col: 120,
                 ws_xpixel: 0,
@@ -3405,8 +3413,8 @@ mod boundary_tests {
                         &mut master,
                         &mut slave,
                         std::ptr::null_mut(),
-                        std::ptr::null(),
-                        &size,
+                        std::ptr::null_mut(),
+                        &mut size,
                     )
                 },
                 0
@@ -3421,7 +3429,7 @@ mod boundary_tests {
                 .stdin(slave.try_clone().unwrap()).stdout(slave.try_clone().unwrap()).stderr(slave);
             unsafe {
                 command.pre_exec(|| {
-                    if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                    if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                         return Err(std::io::Error::last_os_error());
                     }
                     Ok(())
@@ -3459,6 +3467,8 @@ mod boundary_tests {
                     }
                     Err(error) => panic!("{error}"),
                 };
+                // Accepted sockets inherit O_NONBLOCK on Darwin, unlike Linux.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(3)))
                     .unwrap();
@@ -3605,9 +3615,11 @@ mod boundary_tests {
                     String::from_utf8_lossy(&output.stderr)
                 );
             }
-            let path = root
-                .path()
-                .join("cache/reagent/sessions/0123456789abcdef/checkpoint.json");
+            let path = root.path().join(if cfg!(target_os = "macos") {
+                "Library/Caches/reagent/sessions/0123456789abcdef/checkpoint.json"
+            } else {
+                "cache/reagent/sessions/0123456789abcdef/checkpoint.json"
+            });
             let checkpoint: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
             assert_eq!(checkpoint["state"]["phase"], phase);
             assert_eq!(

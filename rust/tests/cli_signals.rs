@@ -32,6 +32,7 @@ fn request(listener: &TcpListener, child: &mut Child) -> (TcpStream, Value) {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
@@ -193,9 +194,10 @@ fn proxy_header_masks_fixture_password_without_hiding_the_endpoint() {
 }
 
 struct Pty {
-    terminal: std::fs::File,
+    terminal: Option<std::fs::File>,
     child: Child,
     raw: Vec<u8>,
+    observed: usize,
 }
 
 impl Pty {
@@ -204,9 +206,12 @@ impl Pty {
     }
 
     fn start_output(command: &mut Command, stdout_tty: bool) -> Self {
-        use std::os::{fd::FromRawFd, unix::process::CommandExt};
+        use std::os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::process::CommandExt,
+        };
         let (mut master, mut slave) = (-1, -1);
-        let size = libc::winsize {
+        let mut size = libc::winsize {
             ws_row: 24,
             ws_col: 80,
             ws_xpixel: 0,
@@ -218,14 +223,27 @@ impl Pty {
                     &mut master,
                     &mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &size,
+                    std::ptr::null_mut(),
+                    &mut size,
                 )
             },
             0
         );
         let terminal = unsafe { std::fs::File::from_raw_fd(master) };
         let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+        // openpty does not promise close-on-exec; parallel children must not retain other PTYs.
+        for fd in [terminal.as_raw_fd(), slave.as_raw_fd()] {
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+        }
+        let flags = unsafe { libc::fcntl(master, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
         command.stdin(slave.try_clone().unwrap());
         if stdout_tty {
             command.stdout(slave.try_clone().unwrap());
@@ -235,26 +253,36 @@ impl Pty {
         command.stderr(slave);
         unsafe {
             command.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
             });
         }
+        let child = command.spawn().unwrap();
+        // Command retains its configured stdio after spawning, including the slave handles.
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         Self {
-            terminal,
-            child: command.spawn().unwrap(),
+            terminal: Some(terminal),
+            child,
             raw: Vec::new(),
+            observed: 0,
         }
     }
 
     fn wait(&mut self, marker: &[u8]) {
-        let start = self.raw.len();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !self.raw[start..]
-            .windows(marker.len())
-            .any(|window| window == marker)
-        {
+        loop {
+            if let Some(offset) = self.raw[self.observed..]
+                .windows(marker.len())
+                .position(|window| window == marker)
+            {
+                self.observed += offset + marker.len();
+                return;
+            }
             assert!(
                 Instant::now() < deadline,
                 "missing {:?} in {}",
@@ -265,19 +293,23 @@ impl Pty {
         }
     }
 
-    fn pump(&mut self) {
-        use std::os::fd::AsRawFd;
-        let mut poll = libc::pollfd {
-            fd: self.terminal.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        if unsafe { libc::poll(&mut poll, 1, 20) } > 0 {
-            let mut bytes = [0; 8192];
-            let count = self.terminal.read(&mut bytes).unwrap();
-            assert!(count > 0, "terminal closed before marker");
-            self.raw.extend_from_slice(&bytes[..count]);
+    fn drain(&mut self) -> std::io::Result<()> {
+        let mut bytes = [0; 8192];
+        match self.terminal.as_mut().unwrap().read(&mut bytes) {
+            Ok(count) => self.raw.extend_from_slice(&bytes[..count]),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) || error.raw_os_error() == Some(libc::EIO) => {}
+            Err(error) => return Err(error),
         }
+        Ok(())
+    }
+
+    fn pump(&mut self) {
+        self.drain().unwrap();
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     fn request(&mut self, listener: &TcpListener) -> (TcpStream, Value) {
@@ -290,7 +322,10 @@ impl Pty {
                 revents: 0,
             };
             if unsafe { libc::poll(&mut poll, 1, 0) } > 0 {
-                return request(listener, &mut self.child);
+                let result = request(listener, &mut self.child);
+                self.drain().unwrap();
+                self.observed = self.raw.len();
+                return result;
             }
             assert!(
                 Instant::now() < deadline,
@@ -302,15 +337,41 @@ impl Pty {
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.terminal.write_all(bytes).unwrap();
+        self.observed = self.raw.len();
+        self.terminal.as_mut().unwrap().write_all(bytes).unwrap();
     }
 }
 
 impl Drop for Pty {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        // Closing the master releases Darwin's pending slave output before reaping.
+        drop(self.terminal.take());
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn pty_fixture_idle_reads_and_cleanup_with_pending_output_are_bounded() {
+    let mut command = Command::new("/bin/sh");
+    command.args([
+        "-c",
+        "printf 'fixture ready\\n'; while :; do printf 'pending output\\n'; done",
+    ]);
+    let mut pty = Pty::start(&mut command);
+    pty.wait(b"fixture ready");
+    std::thread::sleep(Duration::from_millis(50));
+    let start = Instant::now();
+    drop(pty);
+    assert!(start.elapsed() < Duration::from_secs(2));
+
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "printf 'fixture idle\\n'; exec sleep 30"]);
+    let mut pty = Pty::start(&mut command);
+    pty.wait(b"fixture idle");
+    let start = Instant::now();
+    pty.pump();
+    assert!(start.elapsed() < Duration::from_secs(1));
 }
 
 fn assert_cancelled_trace_restore(output: &str) {
@@ -368,7 +429,13 @@ fn pty_turn_reader_preserves_draft_resize_and_one_queued_submission() {
         ws_ypixel: 0,
     };
     assert_eq!(
-        unsafe { libc::ioctl(pty.terminal.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+        unsafe {
+            libc::ioctl(
+                pty.terminal.as_ref().unwrap().as_raw_fd(),
+                libc::TIOCSWINSZ,
+                &size,
+            )
+        },
         0
     );
     pty.wait("─".repeat(60).as_bytes());
@@ -517,7 +584,11 @@ fn checkpoint_publication_failure_stops_chat_before_reply_recap_or_next_request(
         .write_all(b"first\nsecond must not run\n/exit\n")
         .unwrap();
     let (mut first, _) = request(&listener, &mut child);
-    let sessions = directory.path().join("cache/reagent/sessions");
+    let sessions = directory.path().join(if cfg!(target_os = "macos") {
+        "Library/Caches/reagent/sessions"
+    } else {
+        "cache/reagent/sessions"
+    });
     let session = std::fs::read_dir(sessions)
         .unwrap()
         .next()
@@ -738,10 +809,16 @@ fn pty_exec_cancellation_prints_trace_before_changing_the_prompt_status() {
     pty.wait("❯ ".as_bytes());
     pty.send(b"run a command\r");
     let (mut stream, _) = pty.request(&listener);
-    let response = json!({"id":"exec-fixture","status":"completed","model":"gpt-6-luna","output":[{"type":"function_call","id":"item-exec","call_id":"call-exec","name":"exec","arguments":json!({"argv":["sh","-c","sleep 30"],"cwd":"."}).to_string()}],"usage":{"input_tokens":13,"output_tokens":3}}).to_string();
+    let response = json!({"id":"exec-fixture","status":"completed","model":"gpt-6-luna","output":[{"type":"function_call","id":"item-exec","call_id":"call-exec","name":"exec","arguments":json!({"argv":["sh","-c","printf started > exec-started; sleep 30"],"cwd":"."}).to_string()}],"usage":{"input_tokens":13,"output_tokens":3}}).to_string();
     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
     stream.flush().unwrap();
     pty.wait(b"running sh");
+    // The activity line precedes process creation; cancel only after the command has started.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !directory.path().join("exec-started").exists() {
+        assert!(Instant::now() < deadline, "exec never started");
+        pty.pump();
+    }
     pty.send(b"\x03");
     pty.wait(b"\x1b[?2004h");
     let output = String::from_utf8_lossy(&pty.raw);
@@ -750,6 +827,9 @@ fn pty_exec_cancellation_prints_trace_before_changing_the_prompt_status() {
     assert!(output[prompt..trace].starts_with("❯ \r\n"), "{output}");
     assert!(!output[..trace].contains("(blocked) ❯"), "{output}");
     assert_cancelled_trace_restore(&output);
+    assert!(output[trace..].contains("(blocked) ❯"), "{output}");
+    pty.send(b"/reset\r");
+    pty.wait(b"\x1b[?2004h");
     pty.send(b"after cancelled command\r");
     let (mut stream, body) = pty.request(&listener);
     assert!(
@@ -908,7 +988,13 @@ fn pty_shell_streams_above_the_draft_and_interrupt_discards_typeahead() {
             ws_ypixel: 0,
         };
         assert_eq!(
-            unsafe { libc::ioctl(pty.terminal.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+            unsafe {
+                libc::ioctl(
+                    pty.terminal.as_ref().unwrap().as_raw_fd(),
+                    libc::TIOCSWINSZ,
+                    &size,
+                )
+            },
             0
         );
         pty.wait("─".repeat(60).as_bytes());
@@ -1042,7 +1128,7 @@ open(path,'wb').write(b'\t \n' if mode=='empty' else b'edited \xff text\nline2\n
                 // Snapshot the PTY bytes already queued when the reply is observable,
                 // rather than waiting for the later read_line bracketed-paste marker.
                 let mut terminal = libc::pollfd {
-                    fd: pty.terminal.as_raw_fd(),
+                    fd: pty.terminal.as_ref().unwrap().as_raw_fd(),
                     events: libc::POLLIN,
                     revents: 0,
                 };
@@ -1239,7 +1325,7 @@ fn pty_dumb_invalid_utf8_preserves_enter_and_eof() {
                 Instant::now() < deadline,
                 "Ctrl-D did not exit the fallback editor"
             );
-            std::thread::sleep(Duration::from_millis(10));
+            pty.pump();
         }
         assert!(listener.accept().is_err());
     }

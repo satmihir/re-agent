@@ -8,9 +8,11 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 mod editor;
+mod readiness;
 mod region;
 use crate::tools::{WorkspaceConsent, WorkspaceConsentError, WorkspaceDestination};
 use editor::{Decoder, Editor as IdleEditor, Key, TurnInput};
+pub(crate) use readiness::poll_read;
 pub(crate) use region::output;
 pub use region::{Region, RegionHandle};
 use serde_json::Value;
@@ -278,19 +280,11 @@ impl Input {
                 Some(key)
             } else {
                 let fd = self.tty.as_ref().unwrap().as_raw_fd();
-                let mut poll = libc::pollfd {
-                    fd,
-                    events: libc::POLLIN,
-                    revents: 0,
+                let ready = match poll_read(fd, 50) {
+                    Ok(ready) => ready,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
                 };
-                let ready = unsafe { libc::poll(&mut poll, 1, 50) };
-                if ready < 0 {
-                    let error = io::Error::last_os_error();
-                    if error.kind() == io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(error);
-                }
                 if ready == 0 {
                     self.decoder.escape()
                 } else {
@@ -737,12 +731,7 @@ impl Input {
         let mut pending = Vec::new();
         let mut row = 0;
         while Instant::now() < deadline && pending.len() < 256 {
-            let mut poll = libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            if unsafe { libc::poll(&mut poll, 1, 5) } <= 0 {
+            if !matches!(poll_read(fd, 5), Ok(ready) if ready != 0) {
                 continue;
             }
             let mut chunk = [0u8; 64];
@@ -852,19 +841,11 @@ impl Input {
                 Some(key)
             } else {
                 let fd = self.tty.as_ref().unwrap().as_raw_fd();
-                let mut poll = libc::pollfd {
-                    fd,
-                    events: libc::POLLIN,
-                    revents: 0,
+                let ready = match poll_read(fd, 50) {
+                    Ok(ready) => ready,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
                 };
-                let ready = unsafe { libc::poll(&mut poll, 1, 50) };
-                if ready < 0 {
-                    let error = io::Error::last_os_error();
-                    if error.kind() == io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(error);
-                }
                 if ready > 0 {
                     let mut chunk = [0; 256];
                     let count = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
@@ -942,19 +923,11 @@ impl Input {
                 key
             } else {
                 let fd = self.tty.as_ref().unwrap().as_raw_fd();
-                let mut poll = libc::pollfd {
-                    fd,
-                    events: libc::POLLIN,
-                    revents: 0,
+                let ready = match poll_read(fd, 50) {
+                    Ok(ready) => ready,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
                 };
-                let ready = unsafe { libc::poll(&mut poll, 1, 50) };
-                if ready < 0 {
-                    let error = io::Error::last_os_error();
-                    if error.kind() == io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(error);
-                }
                 if ready == 0 {
                     if let Some(key) = self.decoder.escape() {
                         key
@@ -1098,19 +1071,11 @@ fn read_key(reader: &mut io::BufReader<io::Stdin>, decoder: &mut Decoder) -> io:
             });
         }
         if reader.buffer().is_empty() {
-            let mut poll = libc::pollfd {
-                fd: 0,
-                events: libc::POLLIN,
-                revents: 0,
+            let ready = match poll_read(0, 20) {
+                Ok(ready) => ready,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
             };
-            let ready = unsafe { libc::poll(&mut poll, 1, 20) };
-            if ready < 0 {
-                let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(error);
-            }
             if ready == 0 {
                 if let Some(Key::Name(name)) = decoder.escape() {
                     return Ok(name.into());

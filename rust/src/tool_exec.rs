@@ -611,6 +611,7 @@ fn run(
     let mut timed_out = false;
     let mut stopped = false;
     let mut incomplete = false;
+    let mut cleanup_error = None;
     loop {
         for i in 0..2 {
             if eof[i] {
@@ -653,7 +654,7 @@ fn run(
         if !stopped && status.is_none() {
             let cancelled = cancellation.load(Ordering::Acquire);
             if cancelled || started.elapsed() >= Duration::from_millis(timeout) {
-                terminate_tree(pid);
+                cleanup_error = terminate_tree(pid).err();
                 timed_out = !cancelled;
                 stopped = true;
             }
@@ -714,9 +715,18 @@ fn run(
     } else {
         ("ok", "", "applied")
     };
+    let message = if let Some(error) = cleanup_error {
+        data["cleanup_error"] = json!(stable(&error));
+        format!(
+            "{message}; descendant cleanup could not be verified: {}",
+            stable(&error)
+        )
+    } else {
+        message.to_owned()
+    };
     loop {
         let mut result = attributed(
-            outcome(code == "ok", code, message, data.clone(), effect),
+            outcome(code == "ok", code, &message, data.clone(), effect),
             root,
         );
         result["truncated"] =
@@ -755,7 +765,8 @@ fn signal_name(signal: i32) -> String {
         _ => format!("signal {signal}"),
     }
 }
-fn terminate_tree(pid: i32) {
+#[cfg(target_os = "linux")]
+fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
     let mut processes = vec![];
     if let Ok(entries) = fs::read_dir("/proc") {
         for e in entries.flatten() {
@@ -774,6 +785,77 @@ fn terminate_tree(pid: i32) {
             }
         }
     }
+    Ok(processes)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
+    // Unlike /proc, ps is available on Darwin. Bound it independently of exec's timeout.
+    let mut child = Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid=,pgid="])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut stdout = child.stdout.take().unwrap();
+    let result = (|| {
+        if unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut output = Vec::new();
+        loop {
+            match stdout.read_to_end(&mut output) {
+                Ok(_) => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(e) => return Err(e),
+            }
+            if let Some(status) = child.try_wait()? {
+                if !status.success() {
+                    return Err(std::io::Error::other("process snapshot failed"));
+                }
+                stdout.read_to_end(&mut output)?;
+                let invalid = || {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid process snapshot")
+                };
+                let output = std::str::from_utf8(&output).map_err(|_| invalid())?;
+                let mut processes = Vec::new();
+                for line in output.lines().filter(|line| !line.trim().is_empty()) {
+                    let fields: Vec<_> = line.split_whitespace().collect();
+                    if fields.len() != 3 {
+                        return Err(invalid());
+                    }
+                    processes.push((
+                        fields[0].parse().map_err(|_| invalid())?,
+                        fields[1].parse().map_err(|_| invalid())?,
+                        fields[2].parse().map_err(|_| invalid())?,
+                    ));
+                }
+                return Ok(processes);
+            }
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "process snapshot timed out",
+                ));
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+fn terminate_tree(pid: i32) -> std::io::Result<()> {
+    let snapshot = process_snapshot();
+    let processes = snapshot.as_ref().map(Vec::as_slice).unwrap_or_default();
     let mut tree = vec![(pid, 0, pid)];
     let mut i = 0;
     while i < tree.len() {
@@ -802,6 +884,7 @@ fn terminate_tree(pid: i32) {
             thread::sleep(Duration::from_millis(200));
         }
     }
+    snapshot.map(|_| ())
 }
 
 #[cfg(test)]
@@ -817,31 +900,31 @@ mod tests {
                 "field \"argv\" must be an array of strings",
             ),
             (
-                json!({"argv":["/bin/true"],"then":false}),
+                json!({"argv":["/usr/bin/true"],"then":false}),
                 "field \"then\" must be an array of command arrays",
             ),
             (
-                json!({"argv":["/bin/true"],"then":[false]}),
+                json!({"argv":["/usr/bin/true"],"then":[false]}),
                 "field \"then\" must be an array of command arrays",
             ),
             (
-                json!({"argv":["/bin/true"],"then":[[false]]}),
+                json!({"argv":["/usr/bin/true"],"then":[[false]]}),
                 "field \"then\" must be an array of command arrays",
             ),
             (
-                json!({"argv":["/bin/true"],"cwd":false}),
+                json!({"argv":["/usr/bin/true"],"cwd":false}),
                 "field \"cwd\" must be a string",
             ),
             (
-                json!({"argv":["/bin/true"],"timeout_ms":false}),
+                json!({"argv":["/usr/bin/true"],"timeout_ms":false}),
                 "timeout_ms must be an integer",
             ),
             (
-                json!({"argv":["/bin/true"],"timeout_ms":null}),
+                json!({"argv":["/usr/bin/true"],"timeout_ms":null}),
                 "timeout_ms must be omitted rather than null",
             ),
             (
-                json!({"argv":["/bin/true"],"timeout_ms":0}),
+                json!({"argv":["/usr/bin/true"],"timeout_ms":0}),
                 "timeout_ms must be at least 1",
             ),
             (
@@ -849,7 +932,7 @@ mod tests {
                 "every command must start with an executable",
             ),
             (
-                json!({"argv":["/bin/true"],"unexpected\u{7}":1}),
+                json!({"argv":["/usr/bin/true"],"unexpected\u{7}":1}),
                 "unknown field \"unexpected\\a\"",
             ),
         ] {
@@ -858,8 +941,12 @@ mod tests {
             assert_eq!(value["message"], message, "{args}");
             assert_eq!(value["effect"], "none", "{args}");
         }
-        let corrected =
-            execute(&mut w, &json!({}), &json!({"argv":["/bin/true"],"cwd":"."})).unwrap();
+        let corrected = execute(
+            &mut w,
+            &json!({}),
+            &json!({"argv":["/usr/bin/true"],"cwd":"."}),
+        )
+        .unwrap();
         assert_eq!(corrected["ok"], true);
     }
 
@@ -888,8 +975,93 @@ mod tests {
 }
 
 #[cfg(test)]
+fn assert_exec_pids_stopped(dir: &Path, names: &[&str]) {
+    let mut alive = Vec::new();
+    for name in names {
+        let pid: i32 = fs::read_to_string(dir.join(name)).unwrap().parse().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            // Independent of the discovery implementation; missing /proc must not skip this assertion.
+            let output = Command::new("/bin/ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success() || output.status.code() == Some(1),
+                "{output:?}"
+            );
+            let state = String::from_utf8(output.stdout).unwrap();
+            let state = state.trim();
+            if state.is_empty() || state.starts_with('Z') || state.starts_with('X') {
+                break;
+            }
+            if Instant::now() >= deadline {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                alive.push((pid, state.to_owned()));
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert!(alive.is_empty(), "descendants remain alive: {alive:?}");
+}
+
+#[cfg(test)]
 mod boundary_tests {
     use super::*;
+
+    #[test]
+    fn exec_timeout_stops_term_resistant_escaped_descendants_with_both_pipe_modes() {
+        for redirected in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = format!(
+                r#"import os,time,pathlib,signal
+pathlib.Path('parent.pid').write_text(str(os.getpid()))
+if os.fork()==0:
+ os.setsid()
+ signal.signal(signal.SIGTERM,signal.SIG_IGN)
+ if {redirected}:
+  fd=os.open(os.devnull,os.O_WRONLY)
+  os.dup2(fd,1)
+  os.dup2(fd,2)
+ pathlib.Path('escaped.pid').write_text(str(os.getpid()))
+ if os.fork()==0:
+  pathlib.Path('grandchild.pid').write_text(str(os.getpid()))
+ time.sleep(30)
+time.sleep(30)"#,
+                redirected = if redirected { "True" } else { "False" }
+            );
+            let argv = vec!["/usr/bin/python3".into(), "-c".into(), script];
+            // Exercise the execution boundary without paying the public ten-second timeout floor twice.
+            let value = run(
+                dir.path(),
+                dir.path(),
+                ".",
+                &argv,
+                1500,
+                LIMIT,
+                &AtomicBool::new(false),
+                &json!({}),
+            )
+            .unwrap();
+            assert_exec_pids_stopped(dir.path(), &["parent.pid", "escaped.pid", "grandchild.pid"]);
+            assert_eq!(value["code"], "timeout", "{value}");
+            assert_eq!(value["effect"], "unknown");
+            assert_eq!(value["data"]["termination_reason"], "timeout");
+            assert_eq!(value["data"]["output_may_be_incomplete"], false);
+            assert!(value["data"].get("cleanup_error").is_none(), "{value}");
+            let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+            let next = execute(
+                &mut workspace,
+                &json!({}),
+                &json!({"argv":["/usr/bin/true"],"cwd":"."}),
+            )
+            .unwrap();
+            assert_eq!(next["ok"], true, "{next}");
+        }
+    }
     #[test]
     fn exec_noisy_output_remains_bounded() {
         let d = tempfile::tempdir().unwrap();
@@ -913,7 +1085,7 @@ mod boundary_tests {
     fn exec_timeout_marks_unknown_and_skips_later_steps() {
         let d = tempfile::tempdir().unwrap();
         let mut w = Workspace::open(d.path().to_str().unwrap()).unwrap();
-        let value=execute(&mut w,&json!({}),&json!({"argv":["/bin/sh","-c","printf started; sleep 30"],"then":[["/bin/touch","forbidden"]],"cwd":".","timeout_ms":1})).unwrap();
+        let value=execute(&mut w,&json!({}),&json!({"argv":["/bin/sh","-c","printf started; sleep 30"],"then":[["/usr/bin/touch","forbidden"]],"cwd":".","timeout_ms":1})).unwrap();
         assert_eq!(value["code"], "timeout", "{value}");
         assert_eq!(value["effect"], "unknown");
         assert_eq!(value["data"]["steps"][0]["timeout_ms"], 10000);
@@ -1037,14 +1209,14 @@ mod cancellation_tests {
         let unaffected = execute(
             &mut workspace,
             &sibling,
-            &json!({"argv":["/bin/true"],"cwd":"."}),
+            &json!({"argv":["/usr/bin/true"],"cwd":"."}),
         )
         .unwrap();
         assert_eq!(unaffected["ok"], true);
         let still_cancelled = execute(
             &mut workspace,
             &config,
-            &json!({"argv":["/bin/true"],"cwd":"."}),
+            &json!({"argv":["/usr/bin/true"],"cwd":"."}),
         )
         .unwrap();
         assert_eq!(still_cancelled["code"], "cancelled");
@@ -1054,26 +1226,11 @@ mod cancellation_tests {
         let recovered = execute(
             &mut workspace,
             &config,
-            &json!({"argv":["/bin/true"],"cwd":"."}),
+            &json!({"argv":["/usr/bin/true"],"cwd":"."}),
         )
         .unwrap();
         assert_eq!(recovered["ok"], true);
-        for name in ["parent.pid", "escaped.pid"] {
-            let pid = fs::read_to_string(Path::new(&dir).join(name)).unwrap();
-            if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
-                let state = stat
-                    .rsplit_once(')')
-                    .unwrap()
-                    .1
-                    .split_whitespace()
-                    .next()
-                    .unwrap();
-                assert!(
-                    state == "Z" || state == "X",
-                    "descendant remains alive: {stat}"
-                );
-            }
-        }
+        assert_exec_pids_stopped(Path::new(&dir), &["parent.pid", "escaped.pid"]);
     }
 }
 
@@ -1126,9 +1283,9 @@ mod overlap_tests {
             }
             let ready = shared.join("ready").exists();
             let mut workspace = Workspace::open(root.to_str().unwrap()).unwrap();
-            let mut args = json!({"argv":["/bin/true"],"cwd":"."});
+            let mut args = json!({"argv":["/usr/bin/true"],"cwd":"."});
             if mode == "chain" {
-                args["then"] = json!([["/bin/true"]]);
+                args["then"] = json!([["/usr/bin/true"]]);
             }
             let observed = execute(&mut workspace, &root_config, &args).unwrap();
             fs::write(shared.join("release"), "done").unwrap();
@@ -1163,7 +1320,7 @@ mod overlap_tests {
             let after = execute(
                 &mut workspace,
                 &root_config,
-                &json!({"argv":["/bin/true"],"cwd":"."}),
+                &json!({"argv":["/usr/bin/true"],"cwd":"."}),
             )
             .unwrap();
             assert!(
@@ -1182,7 +1339,7 @@ mod overlap_tests {
             let sibling = execute(
                 &mut workspace,
                 &sibling_config,
-                &json!({"argv":["/bin/true"],"cwd":"."}),
+                &json!({"argv":["/usr/bin/true"],"cwd":"."}),
             )
             .unwrap();
             assert!(

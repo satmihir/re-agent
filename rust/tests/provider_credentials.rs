@@ -17,7 +17,12 @@ fn unauthorized_refresh_redacts_current_and_retired_secrets_from_stdout_and_trac
 
 fn refresh_redacts_secrets(unauthorized: bool) {
     let directory = tempfile::tempdir().unwrap();
-    let credentials = directory.path().join("config/reagent");
+    let config = directory.path().join(if cfg!(target_os = "macos") {
+        "Library/Application Support"
+    } else {
+        "config"
+    });
+    let credentials = config.join("reagent");
     std::fs::create_dir_all(&credentials).unwrap();
     std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o700)).unwrap();
     let path = credentials.join("chatgpt.json");
@@ -49,6 +54,7 @@ fn refresh_redacts_secrets(unauthorized: bool) {
                 );
                 std::thread::sleep(Duration::from_millis(5));
             };
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
@@ -102,7 +108,7 @@ fn refresh_redacts_secrets(unauthorized: bool) {
     let output = Command::new(env!("CARGO_BIN_EXE_reagent"))
         .env_clear()
         .env("HOME", directory.path())
-        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_CONFIG_HOME", &config)
         .env("REAGENT_OPENAI_AUTH_ISSUER", format!("{endpoint}/issuer"))
         .env("REAGENT_OPENAI_BASE_URL", format!("{endpoint}/openai/v1"))
         .env("REAGENT_ANTHROPIC_BASE_URL", &endpoint)

@@ -723,7 +723,11 @@ mod tests {
             assert_eq!(value["code"], "invalid_arguments", "{args}");
             assert_eq!(value["message"], message, "{args}");
             assert_eq!(value["effect"], "none", "{args}");
-            assert_eq!(value["workspace"], json!(d.path()), "{args}");
+            assert_eq!(
+                value["workspace"],
+                json!(d.path().canonicalize().unwrap()),
+                "{args}"
+            );
         }
         let oversized = " ".repeat(LIMIT + 1);
         let value = inspect_raw(&mut w, &json!({}), &oversized).unwrap();

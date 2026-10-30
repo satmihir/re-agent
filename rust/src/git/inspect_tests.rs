@@ -73,6 +73,7 @@ fn hostile_inspection_commands_are_recorded_without_running_configured_programs(
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("repo");
     fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
     git(&root, &["init", "-q", "-b", "main"]);
     git(&root, &["config", "user.name", "Test"]);
     git(&root, &["config", "user.email", "test@example.invalid"]);
@@ -160,6 +161,16 @@ os.execv('/usr/bin/git', ['git'] + sys.argv[1:])
         !marker.exists(),
         "inspection ran a hostile configured program"
     );
+    // Apple's Python launcher adds its own environment even after env_clear().
+    let baseline = Command::new("/usr/bin/python3")
+        .args(["-c", "import json, os; print(json.dumps(dict(os.environ)))"])
+        .env_clear()
+        .envs(ENV.iter().copied())
+        .env("PATH", &bin)
+        .output()
+        .unwrap();
+    assert!(baseline.status.success(), "{}", utf8(&baseline.stderr));
+    let expected_env: Value = serde_json::from_slice(&baseline.stdout).unwrap();
     let records: Vec<Value> = fs::read_to_string(log)
         .unwrap()
         .lines()
@@ -169,17 +180,7 @@ os.execv('/usr/bin/git', ['git'] + sys.argv[1:])
         let argv = record["argv"].as_array().unwrap();
         assert_eq!(&argv[..PREFIX.len()], json!(PREFIX).as_array().unwrap());
         assert_eq!(record["cwd"], json!(root));
-        for (key, value) in ENV {
-            assert_eq!(record["env"][key], *value);
-        }
-        assert_eq!(record["env"]["PATH"], json!(bin));
-        for key in record["env"].as_object().unwrap().keys() {
-            // Python may add LC_CTYPE while initializing; it is not inherited from the harness.
-            assert!(
-                key == "PATH" || key == "LC_CTYPE" || ENV.iter().any(|(k, _)| key == k),
-                "unexpected inherited environment key {key}"
-            );
-        }
+        assert_eq!(record["env"], expected_env);
     }
     let oid = git(&root, &["rev-parse", "HEAD"]);
     let blob = git(&root, &["rev-parse", "HEAD:a.txt"]);

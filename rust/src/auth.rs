@@ -761,6 +761,10 @@ fn wait_callback(
             return Err("ChatGPT sign-in cancelled or timed out".into());
         }
         if let Ok((mut stream, _)) = listener.accept() {
+            // Darwin inherits the listener's O_NONBLOCK flag; a read timeout alone does not clear it.
+            stream
+                .set_nonblocking(false)
+                .map_err(|_| "could not read ChatGPT callback")?;
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut bytes = Vec::new();
             let mut byte = [0u8; 1];
@@ -806,13 +810,8 @@ fn wait_callback(
             }
         }
         if stdin_open {
-            let mut poll = libc::pollfd {
-                fd: 0,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let ready = unsafe { libc::poll(&mut poll, 1, 0) };
-            if ready > 0 && poll.revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+            if matches!(crate::terminal::poll_read(0, 0), Ok(events) if events & (libc::POLLIN | libc::POLLHUP) != 0)
+            {
                 let mut byte = [0u8; 1];
                 let read = unsafe { libc::read(0, byte.as_mut_ptr().cast(), 1) };
                 if read <= 0 {
@@ -1167,6 +1166,73 @@ mod tests {
         assert_eq!(cached(&c, true, "old").unwrap(), Some("new".into()));
         c.earliest_refresh_at = 0;
         assert_eq!(cached(&c, false, "").unwrap(), None);
+    }
+
+    #[test]
+    fn delayed_fragmented_http_callback_completes_login() {
+        if std::env::var_os("REAGENT_TEST_FRAGMENTED_CALLBACK").is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            let browser = directory.path().join(if cfg!(target_os = "macos") {
+                "open"
+            } else {
+                "xdg-open"
+            });
+            std::fs::write(&browser, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "auth::tests::delayed_fragmented_http_callback_completes_login",
+                    "--nocapture",
+                ])
+                .env("REAGENT_TEST_FRAGMENTED_CALLBACK", "1")
+                .env("PATH", directory.path())
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            // Leave time for accept before sending any bytes, then split both request line and headers.
+            for part in [
+                "GET /auth/callback?state=s&code=",
+                "c&client_id=oaiapp_test HTTP/1.1\r\nHost: ",
+                &format!("{address}\r\n\r\n"),
+            ] {
+                std::thread::sleep(Duration::from_millis(100));
+                stream.write_all(part.as_bytes()).unwrap();
+            }
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        });
+        let result = wait_callback(
+            &listener,
+            &format!("http://{address}/auth/callback"),
+            "s",
+            "oaiapp_test",
+            "https://auth.example.invalid/authorize",
+            &mut Vec::new(),
+            Instant::now() + Duration::from_secs(3),
+        );
+        let response = client.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        let values = result.unwrap();
+        assert_eq!(values["code"], "c");
+        assert_eq!(values["client_id"], "oaiapp_test");
     }
 
     #[test]

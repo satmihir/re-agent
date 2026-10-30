@@ -14,7 +14,7 @@ fn git_tools_cancel_a_running_command_and_do_not_launch_later_probes() {
         std::fs::write(
             &git,
             format!(
-                "#!/bin/sh\nif /bin/grep -q '\"type\":\"tool.started\"' '{}' 2>/dev/null; then\n echo $$ >> '{}'\n exec /bin/sleep 30\nfi\nexec /usr/bin/git \"$@\"\n",
+                "#!/bin/sh\nif /usr/bin/grep -q '\"type\":\"tool.started\"' '{}' 2>/dev/null; then\n echo $$ >> '{}'\n exec /bin/sleep 30\nfi\nexec /usr/bin/git \"$@\"\n",
                 trace.display(), marker.display()
             ),
         )

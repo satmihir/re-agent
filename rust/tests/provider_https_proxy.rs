@@ -88,6 +88,7 @@ fn proxy_case(https_origin: bool, reject: bool) {
                 Err(error) => panic!("accept HTTPS proxy: {error}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
