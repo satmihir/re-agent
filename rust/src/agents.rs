@@ -1029,28 +1029,22 @@ fn threads(s: &Session, a: &Value) -> Value {
     for r in &records {
         crate::types::usage_add(&mut cost, &r["cost"]);
     }
-    let mut data = json!({"threads":records.iter().skip(offset).cloned().collect::<Vec<_>>(),"total_cost":cost,"total_agents":count,"accounting_complete":t.accounting_complete});
-    while crate::types::json_string(&data).len() > 32000
-        && data["threads"].as_array().unwrap().len() > 1
-    {
-        data["threads"].as_array_mut().unwrap().pop();
+    let build = |n| {
+        let mut data = json!({"threads":records.iter().skip(offset).take(n).cloned().collect::<Vec<_>>(),"total_cost":cost,"total_agents":count});
+        if offset + n < count {
+            data["next_offset"] = json!(offset + n);
+        }
+        data["accounting_complete"] = json!(t.accounting_complete);
+        success(data)
+    };
+    let mut n = count.saturating_sub(offset);
+    let mut out = build(n);
+    // Match Go's sizing envelope: continuation metadata is present, truncated is still false.
+    while crate::types::json_bytes(&out).len() > crate::workspace::MAX_RESULT_BYTES && n > 0 {
+        n -= 1;
+        out = build(n);
     }
-    let next = offset + data["threads"].as_array().unwrap().len();
-    let mut out = success(data);
-    if next < count {
-        out["data"]["next_offset"] = json!(next);
-        out["truncated"] = json!(true);
-    }
-    out["data"] = ordered(
-        &out["data"],
-        &[
-            "threads",
-            "total_cost",
-            "total_agents",
-            "next_offset",
-            "accounting_complete",
-        ],
-    );
+    out["truncated"] = json!(offset + n < count);
     out
 }
 
@@ -1466,6 +1460,114 @@ mod tests {
             working: false,
             ended: false,
             cancelled: false,
+        }
+    }
+
+    #[test]
+    fn subtree_pages_keep_the_largest_fitting_prefix_with_long_trace_paths() {
+        for trace_bytes in [136, 168] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut session = Session::new(
+                json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            )
+            .unwrap();
+            {
+                let shared = tree(&session);
+                let mut t = shared.tree.lock().unwrap();
+                for index in 0..30 {
+                    let id = format!("t{}", index + 1);
+                    let name = format!("page-{index}-");
+                    t.archive.insert(id.clone(), json!({
+                        "id":id,"parent_id":"root","name":format!("{name}{}", "n".repeat(64 - name.len())),
+                        "state":"dismissed","task":format!("agent-case:page-{index} {}", "<".repeat(160)),
+                        "steps":1,"cost":{"known":true,"input_tokens":101,"cached_input_tokens":11,"output_tokens":7,"reasoning_tokens":2},
+                        "trace_path":format!("/tmp/{}/events.jsonl", "p".repeat(trace_bytes - 18)),
+                        "authority":"read","context_mode":"fresh","depth":1
+                    }));
+                }
+            }
+            let first = execute(&mut session, "threads", r#"{"subtree":true}"#)
+                .unwrap()
+                .unwrap();
+            let records = first["data"]["threads"].as_array().unwrap();
+            assert_eq!(records.len(), 24, "trace length {trace_bytes}");
+            assert_eq!(records.last().unwrap()["id"], "t30");
+            assert_eq!(first["data"]["next_offset"], 24);
+            assert_eq!(first["truncated"], true);
+            let second = execute(&mut session, "threads", r#"{"subtree":true,"offset":24}"#)
+                .unwrap()
+                .unwrap();
+            assert_eq!(second["data"]["threads"].as_array().unwrap().len(), 6);
+            assert_eq!(second["data"]["threads"][0]["id"], "t4");
+            assert!(second["data"].get("next_offset").is_none());
+            assert_eq!(second["truncated"], false);
+            assert_eq!(second["data"]["total_cost"], first["data"]["total_cost"]);
+            assert_eq!(
+                crate::types::json_bytes(&first).len(),
+                if trace_bytes == 136 { 31965 } else { 32733 }
+            );
+            let mut next_candidate = first.clone();
+            next_candidate["data"]["threads"]
+                .as_array_mut()
+                .unwrap()
+                .push(second["data"]["threads"][0].clone());
+            next_candidate["data"]["next_offset"] = json!(25);
+            next_candidate["truncated"] = json!(false);
+            assert!(
+                crate::types::json_bytes(&next_candidate).len()
+                    > crate::workspace::MAX_RESULT_BYTES
+            );
+        }
+    }
+
+    #[test]
+    fn subtree_pages_measure_the_envelope_and_continuation_at_the_byte_limit() {
+        for (candidate_bytes, expected_count) in [(32767, 2), (32768, 2), (32769, 1), (66000, 0)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut session = Session::new(
+                json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            )
+            .unwrap();
+            let shared = tree(&session);
+            {
+                let mut t = shared.tree.lock().unwrap();
+                for id in ["t1", "t2", "t3"] {
+                    let mut record = stopped_node(id, "root").record;
+                    record["cost"] = crate::types::usage_zero(true);
+                    record["trace_path"] = json!(if id == "t3" {
+                        "x".repeat(1024)
+                    } else {
+                        "/".into()
+                    });
+                    record["depth"] = json!(1);
+                    t.archive.insert(id.into(), record);
+                }
+            }
+            let mut candidate = execute(&mut session, "threads", r#"{"subtree":true}"#)
+                .unwrap()
+                .unwrap();
+            candidate["data"]["threads"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(2);
+            candidate["data"]["next_offset"] = json!(2);
+            let padding = candidate_bytes - crate::types::json_bytes(&candidate).len();
+            shared.tree.lock().unwrap().archive.get_mut("t1").unwrap()["trace_path"] =
+                json!(format!("/{}", "x".repeat(padding)));
+            let out = execute(&mut session, "threads", r#"{"subtree":true}"#)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                out["data"]["threads"].as_array().unwrap().len(),
+                expected_count,
+                "candidate size {candidate_bytes}"
+            );
+            assert_eq!(out["data"]["next_offset"], expected_count);
+            assert_eq!(out["truncated"], true);
+            assert!(crate::types::json_bytes(&out).len() <= crate::workspace::MAX_RESULT_BYTES);
+            if expected_count == 2 {
+                assert_eq!(crate::types::json_bytes(&out).len(), candidate_bytes - 1);
+            }
         }
     }
 

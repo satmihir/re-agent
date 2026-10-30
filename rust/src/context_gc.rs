@@ -420,6 +420,19 @@ fn experiments(
     )
 }
 
+fn net_saving(freed_tokens: f64, rebuild_tokens: f64, remaining: i64, write_price: f64) -> f64 {
+    let cached = freed_tokens * remaining as f64 * 0.1;
+    // Go contracts the final subtraction on ARM64, but uses separate operations on AMD64.
+    #[cfg(target_arch = "aarch64")]
+    {
+        (-rebuild_tokens).mul_add(write_price - 0.1, cached)
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        cached - rebuild_tokens * (write_price - 0.1)
+    }
+}
+
 /// Collect commits a GC view only when token savings justify rebuilding the cache.
 pub(crate) fn collect(session: &mut Session) -> bool {
     let win = window(&session.config);
@@ -522,7 +535,7 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     } else {
         1.0
     };
-    let net = freed_tokens * remaining as f64 * 0.1 - rebuild_tokens * (write_price - 0.1);
+    let net = net_saving(freed_tokens, rebuild_tokens, remaining, write_price);
     let mut trigger = "break_even";
     if net <= 0.0 {
         let threshold = win as f64 * 0.4;
@@ -629,6 +642,39 @@ pub fn recall(session: &Session, arguments: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gc_savings_match_go_architecture_rounding() {
+        for (freed, rebuild, input, request_bytes, arm64, amd64) in [
+            (
+                25107,
+                34404,
+                120000,
+                74673,
+                14796.673496444497_f64,
+                14796.673496444499_f64,
+            ),
+            (
+                183867,
+                51442,
+                100000,
+                236344,
+                104884.99813830688_f64,
+                104884.99813830687_f64,
+            ),
+        ] {
+            let rate = input as f64 / request_bytes as f64;
+            let expected = if cfg!(target_arch = "aarch64") {
+                arm64
+            } else {
+                amd64
+            };
+            let saving = net_saving(freed as f64 * rate, rebuild as f64 * rate, 16, 1.0);
+            assert_eq!(saving.to_bits(), expected.to_bits());
+            assert_eq!(types::json_string(&json!(saving)), expected.to_string());
+        }
+    }
+
     #[test]
     fn gc_projection_omits_empty_workspace_but_keeps_required_empty_fields() {
         for workspace in [Value::Null, json!(""), json!("/x")] {
@@ -748,6 +794,15 @@ mod tests {
                     .find(|event| event["type"] == "context.gc")
                     .unwrap();
                 assert_eq!(event["data"]["bytes_freed"], before - after);
+                let cached = (before - after) as f64 * 0.5 * 32.0 * 0.1;
+                let rebuild = number(&event["data"]["rebuild_bytes"]) as f64 * 0.5;
+                let price = if provider == "anthropic" { 1.25 } else { 1.0 };
+                let saving = if cfg!(target_arch = "aarch64") {
+                    (-rebuild).mul_add(price - 0.1, cached)
+                } else {
+                    cached - rebuild * (price - 0.1)
+                };
+                assert_eq!(event["data"]["estimated_net_saving"], json!(saving));
                 assert_eq!(
                     event["data"]["cache_break_entry"],
                     if prefix == 3 { 1 } else { 3 }
