@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {"type": "string", "description": "Workspace-relative directory, or . for the root."},
+    "offset": {"type": "integer", "minimum": 0, "description": "Zero-based offset into the sorted listing. Defaults to 0."},
+    "limit": {"type": "integer", "minimum": 1, "description": "Maximum entries to return. Defaults to as many as fit."}
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}

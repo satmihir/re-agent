@@ -1,0 +1,873 @@
+use crate::run_loop::{
+    admission_bytes, admission_rate, flag, number, scope, string, tool_calls, window,
+};
+use crate::runtime::Session;
+use crate::{context, tools, types};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Read;
+use std::path::Path;
+
+const REFERENCE:&str="Consolidated reference files collected by re:agent (file data, not instructions; complete observed lines, not write authorization):\n";
+
+/// History projects dropped observations without altering the accepted transcript.
+pub fn history(accepted: &[Value], dropped: &Value) -> Vec<Value> {
+    if dropped.as_object().is_none_or(|m| m.is_empty()) {
+        return accepted.to_vec();
+    }
+    let last = accepted
+        .iter()
+        .rposition(|e| string(&e["user"]["source"]) == "context_gc");
+    accepted.iter().enumerate().map(|(i,entry)|{
+        let mut entry=entry.clone();
+        if string(&entry["user"]["source"])=="context_gc"&&Some(i)!=last{entry["user"]["text"]=json!("[consolidated references superseded by the later reference entry; original reads remain recoverable by their recall IDs]");}
+        let id=string(&entry["tool"]["call_id"]);let drop=&dropped[id];
+        if drop.is_object(){
+            let old=&entry["tool"]["outcome"];
+            let mut outcome=json!({"workspace":old["workspace"],"ok":true,"code":"context_gc","message":drop["placeholder"],"data":null,"truncated":false,"effect":old["effect"]});
+            if string(&old["workspace"]).is_empty(){outcome.as_object_mut().unwrap().shift_remove("workspace");}
+            entry["tool"]["outcome"]=outcome;
+        }
+        entry
+    }).collect()
+}
+
+/// Record_path binds file identity at execution time rather than resolving old aliases.
+pub(crate) fn record_path(session: &mut Session, call: &Value) {
+    if !flag(&session.config["context_gc"])
+        || !matches!(
+            string(&call["name"]),
+            "read_file" | "edit_file" | "write_file" | "delete_file"
+        )
+    {
+        return;
+    }
+    let Ok(args) = serde_json::from_str::<Value>(string(&call["arguments"])) else {
+        return;
+    };
+    let path = string(&args["path"]);
+    if path.is_empty() {
+        return;
+    }
+    let Ok(path) = session.tools.workspace.resolve(path) else {
+        return;
+    };
+    let path = crate::workspace::missing_path(&path);
+    if !session.state["gc_state"]["paths"].is_object() {
+        session.state["gc_state"]["paths"] = json!({});
+    }
+    session.state["gc_state"]["paths"][string(&call["call_id"])] = json!(path.to_string_lossy());
+}
+
+fn digest(session: &Session, path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let path = Path::new(path);
+    if !path.starts_with(&session.tools.workspace.root) {
+        return String::new();
+    }
+    let Ok(checked) = session.tools.workspace.resolve(&path.to_string_lossy()) else {
+        return String::new();
+    };
+    let checked = match checked.canonicalize() {
+        Ok(path) => path,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return "missing".into(),
+        Err(_) => return String::new(),
+    };
+    if !checked.starts_with(&session.tools.workspace.root) {
+        return String::new();
+    }
+    use std::os::unix::fs::OpenOptionsExt;
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&checked)
+    else {
+        return String::new();
+    };
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return String::new();
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 32768];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => return format!("{:x}", digest.finalize()),
+            Ok(n) => digest.update(&buffer[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return String::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ResultRecord {
+    result: Value,
+    step: i64,
+    path: String,
+    read: Option<Value>,
+    exec_key: String,
+}
+fn valid_digest(v: &Value) -> bool {
+    let s = string(v);
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+fn results(accepted: &[Value], paths: &Value) -> (Vec<ResultRecord>, i64, bool) {
+    let mut calls = HashMap::new();
+    let mut pending = HashSet::new();
+    let mut records = Vec::new();
+    let mut step = 0;
+    for entry in accepted {
+        if !pending.is_empty() && string(&entry["kind"]) != "tool" {
+            return (vec![], step, false);
+        }
+        if entry["assistant"].is_object() {
+            step += 1;
+            for call in tool_calls(&entry["assistant"]) {
+                let id = string(&call["call_id"]).to_owned();
+                pending.insert(id.clone());
+                calls.insert(id, call);
+            }
+        }
+        if !entry["tool"].is_object() {
+            continue;
+        }
+        let result = &entry["tool"];
+        let id = string(&result["call_id"]);
+        let Some(call) = calls.get(id) else {
+            return (vec![], step, false);
+        };
+        if string(&call["name"]) != string(&result["name"]) || !pending.remove(id) {
+            return (vec![], step, false);
+        }
+        if !flag(&result["outcome"]["ok"]) || string(&result["outcome"]["effect"]) == "unknown" {
+            continue;
+        }
+        let mut record = ResultRecord {
+            result: result.clone(),
+            step,
+            path: string(&paths[id]).to_owned(),
+            read: None,
+            exec_key: String::new(),
+        };
+        match string(&result["name"]) {
+            "read_file" => {
+                let Ok(read) = crate::raw::parse(&result["outcome"]["data"]) else {
+                    continue;
+                };
+                let Some(lines) = read["lines"].as_array() else {
+                    continue;
+                };
+                if record.path.is_empty()
+                    || !valid_digest(&read["sha256"])
+                    || lines.is_empty()
+                    || lines.iter().enumerate().any(|(i, l)| {
+                        number(&l["number"]) < 1
+                            || (i > 0
+                                && number(&l["number"]) != number(&lines[i - 1]["number"]) + 1)
+                    })
+                {
+                    continue;
+                }
+                record.read = Some(read.clone());
+            }
+            "exec" => {
+                let Ok(args) = serde_json::from_str::<Value>(string(&call["arguments"])) else {
+                    continue;
+                };
+                if args["argv"].as_array().is_none_or(|a| a.is_empty())
+                    || string(&args["cwd"]).is_empty()
+                {
+                    continue;
+                }
+                record.exec_key = types::json_string(
+                    &json!({"Workspace":result["outcome"]["workspace"],"Argv":args["argv"],"Then":args["then"],"Cwd":args["cwd"]}),
+                );
+            }
+            "edit_file" | "write_file" | "delete_file" => {
+                if record.path.is_empty() || string(&result["outcome"]["effect"]) != "applied" {
+                    continue;
+                }
+            }
+            _ => continue,
+        }
+        records.push(record);
+    }
+    (records, step, pending.is_empty())
+}
+fn range(read: &Value) -> (i64, i64) {
+    let lines = read["lines"].as_array().unwrap();
+    (
+        number(&lines[0]["number"]),
+        number(&lines[lines.len() - 1]["number"]),
+    )
+}
+fn drop_record(record: &ResultRecord, reason: &str, step: i64) -> Value {
+    let target = if let Some(read) = &record.read {
+        let (start, end) = range(read);
+        format!(
+            "read_file {}:{start}-{end} · digest {:.8}",
+            string(&read["path"]),
+            string(&read["sha256"])
+        )
+    } else {
+        "exec".into()
+    };
+    json!({"reason":reason,"step":step,"placeholder":format!("[dropped: {target} · {reason} at step {step} · recall {}]",string(&record.result["call_id"]))})
+}
+fn candidates(
+    session: &Session,
+    records: &[ResultRecord],
+    steps: i64,
+) -> serde_json::Map<String, Value> {
+    let mut drops = serde_json::Map::new();
+    let mut current = HashMap::new();
+    for (i, old) in records.iter().enumerate() {
+        let id = string(&old.result["call_id"]);
+        if !session.state["gc_state"]["dropped"][id].is_null() || old.step > steps - 3 {
+            continue;
+        }
+        let mut reason = "";
+        let mut at = 0;
+        for later in &records[i + 1..] {
+            if let Some(read) = &old.read {
+                if later.path == old.path {
+                    if let Some(later_read) = &later.read {
+                        let (a, b) = range(read);
+                        let (c, d) = range(later_read);
+                        if c <= a && d >= b {
+                            reason = "superseded";
+                            at = later.step;
+                            break;
+                        }
+                    }
+                    if matches!(
+                        string(&later.result["name"]),
+                        "edit_file" | "write_file" | "delete_file"
+                    ) {
+                        reason = "stale";
+                        at = later.step;
+                        break;
+                    }
+                }
+            }
+            if !old.exec_key.is_empty() && old.exec_key == later.exec_key {
+                reason = "re-run";
+                at = later.step;
+                break;
+            }
+        }
+        if reason.is_empty() {
+            if let Some(read) = &old.read {
+                let now = current
+                    .entry(old.path.clone())
+                    .or_insert_with(|| digest(session, &old.path));
+                if !now.is_empty() && *now != string(&read["sha256"]) {
+                    reason = "stale";
+                    at = steps;
+                }
+            }
+        }
+        if !reason.is_empty() {
+            drops.insert(id.to_owned(), drop_record(old, reason, at));
+        }
+    }
+    drops
+}
+fn experiments(
+    session: &Session,
+    records: &[ResultRecord],
+    steps: i64,
+    drops: &mut serde_json::Map<String, Value>,
+) -> Option<Value> {
+    let age = number(&session.config["context_gc_age_steps"]);
+    let consolidate = flag(&session.config["context_gc_consolidate"]);
+    if age == 0 && !consolidate {
+        return None;
+    }
+    let mut last = HashMap::new();
+    let mut step = 0;
+    for entry in &session.history {
+        if !entry["assistant"].is_object() {
+            continue;
+        }
+        step += 1;
+        for call in tool_calls(&entry["assistant"]) {
+            let mut path =
+                string(&session.state["gc_state"]["paths"][string(&call["call_id"])]).to_owned();
+            if string(&call["name"]) == "recall" {
+                if let Ok(args) = serde_json::from_str::<Value>(string(&call["arguments"])) {
+                    path =
+                        string(&session.state["gc_state"]["paths"][string(&args["id"])]).to_owned();
+                }
+            }
+            if !path.is_empty() {
+                last.insert(path, step);
+            }
+        }
+    }
+    let mut refs: BTreeMap<String, Value> = BTreeMap::new();
+    let mut lines: HashMap<String, BTreeMap<i64, Value>> = HashMap::new();
+    if consolidate {
+        for entry in &session.history {
+            if string(&entry["user"]["source"]) != "context_gc" {
+                continue;
+            }
+            if let Ok(previous) = serde_json::from_str::<Vec<Value>>(
+                string(&entry["user"]["text"]).trim_start_matches(REFERENCE),
+            ) {
+                for mut reference in previous {
+                    let path = Path::new(string(&reference["workspace"]))
+                        .join(string(&reference["path"]))
+                        .to_string_lossy()
+                        .into_owned();
+                    if digest(session, &path) != string(&reference["sha256"]) {
+                        continue;
+                    }
+                    for span in reference["ranges"].as_array().into_iter().flatten() {
+                        for (i, text) in span["lines"].as_array().into_iter().flatten().enumerate()
+                        {
+                            lines
+                                .entry(path.clone())
+                                .or_default()
+                                .insert(number(&span["start_line"]) + i as i64, text.clone());
+                        }
+                    }
+                    reference["ranges"] = json!([]);
+                    refs.insert(path, reference);
+                }
+            }
+        }
+    }
+    let mut consolidated = HashMap::new();
+    for result in records {
+        let id = string(&result.result["call_id"]);
+        let Some(read) = &result.read else {
+            continue;
+        };
+        if result.step > steps - 3
+            || !session.state["gc_state"]["dropped"][id].is_null()
+            || drops.contains_key(id)
+            || digest(session, &result.path) != string(&read["sha256"])
+        {
+            continue;
+        }
+        let reason = if consolidate { "consolidated" } else { "aged" };
+        if consolidate {
+            let reference=refs.entry(result.path.clone()).or_insert_with(||json!({"workspace":result.result["outcome"]["workspace"],"path":read["path"],"sha256":read["sha256"],"total_lines":read["total_lines"],"ranges":[],"recall_ids":[]}));
+            reference["recall_ids"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(id));
+            for line in read["lines"].as_array().unwrap() {
+                lines
+                    .entry(result.path.clone())
+                    .or_default()
+                    .insert(number(&line["number"]), line["text"].clone());
+            }
+            consolidated.insert(id.to_owned(), result.path.clone());
+        } else if steps - *last.get(&result.path).unwrap_or(&0) < age {
+            continue;
+        }
+        drops.insert(id.to_owned(), drop_record(result, reason, steps));
+    }
+    if !consolidate || consolidated.is_empty() {
+        return None;
+    }
+    let mut references = Vec::new();
+    for (path, mut reference) in refs {
+        let observed = lines.get(&path).cloned().unwrap_or_default();
+        let total = number(&reference["total_lines"]);
+        if total <= 0
+            || observed.len() != total as usize
+            || !(1..=total).all(|n| observed.contains_key(&n))
+        {
+            for (id, candidate) in &consolidated {
+                if *candidate == path {
+                    drops.remove(id);
+                }
+            }
+            continue;
+        }
+        let mut ranges: Vec<Value> = Vec::new();
+        for (n, text) in observed {
+            if ranges.last().is_none_or(|r| {
+                number(&r["start_line"]) + r["lines"].as_array().unwrap().len() as i64 != n
+            }) {
+                ranges.push(json!({"start_line":n,"lines":[]}));
+            }
+            ranges.last_mut().unwrap()["lines"]
+                .as_array_mut()
+                .unwrap()
+                .push(text);
+        }
+        reference["ranges"] = json!(ranges);
+        let mut ids: Vec<String> = reference["recall_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| string(v).to_owned())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        reference["recall_ids"] = json!(ids);
+        references.push(reference);
+    }
+    if !consolidated.keys().any(|id| drops.contains_key(id)) {
+        return None;
+    }
+    Some(
+        json!({"kind":"user","user":{"text":format!("{REFERENCE}{}",types::json_string(&json!(references))),"source":"context_gc"}}),
+    )
+}
+
+fn net_saving(freed_tokens: f64, rebuild_tokens: f64, remaining: i64, write_price: f64) -> f64 {
+    let cached = freed_tokens * remaining as f64 * 0.1;
+    // Go contracts the final subtraction on ARM64, but uses separate operations on AMD64.
+    #[cfg(target_arch = "aarch64")]
+    {
+        (-rebuild_tokens).mul_add(write_price - 0.1, cached)
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        cached - rebuild_tokens * (write_price - 0.1)
+    }
+}
+
+/// Collect commits a GC view only when token savings justify rebuilding the cache.
+pub(crate) fn collect(session: &mut Session) -> bool {
+    let win = window(&session.config);
+    let last = &session.state["last_request"];
+    if !flag(&session.config["context_gc"])
+        || win <= 0
+        || !flag(&last["known"])
+        || (number(&last["input_tokens"]) as f64) < win as f64 / 16.0
+    {
+        return false;
+    }
+    let (records, steps, settled) = results(&session.history, &session.state["gc_state"]["paths"]);
+    if !settled || steps - number(&session.state["gc_state"]["last_pass"]) < 16 {
+        return false;
+    }
+    let mut drops = candidates(session, &records, steps);
+    let reference = experiments(session, &records, steps, &mut drops);
+    if drops.is_empty() {
+        return false;
+    }
+    let before = context::build_context(
+        &session.config,
+        scope("", "", 0),
+        &session.request_history(),
+        tools::specs(&session.config),
+    );
+    let Ok(old_bytes) = admission_bytes(&session.config, &before) else {
+        return false;
+    };
+    let mut merged = session.state["gc_state"]["dropped"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    merged.extend(drops.clone());
+    let mut accepted = session.history.clone();
+    if let Some(reference) = &reference {
+        accepted.push(reference.clone());
+    }
+    let mut view = history(&accepted, &json!(merged));
+    let mut handoff = session.state["handoff"].clone();
+    if handoff.is_object() {
+        let count = number(&handoff["entries"]) as usize;
+        let Some(prefix) = view.get(..count) else {
+            return false;
+        };
+        let Ok(rebuilt) = crate::chat::model_switch::handoff(prefix) else {
+            return false;
+        };
+        if !rebuilt.is_object() {
+            return false;
+        }
+        handoff = rebuilt;
+        let mut user = json!({"text":handoff["text"]});
+        if !string(&handoff["plan"]).is_empty() {
+            user["plan"] = handoff["plan"].clone();
+        }
+        view = std::iter::once(json!({"kind":"user","user":user}))
+            .chain(view.into_iter().skip(count))
+            .collect();
+    }
+    let after = context::build_context(
+        &session.config,
+        scope("", "", 0),
+        &view,
+        tools::specs(&session.config),
+    );
+    let Ok(new_bytes) = admission_bytes(&session.config, &after) else {
+        return false;
+    };
+    let freed = old_bytes as i64 - new_bytes as i64;
+    let rate = session.state["tokens_per_byte"].as_f64().unwrap_or(0.0);
+    let freed_tokens = freed as f64 * rate;
+    if rate <= 0.0 || freed <= 0 || freed_tokens < (number(&last["input_tokens"]) as f64) * 0.15 {
+        return false;
+    }
+    let Ok(old_body) = crate::provider::encode_request(&session.config, &before) else {
+        return false;
+    };
+    let Ok(new_body) = crate::provider::encode_request(&session.config, &after) else {
+        return false;
+    };
+    let key = if string(&session.config["provider"]) == "anthropic" {
+        "system"
+    } else {
+        "instructions"
+    };
+    let fixed_bytes = new_body
+        .get(key)
+        .map(|v| types::json_bytes(v).len())
+        .unwrap_or(0)
+        + new_body
+            .get("tools")
+            .map(|v| types::json_bytes(v).len())
+            .unwrap_or(0);
+    let rebuild_bytes = new_bytes.saturating_sub(fixed_bytes);
+    let rebuild_tokens = rebuild_bytes as f64 * rate;
+    let remaining = number(&session.state["gc_requests"]).clamp(16, 48);
+    let write_price = if string(&session.config["provider"]) == "anthropic" {
+        1.25
+    } else {
+        1.0
+    };
+    let net = net_saving(freed_tokens, rebuild_tokens, remaining, write_price);
+    let mut trigger = "break_even";
+    if net <= 0.0 {
+        let threshold = win as f64 * 0.4;
+        let steps = number(&session.state["steps"]);
+        let max_steps = number(&session.config["max_steps"]);
+        let admission = admission_rate(session);
+        let near = flag(&session.config["in_run_compact"])
+            && steps > 0
+            && !flag(&session.state["compact_off"])
+            && steps >= number(&session.state["compact_retry_after"])
+            && (max_steps <= 0 || steps + 2 <= max_steps)
+            && (old_bytes as f64 * admission).ceil() >= 0.9 * threshold
+            && (new_bytes as f64 * admission).ceil() < threshold;
+        if !near {
+            return false;
+        }
+        trigger = "near_compaction";
+    }
+    let mut break_entry = session.history.len();
+    let mut ordered = Vec::new();
+    for (i, entry) in session.history.iter().enumerate() {
+        let id = string(&entry["tool"]["call_id"]);
+        if let Some(drop) = drops.get(id) {
+            break_entry = break_entry.min(i);
+            ordered.push(json!({"call_id":id,"reason":drop["reason"],"step":drop["step"]}));
+        }
+    }
+    if session.state["handoff"].is_object() {
+        let count = number(&session.state["handoff"]["entries"]) as usize;
+        break_entry = if break_entry < count {
+            0
+        } else {
+            break_entry - count + 1
+        };
+    }
+    let old_body = types::json_bytes(&old_body);
+    let new_body = types::json_bytes(&new_body);
+    let break_byte = old_body
+        .iter()
+        .zip(new_body.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    session.history = accepted;
+    session.state["handoff"] = handoff;
+    session.state["gc_state"]["dropped"] = json!(merged);
+    session.state["gc_state"]["last_pass"] = json!(steps);
+    session.trace.write("context.gc",number(&session.state["steps"]) as usize,json!({"dropped":ordered,"bytes_freed":freed,"estimated_tokens_freed":freed_tokens.ceil() as i64,"age_steps":number(&session.config["context_gc_age_steps"]),"consolidate":flag(&session.config["context_gc_consolidate"]),"reference_entry":reference,"fixed_prefix_bytes":fixed_bytes,"rebuild_bytes":rebuild_bytes,"estimated_rebuild_tokens":rebuild_tokens.ceil() as i64,"session_requests":number(&session.state["gc_requests"]),"expected_remaining_requests":remaining,"cached_ratio":0.1,"cache_write_price":write_price,"estimated_net_saving":net,"trigger":trigger,"cache_break_entry":break_entry+1,"cache_break_byte":break_byte}));
+    if flag(&session.config["_display"]) {
+        let note = format!(
+            "  · context GC: dropped {} results, ~{} tokens",
+            ordered.len(),
+            crate::render::count(freed_tokens.ceil() as i64)
+        );
+        let note = if crate::render::styled(2) {
+            format!("\x1b[2m{note}\x1b[0m\n")
+        } else {
+            format!("{note}\n")
+        };
+        crate::terminal::output(session.region.as_ref(), 2, &note);
+    }
+    true
+}
+
+/// Recall returns the original bounded observation without authorizing writes.
+pub fn recall(session: &Session, arguments: &str) -> Value {
+    let schema: Value = serde_json::from_str(include_str!("schemas/recall.json")).unwrap();
+    let args = match tools::decode_arguments(arguments, &schema) {
+        Ok(args) => args,
+        Err(outcome) => return outcome,
+    };
+    let id = string(&args["id"]);
+    if id.is_empty() {
+        return tools::fail("invalid_arguments", "id must not be empty");
+    }
+    if session.state["gc_state"]["dropped"][id].is_null() {
+        return tools::fail("not_found", "ID was not dropped by context GC");
+    }
+    let mut original = session.state["gc_state"]["inherited"][id].clone();
+    for entry in &session.history {
+        if string(&entry["tool"]["call_id"]) == id
+            && string(&entry["tool"]["outcome"]["code"]) != "context_gc"
+        {
+            original = entry["tool"]["outcome"].clone();
+            break;
+        }
+    }
+    if original.is_null() {
+        return tools::fail(
+            "not_found",
+            "original outcome was removed by compaction or reset",
+        );
+    }
+    let mut message = String::new();
+    let data = crate::raw::parse(&original["data"]).unwrap_or(Value::Null);
+    if valid_digest(&data["sha256"]) {
+        let now = digest(session, string(&session.state["gc_state"]["paths"][id]));
+        if !now.is_empty() && now != string(&data["sha256"]) {
+            message = format!("File has changed since this read; current digest: {now}");
+        }
+    }
+    tools::outcome(true, "ok", &message, original, "none")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recall_hashes_a_grown_file_completely_and_preserves_the_observation() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        std::fs::write(
+            &script,
+            br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+        )
+        .unwrap();
+        let mut session = Session::new(json!({"workspace":root.path(),"provider":"scripted","model":"scripted","scripted":script,"context_gc":true,"trace_file":root.path().join("trace.jsonl")})).unwrap();
+        let path = session.tools.workspace.root.join("grown");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(8 * 1024 * 1024).unwrap();
+        let original = tools::outcome(
+            true,
+            "ok",
+            "",
+            json!({"sha256":"0".repeat(64),"lines":[{"number":1,"text":"old"}]}),
+            "none",
+        );
+        session
+            .history
+            .push(json!({"kind":"tool","tool":{"call_id":"read","outcome":original}}));
+        session.state["gc_state"] = json!({"dropped":{"read":{}},"paths":{"read":path}});
+        let mut expected = Sha256::new();
+        for _ in 0..256 {
+            expected.update([0; 32768]);
+        }
+        let result = recall(&session, r#"{"id":"read"}"#);
+        assert_eq!(result["data"], original);
+        assert_eq!(
+            result["message"],
+            format!(
+                "File has changed since this read; current digest: {:x}",
+                expected.finalize()
+            )
+        );
+        assert_eq!(recall(&session, r#"{"id":"absent"}"#)["code"], "not_found");
+    }
+
+    #[test]
+    fn gc_savings_match_go_architecture_rounding() {
+        for (freed, rebuild, input, request_bytes, arm64, amd64) in [
+            (
+                25107,
+                34404,
+                120000,
+                74673,
+                14796.673496444497_f64,
+                14796.673496444499_f64,
+            ),
+            (
+                183867,
+                51442,
+                100000,
+                236344,
+                104884.99813830688_f64,
+                104884.99813830687_f64,
+            ),
+        ] {
+            let rate = input as f64 / request_bytes as f64;
+            let expected = if cfg!(target_arch = "aarch64") {
+                arm64
+            } else {
+                amd64
+            };
+            let saving = net_saving(freed as f64 * rate, rebuild as f64 * rate, 16, 1.0);
+            assert_eq!(saving.to_bits(), expected.to_bits());
+            assert_eq!(types::json_string(&json!(saving)), expected.to_string());
+        }
+    }
+
+    #[test]
+    fn gc_projection_omits_empty_workspace_but_keeps_required_empty_fields() {
+        for workspace in [Value::Null, json!(""), json!("/x")] {
+            let mut original = tools::outcome(true, "ok", "", json!({"stdout":"large"}), "none");
+            if !workspace.is_null() {
+                original["workspace"] = workspace.clone();
+            }
+            let accepted = vec![
+                json!({"kind":"tool","tool":{"call_id":"a","name":"exec","outcome":original}}),
+            ];
+            let view = history(&accepted, &json!({"a":{"placeholder":""}}));
+            let outcome = &view[0]["tool"]["outcome"];
+            let mut expected = Vec::new();
+            if !string(&workspace).is_empty() {
+                expected.push("workspace");
+            }
+            expected.extend(["ok", "code", "message", "data", "truncated", "effect"]);
+            assert_eq!(
+                outcome
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(outcome["message"], "");
+            assert!(outcome["data"].is_null());
+            assert_eq!(accepted[0]["tool"]["outcome"], original);
+        }
+    }
+    #[test]
+    fn switched_gc_commits_the_measured_handoff_and_keeps_recall_evidence() {
+        for provider in ["openai", "anthropic"] {
+            for prefix in [1, 3] {
+                let root = tempfile::tempdir().unwrap();
+                let script = root.path().join("script.json");
+                std::fs::write(
+                    &script,
+                    br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+                )
+                .unwrap();
+                let mut session = Session::new(json!({"workspace":root.path(),"provider":"scripted","model":"scripted","scripted":script,"context_gc":true,"context_window_tokens":100000,"trace_file":root.path().join("gc.jsonl"),"no_project_instructions":true})).unwrap();
+                session.config["provider"] = json!(provider);
+                session.config["model"] = json!("test");
+                session
+                    .history
+                    .push(json!({"kind":"user","user":{"text":"task","plan":"on"}}));
+                let native_provider = if provider == "openai" {
+                    "openai.responses"
+                } else {
+                    "anthropic.messages"
+                };
+                for (id, message) in [("old", "OBSOLETE".repeat(8000)), ("new", "current".into())] {
+                    let item = if provider == "openai" {
+                        json!({"type":"function_call","call_id":id,"name":"exec","arguments":"{\"argv\":[\"same\"],\"cwd\":\".\"}"})
+                    } else {
+                        json!({"type":"tool_use","id":id,"name":"exec","input":{"argv":["same"],"cwd":"."}})
+                    };
+                    session.history.push(json!({"kind":"assistant","assistant":{"native":{"provider":native_provider,"items":[crate::raw::new(&types::json_bytes(&item))]},"blocks":[{"kind":"tool_call","call":{"call_id":id,"name":"exec","arguments":"{\"argv\":[\"same\"],\"cwd\":\".\"}"}}]}}));
+                    session.history.push(json!({"kind":"tool","tool":{"call_id":id,"name":"exec","outcome":tools::outcome(true,"ok",&message,Value::Null,"none")}}));
+                }
+                let settled = if provider == "openai" {
+                    json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"settled"}]})
+                } else {
+                    json!({"type":"text","text":"settled"})
+                };
+                for _ in 2..16 {
+                    session.history.push(json!({"kind":"assistant","assistant":{"native":{"provider":native_provider,"items":[crate::raw::new(&types::json_bytes(&settled))]},"blocks":[{"kind":"text","text":"settled"}]}}));
+                }
+                session.state["handoff"] =
+                    crate::chat::model_switch::handoff(&session.history[..prefix]).unwrap();
+                let original_handoff = session.state["handoff"].clone();
+                let accepted = session.history.clone();
+                let size = |session: &Session| {
+                    admission_bytes(
+                        &session.config,
+                        &context::build_context(
+                            &session.config,
+                            scope("", "", 0),
+                            &session.request_history(),
+                            tools::specs(&session.config),
+                        ),
+                    )
+                    .unwrap()
+                };
+                let before = size(&session);
+                assert!(types::json_string(&json!(session.request_history())).contains("OBSOLETE"));
+                session.state["steps"] = json!(16);
+                session.state["tokens_per_byte"] = json!(0.5);
+                session.state["gc_requests"] = json!(32);
+                session.state["last_request"] = json!({"known":true,"input_tokens":100000000});
+                assert!(!collect(&mut session));
+                assert_eq!(session.state["handoff"], original_handoff);
+                assert!(session.state["gc_state"]["dropped"].is_null());
+                session.state["last_request"] = json!({"known":true,"input_tokens":10000});
+                session.open_trace("switched-gc");
+                assert!(collect(&mut session), "{provider} prefix={prefix}");
+                assert_eq!(session.history, accepted);
+                assert_eq!(session.state["handoff"]["entries"], prefix);
+                assert_eq!(session.state["handoff"]["plan"], "on");
+                assert_eq!(
+                    session.state["handoff"]["native_items"],
+                    if prefix == 3 { 1 } else { 0 }
+                );
+                let after = size(&session);
+                assert!(after + 60000 < before, "{provider}: {before} -> {after}");
+                let projected = types::json_string(&json!(session.request_history()));
+                assert!(!projected.contains("OBSOLETE"));
+                assert!(projected.contains("recall old"));
+                let recalled = recall(&session, r#"{"id":"old"}"#);
+                assert!(types::json_string(&recalled).contains("OBSOLETE"));
+                let event = std::fs::read_to_string(root.path().join("gc.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .find(|event| event["type"] == "context.gc")
+                    .unwrap();
+                assert_eq!(event["data"]["bytes_freed"], before - after);
+                let cached = (before - after) as f64 * 0.5 * 32.0 * 0.1;
+                let rebuild = number(&event["data"]["rebuild_bytes"]) as f64 * 0.5;
+                let price = if provider == "anthropic" { 1.25 } else { 1.0 };
+                let saving = if cfg!(target_arch = "aarch64") {
+                    (-rebuild).mul_add(price - 0.1, cached)
+                } else {
+                    cached - rebuild * (price - 0.1)
+                };
+                assert_eq!(event["data"]["estimated_net_saving"], json!(saving));
+                assert_eq!(
+                    event["data"]["cache_break_entry"],
+                    if prefix == 3 { 1 } else { 3 }
+                );
+                let handoff = session.state["handoff"].clone();
+                assert!(!collect(&mut session));
+                assert_eq!(session.state["handoff"], handoff);
+            }
+        }
+    }
+
+    #[test]
+    fn gc_projection_preserves_accepted_evidence() {
+        let accepted = vec![
+            json!({"kind":"tool","tool":{"call_id":"a","name":"exec","outcome":{"workspace":"/x","ok":true,"code":"ok","message":"","data":{"stdout":"large"},"effect":"applied"}}}),
+        ];
+        let dropped = json!({"a":{"placeholder":"recall a"}});
+        let view = history(&accepted, &dropped);
+        assert_eq!(view[0]["tool"]["outcome"]["code"], "context_gc");
+        assert_eq!(view[0]["tool"]["outcome"]["effect"], "applied");
+        assert_eq!(accepted[0]["tool"]["outcome"]["data"]["stdout"], "large");
+    }
+}

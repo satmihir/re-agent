@@ -1,0 +1,1 @@
+{"type":"object","properties":{"path":{"type":"string","description":"Exact absolute workspace directory; no parent traversal or withheld names."}},"required":["path"],"additionalProperties":false}

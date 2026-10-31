@@ -61,3 +61,19 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  rust:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt
+      - run: cargo +1.99.1 fmt --check
+      - run: cargo +1.99.1 build --locked
+      - run: cargo +1.99.1 test --locked

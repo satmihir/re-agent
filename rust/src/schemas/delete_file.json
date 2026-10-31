@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {"type": "string", "description": "Workspace-relative regular file, or directory/symlink with recursive:true."},
+    "expected_sha256": {"type": "string", "description": "Optional regular-file SHA-256; omit to use the last observed version. Not accepted for directories or symlinks."},
+    "recursive": {"type": "boolean", "description": "Explicitly authorize a directory tree or symlink deletion; default false."}
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}

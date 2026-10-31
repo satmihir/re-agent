@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+             "description": "The first or only command: its executable followed by its literal arguments, such as [\"git\",\"status\"]. Always an array, also when then is given."},
+    "then": {"type": "array", "maxItems": 7,
+             "items": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+             "description": "Commands to run after argv, each an argument vector like argv, in order and in the same cwd, each only if the previous command exited successfully."},
+    "cwd": {"type": "string", "description": "Existing workspace-relative directory, or . for the root."},
+    "timeout_ms": {"type": "integer", "minimum": 1, "description": "Milliseconds each command may run. Defaults to 120000; values below 10000 are raised to 10000."}
+  },
+  "required": ["argv", "cwd"],
+  "additionalProperties": false
+}
