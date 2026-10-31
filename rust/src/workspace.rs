@@ -338,54 +338,43 @@ pub fn project_instructions(root: &str) -> Result<Option<String>, String> {
 }
 
 fn git(root: &str, args: &[&str]) -> Option<String> {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-    let mut child = crate::process::spawn(
-        crate::tool_git::inspect_command(Path::new(root))
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null()),
-    )
-    .ok()?;
-    let stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = vec![];
-        let mut pipe = stdout;
-        let mut buffer = [0u8; 8192];
-        loop {
-            let n = pipe.read(&mut buffer).unwrap_or(0);
-            if n == 0 {
-                break;
-            }
-            if bytes.len() <= MAX_RESULT_BYTES {
-                bytes.extend_from_slice(&buffer[..n]);
-            }
-        }
-        bytes
-    });
+    use std::time::Duration;
+    let mut command = crate::tool_git::inspect_command(Path::new(root));
+    command.args(args);
     let timeout = std::env::var("REAGENT_WORKSPACE_GIT_TIMEOUT")
         .ok()
         .and_then(|v| v.trim_end_matches('s').parse::<f64>().ok())
         .map(Duration::from_secs_f64)
         .unwrap_or(Duration::from_secs(2));
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
-    let bytes = reader.join().ok()?;
-    if !status?.success() || bytes.len() > MAX_RESULT_BYTES {
+    let captured = crate::process::capture(
+        command,
+        crate::process::CaptureOptions {
+            streams: crate::process::Streams::Stdout,
+            limit: Some(MAX_RESULT_BYTES),
+            head_tail: false,
+            read_error: crate::process::CaptureReadError::Eof,
+            input: None,
+            deadline: crate::process::CaptureDeadline::AfterSpawn(timeout),
+            cancellation: None,
+            terminate: None,
+            deadline_after_exit: true,
+            kill_group_on_incomplete: false,
+            eof_timeout: Duration::from_secs(1),
+        },
+    )
+    .ok()?;
+    if captured.timed_out
+        || captured.incomplete
+        || !captured.status?.success()
+        || captured.output[0].seen > MAX_RESULT_BYTES
+    {
         return None;
     }
-    Some(String::from_utf8_lossy(&bytes).trim_end().to_string())
+    Some(
+        String::from_utf8_lossy(&captured.output[0].head)
+            .trim_end()
+            .to_string(),
+    )
 }
 
 /// validate_destination checks linked-worktree identity before workspace consent.
@@ -660,6 +649,49 @@ pub fn fit_elements(workspace: &Workspace, total: usize, build: impl Fn(usize) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_git_stdout_does_not_defeat_probe_deadline() {
+        use std::time::{Duration, Instant};
+        const CHILD: &str = "REAGENT_TEST_INHERITED_GIT_STDOUT";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let started = Instant::now();
+            let result = git(root.to_str().unwrap(), &["probe"]);
+            assert!(
+                result.is_none(),
+                "inherited output must not be reported complete"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "probe took {:?}",
+                started.elapsed()
+            );
+            // The failed probe must not strand the next ordinary probe.
+            assert_eq!(git(root.to_str().unwrap(), &["next"]), Some("next".into()));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("git");
+        fs::write(&script, "#!/bin/sh\nfor arg do last=$arg; done\nif [ \"$last\" = next ]; then printf next; exit 0; fi\n/bin/sleep 3 &\nprintf probe\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workspace::tests::inherited_git_stdout_does_not_defeat_probe_deadline",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .env("PATH", dir.path())
+            .env("REAGENT_WORKSPACE_GIT_TIMEOUT", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn snapshot_uses_local_timezone_abbreviations() {

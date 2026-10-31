@@ -48,7 +48,7 @@ fn generate_traced_records_before_a_stalled_response_in_another_process() {
     if let Ok(path) = std::env::var(CHILD_PATH) {
         let config = json!({"provider":"openai"});
         let mut provider = Provider::new(&config).unwrap();
-        let mut trace = crate::trace::Trace::new(Some(&path), "session", "run").unwrap();
+        let mut trace = crate::trace::Trace::new(Some(&path), "session", "run");
         let response = provider
             .generate_traced(
                 &json!({"model":"local-test","scope":{"step":3},"history":[]}),
@@ -231,14 +231,14 @@ fn summary_policy_is_local_and_deadlines_cancel_header_and_body_waits() {
                 }
                 if retry && index < 2 {
                     stream
-                        .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n")
+                        .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                         .unwrap();
                     continue;
                 }
                 let body = br#"{"status":"completed","output":[{"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}"#;
                 write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 )
                 .unwrap();
@@ -255,7 +255,7 @@ fn summary_policy_is_local_and_deadlines_cancel_header_and_body_waits() {
         let request = json!({"model":"local-test","history":[],"scope":{"step":1}});
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("events.jsonl");
-        let mut trace = crate::trace::Trace::new(path.to_str(), "session", "run").unwrap();
+        let mut trace = crate::trace::Trace::new(path.to_str(), "session", "run");
         let error = if phase == "headers" || phase == "body" {
             provider
                 .generate_inner(
@@ -336,4 +336,78 @@ fn repaired_unknown_keys_do_not_discard_response_fields_or_native_bytes() {
             "ok"
         );
     }
+}
+
+#[test]
+fn pooled_posts_reconnect_when_the_peer_disables_keep_alive() {
+    use std::{
+        io::{Read, Write},
+        time::Duration,
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        for _ in 0..20 {
+            let (mut stream, _) = listener.accept().unwrap();
+            crate::transport::http::tests::request(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+        }
+    });
+    let client =
+        crate::transport::http::Client::new(Duration::from_secs(2), Duration::from_secs(2), None)
+            .unwrap();
+    for _ in 0..20 {
+        let mut response = client
+            .post(&endpoint)
+            .body(b"non-idempotent".to_vec())
+            .send()
+            .unwrap();
+        let mut body = Vec::new();
+        response.read_to_end(&mut body).unwrap();
+        assert_eq!(body, b"ok");
+    }
+    server.join().unwrap();
+}
+
+#[test]
+fn pooled_post_is_not_replayed_after_the_peer_receives_it() {
+    use std::{
+        io::{Read, Write},
+        time::Duration,
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        crate::transport::http::tests::request(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .unwrap();
+        crate::transport::http::tests::request(&mut stream);
+        // The operation may have taken effect; losing its response cannot justify replay.
+        drop(stream);
+        listener
+    });
+    let client =
+        crate::transport::http::Client::new(Duration::from_secs(2), Duration::from_secs(2), None)
+            .unwrap();
+    client
+        .post(&endpoint)
+        .send()
+        .unwrap()
+        .read_to_end(&mut Vec::new())
+        .unwrap();
+    assert!(client
+        .post(&endpoint)
+        .body(b"non-idempotent".to_vec())
+        .send()
+        .is_err());
+    let listener = server.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }

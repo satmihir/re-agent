@@ -4,15 +4,7 @@ use crate::{
     tools::{fail, outcome},
 };
 use serde_json::{json, Value};
-use std::{
-    fs,
-    io::Read,
-    os::unix::io::AsRawFd,
-    path::Path,
-    process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, path::Path, process::Command, time::Duration};
 const MENU:[(&str,&str);12]=[
 ("status","Answer a question about the repository's state, such as the current branch, uncommitted changes, unpushed commits, or the recent log. Changes nothing."),
 ("explain_branch","Summarize what the current branch changes compared with the default branch. Changes nothing."),
@@ -411,23 +403,8 @@ impl Run<'_> {
         if self.cancellation.load(std::sync::atomic::Ordering::SeqCst) {
             return (String::new(), -1, true);
         }
-        // Hold the spawn lock from pipe creation until the child owns its write ends.
-        let spawning = crate::process::lock();
-        let (mut reader, writer) = match spawning.pipe() {
-            Ok(pipe) => pipe,
-            Err(_) => return ("operation failed".into(), -1, false),
-        };
-        let stderr = match writer.try_clone() {
-            Ok(w) => w,
-            Err(_) => return ("operation failed".into(), -1, false),
-        };
         let mut cmd = Command::new(&argv[0]);
-        cmd.args(&argv[1..])
-            .current_dir(self.root)
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(writer))
-            .stderr(Stdio::from(stderr));
+        cmd.args(&argv[1..]).current_dir(self.root).env_clear();
         for key in [
             "PATH",
             "HOME",
@@ -443,9 +420,28 @@ impl Run<'_> {
                 cmd.env(key, v);
             }
         }
-        let mut child = match spawning.spawn(&mut cmd) {
-            Ok(c) => c,
-            Err(e) => {
+        let captured = match crate::process::capture(
+            cmd,
+            crate::process::CaptureOptions {
+                streams: crate::process::Streams::Merged,
+                // Go recipes use bytes.Buffer, including for repository state consumed below.
+                limit: None,
+                head_tail: false,
+                read_error: crate::process::CaptureReadError::Retry,
+                input: None,
+                deadline: crate::process::CaptureDeadline::AfterSpawn(Duration::from_secs(60)),
+                cancellation: Some(&self.cancellation),
+                terminate: None,
+                deadline_after_exit: true,
+                kill_group_on_incomplete: false,
+                eof_timeout: Duration::from_secs(1),
+            },
+        ) {
+            Ok(captured) => captured,
+            Err(crate::process::CaptureError::Wait(_)) => {
+                return ("operation failed".into(), -1, false)
+            }
+            Err(crate::process::CaptureError::Start(e)) => {
                 return (
                     if e.kind() == std::io::ErrorKind::NotFound && !argv[0].contains('/') {
                         "executable not found".into()
@@ -457,52 +453,17 @@ impl Run<'_> {
                 )
             }
         };
-        drop(cmd);
-        drop(spawning);
-        unsafe {
-            libc::fcntl(reader.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
+        if captured.cancelled || captured.timed_out {
+            return (utf8(&captured.output[0].head), -1, true);
         }
-        let started = Instant::now();
-        let mut bytes = vec![];
-        let mut status = None;
-        let mut exited = None;
-        loop {
-            let mut buf = [0; 32768];
-            let mut eof = false;
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => {
-                        eof = true;
-                        break;
-                    }
-                    Ok(n) => bytes.extend_from_slice(&buf[..n]),
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-            if status.is_none() {
-                status = child.try_wait().ok().flatten();
-                if status.is_some() {
-                    exited = Some(Instant::now());
-                }
-            }
-            if status.is_some() && eof {
-                break;
-            }
-            if started.elapsed() >= Duration::from_secs(60)
-                || self.cancellation.load(std::sync::atomic::Ordering::SeqCst)
-            {
-                let _ = child.kill();
-                let _ = child.wait();
-                return (utf8(&bytes), -1, true);
-            }
-            if exited.is_some_and(|t| t.elapsed() >= Duration::from_secs(1)) {
-                return ("operation failed".into(), -1, false);
-            }
-            thread::sleep(Duration::from_millis(1));
+        if captured.incomplete {
+            return ("operation failed".into(), -1, false);
         }
-        (utf8(&bytes), status.unwrap().code().unwrap_or(-1), false)
+        (
+            utf8(&captured.output[0].head),
+            captured.status.unwrap().code().unwrap_or(-1),
+            false,
+        )
     }
     fn quiet(&self, argv: &[&str]) -> (String, bool) {
         let (out, code, _) = self.exec(&strings(argv));

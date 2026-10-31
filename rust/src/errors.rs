@@ -349,8 +349,7 @@ mod tests {
         );
         let blocked = dir.path().join("file");
         std::fs::write(&blocked, "unchanged").unwrap();
-        let trace =
-            crate::trace::Trace::new(blocked.join("events.jsonl").to_str(), "s", "r").unwrap();
+        let trace = crate::trace::Trace::new(blocked.join("events.jsonl").to_str(), "s", "r");
         assert_eq!(trace.path(), "");
         assert_eq!(std::fs::read_to_string(blocked).unwrap(), "unchanged");
     }

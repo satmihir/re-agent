@@ -7,11 +7,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs,
-    io::Read,
-    os::unix::{
-        io::AsRawFd,
-        process::{CommandExt, ExitStatusExt},
-    },
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -262,15 +258,6 @@ struct Capture {
     omitted: usize,
 }
 impl Capture {
-    fn push(&mut self, data: &[u8]) {
-        self.seen += data.len();
-        let take = ((LIMIT + 1) / 2 - self.head.len()).min(data.len());
-        self.head.extend_from_slice(&data[..take]);
-        self.tail.extend_from_slice(&data[take..]);
-        if self.tail.len() > LIMIT / 2 {
-            self.tail.drain(..self.tail.len() - LIMIT / 2);
-        }
-    }
     fn render(&mut self) -> String {
         if self.omitted == 0 {
             return utf8(&self.head) + &utf8(&self.tail);
@@ -571,9 +558,27 @@ fn run(
             root,
         ));
     }
-    let mut child = match crate::process::spawn(&mut command) {
+    let captured = match crate::process::capture(
+        command,
+        crate::process::CaptureOptions {
+            streams: crate::process::Streams::Separate,
+            limit: Some(LIMIT),
+            head_tail: true,
+            read_error: crate::process::CaptureReadError::Incomplete,
+            input: None,
+            deadline: crate::process::CaptureDeadline::At(started + Duration::from_millis(timeout)),
+            cancellation: Some(cancellation),
+            terminate: Some(terminate_tree),
+            deadline_after_exit: false,
+            kill_group_on_incomplete: true,
+            eof_timeout: Duration::from_secs(1),
+        },
+    ) {
         Ok(c) => c,
-        Err(e) => {
+        Err(crate::process::CaptureError::Wait(e)) => {
+            return Err(format!("wait for command: {}", stable(&e)))
+        }
+        Err(crate::process::CaptureError::Start(e)) => {
             let cancelled = cancellation.load(Ordering::Acquire);
             data["duration_ms"] = json!(started.elapsed().as_millis() as u64);
             return Ok(attributed(
@@ -596,78 +601,16 @@ fn run(
             ));
         }
     };
-    let pid = child.id() as i32;
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
-        unsafe {
-            libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
-        }
-    }
-    let mut captures = [Capture::default(), Capture::default()];
-    let mut eof = [false; 2];
-    let mut status = None;
-    let mut exited = None;
-    let mut timed_out = false;
-    let mut stopped = false;
-    let mut incomplete = false;
-    let mut cleanup_error = None;
-    loop {
-        for i in 0..2 {
-            if eof[i] {
-                continue;
-            }
-            let mut buffer = [0; 32768];
-            for _ in 0..64 {
-                let r = if i == 0 {
-                    stdout.read(&mut buffer)
-                } else {
-                    stderr.read(&mut buffer)
-                };
-                match r {
-                    Ok(0) => {
-                        eof[i] = true;
-                        break;
-                    }
-                    Ok(n) => captures[i].push(&buffer[..n]),
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => {
-                        incomplete = true;
-                        eof[i] = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if status.is_none() {
-            status = child
-                .try_wait()
-                .map_err(|e| format!("wait for command: {}", stable(&e)))?;
-            if status.is_some() {
-                exited = Some(Instant::now());
-            }
-        }
-        if status.is_some() && eof.iter().all(|e| *e) {
-            break;
-        }
-        if !stopped && status.is_none() {
-            let cancelled = cancellation.load(Ordering::Acquire);
-            if cancelled || started.elapsed() >= Duration::from_millis(timeout) {
-                cleanup_error = terminate_tree(pid).err();
-                timed_out = !cancelled;
-                stopped = true;
-            }
-        }
-        if exited.is_some_and(|t| t.elapsed() >= Duration::from_secs(1)) {
-            incomplete = true;
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-            }
-            break;
-        }
-        thread::sleep(Duration::from_millis(2));
-    }
+    let status = captured.status;
+    let timed_out = captured.timed_out;
+    let incomplete = captured.incomplete;
+    let cleanup_error = captured.cleanup_error;
+    let mut captures = captured.output.map(|output| Capture {
+        head: output.head,
+        tail: output.tail,
+        seen: output.seen,
+        omitted: 0,
+    });
     if let Some(s) = status {
         data["exit_code"] = s.code().map_or(Value::Null, |c| json!(c));
         data["signal"] = s.signal().map_or(Value::Null, |s| json!(signal_name(s)));
@@ -767,29 +710,39 @@ fn signal_name(signal: i32) -> String {
 }
 #[cfg(target_os = "linux")]
 fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
+    process_snapshot_from(Path::new("/proc"))
+}
+
+#[cfg(target_os = "linux")]
+fn process_snapshot_from(root: &Path) -> std::io::Result<Vec<(i32, i32, i32)>> {
     let mut processes = vec![];
-    if let Ok(entries) = fs::read_dir("/proc") {
-        for e in entries.flatten() {
-            let Ok(p) = e.file_name().to_string_lossy().parse::<i32>() else {
-                continue;
-            };
-            if let Ok(s) = fs::read_to_string(e.path().join("stat")) {
-                if let Some((_, tail)) = s.rsplit_once(')') {
-                    let f: Vec<_> = tail.split_whitespace().collect();
-                    if f.len() >= 3 {
-                        if let (Ok(ppid), Ok(pgid)) = (f[1].parse::<i32>(), f[2].parse::<i32>()) {
-                            processes.push((p, ppid, pgid));
-                        }
-                    }
-                }
-            }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        let stat = match fs::read_to_string(entry.path().join("stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let invalid =
+            || std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid process snapshot");
+        let (_, tail) = stat.rsplit_once(')').ok_or_else(invalid)?;
+        let fields: Vec<_> = tail.split_whitespace().collect();
+        if fields.len() < 3 {
+            return Err(invalid());
         }
+        let ppid = fields[1].parse().map_err(|_| invalid())?;
+        let pgid = fields[2].parse().map_err(|_| invalid())?;
+        processes.push((pid, ppid, pgid));
     }
     Ok(processes)
 }
 
 #[cfg(not(target_os = "linux"))]
 fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
+    use std::{io::Read, os::fd::AsRawFd};
     // Unlike /proc, ps is available on Darwin. Bound it independently of exec's timeout.
     let mut child = crate::process::spawn(
         Command::new("/bin/ps")
@@ -1012,6 +965,21 @@ fn assert_exec_pids_stopped(dir: &Path, names: &[&str]) {
 #[cfg(test)]
 mod boundary_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_discovery_reports_errors_instead_of_verified_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(process_snapshot_from(&dir.path().join("missing")).is_err());
+        fs::create_dir(dir.path().join("123")).unwrap();
+        // A vanished PID is expected; malformed or unreadable stat is not.
+        assert!(process_snapshot_from(dir.path()).unwrap().is_empty());
+        fs::write(dir.path().join("123/stat"), "malformed").unwrap();
+        assert!(process_snapshot_from(dir.path()).is_err());
+        fs::remove_file(dir.path().join("123/stat")).unwrap();
+        fs::create_dir(dir.path().join("123/stat")).unwrap();
+        assert!(process_snapshot_from(dir.path()).is_err());
+    }
 
     #[test]
     fn exec_timeout_stops_term_resistant_escaped_descendants_with_both_pipe_modes() {

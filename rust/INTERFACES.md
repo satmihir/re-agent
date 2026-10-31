@@ -18,7 +18,7 @@ Config is a JSON object using snake_case names from Go Config: provider, auth_mo
 - types::ModelError { pub status: String, pub message: String, pub usage: Value }; implement Display/Error. types::usage_zero(known:bool)->Value, usage_add(&mut Value,&Value), new_id()->String, json_string(&Value)->String (Go json.Marshal escaping), canonical_json(&Value)->String (no HTML escaping).
 - context::build_context(config:&Value,scope:Value,history:&[Value],tools:Value)->Value: Go ModelRequest exact shape. context::instructions(config:&Value)->String. Copy instruction text constants into Rust-owned files under src/prompts/ if useful (authorized as your ownership); no runtime reference to Go tree.
 - catalog::model_info(model:&str)->Value (provider, context_window, effort info etc); catalog::models()->Value.
-- trace::Trace::new(path:Option<&str>,session_id:&str,run_id:&str)->Result<Self,String>; Trace::disabled()->Self; Trace::write(&mut self,event:&str,step:usize,data:Value). Trace envelope exact Go trace.go. Expose path if useful.
+- trace::Trace::new(path:Option<&str>,session_id:&str,run_id:&str)->Self; Trace::disabled()->Self; Trace::write(&mut self,event:&str,step:usize,data:Value). Trace envelope exact Go trace.go. Expose path if useful.
 
 ## providers agent
 - provider::Provider::new(config:&Value)->Result<Self,String>; provider::Provider::generate(&mut self,request:&Value)->Result<Value,types::ModelError>; provider::Provider::name(&self)->String.

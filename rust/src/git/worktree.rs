@@ -298,9 +298,7 @@ pub(super) fn compare(
         if out.seen > LIMIT {
             break;
         }
-        if std::time::Instant::now() >= git.deadline {
-            return Err("timeout".into());
-        }
+        check_read(git).map_err(|e| e.to_string())?;
         let mut b = base.remove(&p).unwrap_or_default();
         let mut i = idx.remove(&p).unwrap_or_default();
         if operation == "status"
@@ -334,8 +332,9 @@ pub(super) fn compare(
             ));
             continue;
         }
-        let current = working(git.root, &p, &algorithm);
+        let current = working(git, &p, &algorithm);
         if !current.note.is_empty() {
+            check_read(git).map_err(|e| e.to_string())?;
             out.text(&format!("unknown {}: {}\n", quote(&p), current.note));
             continue;
         }
@@ -470,7 +469,8 @@ fn note(s: &str) -> File {
         ..File::default()
     }
 }
-fn working(root: &Path, p: &str, algorithm: &str) -> File {
+fn working(git: &Git<'_>, p: &str, algorithm: &str) -> File {
+    let root = git.root;
     let parts: Vec<_> = p.split('/').collect();
     let mut abs = root.to_path_buf();
     for c in &parts[..parts.len() - 1] {
@@ -492,11 +492,16 @@ fn working(root: &Path, p: &str, algorithm: &str) -> File {
             Ok(t) => t,
             Err(_) => return note("symlink unavailable"),
         };
-        let content = target.as_os_str().as_bytes().to_vec();
+        let target = target.as_os_str().as_bytes();
+        let (content, oid) =
+            match read_content(git, &mut &target[..], target.len() as u64, algorithm) {
+                Ok(v) => v,
+                Err(_) => return note("symlink changed during comparison"),
+            };
         return File {
             mode: "120000".into(),
-            oid: hash(&content, algorithm),
-            size: content.len() as u64,
+            oid,
+            size: target.len() as u64,
             content,
             ..File::default()
         };
@@ -517,7 +522,7 @@ fn working(root: &Path, p: &str, algorithm: &str) -> File {
         _ => return note("file changed during comparison"),
     };
     // Hash the complete raw stream even when its contents exceed the display cap.
-    let (bytes, oid) = match read_content(&mut file, opened.len(), algorithm) {
+    let (bytes, oid) = match read_content(git, &mut file, opened.len(), algorithm) {
         Ok(v) => v,
         Err(_) => return note("file unreadable or changed during comparison"),
     };
@@ -554,12 +559,20 @@ fn blob(git: &Git<'_>, mut f: File, algorithm: &str) -> Result<File, String> {
         return Ok(f);
     }
     let out = git.run(&strings(&["cat-file", "blob", &f.oid]), None, CONTENT)?;
-    if out.seen as u64 != f.size || hash(&out.bytes, algorithm) != f.oid {
+    let (content, oid) =
+        read_content(git, &mut out.bytes.as_slice(), f.size, algorithm).map_err(|e| {
+            match e.kind() {
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::TimedOut => e.to_string(),
+                _ => "blob digest mismatch".to_owned(),
+            }
+        })?;
+    if out.seen as u64 != f.size || oid != f.oid {
         return Err("blob digest mismatch".into());
     }
-    f.content = out.bytes;
+    f.content = content;
     Ok(f)
 }
+#[cfg(test)]
 fn hash(content: &[u8], algorithm: &str) -> String {
     let mut data = format!("blob {}\0", content.len()).into_bytes();
     data.extend_from_slice(content);
@@ -568,7 +581,21 @@ fn hash(content: &[u8], algorithm: &str) -> String {
     }
     sha1(&data)
 }
+fn check_read(git: &Git<'_>) -> std::io::Result<()> {
+    if git.cancellation.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "cancelled",
+        ));
+    }
+    if std::time::Instant::now() >= git.deadline {
+        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
+    }
+    Ok(())
+}
+
 fn read_content(
+    git: &Git<'_>,
     reader: &mut impl Read,
     size: u64,
     algorithm: &str,
@@ -585,6 +612,7 @@ fn read_content(
     let mut seen = 0u64;
     let mut buffer = [0; 32768];
     loop {
+        check_read(git)?;
         let n = reader.read(&mut buffer)?;
         if n == 0 {
             break;
@@ -611,6 +639,7 @@ fn read_content(
     };
     Ok((content, digest))
 }
+#[cfg(test)]
 fn sha1(bytes: &[u8]) -> String {
     let mut digest = Sha1::new();
     digest.update(bytes);
@@ -694,6 +723,110 @@ impl Sha1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::{Duration, Instant},
+    };
+
+    struct InterruptedReader {
+        first: bool,
+        cancellation: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        cancel: bool,
+    }
+    impl Read for InterruptedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if !self.first {
+                panic!("raw hashing read another chunk after interruption");
+            }
+            self.first = false;
+            buffer.fill(b'x');
+            if self.cancel {
+                self.cancellation
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            Ok(buffer.len())
+        }
+    }
+
+    #[test]
+    fn raw_hash_checks_cancellation_and_deadline_between_chunks() {
+        for algorithm in ["sha1", "sha256"] {
+            for cancel in [true, false] {
+                let git = Git {
+                    root: Path::new("."),
+                    deadline: Instant::now()
+                        + if cancel {
+                            Duration::from_secs(10)
+                        } else {
+                            Duration::from_millis(10)
+                        },
+                    cancellation: Arc::default(),
+                };
+                let mut reader = InterruptedReader {
+                    first: true,
+                    cancellation: git.cancellation.clone(),
+                    cancel,
+                };
+                let error =
+                    read_content(&git, &mut reader, CONTENT as u64 + 1, algorithm).unwrap_err();
+                assert!(
+                    !reader.first,
+                    "must read the first chunk before interruption"
+                );
+                assert_eq!(
+                    error.kind(),
+                    if cancel {
+                        std::io::ErrorKind::Interrupted
+                    } else {
+                        std::io::ErrorKind::TimedOut
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn working_hash_preserves_complete_digests_and_interruption_notes() {
+        let directory = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("target", directory.path().join("link")).unwrap();
+        for algorithm in ["sha1", "sha256"] {
+            for size in [6, CONTENT + 1] {
+                let bytes = vec![b'x'; size];
+                fs::write(directory.path().join("file"), &bytes).unwrap();
+                let mut git = Git {
+                    root: directory.path(),
+                    deadline: Instant::now() + Duration::from_secs(10),
+                    cancellation: Arc::default(),
+                };
+                let file = working(&git, "file", algorithm);
+                assert!(file.note.is_empty());
+                assert_eq!(file.size, size as u64);
+                assert_eq!(file.oid, hash(&bytes, algorithm));
+                assert_eq!(file.content, if size <= CONTENT { bytes } else { vec![] });
+                let link = working(&git, "link", algorithm);
+                assert_eq!(link.oid, hash(b"target", algorithm));
+                assert_eq!(link.mode, "120000");
+
+                for cancel in [true, false] {
+                    git.cancellation.store(cancel, Ordering::SeqCst);
+                    if !cancel {
+                        git.deadline = Instant::now();
+                    }
+                    for (path, expected) in [
+                        ("file", "file unreadable or changed during comparison"),
+                        ("link", "symlink changed during comparison"),
+                    ] {
+                        let file = working(&git, path, algorithm);
+                        assert_eq!(file.note, expected);
+                        assert!(file.oid.is_empty());
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn known_blob_hash() {
         assert_eq!(

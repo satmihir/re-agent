@@ -5,11 +5,8 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    io::{Read, Write},
-    os::unix::io::AsRawFd,
     path::Path,
-    process::{Command, Stdio},
-    thread,
+    process::Command,
     time::{Duration, Instant},
 };
 #[path = "git/diff.rs"]
@@ -550,78 +547,48 @@ impl Git<'_> {
         }
         let mut command = inspect_command(self.root);
         command.args(args);
-        command
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let mut child = crate::process::spawn(&mut command).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
+        let captured = crate::process::capture(
+            command,
+            crate::process::CaptureOptions {
+                streams: crate::process::Streams::Stdout,
+                limit: Some(limit),
+                head_tail: false,
+                read_error: crate::process::CaptureReadError::Retry,
+                input,
+                deadline: crate::process::CaptureDeadline::At(self.deadline),
+                cancellation: Some(&self.cancellation),
+                terminate: None,
+                deadline_after_exit: true,
+                kill_group_on_incomplete: false,
+                eof_timeout: Duration::from_secs(1),
+            },
+        )
+        .map_err(|error| match error {
+            crate::process::CaptureError::Start(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 "unavailable".to_string()
-            } else {
-                "start".to_string()
             }
+            crate::process::CaptureError::Start(_) => "start".to_string(),
+            crate::process::CaptureError::Wait(_) => "wait".to_string(),
         })?;
-        let writer = input.map(|data| {
-            let data = data.to_vec();
-            let mut stdin = child.stdin.take().unwrap();
-            thread::spawn(move || {
-                let _ = stdin.write_all(&data);
-            })
-        });
-        let mut stdout = child.stdout.take().unwrap();
-        unsafe {
-            libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
+        if captured.cancelled {
+            return Err("cancelled".into());
         }
-        let mut output = Output::new();
-        let mut status = None;
-        let mut exited = None;
-        let mut eof = false;
-        loop {
-            let mut buf = [0; 32768];
-            loop {
-                match stdout.read(&mut buf) {
-                    Ok(0) => {
-                        eof = true;
-                        break;
-                    }
-                    Ok(n) => output.push(&buf[..n], limit),
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-            if status.is_none() {
-                status = child.try_wait().map_err(|_| "wait".to_string())?;
-                if status.is_some() {
-                    exited = Some(Instant::now());
-                }
-            }
-            if status.is_some() && eof {
-                break;
-            }
-            let cancelled = self.cancellation.load(std::sync::atomic::Ordering::SeqCst);
-            if Instant::now() >= self.deadline || cancelled {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(if cancelled { "cancelled" } else { "timeout" }.into());
-            }
-            if exited.is_some_and(|t| t.elapsed() >= Duration::from_secs(1)) {
-                return Err("output_wait".into());
-            }
-            thread::sleep(Duration::from_millis(1));
+        if captured.timed_out {
+            return Err("timeout".into());
         }
-        if let Some(w) = writer {
-            let _ = w.join();
+        if captured.incomplete {
+            return Err("output_wait".into());
         }
-        let status = status.unwrap();
+        let status = captured.status.unwrap();
         if !status.success() {
             return Err(format!("exit:{}", status.code().unwrap_or(-1)));
         }
-        Ok(output)
+        let [output, _] = captured.output;
+        Ok(Output {
+            bytes: output.head,
+            seen: output.seen,
+            incomplete: false,
+        })
     }
 }
 
