@@ -8,6 +8,9 @@ mod display;
 #[path = "transport/event_tests.rs"]
 mod event_tests;
 pub mod http;
+#[cfg(test)]
+#[path = "transport/performance_tests.rs"]
+mod performance_tests;
 mod redaction;
 #[cfg(test)]
 #[path = "transport/security_tests.rs"]
@@ -80,6 +83,9 @@ pub fn redact(text: &str, secrets: &[String], endpoint: &str) -> String {
 }
 
 pub struct Transport {
+    client: Option<http::Client>,
+    #[cfg(test)]
+    secret_counts: Vec<usize>,
     pub config: Value,
     pub events: Vec<Value>,
     pub retry_usage: Value,
@@ -88,6 +94,9 @@ pub struct Transport {
 impl Transport {
     pub fn new(config: &Value) -> Self {
         Self {
+            client: None,
+            #[cfg(test)]
+            secret_counts: Vec::new(),
             config: config.clone(),
             events: Vec::new(),
             retry_usage: usage_zero(true),
@@ -234,7 +243,7 @@ impl Transport {
         })
         .unwrap_or_default()];
         if chatgpt {
-            secrets.extend(crate::auth::secrets());
+            merge_secrets(&mut secrets, crate::auth::secrets());
         }
         loop {
             if self.request_cancelled(summary_deadline) {
@@ -257,7 +266,7 @@ impl Transport {
             };
             if chatgpt {
                 // Token acquisition can rotate refresh and ID tokens as well.
-                secrets.extend(crate::auth::secrets());
+                merge_secrets(&mut secrets, crate::auth::secrets());
             }
             let mut refreshed = false;
             let (status, raw, retry_after, failure) = loop {
@@ -267,9 +276,15 @@ impl Transport {
                 if !token.is_empty() && !secrets.contains(&token) {
                     secrets.push(token.clone());
                 }
+                #[cfg(test)]
+                self.secret_counts.push(secrets.len());
                 self.event(&mut trace,"api.attempt.started",step,json!({"attempt":attempt,"endpoint":redact(&redacted(&endpoint),&secrets,&endpoint),"request_body":crate::raw::string(&redact_bytes(&bytes,&secrets,&endpoint)),"request_sha256":format!("{:x}",Sha256::digest(&bytes))}));
                 let sent = Instant::now();
-                let mut client = client().map_err(|m| error("provider_error", &m))?;
+                if self.client.is_none() {
+                    self.client = Some(client().map_err(|m| error("provider_error", &m))?);
+                }
+                // Share the pool, but bind cancellation and deadlines only to this attempt.
+                let mut client = self.client.as_ref().unwrap().clone();
                 client.cancellation = self.cancellation.clone();
                 client.deadline = summary_deadline;
                 let mut req = client
@@ -343,7 +358,7 @@ impl Transport {
                                             error("provider_error", &m)
                                         }
                                     })?;
-                                    secrets.extend(crate::auth::secrets());
+                                    merge_secrets(&mut secrets, crate::auth::secrets());
                                     continue;
                                 }
                                 break (status, raw, retry_after, None);
@@ -478,6 +493,13 @@ impl Transport {
                 });
             }
             display::started(&self.config, region, attempt + 1);
+        }
+    }
+}
+fn merge_secrets(secrets: &mut Vec<String>, additions: Vec<String>) {
+    for secret in additions {
+        if !secrets.contains(&secret) {
+            secrets.push(secret);
         }
     }
 }

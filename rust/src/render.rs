@@ -1,7 +1,7 @@
 use crate::cli::{number, text, yes};
 use regex::Regex;
 use serde_json::Value;
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
 #[path = "cli/activity.rs"]
 mod activity;
 pub use activity::{
@@ -50,11 +50,12 @@ pub fn display(text: &str, styled: bool, columns: usize) -> String {
         safe
     }
 }
-fn re(pattern: &str) -> Regex {
-    Regex::new(pattern).unwrap()
-}
 fn spans(text: &str) -> String {
-    let text = re(r"\[([^\]]*)\]\(([^)\s]+)\)")
+    static LINKS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)").unwrap());
+    static BOLD_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
+    static ITALIC_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*([^*]+)\*").unwrap());
+    let text = LINKS
         .replace_all(text, format!("${{1}}{DIM} (${{2}}){RESET}"))
         .into_owned();
     let parts: Vec<_> = text.split('`').collect();
@@ -64,12 +65,15 @@ fn spans(text: &str) -> String {
             out.push_str(&format!("{CODE}{p}{RESET}"));
             continue;
         }
-        let bold = re(r"\*\*([^*]+)\*\*").replace_all(p, format!("{BOLD}${{1}}{RESET}"));
-        out.push_str(&re(r"\*([^*]+)\*").replace_all(&bold, format!("\x1b[3m${{1}}{RESET}")));
+        let bold = BOLD_SPAN.replace_all(p, format!("{BOLD}${{1}}{RESET}"));
+        out.push_str(&ITALIC_SPAN.replace_all(&bold, format!("\x1b[3m${{1}}{RESET}")));
     }
     out
 }
 fn line(text: &str) -> (String, String, String) {
+    static RULE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(-{3,}|\*{3,}|_{3,})$").unwrap());
+    static BULLET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-*+][ \t]+").unwrap());
+    static NUMBERED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+[.)][ \t]+").unwrap());
     let content = text.trim_start_matches([' ', '\t']);
     let indent = &text[..text.len() - content.len()];
     let level = content.bytes().take_while(|b| *b == b'#').count();
@@ -80,21 +84,21 @@ fn line(text: &str) -> (String, String, String) {
             format!("{BOLD}{}{RESET}", spans(content[level..].trim())),
         );
     }
-    if re(r"^(-{3,}|\*{3,}|_{3,})$").is_match(content) {
+    if RULE.is_match(content) {
         return (
             format!("{indent}{DIM}{}{RESET}", "─".repeat(32)),
             String::new(),
             String::new(),
         );
     }
-    if let Some(m) = re(r"^[-*+][ \t]+").find(content) {
+    if let Some(m) = BULLET.find(content) {
         return (
             format!("{indent}{DIM}•{RESET} "),
             format!("{indent}  "),
             spans(&content[m.end()..]),
         );
     }
-    if let Some(m) = re(r"^\d+[.)][ \t]+").find(content) {
+    if let Some(m) = NUMBERED.find(content) {
         let n = m.as_str().trim();
         return (
             format!("{indent}{DIM}{n}{RESET} "),
@@ -110,6 +114,7 @@ fn line(text: &str) -> (String, String, String) {
 }
 /// Wrap preserves styled words while fitting subsequent rows to a hanging prefix.
 pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<String> {
+    static ANSI_STYLE: LazyLock<Regex> = LazyLock::new(|| Regex::new("\x1b\\[[0-9;]*m").unwrap());
     if columns == 0 || width(&format!("{first}{body}")) <= columns {
         return vec![format!("{first}{body}")];
     }
@@ -139,7 +144,7 @@ pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<S
         row.push_str(word);
         cells += w;
         words += 1;
-        for seq in re("\x1b\\[[0-9;]*m").find_iter(word) {
+        for seq in ANSI_STYLE.find_iter(word) {
             if seq.as_str() == RESET {
                 open.clear()
             } else {
@@ -240,6 +245,8 @@ fn table(lines: &[&str], columns: usize) -> Vec<String> {
 }
 /// Markdown renders the reference terminal subset, including fences and tables.
 pub fn markdown(text: &str, columns: usize) -> String {
+    static TABLE_SEPARATOR: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$").unwrap());
     let lines: Vec<_> = text.split('\n').collect();
     let mut rendered = Vec::new();
     let mut fence = false;
@@ -262,7 +269,7 @@ pub fn markdown(text: &str, columns: usize) -> String {
             && h.ends_with('|')
             && h.len() >= 2
             && i + 1 < lines.len()
-            && re(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$").is_match(lines[i + 1])
+            && TABLE_SEPARATOR.is_match(lines[i + 1])
             && table_cells(l).len() == table_cells(lines[i + 1]).len()
         {
             let mut end = i + 2;
@@ -282,11 +289,9 @@ pub fn markdown(text: &str, columns: usize) -> String {
 /// Rune width approximates East Asian terminal cell widths.
 pub(crate) fn rune_width(c: char) -> usize {
     let n = c as u32;
-    static ZERO_WIDTH: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    if ZERO_WIDTH
-        .get_or_init(|| re(r"^[\p{Mn}\p{Me}\p{Cf}]$"))
-        .is_match(&c.to_string())
-    {
+    static ZERO_WIDTH: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[\p{Mn}\p{Me}\p{Cf}]$").unwrap());
+    if ZERO_WIDTH.is_match(&c.to_string()) {
         return 0;
     }
     if n >= 0x1100
@@ -964,6 +969,63 @@ pub fn result_in_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn large_markdown_reply() -> String {
+        let section = concat!(
+            "## Rendering performance report\n\n",
+            "This **Markdown reply** checks wrapping and *emphasis* while preserving `inline code` and [links](https://example.invalid/docs) across repeated sections with enough ordinary words to cross eighty terminal columns reliably.\n\n",
+            "- Bullet items include **bold text** and *italic text* with hanging indentation.\n",
+            "1. Numbered items preserve their prefix and show `code` beside normal words.\n",
+            "> Quoted paragraphs keep their visible marker when the text wraps onto another row.\n\n",
+            "| Feature | Status |\n| :--- | ---: |\n| cache | **ready** |\n\n",
+            "---\n```rust\nlet cached = true;\n```\n\n",
+        );
+        let reply = section.repeat(64);
+        assert_eq!(reply.split_whitespace().count(), 5_760);
+        reply
+    }
+
+    #[test]
+    fn large_markdown_reply_preserves_rendered_bytes() {
+        use sha2::{Digest, Sha256};
+
+        let rendered = display(&large_markdown_reply(), true, 80);
+        assert_eq!(rendered.len(), 56_576);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(rendered.as_bytes())),
+            "da447308ac32d089bb11e0b80f30c9f35e375f308b92812ff6f8241efd200568"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual rendering benchmark; run with --release --ignored --nocapture"]
+    fn benchmark_large_markdown_reply() {
+        use sha2::{Digest, Sha256};
+        use std::{hint::black_box, time::Instant};
+
+        let reply = large_markdown_reply();
+        let start = Instant::now();
+        let rendered = black_box(display(black_box(&reply), true, 80));
+        let first_ms = start.elapsed().as_secs_f64() * 1_000.;
+        println!(
+            "5760 words, {} input bytes, {} output bytes, width 80; sha256 {:x}",
+            reply.len(),
+            rendered.len(),
+            Sha256::digest(rendered.as_bytes())
+        );
+        println!("first render: {first_ms:.3} ms");
+        let mut samples = Vec::new();
+        for _ in 0..7 {
+            let start = Instant::now();
+            for _ in 0..3 {
+                black_box(display(black_box(&reply), true, 80));
+            }
+            samples.push(start.elapsed().as_secs_f64() * 1_000. / 3.);
+        }
+        println!("7 samples, 3 renders/sample, ms/render: {samples:.3?}");
+        samples.sort_by(f64::total_cmp);
+        println!("median: {:.3} ms/render", samples[3]);
+    }
     #[test]
     fn router_notes_distinguish_missing_unknown_and_known_usage() {
         for (usage, expected) in [

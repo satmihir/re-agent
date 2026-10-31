@@ -22,12 +22,12 @@ pub struct Trace {
 
 impl Trace {
     /// new opens an exclusive trace file, warning rather than failing the run on I/O errors.
-    pub fn new(path: Option<&str>, session_id: &str, run_id: &str) -> Result<Self, String> {
+    pub fn new(path: Option<&str>, session_id: &str, run_id: &str) -> Self {
         let mut trace = Self::disabled();
         if let Some(path) = path {
             trace.open(session_id, run_id, path);
         }
-        Ok(trace)
+        trace
     }
 
     /// disabled returns a recorder that writes nothing until explicitly opened.
@@ -132,30 +132,31 @@ impl Trace {
     }
 }
 
+// Value erases Go's map/struct distinction. These payloads sort top-level keys;
+// other payloads and nested values retain their field order.
+const SORTED_PAYLOAD_EVENTS: &[&str] = &[
+    "run.started",
+    "model.failed",
+    "tool.started",
+    "api.attempt.started",
+    "api.attempt.finished",
+    "api.retry.scheduled",
+    "api.retry.exhausted",
+    "compaction.skipped",
+    "compaction.failed",
+    "compaction.shorten",
+    "compaction.finished",
+    "context.gc",
+    "auto.route",
+    "model.switch.requested",
+    "model.switch.failed",
+    "model.switch.finished",
+    "agent.send",
+    "agent.cap_summary.failed",
+];
+
 fn ordered_data(event: &str, data: Value) -> Value {
-    // Value erases Go's map/struct distinction; only these payloads are maps.
-    let map_payload = matches!(
-        event,
-        "run.started"
-            | "model.failed"
-            | "tool.started"
-            | "api.attempt.started"
-            | "api.attempt.finished"
-            | "api.retry.scheduled"
-            | "api.retry.exhausted"
-            | "compaction.skipped"
-            | "compaction.failed"
-            | "compaction.shorten"
-            | "compaction.finished"
-            | "context.gc"
-            | "auto.route"
-            | "model.switch.requested"
-            | "model.switch.failed"
-            | "model.switch.finished"
-            | "agent.send"
-            | "agent.cap_summary.failed"
-    );
-    if !map_payload {
+    if !SORTED_PAYLOAD_EVENTS.contains(&event) {
         return data;
     }
     let Value::Object(map) = data else {
@@ -175,21 +176,7 @@ fn timestamp() -> String {
 
 /// default_trace_path locates the per-run JSONL file below the user's cache directory.
 pub fn default_trace_path(run_id: &str) -> Result<String, String> {
-    let cache = if cfg!(target_os = "macos") {
-        std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(|home| Path::new(&home).join("Library/Caches"))
-    } else {
-        std::env::var_os("XDG_CACHE_HOME")
-            .filter(|value| !value.is_empty())
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .filter(|home| !home.is_empty())
-                    .map(|home| Path::new(&home).join(".cache"))
-            })
-    }
-    .ok_or("locate trace cache: operation failed")?;
+    let cache = crate::cache::directory().ok_or("locate trace cache: operation failed")?;
     Ok(Path::new(&cache)
         .join("reagent")
         .join("runs")
@@ -207,7 +194,7 @@ mod tests {
     fn trace_writes_ordered_envelopes_and_private_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run/events.jsonl");
-        let mut trace = Trace::new(path.to_str(), "session", "run").unwrap();
+        let mut trace = Trace::new(path.to_str(), "session", "run");
         trace.write("run.started", 0, json!({"x":"<雪>"}));
         trace.write("run.finished", 1, json!({"status":"completed"}));
         trace.close();
@@ -238,34 +225,14 @@ mod tests {
     fn map_event_payloads_sort_only_the_top_level_without_reordering_structs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("map-events.jsonl");
-        let mut trace = Trace::new(path.to_str(), "s", "r").unwrap();
-        let events = [
-            "run.started",
-            "model.failed",
-            "tool.started",
-            "api.attempt.started",
-            "api.attempt.finished",
-            "api.retry.scheduled",
-            "api.retry.exhausted",
-            "compaction.skipped",
-            "compaction.failed",
-            "compaction.shorten",
-            "compaction.finished",
-            "context.gc",
-            "auto.route",
-            "model.switch.requested",
-            "model.switch.failed",
-            "model.switch.finished",
-            "agent.send",
-            "agent.cap_summary.failed",
-        ];
-        for event in events {
+        let mut trace = Trace::new(path.to_str(), "s", "r");
+        for event in SORTED_PAYLOAD_EVENTS {
             trace.write(event, 1, json!({"z":{"scope":{"session_id":"s","run_id":"r","step":1},"model":"m","tools":[{"name":"read_file","description":"read","input_schema":{},"effect":"read"}],"usage":{"known":true,"input_tokens":7,"cached_input_tokens":2,"output_tokens":3,"reasoning_tokens":1}},"a":"first"}));
         }
         trace.close();
         let raw = std::fs::read_to_string(path).unwrap();
         let expected = "\"data\":{\"a\":\"first\",\"z\":{\"scope\":{\"session_id\":\"s\",\"run_id\":\"r\",\"step\":1},\"model\":\"m\",\"tools\":[{\"name\":\"read_file\",\"description\":\"read\",\"input_schema\":{},\"effect\":\"read\"}],\"usage\":{\"known\":true,\"input_tokens\":7,\"cached_input_tokens\":2,\"output_tokens\":3,\"reasoning_tokens\":1}}}}";
-        assert_eq!(raw.lines().count(), events.len());
+        assert_eq!(raw.lines().count(), SORTED_PAYLOAD_EVENTS.len());
         for line in raw.lines() {
             assert!(line.starts_with("{\"schema_version\":1,\"seq\":"));
             assert!(line.ends_with(expected), "{line}");
@@ -276,7 +243,7 @@ mod tests {
     fn struct_event_payloads_keep_declaration_order() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("struct-events.jsonl");
-        let mut trace = Trace::new(path.to_str(), "s", "r").unwrap();
+        let mut trace = Trace::new(path.to_str(), "s", "r");
         for event in [
             "run.finished",
             "model.requested",
@@ -329,7 +296,7 @@ mod tests {
         assert!(original_body
             .windows(4)
             .any(|bytes| bytes == b"\xff\xfeX\x80"));
-        let mut trace = Trace::new(path.to_str(), "s", "r").unwrap();
+        let mut trace = Trace::new(path.to_str(), "s", "r");
         trace.write("model.requested", 2, request.clone());
         trace.write("model.accepted", 2, response);
         trace.close();
@@ -370,7 +337,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.jsonl");
         std::fs::write(&path, "original").unwrap();
-        let mut trace = Trace::new(path.to_str(), "s", "r").unwrap();
+        let mut trace = Trace::new(path.to_str(), "s", "r");
         trace.write("ignored", 0, Value::Null);
         assert_eq!(trace.path(), "");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
@@ -382,42 +349,25 @@ mod tests {
     }
 
     #[test]
-    fn default_child_trace_uses_the_platform_cache_directory() {
-        const CHILD: &str = "REAGENT_TEST_DEFAULT_CHILD_TRACE";
-        if std::env::var_os(CHILD).is_some() {
-            let expected = if cfg!(target_os = "macos") {
-                "/home/test/Library/Caches"
-            } else {
-                "/xdg/test"
-            };
-            assert_eq!(
-                default_trace_path("child").unwrap(),
-                format!("{expected}/reagent/runs/child/events.jsonl")
-            );
-            return;
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "trace::tests::default_child_trace_uses_the_platform_cache_directory",
-            ])
-            .env(CHILD, "1")
-            .env("HOME", "/home/test")
-            .env("XDG_CACHE_HOME", "/xdg/test")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
+    fn no_path_constructor_stays_disabled_until_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut trace = Trace::new(None, "s", "r");
+        trace.write("ignored", 0, Value::Null);
+        assert_eq!(trace.path(), "");
+        trace.open("s", "r2", path.to_str().unwrap());
+        trace.write("recorded", 1, Value::Null);
+        let event: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(event["seq"], 1);
+        assert_eq!(event["run_id"], "r2");
+        assert_eq!(event["type"], "recorded");
     }
 
     #[test]
     fn persistent_child_trace_keeps_sequence_across_runs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("child.jsonl");
-        let mut trace = Trace::new(path.to_str(), "child", "run1").unwrap();
+        let mut trace = Trace::new(path.to_str(), "child", "run1");
         trace.parent_id = "parent".into();
         trace.agent_id = "child".into();
         trace.persistent = true;

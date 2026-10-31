@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// WorkspaceDestination describes a validated location presented for human consent.
 #[derive(Clone)]
@@ -116,24 +117,85 @@ pub fn fail(code: &str, message: &str) -> Value {
     outcome(false, code, message, Value::Null, "none")
 }
 
+#[derive(Hash, PartialEq, Eq)]
+struct SpecConfig {
+    report_friction: bool,
+    git_do: &'static str,
+    context_gc: bool,
+    scripted: bool,
+    agent: bool,
+    agents: bool,
+    read_only: bool,
+}
+
+static SPECS: LazyLock<Mutex<HashMap<SpecConfig, Arc<Value>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// specs returns the declarations enabled by this run's authority and features.
 pub fn specs(config: &Value) -> Value {
-    let mut specs: Vec<Value> = serde_json::from_str(include_str!("tool_specs.json")).unwrap();
+    (*cached_specs(config)).clone()
+}
+
+fn cached_specs(config: &Value) -> Arc<Value> {
+    let enabled = |key: &str| config[key].as_bool().unwrap_or(false);
+    let key = SpecConfig {
+        report_friction: enabled("report_friction"),
+        git_do: match config["git_do"].as_str() {
+            Some("recipe") => "recipe",
+            Some("jev") => "jev",
+            _ => "",
+        },
+        context_gc: enabled("context_gc"),
+        scripted: config["scripted"].as_str().is_some_and(|s| !s.is_empty()),
+        agent: enabled("agent"),
+        agents: enabled("agents"),
+        read_only: enabled("read_only"),
+    };
+    // The normalized key bounds this cache independently of session IDs and paths.
+    SPECS
+        .lock()
+        .unwrap()
+        .entry(key)
+        .or_insert_with(|| Arc::new(build_specs(config)))
+        .clone()
+}
+
+fn build_specs(config: &Value) -> Value {
+    static BASE: LazyLock<Vec<Value>> = LazyLock::new(|| {
+        let mut specs: Vec<Value> = serde_json::from_str(include_str!("tool_specs.json")).unwrap();
+        specs.push(crate::tool_exec::spec());
+        specs.push(crate::tool_git::inspect_spec());
+        specs
+    });
+    let mut specs = BASE.clone();
     if !config["report_friction"].as_bool().unwrap_or(false) {
         specs.retain(|s| s["name"] != "report_friction");
     }
-    specs.push(crate::tool_exec::spec());
-    specs.push(crate::tool_git::inspect_spec());
     if matches!(config["git_do"].as_str(), Some("recipe" | "jev")) {
-        specs.push(crate::tool_git::git_do_spec(config));
+        static RECIPE: LazyLock<Value> =
+            LazyLock::new(|| crate::tool_git::git_do_spec(&json!({"git_do":"recipe"})));
+        static JEV: LazyLock<Value> =
+            LazyLock::new(|| crate::tool_git::git_do_spec(&json!({"git_do":"jev"})));
+        specs.push(if config["git_do"] == "jev" {
+            JEV.clone()
+        } else {
+            RECIPE.clone()
+        });
     }
     if config["context_gc"].as_bool().unwrap_or(false) {
-        specs.push(json!({"name":"recall","description":"Retrieve an original tool outcome hidden by context GC using its recall call ID. Returns the recorded bounded outcome verbatim as data, with a changed-since note and current digest for stale file reads. IDs not dropped or removed by compaction return not_found. Recall does not authorize a write.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/recall.json")).unwrap(),"effect":"read"}));
+        static RECALL: LazyLock<Value> = LazyLock::new(
+            || json!({"name":"recall","description":"Retrieve an original tool outcome hidden by context GC using its recall call ID. Returns the recorded bounded outcome verbatim as data, with a changed-since note and current digest for stale file reads. IDs not dropped or removed by compaction return not_found. Recall does not authorize a write.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/recall.json")).unwrap(),"effect":"read"}),
+        );
+        specs.push(RECALL.clone());
     }
     if config["scripted"]
         .as_str()
         .is_some_and(|script| !script.is_empty())
     {
-        specs.push(json!({"name":"echo","description":"Return the given text unchanged. A test tool: it reads nothing and changes nothing.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/echo.json")).unwrap(),"effect":"read"}));
+        static ECHO: LazyLock<Value> = LazyLock::new(
+            || json!({"name":"echo","description":"Return the given text unchanged. A test tool: it reads nothing and changes nothing.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/echo.json")).unwrap(),"effect":"read"}),
+        );
+        specs.push(ECHO.clone());
     }
     if config["agent"].as_bool().unwrap_or(false) {
         specs.retain(|spec| {
@@ -155,7 +217,8 @@ pub fn specs(config: &Value) -> Value {
         });
     }
     if config["agents"].as_bool().unwrap_or(false) || config["agent"].as_bool().unwrap_or(false) {
-        specs.extend(crate::agents::specs());
+        static AGENTS: LazyLock<Vec<Value>> = LazyLock::new(crate::agents::specs);
+        specs.extend(AGENTS.iter().cloned());
     }
     if config["read_only"].as_bool().unwrap_or(false) {
         specs.retain(|s| s["effect"] == "read");
@@ -203,7 +266,12 @@ pub fn optional_bool(args: &Value, key: &str) -> Result<bool, Value> {
         .ok_or_else(|| fail("invalid_arguments", &format!("{key} must be a boolean")))
 }
 
-/// decode_arguments validates one tool argument object against its input schema.
+/// decode_arguments reproduces Go encoding/json decoding, not JSON Schema validation.
+/// Fields match case-insensitively (including Kelvin and long-s folding); the last
+/// duplicate wins unless an earlier typed value failed validation. Null preserves
+/// typed strings but clears slices and pointers. raw_field's hard-coded RawMessage
+/// cases (scalar options, content/append_text/details/related_call_ids/edits, and
+/// selected expected_sha256/paths) defer type and null validation to the tool.
 pub fn decode_arguments(arguments: &str, schema: &Value) -> Result<Value, Value> {
     if !arguments.trim_start().starts_with('{') {
         return Err(fail(
@@ -391,7 +459,7 @@ pub fn execute(
     name: &str,
     arguments: &str,
 ) -> Result<Value, String> {
-    let all = specs(config);
+    let all = cached_specs(config);
     let spec = all.as_array().unwrap().iter().find(|s| s["name"] == name);
     let write = matches!(
         name,
@@ -401,7 +469,7 @@ pub fn execute(
         let mut unrestricted = config.clone();
         unrestricted["read_only"] = json!(false);
         let known = config["agent"] != true
-            && specs(&unrestricted)
+            && cached_specs(&unrestricted)
                 .as_array()
                 .unwrap()
                 .iter()
@@ -422,7 +490,10 @@ pub fn execute(
     }
     // Both git_do modes decode the same Go struct; only Jev advertises intent.
     let schema = if name == "git_do" {
-        serde_json::from_str(include_str!("schemas/git_do_jev.json")).unwrap()
+        static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
+            serde_json::from_str(include_str!("schemas/git_do_jev.json")).unwrap()
+        });
+        SCHEMA.clone()
     } else {
         spec.unwrap()["input_schema"].clone()
     };
@@ -752,6 +823,36 @@ fn report_friction(state: &mut ToolState, args: &Value) -> Result<Value, Value> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spec_cache_tracks_only_declaration_fields_and_does_not_share_mutations() {
+        let first = json!({"session_id":"first", "scripted":"one.json", "plan":true});
+        let second = json!({"session_id":"second", "scripted":"two.json"});
+        assert!(Arc::ptr_eq(&cached_specs(&first), &cached_specs(&second)));
+        let mut changed = specs(&first);
+        changed[0]["name"] = json!("changed");
+        assert_ne!(specs(&first)[0]["name"], "changed");
+        for key in [
+            "report_friction",
+            "context_gc",
+            "agent",
+            "agents",
+            "read_only",
+        ] {
+            let mut config = second.clone();
+            config[key] = json!(true);
+            assert!(
+                !Arc::ptr_eq(&cached_specs(&second), &cached_specs(&config)),
+                "{key}"
+            );
+            assert_eq!(*cached_specs(&config), build_specs(&config));
+        }
+        for mode in ["recipe", "jev"] {
+            let config = json!({"git_do":mode});
+            assert_eq!(*cached_specs(&config), build_specs(&config));
+            assert_ne!(specs(&config), specs(&json!({})));
+        }
+    }
+
     #[test]
     fn child_declarations_preserve_parent_schema_bytes_and_limit_authority() {
         for read_only in [false, true] {

@@ -5,7 +5,7 @@ use std::io::Write;
 fn borrowed_recorder_keeps_retry_events_ordered_and_out_of_the_buffer() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("events.jsonl");
-    let mut trace = crate::trace::Trace::new(path.to_str(), "session", "run").unwrap();
+    let mut trace = crate::trace::Trace::new(path.to_str(), "session", "run");
     trace.persistent = true;
     trace.agent_id = "child".into();
     trace.parent_id = "parent".into();
@@ -205,7 +205,7 @@ fn cancellation_trace_wraps_only_header_errors_and_masks_endpoint_password() {
             endpoint.replacen("http://", "http://user:private-password@", 1) + "/v1/responses";
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("events.jsonl");
-        let mut trace = crate::trace::Trace::new(path.to_str(), "session", "run").unwrap();
+        let mut trace = crate::trace::Trace::new(path.to_str(), "session", "run");
         let mut transport = Transport::new(&json!({"provider":"openai", "proxied":true}));
         transport.cancellation = Some(token);
         let error = transport
@@ -289,4 +289,62 @@ fn retry_after_signed_overflow_falls_back_and_reaches_the_second_request() {
         let delay = scheduled["data"]["delay_ms"].as_u64().unwrap();
         assert!((800..=1200).contains(&delay), "header {header}: {delay}");
     }
+}
+
+#[test]
+fn retries_and_sequential_calls_reuse_one_connection_with_fresh_request_limits() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let (endpoint, server) = http::tests::server(|mut stream| {
+        // Accept only once: every retry and later call must use this same socket.
+        for status in [503, 200, 200, 200] {
+            http::tests::request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\nContent-Length: 2\r\n\r\n{{}}"
+            )
+            .unwrap();
+        }
+    });
+    let mut transport = Transport::new(&json!({"provider":"anthropic"}));
+    let token = Arc::new(AtomicBool::new(false));
+    transport.cancellation = Some(token.clone());
+    let request = json!({});
+    assert_eq!(
+        transport
+            .call_endpoint(&request, &request, &endpoint)
+            .unwrap(),
+        (200, b"{}".to_vec())
+    );
+    token.store(true, Ordering::SeqCst);
+    let next_token = Arc::new(AtomicBool::new(false));
+    transport.cancellation = Some(next_token.clone());
+    let deadline = Instant::now() + Duration::from_secs(1);
+    assert_eq!(
+        transport
+            .call_endpoint_displayed(&request, &request, &endpoint, None, None, Some(deadline))
+            .unwrap(),
+        (200, b"{}".to_vec())
+    );
+    next_token.store(true, Ordering::SeqCst);
+    transport.cancellation = None;
+    std::thread::sleep(
+        deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+    );
+    assert_eq!(
+        transport
+            .call_endpoint(&request, &request, &endpoint)
+            .unwrap(),
+        (200, b"{}".to_vec())
+    );
+    server.join().unwrap();
+    let statuses: Vec<_> = transport
+        .events
+        .iter()
+        .filter(|event| event["event"] == "api.attempt.finished")
+        .map(|event| event["data"]["http_status"].as_u64().unwrap())
+        .collect();
+    assert_eq!(statuses, [503, 200, 200, 200]);
 }

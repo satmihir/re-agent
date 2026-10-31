@@ -30,21 +30,7 @@ pub fn directory(id: &str) -> Result<PathBuf, String> {
             "invalid session ID {id:?}: expected 16 lowercase hex digits"
         ));
     }
-    let root = if cfg!(target_os = "macos") {
-        std::env::var_os("HOME")
-            .filter(|x| !x.is_empty())
-            .map(|x| PathBuf::from(x).join("Library/Caches"))
-    } else {
-        std::env::var_os("XDG_CACHE_HOME")
-            .filter(|x| !x.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .filter(|x| !x.is_empty())
-                    .map(|x| PathBuf::from(x).join(".cache"))
-            })
-    }
-    .ok_or("user cache directory is unavailable")?;
+    let root = crate::cache::directory().ok_or("user cache directory is unavailable")?;
     Ok(root.join("reagent/sessions").join(id))
 }
 

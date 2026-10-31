@@ -2,6 +2,7 @@ pub mod agents;
 pub mod anthropic;
 pub mod auth;
 pub(crate) mod auto;
+pub(crate) mod cache;
 pub(crate) mod cancellation;
 pub mod catalog;
 pub mod chat;

@@ -127,3 +127,37 @@ fn request_trace_quotes_each_invalid_byte_without_changing_http_bytes_or_digest(
         server.join().unwrap();
     }
 }
+
+#[test]
+fn repeated_retry_secret_snapshots_stay_unique_and_in_first_seen_order() {
+    let mut secrets = vec!["api-key".to_string()];
+    let snapshot = vec![
+        "access".to_string(),
+        "refresh".to_string(),
+        "id".to_string(),
+    ];
+    merge_secrets(&mut secrets, snapshot.clone());
+    for _ in 0..1000 {
+        merge_secrets(&mut secrets, snapshot.clone());
+        assert_eq!(secrets, ["api-key", "access", "refresh", "id"]);
+    }
+    let rotated = vec![
+        "access".into(),
+        "rotated".into(),
+        "refresh".into(),
+        "rotated".into(),
+    ];
+    merge_secrets(&mut secrets, rotated.clone());
+    for _ in 0..1000 {
+        merge_secrets(&mut secrets, rotated.clone());
+        assert_eq!(secrets, ["api-key", "access", "refresh", "id", "rotated"]);
+    }
+    assert_eq!(
+        redact(
+            "api-key access refresh id rotated",
+            &secrets,
+            "http://localhost"
+        ),
+        "[redacted] [redacted] [redacted] [redacted] [redacted]"
+    );
+}

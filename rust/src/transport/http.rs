@@ -21,7 +21,8 @@ mod proxy_policy;
 #[path = "socks.rs"]
 mod socks;
 
-/// Client sends explicit HTTP requests without implicit Accept headers or redirects.
+/// Client sends explicit HTTP requests; clones share its runtime and connection pool.
+#[derive(Clone)]
 pub struct Client {
     runtime: Arc<Runtime>,
     inner: HyperClient<proxy::Connector, Full<Bytes>>,
@@ -42,8 +43,9 @@ impl Client {
         );
         let proxy_policy = Arc::new(proxy_policy::ProxyPolicy::from_env());
         let connector = proxy::Connector::new(proxy_policy.clone());
+        // Recover a closed pooled connection only before any request bytes are written.
         let inner = HyperClient::builder(TokioExecutor::new())
-            .retry_canceled_requests(false)
+            .retry_canceled_requests(true)
             .build(connector);
         Ok(Self {
             runtime,
