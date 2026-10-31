@@ -582,7 +582,7 @@ func (r *gitDoRun) snapshot() {
 			}
 		}
 	}
-	if s.PullRequest != nil || r.pr > 0 || (s.Branch != "" && s.Branch != s.Default) {
+	if s.PullRequest != nil || r.pr > 0 {
 		r.observedTip, _ = r.remoteTip(s.Branch)
 	}
 }
@@ -1225,9 +1225,6 @@ func (r *gitDoRun) rebasePush() (string, []gitDoCheck, error) {
 		return "", nil, gitDoDecline{"uncommitted changes; commit them first"}
 	}
 	remoteTip, exists := r.remoteTip(r.state.Branch)
-	if remoteTip != r.observedTip {
-		return "", nil, gitDoDecline{"the remote branch moved; fetch and reconcile first"}
-	}
 	if exists {
 		_, ancestor, err := r.exec([]string{"git", "merge-base", "--is-ancestor", remoteTip, "HEAD"})
 		if err != nil || ancestor < 0 || ancestor > 1 {

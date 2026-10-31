@@ -1144,53 +1144,36 @@ func TestGitDo_RebasePushPreservesCollaboratorCommit(t *testing.T) {
 }
 
 func TestGitDo_RebasePushRejectsRemoteRaces(t *testing.T) {
-	for _, tc := range []struct {
-		name, command string
-		pushed        bool
-	}{
-		{"moved after observation", "ls-remote", true},
-		{"moved during fetch", "fetch", true},
-		{"created during first fetch", "fetch", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, pushed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("pushed=%t", pushed), func(t *testing.T) {
 			ws := gitDoRepo(t)
-			before := gitDoRebaseBranch(t, ws, tc.pushed)
+			before := gitDoRebaseBranch(t, ws, pushed)
 			realGit, err := exec.LookPath("git")
 			if err != nil {
 				t.Fatal(err)
 			}
 			bin := t.TempDir()
-			marker := filepath.Join(bin, "moved")
 			origin := filepath.Join(filepath.Dir(ws.Root()), "origin.git")
 			remote := gitDoGit(t, ws.Root(), "rev-parse", "origin/main")
-			// Move the real remote at a command boundary, without scheduling sleeps.
+			// Refresh the tracking ref after the check; the lease must keep the old tip.
 			wrapper := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = '%s' ] && [ ! -f '%s' ]; then
-  if [ "$1" = ls-remote ]; then '%s' "$@" || exit; fi
-  touch '%s'
+if [ "$1" = fetch ]; then
   '%s' --git-dir='%s' update-ref refs/heads/feature %s || exit
-  if [ "$1" = ls-remote ]; then exit; fi
 fi
 exec '%s' "$@"
-`, tc.command, marker, realGit, marker, realGit, origin, remote, realGit)
+`, realGit, origin, remote, realGit)
 			if err := os.WriteFile(filepath.Join(bin, "git"), []byte(wrapper), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"rebase_push"}`)
 			result := gitDoData(t, outcome)
-			if tc.command == "ls-remote" {
-				if outcome.Code != "declined" || outcome.Message != "the remote branch moved; fetch and reconcile first" || len(result.Steps) != 0 || gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before {
-					t.Fatalf("%+v / %+v", outcome, result)
-				}
-			} else {
-				lease := before
-				if !tc.pushed {
-					lease = ""
-				}
-				if outcome.Code != "step_failed" || len(result.Steps) != 3 || result.Steps[2].ExitCode == 0 || strings.Join(result.Steps[2].Argv, " ") != "git push -q --force-with-lease=feature:"+lease+" origin feature" || !strings.Contains(result.Steps[2].Output, "stale info") {
-					t.Fatalf("%+v / %+v", outcome, result)
-				}
+			lease := before
+			if !pushed {
+				lease = ""
+			}
+			if outcome.Code != "step_failed" || len(result.Steps) != 3 || result.Steps[2].ExitCode == 0 || strings.Join(result.Steps[2].Argv, " ") != "git push -q --force-with-lease=feature:"+lease+" origin feature" || !strings.Contains(result.Steps[2].Output, "stale info") {
+				t.Fatalf("%+v / %+v", outcome, result)
 			}
 			if gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature") != remote+"\trefs/heads/feature" {
 				t.Fatal("overwrote racing remote commit")

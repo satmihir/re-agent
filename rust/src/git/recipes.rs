@@ -610,10 +610,7 @@ impl Run<'_> {
                 }
             }
         }
-        if self.state.get("pull_request").is_some()
-            || self.pr > 0
-            || (!branch.is_empty() && branch != default)
-        {
+        if self.state.get("pull_request").is_some() || self.pr > 0 {
             self.observed = self.remote_tip(&branch).unwrap_or_default();
         }
         order_fields(
@@ -1324,11 +1321,6 @@ impl Run<'_> {
                 }
                 let remote = self.remote_tip(&branch);
                 let tip = remote.as_deref().unwrap_or("");
-                if tip != self.observed {
-                    return Err(decline(
-                        "the remote branch moved; fetch and reconcile first",
-                    ));
-                }
                 if remote.is_some() {
                     let (_, ancestor, timeout) = self.exec(&strings(&[
                         "git",

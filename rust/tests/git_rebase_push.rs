@@ -129,23 +129,12 @@ impl Repository {
         git(&self.peer, &["push", "-q", "origin", "topic"]);
     }
 
-    fn race(&self, during_snapshot: bool) {
-        let action = format!(
-            "/usr/bin/git -C '{}' push -q origin topic || exit $?\n",
+    fn race_during_fetch(&self) {
+        // Fetch refreshes origin/topic after the safety check, which must not refresh the lease.
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = fetch ]; then\n /usr/bin/git -C '{}' push -q origin topic || exit $?\nfi\nexec /usr/bin/git \"$@\"\n",
             self.peer.display()
         );
-        let script = if during_snapshot {
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = ls-remote ] && [ ! -e '{}' ]; then\n /usr/bin/git \"$@\"\n result=$?\n /usr/bin/touch '{}'\n {action} exit $result\nfi\nexec /usr/bin/git \"$@\"\n",
-                self.directory.path().join("observed").display(),
-                self.directory.path().join("observed").display()
-            )
-        } else {
-            // Fetch refreshes origin/topic after the safety check, which must not refresh the lease.
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = fetch ]; then\n {action}fi\nexec /usr/bin/git \"$@\"\n"
-            )
-        };
         executable(&self.bin.join("git"), &script);
     }
 
@@ -243,19 +232,6 @@ fn rebase_push_does_not_treat_reflog_as_permission_to_overwrite() {
 }
 
 #[test]
-fn rebase_push_declines_remote_movement_since_snapshot() {
-    let repo = Repository::new(true);
-    let head = git(&repo.local, &["rev-parse", "HEAD"]);
-    let collaborator = repo.collaborator(true);
-    repo.race(true);
-    declined(
-        &repo.run(),
-        "the remote branch moved; fetch and reconcile first",
-    );
-    repo.unchanged(&head, &collaborator);
-}
-
-#[test]
 fn rebase_push_rewrites_and_pushes_with_an_exact_lease_including_first_push() {
     for pushed in [true, false] {
         let repo = Repository::new(pushed);
@@ -298,7 +274,7 @@ fn rebase_push_lease_rejects_a_race_even_when_fetch_updates_tracking() {
         let before = git(&repo.local, &["rev-parse", "HEAD"]);
         repo.advance_default(false);
         let collaborator = repo.collaborator(pushed);
-        repo.race(false);
+        repo.race_during_fetch();
         let value = repo.run();
         assert_eq!(value["code"], "step_failed", "{value}");
         let steps = value["data"]["steps"].as_array().unwrap();
