@@ -1049,3 +1049,167 @@ func TestGitDo_ScopedPathsAlreadyCommitted(t *testing.T) {
 		}
 	}
 }
+
+func gitDoRebaseBranch(t *testing.T, ws *Workspace, pushed bool) string {
+	t.Helper()
+	gitDoGit(t, ws.Root(), "switch", "-q", "-c", "feature")
+	gitDoWrite(t, ws.Root(), "feature.txt")
+	gitDoGit(t, ws.Root(), "add", "feature.txt")
+	gitDoGit(t, ws.Root(), "commit", "-q", "-m", "Feature")
+	tip := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+	if pushed {
+		gitDoGit(t, ws.Root(), "push", "-q", "-u", "origin", "feature")
+	}
+	gitDoGit(t, ws.Root(), "switch", "-q", "main")
+	gitDoWrite(t, ws.Root(), "base.txt")
+	gitDoGit(t, ws.Root(), "add", "base.txt")
+	gitDoGit(t, ws.Root(), "commit", "-q", "-m", "Base")
+	gitDoGit(t, ws.Root(), "push", "-q", "origin", "main")
+	gitDoGit(t, ws.Root(), "switch", "-q", "feature")
+	return tip
+}
+
+func TestGitDo_RebasePushUsesExplicitLease(t *testing.T) {
+	for _, pushed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("pushed=%t", pushed), func(t *testing.T) {
+			ws := gitDoRepo(t)
+			before := gitDoRebaseBranch(t, ws, pushed)
+			lease := before
+			if !pushed {
+				lease = ""
+			}
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"rebase_push"}`)
+			result := gitDoData(t, outcome)
+			if !outcome.OK || result.Status != "done" || len(result.Steps) != 3 || len(result.Checks) != 2 {
+				t.Fatalf("%+v / %+v", outcome, result)
+			}
+			want := []string{"git fetch -q origin", "git rebase -q origin/main", "git push -q --force-with-lease=feature:" + lease + " origin feature"}
+			for i, step := range result.Steps {
+				if strings.Join(step.Argv, " ") != want[i] || step.ExitCode != 0 {
+					t.Fatalf("step %d: %+v", i, step)
+				}
+			}
+			for _, check := range result.Checks {
+				if !check.OK {
+					t.Fatalf("check: %+v", check)
+				}
+			}
+			head := gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+			if head == before || gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature") != head+"\trefs/heads/feature" {
+				t.Fatal("did not rewrite and publish the branch")
+			}
+			gitDoGit(t, ws.Root(), "merge-base", "--is-ancestor", "origin/main", "HEAD")
+			if gitDoGit(t, ws.Root(), "status", "--porcelain") != "" {
+				t.Fatal("rebase left changes")
+			}
+		})
+	}
+}
+
+func TestGitDo_RebasePushPreservesCollaboratorCommit(t *testing.T) {
+	for _, history := range []string{"unknown", "fetched", "reflog"} {
+		t.Run(history, func(t *testing.T) {
+			ws := gitDoRepo(t)
+			before := gitDoRebaseBranch(t, ws, true)
+			base := filepath.Dir(ws.Root())
+			collaborator := filepath.Join(base, "collaborator")
+			gitDoGit(t, base, "clone", "-q", "--template=", "-b", "feature", filepath.Join(base, "origin.git"), collaborator)
+			gitDoWrite(t, collaborator, "collaborator.txt")
+			gitDoGit(t, collaborator, "add", "collaborator.txt")
+			gitDoGit(t, collaborator, "commit", "-q", "-m", "Collaborator work")
+			gitDoGit(t, collaborator, "push", "-q", "origin", "feature")
+			remote := gitDoGit(t, collaborator, "rev-parse", "HEAD")
+			reason := "cannot compare the remote branch with HEAD; fetch and reconcile first"
+			if history != "unknown" {
+				gitDoGit(t, ws.Root(), "fetch", "-q", "origin")
+				reason = "the remote branch has commits that HEAD does not contain; merge or rebase onto it first"
+			}
+			if history == "reflog" {
+				gitDoGit(t, ws.Root(), "reset", "--hard", remote)
+				gitDoGit(t, ws.Root(), "reset", "--hard", before)
+			}
+			tracking := gitDoGit(t, ws.Root(), "rev-parse", "origin/feature")
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"rebase_push"}`)
+			if outcome.Code != "declined" || outcome.Message != reason || outcome.Effect != EffectNone || len(gitDoData(t, outcome).Steps) != 0 {
+				t.Fatalf("%+v", outcome)
+			}
+			if gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "status", "--porcelain") != "" || gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature") != remote+"\trefs/heads/feature" {
+				t.Fatal("decline changed local or remote branch")
+			}
+			if gitDoGit(t, ws.Root(), "rev-parse", "origin/feature") != tracking {
+				t.Fatal("decline fetched despite unsafe remote")
+			}
+		})
+	}
+}
+
+func TestGitDo_RebasePushRejectsRemoteRaces(t *testing.T) {
+	for _, pushed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("pushed=%t", pushed), func(t *testing.T) {
+			ws := gitDoRepo(t)
+			before := gitDoRebaseBranch(t, ws, pushed)
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			origin := filepath.Join(filepath.Dir(ws.Root()), "origin.git")
+			remote := gitDoGit(t, ws.Root(), "rev-parse", "origin/main")
+			// Refresh the tracking ref after the check; the lease must keep the old tip.
+			wrapper := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = fetch ]; then
+  '%s' --git-dir='%s' update-ref refs/heads/feature %s || exit
+fi
+exec '%s' "$@"
+`, realGit, origin, remote, realGit)
+			if err := os.WriteFile(filepath.Join(bin, "git"), []byte(wrapper), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"rebase_push"}`)
+			result := gitDoData(t, outcome)
+			lease := before
+			if !pushed {
+				lease = ""
+			}
+			if outcome.Code != "step_failed" || len(result.Steps) != 3 || result.Steps[2].ExitCode == 0 || strings.Join(result.Steps[2].Argv, " ") != "git push -q --force-with-lease=feature:"+lease+" origin feature" || !strings.Contains(result.Steps[2].Output, "stale info") {
+				t.Fatalf("%+v / %+v", outcome, result)
+			}
+			if gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature") != remote+"\trefs/heads/feature" {
+				t.Fatal("overwrote racing remote commit")
+			}
+		})
+	}
+}
+
+func TestGitDo_RebasePushPreservesDirtyAndConflictBehavior(t *testing.T) {
+	for _, dirty := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dirty=%t", dirty), func(t *testing.T) {
+			ws := gitDoRepo(t)
+			before := gitDoRebaseBranch(t, ws, true)
+			if dirty {
+				gitDoWrite(t, ws.Root(), "notes.txt")
+			} else {
+				if err := os.WriteFile(filepath.Join(ws.Root(), "base.txt"), []byte("different\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				gitDoGit(t, ws.Root(), "add", "base.txt")
+				gitDoGit(t, ws.Root(), "commit", "-q", "-m", "Conflicting base")
+				before = gitDoGit(t, ws.Root(), "rev-parse", "HEAD")
+				gitDoGit(t, ws.Root(), "push", "-q", "origin", "feature")
+			}
+			outcome := runTool(t, NewGitDoTool(ws, nil), `{"recipe":"rebase_push"}`)
+			result := gitDoData(t, outcome)
+			wantStatus, wantReason, wantSteps := "failed", "the rebase stopped on a conflict and was aborted; the branch is unchanged", 2
+			if dirty {
+				wantStatus, wantReason, wantSteps = "declined", "uncommitted changes; commit them first", 0
+			}
+			if result.Status != wantStatus || result.Reason != wantReason || len(result.Steps) != wantSteps || gitDoGit(t, ws.Root(), "rev-parse", "HEAD") != before || gitDoGit(t, ws.Root(), "ls-remote", "origin", "refs/heads/feature") != before+"\trefs/heads/feature" {
+				t.Fatalf("%+v / %+v", outcome, result)
+			}
+			if !dirty && gitDoGit(t, ws.Root(), "status", "--porcelain") != "" {
+				t.Fatal("conflict was not aborted")
+			}
+		})
+	}
+}

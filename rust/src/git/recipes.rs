@@ -1319,13 +1319,39 @@ impl Run<'_> {
                 if !self.changed.is_empty() {
                     return Err(decline("uncommitted changes; commit them first"));
                 }
+                let remote = self.remote_tip(&branch);
+                let tip = remote.as_deref().unwrap_or("");
+                if remote.is_some() {
+                    let (_, ancestor, timeout) = self.exec(&strings(&[
+                        "git",
+                        "merge-base",
+                        "--is-ancestor",
+                        tip,
+                        "HEAD",
+                    ]));
+                    if timeout || !(0..=1).contains(&ancestor) {
+                        return Err(decline(
+                            "cannot compare the remote branch with HEAD; fetch and reconcile first",
+                        ));
+                    }
+                    if ancestor == 1 {
+                        return Err(decline("the remote branch has commits that HEAD does not contain; merge or rebase onto it first"));
+                    }
+                }
                 self.step(&["git", "fetch", "-q", "origin"])?;
                 let base = format!("origin/{default}");
                 if self.step(&["git", "rebase", "-q", &base]).is_err() {
                     self.quiet(&["git", "rebase", "--abort"]);
                     return Err(Error{status:"failed",reason:"the rebase stopped on a conflict and was aborted; the branch is unchanged".into()});
                 }
-                self.step(&["git", "push", "-q", "--force-with-lease", "origin", &branch])?;
+                self.step(&[
+                    "git",
+                    "push",
+                    "-q",
+                    &format!("--force-with-lease={branch}:{tip}"),
+                    "origin",
+                    &branch,
+                ])?;
                 let (tip, _) = self.quiet(&["git", "rev-parse", &base]);
                 let (merge_base, _) = self.quiet(&["git", "merge-base", "HEAD", &tip]);
                 Ok((
