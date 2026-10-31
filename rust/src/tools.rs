@@ -554,6 +554,9 @@ fn workspace_destination(path: &str, prospective: bool) -> Result<WorkspaceDesti
         ));
     };
     let parent = fs::canonicalize(parent).map_err(os_outcome)?;
+    if parent.to_str().is_none() {
+        return Err(fail("invalid_path", "resolved workspace path is not UTF-8"));
+    }
     let parent_info = fs::metadata(&parent).map_err(os_outcome)?;
     if !parent_info.is_dir() {
         return Err(fail("not_directory", "workspace parent is not a directory"));
@@ -571,6 +574,10 @@ fn workspace_destination(path: &str, prospective: bool) -> Result<WorkspaceDesti
             (root, false)
         }
     };
+    // Session configuration stores paths as strings; lossy conversion could select another directory.
+    if root.to_str().is_none() {
+        return Err(fail("invalid_path", "resolved workspace path is not UTF-8"));
+    }
     if root.parent().is_none()
         || root
             .components()
@@ -727,10 +734,15 @@ fn workspace_tool(
         data["project_instructions_note"] =
             json!("project instructions are disabled for this session");
     } else {
-        match crate::workspace::project_instructions(&root.to_string_lossy()){
-        Ok(Some(project))=>data["project_instructions"]=json!(project),
-        _=>data["project_instructions_note"]=json!("no AGENTS.md was loaded from the new workspace (see warnings if any); earlier project instructions no longer apply"),
-    }
+        match crate::workspace::project_instructions(&root.to_string_lossy()) {
+            Ok(Some(project)) => data["project_instructions"] = json!(project),
+            result => {
+                data["project_instructions_note"] = json!("no AGENTS.md was loaded from the new workspace (see warnings if any); earlier project instructions no longer apply");
+                if let Err(reason) = result {
+                    data["warnings"] = json!(format!("warning: AGENTS.md skipped: {reason}\n"));
+                }
+            }
+        }
     }
     if crate::cancellation::cancelled(config) {
         return Err(fail("permission_denied", "workspace request cancelled"));
@@ -1960,6 +1972,120 @@ mod tests {
             execute(&mut state, &config, "echo", "{}").unwrap()["code"],
             "invalid_arguments"
         );
+    }
+
+    #[test]
+    fn workspace_switch_rejects_non_utf8_canonical_parent_without_mutation() {
+        assert_non_utf8_workspace_rejected(true);
+    }
+
+    #[test]
+    fn workspace_switch_rejects_non_utf8_canonical_root_without_mutation() {
+        assert_non_utf8_workspace_rejected(false);
+    }
+
+    fn assert_non_utf8_workspace_rejected(parent_alias: bool) {
+        use std::os::unix::{ffi::OsStringExt, fs::symlink};
+        let dir = tempfile::tempdir().unwrap();
+        let launch = dir.path().join("launch");
+        let native = dir
+            .path()
+            .join(std::ffi::OsString::from_vec(b"native-\xff".to_vec()));
+        let replacement = PathBuf::from(native.to_string_lossy().into_owned());
+        fs::create_dir(&launch).unwrap();
+        fs::create_dir(&native).unwrap();
+        fs::create_dir(&replacement).unwrap();
+        fs::write(replacement.join("wrong-workspace"), "decoy").unwrap();
+        let alias = dir.path().join("alias");
+        symlink(&native, &alias).unwrap();
+        let target = if parent_alias {
+            fs::create_dir(native.join("target")).unwrap();
+            alias.join("target")
+        } else {
+            alias
+        };
+        let config = json!({"workspace":launch});
+        let mut state = ToolState::new(&config).unwrap();
+        state.workspace_consent = Some(Box::new(|_, _| panic!("invalid path reached consent")));
+        for name in ["request_workspace_access", "switch_workspace"] {
+            let args = json!({"path":target}).to_string();
+            let result = execute(&mut state, &config, name, &args).unwrap();
+            assert_eq!(result["code"], "invalid_path", "{result}");
+            assert_eq!(state.workspace.root, fs::canonicalize(&launch).unwrap());
+            assert!(state.handles.is_empty());
+            assert_eq!(state.approved.len(), 1);
+        }
+        if parent_alias {
+            let args = json!({"path":target.with_file_name("future")}).to_string();
+            let result = execute(&mut state, &config, "request_workspace_access", &args).unwrap();
+            assert_eq!(result["code"], "invalid_path", "{result}");
+            assert_eq!(state.approved.len(), 1);
+        }
+    }
+
+    #[test]
+    fn workspace_switch_preserves_project_instruction_warnings() {
+        use std::os::unix::fs::symlink;
+        for (case, reason) in [
+            ("directory", "not a regular file"),
+            ("invalid-utf8", "not UTF-8"),
+            ("too-large", "larger than 32 KiB"),
+            ("broken-symlink", "cannot resolve symlink"),
+            ("outside-symlink", "symlink points outside the workspace"),
+            ("missing", ""),
+            ("empty", ""),
+            ("disabled", ""),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let launch = dir.path().join("launch");
+            let target = dir.path().join("target");
+            fs::create_dir(&launch).unwrap();
+            fs::create_dir(&target).unwrap();
+            let agents = target.join("AGENTS.md");
+            match case {
+                "directory" => fs::create_dir(&agents).unwrap(),
+                "invalid-utf8" => fs::write(&agents, b"\xff").unwrap(),
+                "too-large" => fs::write(&agents, vec![b'a'; 32769]).unwrap(),
+                "broken-symlink" => symlink("missing", &agents).unwrap(),
+                "missing" => {}
+                "empty" => fs::write(&agents, "").unwrap(),
+                "disabled" => fs::create_dir(&agents).unwrap(),
+                _ => {
+                    fs::write(dir.path().join("outside"), "outside instructions").unwrap();
+                    symlink(dir.path().join("outside"), &agents).unwrap();
+                }
+            }
+            let config = json!({"workspace":launch,"allow_workspaces":[target],"no_project_instructions":case == "disabled"});
+            let mut state = ToolState::new(&config).unwrap();
+            let result = execute(
+                &mut state,
+                &config,
+                "switch_workspace",
+                &json!({"path":target}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(state.workspace.root, fs::canonicalize(&target).unwrap());
+            if reason.is_empty() {
+                assert!(result["data"].get("warnings").is_none(), "{case}: {result}");
+                if case == "empty" {
+                    assert_eq!(result["data"]["project_instructions"], "");
+                    assert!(result["data"].get("project_instructions_note").is_none());
+                }
+                continue;
+            }
+            assert_eq!(
+                result["data"]["warnings"],
+                format!("warning: AGENTS.md skipped: {reason}\n"),
+                "{case}"
+            );
+            assert!(result["data"]["project_instructions"].is_null());
+            assert!(result["data"]["project_instructions_note"]
+                .as_str()
+                .unwrap()
+                .contains("see warnings"));
+            assert_eq!(state.workspace.root, fs::canonicalize(&target).unwrap());
+        }
     }
 
     #[test]

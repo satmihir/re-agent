@@ -365,6 +365,7 @@ impl Session {
     }
     /// Reset discards accepted context without changing launch authority.
     pub fn reset(&mut self) {
+        crate::agents::retire(self);
         self.history.clear();
         if flag(&self.config["agent"]) {
             self.config.as_object_mut().unwrap().remove("agent_prefix");
