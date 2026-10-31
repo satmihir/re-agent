@@ -1993,7 +1993,11 @@ mod tests {
             .join(std::ffi::OsString::from_vec(b"native-\xff".to_vec()));
         let replacement = PathBuf::from(native.to_string_lossy().into_owned());
         fs::create_dir(&launch).unwrap();
-        fs::create_dir(&native).unwrap();
+        // APFS and other UTF-8-only file systems refuse the name, so the case cannot arise.
+        if let Err(error) = fs::create_dir(&native) {
+            assert_eq!(error.raw_os_error(), Some(libc::EILSEQ), "{error}");
+            return;
+        }
         fs::create_dir(&replacement).unwrap();
         fs::write(replacement.join("wrong-workspace"), "decoy").unwrap();
         let alias = dir.path().join("alias");
