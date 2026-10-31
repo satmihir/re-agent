@@ -1034,13 +1034,14 @@ time.sleep(30)"#,
                 redirected = if redirected { "True" } else { "False" }
             );
             let argv = vec!["/usr/bin/python3".into(), "-c".into(), script];
-            // Exercise the execution boundary without paying the public ten-second timeout floor twice.
+            // Exercise the execution boundary without paying the public ten-second timeout floor
+            // twice, but leave a cold Python on a slow CI host time to write every pid file.
             let value = run(
                 dir.path(),
                 dir.path(),
                 ".",
                 &argv,
-                1500,
+                5000,
                 LIMIT,
                 &AtomicBool::new(false),
                 &json!({}),
