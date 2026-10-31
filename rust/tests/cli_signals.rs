@@ -909,6 +909,8 @@ fn pty_plan_choices_require_consent_and_scope_implementation_history() {
             13,
         );
         pty.wait(b"Plan ready");
+        // The choices follow the picker's header, and a slow host can deliver them later.
+        pty.wait("❯ 3  Keep planning".as_bytes());
         let frame = String::from_utf8_lossy(&pty.raw);
         assert!(frame.contains("❯ 3  Keep planning"), "{choice}: {frame}");
         assert!(frame.contains("esc keep planning"), "{choice}: {frame}");
