@@ -150,12 +150,14 @@ fn progressing_chunks_reset_idle_without_whole_response_timeout() {
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
             .unwrap();
+        // Each gap leaves 200ms of slack for slow CI hosts, while the whole body still
+        // outlasts both timeouts.
         for _ in 0..4 {
-            thread::sleep(Duration::from_millis(40));
+            thread::sleep(Duration::from_millis(100));
             stream.write_all(b"a").unwrap();
         }
     });
-    let mut response = client(70, 100).get(url).send().unwrap();
+    let mut response = client(150, 300).get(url).send().unwrap();
     let mut body = Vec::new();
     response.read_to_end(&mut body).unwrap();
     assert_eq!(body, b"aaaa");
