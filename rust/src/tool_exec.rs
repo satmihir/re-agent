@@ -571,7 +571,7 @@ fn run(
             root,
         ));
     }
-    let mut child = match command.spawn() {
+    let mut child = match crate::process::spawn(&mut command) {
         Ok(c) => c,
         Err(e) => {
             let cancelled = cancellation.load(Ordering::Acquire);
@@ -791,12 +791,13 @@ fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
 #[cfg(not(target_os = "linux"))]
 fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
     // Unlike /proc, ps is available on Darwin. Bound it independently of exec's timeout.
-    let mut child = Command::new("/bin/ps")
-        .args(["-axo", "pid=,ppid=,pgid="])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+    let mut child = crate::process::spawn(
+        Command::new("/bin/ps")
+            .args(["-axo", "pid=,ppid=,pgid="])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )?;
     let mut stdout = child.stdout.take().unwrap();
     let result = (|| {
         if unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {

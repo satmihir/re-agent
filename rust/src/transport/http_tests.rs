@@ -176,7 +176,12 @@ fn cancellation_interrupts_header_and_body_waits() {
                     .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n")
                     .unwrap();
             }
-            thread::sleep(Duration::from_millis(150));
+            // Hold the reply open until the cancelled client closes it, however slow the
+            // host; a fixed delay let the server close first on macOS CI.
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let _ = stream.read(&mut [0; 1]);
         });
         let token = Arc::new(AtomicBool::new(false));
         let signal = token.clone();
@@ -205,6 +210,7 @@ fn cancellation_interrupts_header_and_body_waits() {
                 format!("Post {url:?}: context canceled")
             }
         );
+        drop(client);
         cancel.join().unwrap();
         server.join().unwrap();
     }

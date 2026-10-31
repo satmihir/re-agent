@@ -865,19 +865,22 @@ impl Input {
             let handle = self.region.as_ref().unwrap().clone();
             let (columns, height) = self.size()?;
             let mut region = handle.lock().unwrap();
-            if stop.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire) {
-                break;
-            }
-            let mut changed = region.tick_progress();
+            // A key already taken from the decoder when the turn ends belongs to the next
+            // prompt's draft; only Ctrl-C and Ctrl-L would act on the finished turn.
+            let ended = stop.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire);
+            let mut changed = !ended && region.tick_progress();
             if let Some(key) = key {
                 let prompt = region.prompt();
                 match next.apply(&key, &mut self.history, columns, &prompt) {
-                    Some("interrupt") => cancelled.store(true, Ordering::Release),
-                    Some("clear") => region.clear()?,
+                    Some("interrupt") if !ended => cancelled.store(true, Ordering::Release),
+                    Some("clear") if !ended => region.clear()?,
                     _ => {}
                 }
                 region.queued = next.queued.is_some();
                 changed = true;
+            }
+            if ended {
+                break;
             }
             if changed || columns != region.width || height != region.height {
                 region.input(

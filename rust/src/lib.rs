@@ -13,6 +13,7 @@ pub mod context_gc;
 pub mod errors;
 pub mod jev;
 pub mod openai;
+pub(crate) mod process;
 pub mod provider;
 pub mod raw;
 pub mod render;

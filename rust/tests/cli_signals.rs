@@ -909,6 +909,8 @@ fn pty_plan_choices_require_consent_and_scope_implementation_history() {
             13,
         );
         pty.wait(b"Plan ready");
+        // The choices follow the picker's header, and a slow host can deliver them later.
+        pty.wait("❯ 3  Keep planning".as_bytes());
         let frame = String::from_utf8_lossy(&pty.raw);
         assert!(frame.contains("❯ 3  Keep planning"), "{choice}: {frame}");
         assert!(frame.contains("esc keep planning"), "{choice}: {frame}");
@@ -975,7 +977,8 @@ fn pty_shell_streams_above_the_draft_and_interrupt_discards_typeahead() {
         let command = if interrupt {
             b"!printf 'shell helper ready\\n'; exec sleep 20\r".as_slice()
         } else {
-            b"!printf 'shell helper ready\\n'; printf 'raw \\377 line\\n'; sleep .3; printf 'last line'\r".as_slice()
+            // The command waits for the test, not a timer, so slow hosts keep the same order.
+            b"!printf 'shell helper ready\\n'; printf 'raw \\377 line\\n'; while [ ! -e release ]; do sleep .05; done; printf 'last line'\r".as_slice()
         };
         pty.send(command);
         pty.wait(b"shell helper ready\x1b[");
@@ -1007,6 +1010,7 @@ fn pty_shell_streams_above_the_draft_and_interrupt_discards_typeahead() {
             assert!(listener.accept().is_err());
             pty.send(b"new question\r");
         } else {
+            std::fs::write(directory.path().join("release"), "").unwrap();
             pty.wait(b"last line");
             pty.wait(b"\x1b[?2004h");
             assert!(pty

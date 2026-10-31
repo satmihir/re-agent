@@ -683,13 +683,13 @@ fn open_browser(address: &str) -> bool {
     } else {
         "xdg-open"
     };
-    let Ok(mut child) = Command::new(executable)
-        .arg(address)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
+    let Ok(mut child) = crate::process::spawn(
+        Command::new(executable)
+            .arg(address)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    ) else {
         return false;
     };
     let started = Instant::now();

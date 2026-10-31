@@ -411,7 +411,9 @@ impl Run<'_> {
         if self.cancellation.load(std::sync::atomic::Ordering::SeqCst) {
             return (String::new(), -1, true);
         }
-        let (mut reader, writer) = match std::io::pipe() {
+        // Hold the spawn lock from pipe creation until the child owns its write ends.
+        let spawning = crate::process::lock();
+        let (mut reader, writer) = match spawning.pipe() {
             Ok(pipe) => pipe,
             Err(_) => return ("operation failed".into(), -1, false),
         };
@@ -441,7 +443,7 @@ impl Run<'_> {
                 cmd.env(key, v);
             }
         }
-        let mut child = match cmd.spawn() {
+        let mut child = match spawning.spawn(&mut cmd) {
             Ok(c) => c,
             Err(e) => {
                 return (
@@ -456,6 +458,7 @@ impl Run<'_> {
             }
         };
         drop(cmd);
+        drop(spawning);
         unsafe {
             libc::fcntl(reader.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
         }
