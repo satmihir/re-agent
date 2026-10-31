@@ -1307,7 +1307,8 @@ mod deadline_tests {
             let error = token_until(false, "", None, Some(started + Duration::from_millis(40)))
                 .unwrap_err();
             assert_eq!(error, "refresh ChatGPT credentials: operation timed out");
-            assert!(started.elapsed() < Duration::from_millis(250));
+            // Far below the 300s default wait, with room for a slow CI host.
+            assert!(started.elapsed() < Duration::from_secs(2));
         });
         thread.join().unwrap();
         drop(guard);

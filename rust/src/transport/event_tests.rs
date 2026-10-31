@@ -195,7 +195,11 @@ fn cancellation_trace_wraps_only_header_errors_and_masks_endpoint_password() {
                 std::thread::sleep(Duration::from_millis(40));
             }
             signal.store(true, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(60));
+            // Hold the reply open until the cancelled client closes it, however slow the host.
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let _ = std::io::Read::read(&mut stream, &mut [0; 1]);
         });
         let endpoint =
             endpoint.replacen("http://", "http://user:private-password@", 1) + "/v1/responses";
@@ -210,6 +214,7 @@ fn cancellation_trace_wraps_only_header_errors_and_masks_endpoint_password() {
         assert_eq!(error.status, "cancelled");
         assert_eq!(error.message, "cancelled during a model request");
         assert_eq!(error.usage, usage_zero(true));
+        drop(transport);
         server.join().unwrap();
         let recorded = std::fs::read_to_string(path).unwrap();
         assert!(!recorded.contains("private-password"));
