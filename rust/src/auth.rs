@@ -765,17 +765,43 @@ fn wait_callback(
             stream
                 .set_nonblocking(false)
                 .map_err(|_| "could not read ChatGPT callback")?;
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let header_deadline = deadline.min(Instant::now() + Duration::from_secs(5));
             let mut bytes = Vec::new();
             let mut byte = [0u8; 1];
             while bytes.len() < 65536 {
+                if Instant::now() >= deadline || INTERRUPTED.load(Ordering::SeqCst) {
+                    return Err("ChatGPT sign-in cancelled or timed out".into());
+                }
+                let remaining = header_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                stream
+                    .set_read_timeout(Some(remaining.min(Duration::from_millis(100))))
+                    .map_err(|_| "could not read ChatGPT callback")?;
                 match stream.read(&mut byte) {
                     Ok(1) => bytes.push(byte[0]),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        continue
+                    }
                     _ => break,
                 }
                 if bytes.ends_with(b"\r\n\r\n") {
                     break;
                 }
+            }
+            if Instant::now() >= deadline || INTERRUPTED.load(Ordering::SeqCst) {
+                return Err("ChatGPT sign-in cancelled or timed out".into());
+            }
+            if !bytes.ends_with(b"\r\n\r\n") {
+                continue;
             }
             let raw = String::from_utf8_lossy(&bytes);
             let mut lines = raw.split("\r\n");
@@ -1233,6 +1259,79 @@ mod tests {
         let values = result.unwrap();
         assert_eq!(values["code"], "c");
         assert_eq!(values["client_id"], "oaiapp_test");
+    }
+
+    #[test]
+    fn stalled_and_trickled_callback_headers_obey_login_deadline() {
+        if std::env::var_os("REAGENT_TEST_CALLBACK_DEADLINE").is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            let browser = directory.path().join(if cfg!(target_os = "macos") {
+                "open"
+            } else {
+                "xdg-open"
+            });
+            std::fs::write(&browser, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "auth::tests::stalled_and_trickled_callback_headers_obey_login_deadline",
+                    "--nocapture",
+                ])
+                .env("REAGENT_TEST_CALLBACK_DEADLINE", "1")
+                .env("PATH", directory.path())
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        for trickle in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            write!(
+                stream,
+                "GET /auth/callback?state=s&code=c HTTP/1.1\r\nHost: {address}\r\nX-Slow: "
+            )
+            .unwrap();
+            let client = std::thread::spawn(move || {
+                for _ in 0..12 {
+                    std::thread::sleep(Duration::from_millis(100));
+                    if trickle && stream.write_all(b"x").is_err() {
+                        return;
+                    }
+                }
+                let _ = stream.write_all(b"\r\n\r\n");
+            });
+            let started = Instant::now();
+            let result = wait_callback(
+                &listener,
+                &format!("http://{address}/auth/callback"),
+                "s",
+                "oaiapp_test",
+                "https://auth.example.invalid/authorize",
+                &mut Vec::new(),
+                started + Duration::from_millis(300),
+            );
+            let elapsed = started.elapsed();
+            client.join().unwrap();
+            assert_eq!(
+                result.unwrap_err(),
+                "ChatGPT sign-in cancelled or timed out",
+                "trickle={trickle}"
+            );
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "trickle={trickle}: {elapsed:?}"
+            );
+        }
     }
 
     #[test]

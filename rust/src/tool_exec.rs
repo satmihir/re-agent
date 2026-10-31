@@ -715,15 +715,28 @@ fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
 
 #[cfg(target_os = "linux")]
 fn process_snapshot_from(root: &Path) -> std::io::Result<Vec<(i32, i32, i32)>> {
+    process_snapshot_with_reader(root, &|path| fs::read_to_string(path))
+}
+
+#[cfg(target_os = "linux")]
+fn process_snapshot_with_reader(
+    root: &Path,
+    read_stat: &dyn Fn(&Path) -> std::io::Result<String>,
+) -> std::io::Result<Vec<(i32, i32, i32)>> {
     let mut processes = vec![];
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
             continue;
         };
-        let stat = match fs::read_to_string(entry.path().join("stat")) {
+        let stat = match read_stat(&entry.path().join("stat")) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) =>
+            {
+                continue;
+            }
             Err(error) => return Err(error),
         };
         let invalid =
@@ -979,6 +992,42 @@ mod boundary_tests {
         fs::remove_file(dir.path().join("123/stat")).unwrap();
         fs::create_dir(dir.path().join("123/stat")).unwrap();
         assert!(process_snapshot_from(dir.path()).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_snapshot_skips_only_vanished_pid_read_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("123")).unwrap();
+        fs::create_dir(dir.path().join("456")).unwrap();
+        for (errno, vanished) in [
+            (libc::ENOENT, true),
+            (libc::ESRCH, true),
+            (libc::EACCES, false),
+            (libc::EPERM, false),
+            (libc::EIO, false),
+            (libc::EINTR, false),
+            (libc::ENOTDIR, false),
+            (libc::EISDIR, false),
+        ] {
+            let result = process_snapshot_with_reader(dir.path(), &|path| {
+                if path == dir.path().join("123/stat") {
+                    return Err(std::io::Error::from_raw_os_error(errno));
+                }
+                assert_eq!(path, dir.path().join("456/stat"));
+                Ok("456 (command with ) spaces) S 1 456".into())
+            });
+            if vanished {
+                assert_eq!(result.unwrap(), vec![(456, 1, 456)], "errno {errno}");
+            } else {
+                assert_eq!(result.unwrap_err().raw_os_error(), Some(errno));
+            }
+        }
+        let error = process_snapshot_with_reader(dir.path(), &|_| {
+            Err(std::io::Error::other("stat read failed"))
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "stat read failed");
     }
 
     #[test]

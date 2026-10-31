@@ -32,6 +32,7 @@ struct Tree {
 struct Shared {
     tree: Mutex<Tree>,
     changed: Condvar,
+    retired: AtomicBool,
 }
 
 static TREES: OnceLock<Mutex<HashMap<String, Arc<Shared>>>> = OnceLock::new();
@@ -59,10 +60,41 @@ fn tree_for(config: &Value, session_id: &str) -> Arc<Shared> {
                     ..Tree::default()
                 }),
                 changed: Condvar::new(),
+                retired: AtomicBool::new(false),
             })
         })
         .clone()
 }
+
+/// Retire releases a root's old tree once its remaining workers have stopped.
+pub(crate) fn retire(s: &Session) {
+    if s.config["agents"] != true || parent(s) != "root" {
+        return;
+    }
+    let shared = tree(s);
+    shared.retired.store(true, Ordering::Release);
+    prune(&shared);
+}
+
+fn prune(shared: &Arc<Shared>) {
+    if !shared.retired.load(Ordering::Acquire) {
+        return;
+    }
+    let mut trees = TREES.get().unwrap().lock().unwrap();
+    // Workers still look up this key while publishing usage and starting descendants.
+    if shared
+        .tree
+        .lock()
+        .unwrap()
+        .nodes
+        .values()
+        .any(|n| n.working)
+    {
+        return;
+    }
+    trees.retain(|_, tree| !Arc::ptr_eq(tree, shared));
+}
+
 fn ordered(value: &Value, fields: &[&str]) -> Value {
     let mut out = serde_json::Map::new();
     for key in fields {
@@ -629,6 +661,22 @@ fn start(shared: &Arc<Shared>, t: &mut Tree, id: &str) {
     let id = id.to_string();
     let shared = shared.clone();
     std::thread::spawn(move || loop {
+        #[cfg(test)]
+        match session.config["_test_worker_panic"].as_str() {
+            Some(mode @ ("worker" | "locked")) => {
+                if let Some(path) = std::env::var_os("REAGENT_TEST_WORKER_PANIC_GATE") {
+                    while !std::path::Path::new(&path).exists() {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+                if mode == "locked" {
+                    let _tree = shared.tree.lock().unwrap();
+                    panic!("forced locked agent worker panic");
+                }
+                panic!("forced agent worker panic");
+            }
+            _ => {}
+        }
         let result = session.submit(&prompt);
         let run_id = session.state["run_id"].clone();
         let mut t = shared.tree.lock().unwrap();
@@ -679,6 +727,8 @@ fn start(shared: &Arc<Shared>, t: &mut Tree, id: &str) {
         });
         n.session = Some(session);
         shared.changed.notify_all();
+        drop(t);
+        prune(&shared);
         break;
     });
 }
@@ -1461,6 +1511,74 @@ mod tests {
             ended: false,
             cancelled: false,
         }
+    }
+
+    #[test]
+    fn root_reset_releases_retired_agent_trees() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new(
+            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+        )
+        .unwrap();
+        for _ in 0..3 {
+            let shared = tree(&session);
+            shared
+                .tree
+                .lock()
+                .unwrap()
+                .nodes
+                .insert("t1".into(), stopped_node("t1", "root"));
+            let retired = Arc::downgrade(&shared);
+            let old_id = text(&session.state["session_id"]).to_owned();
+            drop(shared);
+            session.reset();
+            assert!(retired.upgrade().is_none(), "reset retained tree {old_id}");
+            assert!(!TREES.get().unwrap().lock().unwrap().contains_key(&old_id));
+            let roster = roster(&session);
+            assert_eq!(roster["threads"], json!([]));
+        }
+    }
+
+    #[test]
+    fn child_reset_keeps_the_shared_tree_and_worker_completion_releases_retired_trees() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("script.json");
+        std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"done"}]}]"#).unwrap();
+        let mut root = Session::new(json!({"provider":"scripted","model":"scripted","scripted":script,"workspace":dir.path(),"trace_dir":dir.path(),"agents":true})).unwrap();
+        let mut config = child_config(&root, &json!({}), "read");
+        config["agent_id"] = json!("t1");
+        let mut child = Session::new(config).unwrap();
+        let shared = tree(&root);
+        child.reset();
+        assert!(Arc::ptr_eq(&shared, &tree(&child)));
+        assert!(!shared.retired.load(Ordering::Acquire));
+        let mut node = stopped_node("t1", "root");
+        node.cancellation = Some(crate::cancellation::token(&child.config));
+        let child_tree_config = child.config.clone();
+        node.session = Some(child);
+        node.queue.push_back("finish".into());
+        node.working = true;
+        shared.tree.lock().unwrap().nodes.insert("t1".into(), node);
+        let old_id = text(&root.state["session_id"]).to_owned();
+        root.reset();
+        assert!(TREES.get().unwrap().lock().unwrap().contains_key(&old_id));
+        assert!(Arc::ptr_eq(&shared, &tree_for(&child_tree_config, "")));
+        {
+            let mut t = shared.tree.lock().unwrap();
+            t.nodes.get_mut("t1").unwrap().working = false;
+            start(&shared, &mut t, "t1");
+        }
+        let retired = Arc::downgrade(&shared);
+        drop(shared);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while retired.upgrade().is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            retired.upgrade().is_none(),
+            "completed worker retained its retired tree"
+        );
+        assert!(!TREES.get().unwrap().lock().unwrap().contains_key(&old_id));
     }
 
     #[test]

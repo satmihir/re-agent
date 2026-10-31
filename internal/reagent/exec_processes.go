@@ -20,39 +20,7 @@ type execProcess struct {
 
 func execProcessSnapshot() ([]execProcess, error) {
 	if runtime.GOOS == "linux" {
-		entries, err := os.ReadDir("/proc")
-		if err != nil {
-			return nil, err
-		}
-		var processes []execProcess
-		for _, entry := range entries {
-			pid, err := strconv.Atoi(entry.Name())
-			if err != nil {
-				continue
-			}
-			stat, err := os.ReadFile("/proc/" + entry.Name() + "/stat")
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			// The parenthesized command name can itself contain spaces or ')'.
-			fields := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+1:])
-			if len(fields) < 3 {
-				return nil, fmt.Errorf("invalid process stat for PID %d", pid)
-			}
-			ppid, err := strconv.Atoi(fields[1])
-			if err != nil {
-				return nil, err
-			}
-			pgid, err := strconv.Atoi(fields[2])
-			if err != nil {
-				return nil, err
-			}
-			processes = append(processes, execProcess{pid: pid, ppid: ppid, pgid: pgid, state: fields[0]})
-		}
-		return processes, nil
+		return execProcessSnapshotFrom("/proc", os.ReadFile)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -167,4 +135,40 @@ func liveExecPIDs(tree []execProcess) ([]int, error) {
 		}
 	}
 	return alive, nil
+}
+
+func execProcessSnapshotFrom(root string, readFile func(string) ([]byte, error)) ([]execProcess, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	var processes []execProcess
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		stat, err := readFile(root + "/" + entry.Name() + "/stat")
+		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		// The parenthesized command name can itself contain spaces or ')'.
+		fields := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+1:])
+		if len(fields) < 3 {
+			return nil, fmt.Errorf("invalid process stat for PID %d", pid)
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return nil, err
+		}
+		pgid, err := strconv.Atoi(fields[2])
+		if err != nil {
+			return nil, err
+		}
+		processes = append(processes, execProcess{pid: pid, ppid: ppid, pgid: pgid, state: fields[0]})
+	}
+	return processes, nil
 }

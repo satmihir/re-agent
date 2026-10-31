@@ -8,6 +8,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 mod editor;
+#[cfg(test)]
+mod panic_tests;
 mod readiness;
 mod region;
 use crate::tools::{WorkspaceConsent, WorkspaceConsentError, WorkspaceDestination};
@@ -24,6 +26,29 @@ struct Consent {
     answer: Option<Result<bool, WorkspaceConsentError>>,
 }
 
+static PANIC_TERMINAL: Mutex<Option<(i32, libc::termios)>> = Mutex::new(None);
+
+/// Install panic hook restores raw input before terminating the whole process.
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let saved = PANIC_TERMINAL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((fd, previous)) = *saved {
+            unsafe {
+                libc::tcsetattr(fd, libc::TCSANOW, &previous);
+                // Do not wait for a terminal renderer's stderr lock during a crash.
+                let disable = b"\x1b[?2004l";
+                libc::write(2, disable.as_ptr().cast(), disable.len());
+            }
+        }
+        let message = format!("{info}\n");
+        unsafe {
+            libc::write(2, message.as_ptr().cast(), message.len());
+        }
+        // Test and debug builds unwind, but a worker panic must never strand a wait.
+        std::process::abort();
+    }));
+}
+
 struct Raw {
     fd: i32,
     previous: libc::termios,
@@ -38,11 +63,14 @@ impl Raw {
             if libc::tcgetattr(fd, &mut old) != 0 {
                 return Err(io::Error::last_os_error());
             }
+            let mut saved = PANIC_TERMINAL.lock().unwrap_or_else(|e| e.into_inner());
             let mut raw = old;
             libc::cfmakeraw(&mut raw);
             if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
                 return Err(io::Error::last_os_error());
             }
+            *saved = Some((fd, old));
+            drop(saved);
             let guard = Self { fd, previous: old };
             let _ = io::stderr().write_all(b"\x1b[?2004h");
             Ok(guard)
@@ -52,9 +80,11 @@ impl Raw {
 impl Drop for Raw {
     fn drop(&mut self) {
         let _ = io::stderr().write_all(b"\x1b[?2004l");
+        let mut saved = PANIC_TERMINAL.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             libc::tcsetattr(self.fd, libc::TCSANOW, &self.previous);
         }
+        *saved = None;
     }
 }
 
