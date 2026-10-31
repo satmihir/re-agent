@@ -582,7 +582,7 @@ func (r *gitDoRun) snapshot() {
 			}
 		}
 	}
-	if s.PullRequest != nil || r.pr > 0 {
+	if s.PullRequest != nil || r.pr > 0 || (s.Branch != "" && s.Branch != s.Default) {
 		r.observedTip, _ = r.remoteTip(s.Branch)
 	}
 }
@@ -1224,6 +1224,20 @@ func (r *gitDoRun) rebasePush() (string, []gitDoCheck, error) {
 	if len(r.state.Changed) > 0 {
 		return "", nil, gitDoDecline{"uncommitted changes; commit them first"}
 	}
+	remoteTip, exists := r.remoteTip(r.state.Branch)
+	if remoteTip != r.observedTip {
+		return "", nil, gitDoDecline{"the remote branch moved; fetch and reconcile first"}
+	}
+	if exists {
+		_, ancestor, err := r.exec([]string{"git", "merge-base", "--is-ancestor", remoteTip, "HEAD"})
+		if err != nil || ancestor < 0 || ancestor > 1 {
+			return "", nil, gitDoDecline{"cannot compare the remote branch with HEAD; fetch and reconcile first"}
+		}
+		if ancestor == 1 {
+			return "", nil, gitDoDecline{"the remote branch has commits that HEAD does not contain; merge or rebase onto it first"}
+		}
+	}
+	// An empty tip leases absence, so a first push cannot replace a new remote branch.
 	if _, err := r.step("git", "fetch", "-q", "origin"); err != nil {
 		return "", nil, err
 	}
@@ -1232,7 +1246,7 @@ func (r *gitDoRun) rebasePush() (string, []gitDoCheck, error) {
 		r.quiet("git", "rebase", "--abort")
 		return "", nil, gitDoFailure{reason: "the rebase stopped on a conflict and was aborted; the branch is unchanged"}
 	}
-	if _, err := r.step("git", "push", "-q", "--force-with-lease", "origin", r.state.Branch); err != nil {
+	if _, err := r.step("git", "push", "-q", "--force-with-lease="+r.state.Branch+":"+remoteTip, "origin", r.state.Branch); err != nil {
 		return "", nil, err
 	}
 	tip, _ := r.quiet("git", "rev-parse", base)
