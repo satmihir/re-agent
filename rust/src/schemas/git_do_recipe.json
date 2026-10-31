@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "recipe": {"type": "string", "enum": ["status","explain_branch","pr_status","commit","split_commits","amend","commit_push","ship_pr","follow_up_pr","new_branch","rebase_push","revert_pr"]},
+    "message": {"type": "string", "description": "Commit message to use; recipes derive one from the changed files when omitted."},
+    "title": {"type": "string", "description": "Pull request title; the commit subject when omitted."},
+    "body": {"type": "string", "description": "Pull request body, or the reply posted on a pull request."},
+    "branch": {"type": "string", "description": "Branch name to create, when the outcome creates one."},
+    "pr": {"type": "integer", "minimum": 1, "description": "Pull request number, when the outcome names one."},
+    "commit": {"type": "string", "description": "Commit to revert, as a hash or ref."},
+    "paths": {"type": "array", "items": {"type": "string"}, "description": "For commit, commit_push, ship_pr, follow_up_pr and amend: name exactly what to commit when the tree has unrelated changes; workspace-relative files or directories."}
+  },
+  "required": ["recipe"],
+  "additionalProperties": false
+}

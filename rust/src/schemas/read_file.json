@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {"type": "string", "description": "Workspace-relative UTF-8 text file."},
+    "start_line": {"type": "integer", "minimum": 1, "description": "One-based first line to read. Defaults to 1."},
+    "max_lines": {"type": "integer", "minimum": 1, "description": "Maximum lines to return. Defaults to 250."}
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}

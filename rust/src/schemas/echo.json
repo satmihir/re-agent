@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "text": {"type": "string", "description": "Text to return unchanged."}
+  },
+  "required": ["text"],
+  "additionalProperties": false
+}
