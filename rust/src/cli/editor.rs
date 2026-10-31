@@ -73,23 +73,24 @@ pub(crate) fn compose() -> Result<Vec<u8>, String> {
                 errors::stable_io(&io::Error::last_os_error())
             ));
         }
-        let status = Command::new(&editor[0])
-            .args(&editor[1..])
-            .arg(&path)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(|e| {
-                let cause = if e.kind() == io::ErrorKind::NotFound
-                    && !editor[0].as_bytes().contains(&b'/')
-                {
+        let status = crate::process::spawn(
+            Command::new(&editor[0])
+                .args(&editor[1..])
+                .arg(&path)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit()),
+        )
+        .and_then(|mut child| child.wait())
+        .map_err(|e| {
+            let cause =
+                if e.kind() == io::ErrorKind::NotFound && !editor[0].as_bytes().contains(&b'/') {
                     "executable not found"
                 } else {
                     errors::stable_io(&e)
                 };
-                format!("run editor: {cause}")
-            })?;
+            format!("run editor: {cause}")
+        })?;
         if !status.success() {
             return Err(format!(
                 "run editor: command exited with status {}",

@@ -340,13 +340,14 @@ pub fn project_instructions(root: &str) -> Result<Option<String>, String> {
 fn git(root: &str, args: &[&str]) -> Option<String> {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
-    let mut child = crate::tool_git::inspect_command(Path::new(root))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = crate::process::spawn(
+        crate::tool_git::inspect_command(Path::new(root))
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .ok()?;
     let stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut bytes = vec![];

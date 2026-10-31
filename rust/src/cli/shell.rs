@@ -2,9 +2,8 @@ use crate::cli::text;
 use crate::runtime::Session;
 use crate::{errors, render, types};
 use serde_json::{json, Value};
-use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,15 +100,11 @@ fn run(
     live: &mut dyn Write,
     cancellation: &AtomicBool,
 ) -> Result<(Value, bool), String> {
-    let mut fds = [0; 2];
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(format!(
-            "run shell command: {}",
-            errors::stable_io(&io::Error::last_os_error())
-        ));
-    }
-    let mut input = unsafe { File::from_raw_fd(fds[0]) };
-    let output = unsafe { File::from_raw_fd(fds[1]) };
+    // Hold the spawn lock from pipe creation until the child owns its write ends.
+    let spawning = crate::process::lock();
+    let (mut input, output) = spawning
+        .pipe()
+        .map_err(|e| format!("run shell command: {}", errors::stable_io(&e)))?;
     let errput = output
         .try_clone()
         .map_err(|e| format!("run shell command: {}", errors::stable_io(&e)))?;
@@ -137,10 +132,11 @@ fn run(
         }
     }
     let started = Instant::now();
-    let mut child = process
-        .spawn()
+    let mut child = spawning
+        .spawn(&mut process)
         .map_err(|e| format!("run shell command: {}", errors::stable_io(&e)))?;
     drop(process);
+    drop(spawning);
     unsafe {
         libc::fcntl(input.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
     }

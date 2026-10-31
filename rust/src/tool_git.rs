@@ -558,7 +558,7 @@ impl Git<'_> {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut child = command.spawn().map_err(|e| {
+        let mut child = crate::process::spawn(&mut command).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 "unavailable".to_string()
             } else {
