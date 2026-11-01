@@ -315,7 +315,7 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "e62bb985038ae056cf871624254ca4988b0eb0a5540bd69664ce716980d3a820",
+  "suite_digest": "247f5a4406c9e45367fe262590757fedffb308451805208902c93ca27f9a984c",
   "verification_evidence": "repin-rust-e6c95713.md (current Rust re-pin, measurements and acceptance); repin-2ab234f7-linux.md, agents-area4.md, linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin capture and acceptance pending on the Mac"
