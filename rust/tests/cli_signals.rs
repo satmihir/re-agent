@@ -756,8 +756,8 @@ fn pty_model_picker_keeps_the_region_and_accepts_the_next_turn() {
     pty.wait("❯ ".as_bytes());
     pty.send(b"/model\r");
     pty.wait(b"Select a model");
-    let screen = String::from_utf8_lossy(&pty.raw);
-    assert!(screen.contains("current"), "{screen}");
+    // The current model is on a later row, possibly in another pty read.
+    pty.wait(b"current");
     let start = pty.raw.len();
     pty.send(b"\r");
     pty.wait("❯ ".as_bytes());
