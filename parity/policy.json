@@ -266,6 +266,12 @@
       "replacement": "<DATE>"
     },
     {
+      "kind": "snapshot-dst-zone",
+      "owner": "Non-native workspace_state time_zone PDT/PST",
+      "validation": "America/Los_Angeles abbreviation at the captured invocation start or end",
+      "replacement": "<PACIFIC_ZONE>"
+    },
+    {
       "kind": "allocated-path-or-reference",
       "owner": "Only registered path-bearing text slots and process stderr",
       "validation": "Exact allocated workspace/artifact prefix with path boundary, allocated fixture authority in URL/Host slots, or previously registered runner identity reference; startup banner ownership and workspace are checked before registering a display session",

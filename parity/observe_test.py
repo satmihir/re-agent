@@ -732,6 +732,23 @@ class ResponseSpanTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             normal.json(b'{"kind":"workspace_state","date":"2000-01-01","time_zone":"UTC"}', 'snapshot')
 
+    def test_pacific_zone_abbreviation_is_masked_only_within_the_invocation_season(self):
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        pacific = ZoneInfo('America/Los_Angeles')
+        for moment, zone, accepted in ((1784160000, 'PDT', True), (1784160000, 'PST', False),
+                                       (1795000000, 'PST', True), (1795000000, 'PDT', False)):
+            with self.subTest(zone=zone, moment=moment):
+                date = dt.datetime.fromtimestamp(moment, pacific).date().isoformat()
+                raw = ('{"kind":"workspace_state","date":"%s","time_zone":"%s"}' % (date, zone)).encode()
+                normal = Normalizer('/root', '', moment, moment + 10)
+                if accepted:
+                    self.assertEqual(normal.json(raw, 'snapshot'),
+                                     b'{"kind":"workspace_state","date":"\\u003cDATE\\u003e","time_zone":"\\u003cPACIFIC_ZONE\\u003e"}')
+                else:
+                    with self.assertRaisesRegex(AssertionError, 'zone abbreviation'):
+                        normal.json(raw, 'snapshot')
+
 
 if __name__ == '__main__':
     unittest.main()

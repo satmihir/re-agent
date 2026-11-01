@@ -865,9 +865,11 @@ class RustRepinLockTest(unittest.TestCase):
         return locks.verify_rust_repin(self.old, self.new, Path('stage'), self.allowlist,
                                        self.previous_identity, self.new_identity)
 
-    def test_four_exact_leaf_authorizations_and_complete_replay_receipt(self):
+    def test_exact_leaf_authorizations_and_complete_replay_receipt(self):
+        # Four rebase_push behavior changes, plus the three W08 leaves whose PDT/PST abbreviation is now masked.
         expected = {'T52.rebase_push.normal', 'T52.conflict-lease.conflict',
-                    'T52.conflict-lease.lease', 'T54.first-failure.rebase_push'}
+                    'T52.conflict-lease.lease', 'T54.first-failure.rebase_push',
+                    *('W08.America-Los_Angeles-ro0-plan0' + suffix for suffix in ('', '-anthropic', '-proxy'))}
         self.assertEqual(set(self.allowlist['platforms']), {'linux/amd64', 'darwin/arm64'})
         for approved in self.allowlist['platforms'].values():
             self.assertEqual(set(approved), expected)
