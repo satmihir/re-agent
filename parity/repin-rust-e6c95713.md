@@ -474,7 +474,16 @@ source restoration; no production diff remains.
 
 Darwin execution and capture are a separate reviewer step. Linux does not write
 Darwin Rust identities, normalized locks or sample bundles. In a checkout of this
-PR on the Mac, use the same Python executable as the previous Darwin capture:
+PR on the Mac, use the same Python executable as the previous Darwin capture.
+
+Darwin adds one build input. ld64 derives the Mach-O `LC_UUID` from object paths,
+so without an OSO prefix the reference digest depends on the archive directory's
+path length. Two builds in different-length directories differed only in
+`LC_UUID` and the code-signature hashes over it. With
+`-Clink-arg=-Wl,-oso_prefix,<archive>/` (recorded in the Darwin manifest
+entry's `reference_rustflags`), 21- and 54-character directories give identical
+binaries. Linux needs no prefix: 13- and 46-character directories both reproduce
+`5fb5c0cd…`, so the Linux identity is unchanged.
 
 ```sh
 set -euo pipefail
@@ -490,8 +499,9 @@ export HOME_ROOT=$(cd "$HOME" && pwd -P)
   CARGO_HOME="$CARGO_ROOT" RUSTUP_HOME="$HOME_ROOT/.rustup" RUSTUP_TOOLCHAIN=1.99.1 \
   RUSTUP_AUTO_INSTALL=0 \
   CARGO_NET_OFFLINE=true CARGO_INCREMENTAL=0 SOURCE_DATE_EPOCH=0 TZ=UTC LC_ALL=C \
-  CARGO_ENCODED_RUSTFLAGS="$(printf '%s\037%s' \
-    "--remap-path-prefix=$SRC=/reagent" "--remap-path-prefix=$CARGO_ROOT=/cargo")" \
+  CARGO_ENCODED_RUSTFLAGS="$(printf '%s\037%s\037%s' \
+    "--remap-path-prefix=$SRC=/reagent" "--remap-path-prefix=$CARGO_ROOT=/cargo" \
+    "-Clink-arg=-Wl,-oso_prefix,$SRC/")" \
   cargo build --release --locked --offline)
 export REF="$SRC/rust/target/release/reagent"
 python3 - <<'PY'
@@ -510,7 +520,6 @@ e.update(reference_commit=m['reference_commit'],
 e.pop('go_version', None)
 p.write_text(json.dumps(m, indent=2) + '\n')
 PY
-python3 -m unittest discover -s parity -p '*test.py'
 python3 - <<'PY'
 import fcntl, os, subprocess
 # macOS need not have the GNU flock executable: use the same system flock here.
@@ -518,11 +527,16 @@ with open('/tmp/reagent-parity.lock', 'a') as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     subprocess.run(['make', 'parity-golden', 'UPDATE=1', 'JOBS=6', 'UNIT=0'],
                    stdin=subprocess.DEVNULL, check=True)
-    for _ in range(3):
-        subprocess.run(['make', 'parity', 'BIN=' + os.environ['REF'], 'JOBS=12', 'UNIT=0'],
-                       stdin=subprocess.DEVNULL, check=True)
+    subprocess.run(['make', 'parity', 'BIN=' + os.environ['REF'], 'UNIT=0'],
+                   stdin=subprocess.DEVNULL, check=True)
 PY
+python3 -m unittest discover -s parity -p '*test.py'
 ```
+
+Run the unit tests after capture: until Darwin is `ready`, tests that read the
+committed manifest stop at "Darwin capture required". The comparison uses the
+default job count (six on an eight-core Mac); the capture already executes and
+replays every leaf, so one comparison run is the Darwin acceptance check.
 
 The preparation changes only `platforms.darwin/arm64` build fields listed above.
 Capture then writes its `capture_status: ready`, `normalized_tree_sha256`, the

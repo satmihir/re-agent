@@ -224,7 +224,7 @@ class StartupIsolationTest(unittest.TestCase):
 
     def test_concurrent_recorders_isolate_settings_repositories_remotes_and_switch_targets(self):
         with tempfile.TemporaryDirectory(prefix='parity-shared-git-') as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()  # macOS /var is a symlink
             contexts = [Context(sys.executable, root / str(i), root / ('artifacts-' + str(i))) for i in range(2)]
             barrier = threading.Barrier(2, timeout=10)
             original_environment = dict(os.environ)
@@ -279,7 +279,7 @@ class StartupIsolationTest(unittest.TestCase):
 
     def test_concurrent_denied_command_recorders_keep_separate_logs(self):
         with tempfile.TemporaryDirectory(prefix='parity-shared-denied-') as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()  # macOS /var is a symlink
             barrier = threading.Barrier(2, timeout=10)
 
             def exercise(index):

@@ -25,7 +25,7 @@ class CheckpointImportsTest(unittest.TestCase):
 
     def test_frozen_go_peer_is_verified_without_building_or_writing_its_cache(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()  # _reference resolves; macOS /var is a symlink
             (root / 'parity').mkdir()
             binary = root / 'go-peer'
             binary.write_bytes(b'frozen fixture executable')

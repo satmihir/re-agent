@@ -116,9 +116,11 @@ class GoldenTest(unittest.TestCase):
                 return archive.getvalue()
             self.assertEqual((Path(cwd) / "Cargo.lock").read_bytes(), b"fixture")
             self.assertEqual(argv, ["cargo", "build", "--release", "--locked", "--offline"])
+            archive_root = Path(cwd).parent.resolve()
             self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"), [
-                "--remap-path-prefix=%s=/reagent" % Path(cwd).parent.resolve(),
-                "--remap-path-prefix=%s=/cargo" % (Path.home().resolve() / ".cargo")])
+                "--remap-path-prefix=%s=/reagent" % archive_root,
+                "--remap-path-prefix=%s=/cargo" % (Path.home().resolve() / ".cargo"),
+                *(["-Clink-arg=-Wl,-oso_prefix,%s/" % archive_root] if system == "darwin" else [])])
             for key in ("RUSTFLAGS", "RUSTC_WRAPPER", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET", "CC", "CFLAGS"):
                 self.assertNotIn(key, environment)
             self.assertEqual(environment["CARGO_NET_OFFLINE"], "true")
@@ -129,16 +131,17 @@ class GoldenTest(unittest.TestCase):
             output.chmod(0o755)
             return b""
 
-        with patch("parity.golden.checked", side_effect=command), patch("parity.golden.platform.python_version", return_value="test"), patch("parity.golden.platform.machine", return_value="arm64"), patch("parity.golden.sys.platform", "darwin"), patch.dict(os.environ, {"RUSTFLAGS": "poison", "RUSTC_WRAPPER": "poison", "CARGO_TARGET_DIR": "poison", "CC": "poison", "CFLAGS": "poison", "RUSTUP_AUTO_INSTALL": "1"}):
-            for update in (False, True):
-                original = dict(manifest)
-                self.assertEqual(golden.build_reference(self.suite, manifest, binary, update=update), binary)
-                self.assertEqual(manifest, original)
-                self.assertTrue(os.access(binary, os.X_OK))
-                wrong = rust_fixture_manifest(reference_binary_sha256="0" * 64, python_version="Python test")
-                with self.assertRaisesRegex(run.HarnessError, "SHA-256 mismatch"):
-                    golden.build_reference(self.suite, wrong, binary, update=update)
-                self.assertEqual(wrong["reference_binary_sha256"], "0" * 64)
+        for system, machine in (("darwin", "arm64"), ("linux", "x86_64")):
+            with self.subTest(system=system), patch("parity.golden.checked", side_effect=command), patch("parity.golden.platform.python_version", return_value="test"), patch("parity.golden.platform.machine", return_value=machine), patch("parity.golden.sys.platform", system), patch.dict(os.environ, {"RUSTFLAGS": "poison", "RUSTC_WRAPPER": "poison", "CARGO_TARGET_DIR": "poison", "CC": "poison", "CFLAGS": "poison", "RUSTUP_AUTO_INSTALL": "1"}):
+                for update in (False, True):
+                    original = dict(manifest)
+                    self.assertEqual(golden.build_reference(self.suite, manifest, binary, update=update), binary)
+                    self.assertEqual(manifest, original)
+                    self.assertTrue(os.access(binary, os.X_OK))
+                    wrong = rust_fixture_manifest(reference_binary_sha256="0" * 64, python_version="Python test")
+                    with self.assertRaisesRegex(run.HarnessError, "SHA-256 mismatch"):
+                        golden.build_reference(self.suite, wrong, binary, update=update)
+                    self.assertEqual(wrong["reference_binary_sha256"], "0" * 64)
         self.assertEqual(calls[2], ["git", "archive", "a" * 40])
         self.assertEqual(calls[3], ["cargo", "build", "--release", "--locked", "--offline"])
 

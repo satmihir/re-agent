@@ -91,6 +91,11 @@ def build_reference(suite, manifest, destination, update=False):
     rustflags = ["--remap-path-prefix=<archive>=/reagent", "--remap-path-prefix=<cargo_home>=/cargo"]
     if manifest.get("reference_rustflags") != rustflags:
         raise run.HarnessError("unsupported reference_rustflags")
+    if selected["reference_platform"].startswith("darwin/"):
+        # ld64 derives LC_UUID from object paths, so the archive directory's length would leak in.
+        rustflags = rustflags + ["-Clink-arg=-Wl,-oso_prefix,<archive>/"]
+    if selected["reference_rustflags"] != rustflags:
+        raise run.HarnessError("unsupported reference_rustflags")
     home = Path.home().resolve()
     cargo_home = home / ".cargo"
     # Do not inherit wrappers, encoded flags, target/profile overrides or compiler settings.

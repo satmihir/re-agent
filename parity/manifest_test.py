@@ -40,6 +40,9 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(manifest['reference_build_flags'], ['--release', '--locked', '--offline'])
         self.assertEqual(manifest['reference_rustflags'], [
             '--remap-path-prefix=<archive>=/reagent', '--remap-path-prefix=<cargo_home>=/cargo'])
+        self.assertEqual(manifest['platforms']['darwin/arm64']['reference_rustflags'],
+                         [*manifest['reference_rustflags'], '-Clink-arg=-Wl,-oso_prefix,<archive>/'])
+        self.assertNotIn('reference_rustflags', manifest['platforms']['linux/amd64'])
         entry = manifest['platforms']['linux/amd64']
         self.assertEqual(entry['rustup_toolchain'], '1.99.1')
         self.assertEqual(entry['cargo_version'], 'cargo 1.99.1 (5f94df478 2026-08-27)')

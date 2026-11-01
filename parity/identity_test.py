@@ -32,6 +32,8 @@ def rust_fixture_manifest(**fields):
     for entry in manifest["platforms"].values():
         del entry["go_version"]
         entry.update(rustup_toolchain="1.99.1", cargo_version="cargo test version", rustc_version="rustc test version")
+    manifest["platforms"]["darwin/arm64"]["reference_rustflags"] = [
+        *manifest["reference_rustflags"], "-Clink-arg=-Wl,-oso_prefix,<archive>/"]
     return manifest
 
 
@@ -41,7 +43,11 @@ class IdentityTests(unittest.TestCase):
         reference = identity.reference(manifest)
         self.assertEqual(set(reference), set(identity.RUST_REFERENCE_FIELDS))
         self.assertEqual(reference["cargo_version"], "cargo test version")
-        self.assertEqual(reference["reference_rustflags"], manifest["reference_rustflags"])
+        entry = manifest["platforms"][identity.current_platform()]
+        self.assertEqual(reference["reference_rustflags"], entry.get("reference_rustflags", manifest["reference_rustflags"]))
+        for system, machine, extra in (("darwin", "arm64", ["-Clink-arg=-Wl,-oso_prefix,<archive>/"]), ("linux", "x86_64", [])):
+            with patch("sys.platform", system), patch("platform.machine", return_value=machine):
+                self.assertEqual(identity.reference(manifest)["reference_rustflags"], [*manifest["reference_rustflags"], *extra])
         self.assertNotIn("go_version", reference)
         for key in ("rustup_toolchain", "cargo_version", "rustc_version", "python_version"):
             for invalid in (None, "", [], 1):

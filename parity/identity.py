@@ -74,7 +74,7 @@ def select(manifest, capture=False):
     return {**entry, "reference_commit": manifest.get("reference_commit"),
             "reference_platform": name, "reference_language": language,
             "reference_build_flags": manifest.get("reference_build_flags"),
-            "reference_rustflags": manifest.get("reference_rustflags")}
+            "reference_rustflags": entry.get("reference_rustflags", manifest.get("reference_rustflags"))}
 
 
 def reference(manifest):
