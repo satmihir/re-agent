@@ -25,7 +25,7 @@
       "reference_binary_sha256": "853b1aee0e4a1958e006570a19e59c1fef8159edf0ddb1b3b5ec87f998b6ffb8",
       "python_version": "Python 3.11.5",
       "normalized_lock": "expected/darwin.json",
-      "normalized_tree_sha256": "0eeacd35c62a47845e8682a77420c2b3cd68cae8b47596f98aa36aefb18923d5",
+      "normalized_tree_sha256": "366c1f998db5aefbb796242eca407d39b293ae1b2b0a29691488d05b33cc66ea",
       "rustup_toolchain": "1.99.1",
       "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
       "rustc_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
@@ -315,7 +315,7 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "86a3d384e96ac2b72f9213617c7f7bfdf8c60f375dfdff906735d9f53e90de93",
+  "suite_digest": "d61078ff65d9e660a2c2413a8817dbe6c34a68035e39ccf34fe0d680eadd8ed6",
   "verification_evidence": "repin-rust-e6c95713.md (current Rust re-pin, measurements and acceptance); repin-2ab234f7-linux.md, agents-area4.md, linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin capture and acceptance pending on the Mac"

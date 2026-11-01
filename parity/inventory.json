@@ -1,7 +1,7 @@
 {
-  "platform": "linux",
+  "platform": "darwin",
   "reference_commit": "e6c9571396af1656c48a089e06b293165828e0c0",
-  "reference_binary_sha256": "5fb5c0cd1abba94bda31804ef14f9581c99f1d277a56ebda47b5e9267698cd84",
+  "reference_binary_sha256": "853b1aee0e4a1958e006570a19e59c1fef8159edf0ddb1b3b5ec87f998b6ffb8",
   "metadata_fields": [
     "id",
     "description",
