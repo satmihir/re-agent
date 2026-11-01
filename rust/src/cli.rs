@@ -18,7 +18,7 @@ fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("plan", "", "start in plan mode; model edits and commands are refused", json!(false)),
         ("auto", "", "opt in to TypeSafe routing; default fallback gpt-6-sol/medium", json!(false)),
         ("in-run-compact", "", "opt in to bounded compaction within a long run; default off", json!(false)),
-        ("context-gc", "", "opt in to lossless context GC with recall; default off", json!(false)),
+        ("context-gc", "", "lossless context GC with recall; default on, disable with --context-gc=false", json!(true)),
         ("model-retry-window", "DURATION", "keep retrying transient model failures within this window (e.g. 12h); 0 disables", json!(0)),
         ("agents", "", "offer concurrent agents with names, nesting and per-spawn read/write authority", json!(false)),
         ("no-project-instructions", "", "do not load the workspace root's AGENTS.md", json!(false)),

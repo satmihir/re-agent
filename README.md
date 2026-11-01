@@ -289,7 +289,17 @@ when supported (at most eight pairs). A sole candidate or missing TypeSafe key
 needs no router calls. `gpt-6.1-sol` remains in the model picker and accepts
 explicit selection with `--model gpt-6.1-sol` or `/model gpt-6.1-sol`; it is not
 a standard Auto candidate, but can be an explicitly configured fallback.
-Manual defaults are unchanged.
+Normal run/chat defaults are **`gpt-6.1-sol` at high effort**; explicit model,
+`REAGENT_MODEL` and effort selections still win. Selecting 6.1 Sol in the picker
+also defaults to high. Opt-in Auto keeps its separate fallback described above.
+`gpt-6.1-terra` is available as model **9** or by name. Its effort support and
+context window are unverified: selection leaves effort/verbosity to the provider,
+and Auto is unavailable until its catalog window is verified. GC passes and
+nonempty model handoffs require a known window or a context-window override.
+
+Context GC is **on by default** for new run/chat sessions. Use
+`--context-gc=false` to disable it. Resume preserves the saved setting, including
+off in older sessions. GC's age/consolidation experiments remain off by default.
 
 In chat, `/auto` reports state, `/auto on` enables routing with the current
 manual pair as fallback, and `/auto off` pins the current model/effort. Successful

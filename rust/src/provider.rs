@@ -111,7 +111,7 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
         model = if provider == "anthropic" {
             "claude-haiku-4-5"
         } else {
-            "gpt-6-luna"
+            "gpt-6.1-sol"
         }
         .into();
     }

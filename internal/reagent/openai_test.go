@@ -207,6 +207,12 @@ func TestEncodeRequest_CatalogVerbosityInDirectAndProxyForms(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if info.Verbosity == "" {
+					if strings.Contains(string(body), `"text":`) || strings.Contains(string(body), `"reasoning":`) {
+						t.Fatalf("provider defaults were overridden: %s", body)
+					}
+					return
+				}
 				if !strings.Contains(string(body), `"reasoning":{"effort":"`+info.Effort+`"},"text":{"verbosity":"low"},"tool_choice":"auto"`) {
 					t.Fatalf("text missing or out of order: %s", body)
 				}

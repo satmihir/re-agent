@@ -163,7 +163,7 @@ func TestContextGC_ReadOnlyRecallAndOffRequestBaseline(t *testing.T) {
 	}
 	for _, provider := range []string{openaiName, anthropicName} {
 		var out, errOut bytes.Buffer
-		args := []string{"run", "--show-context", "--provider", provider, "--workspace", t.TempDir(), "--no-project-instructions", "task"}
+		args := []string{"run", "--show-context", "--context-gc=false", "--provider", provider, "--workspace", t.TempDir(), "--no-project-instructions", "task"}
 		if code := Main(context.Background(), args, strings.NewReader(""), &out, &errOut); code != exitOK {
 			t.Fatalf("%d %s", code, errOut.String())
 		}
@@ -202,5 +202,24 @@ func TestContextGC_LoopRunsPassBeforeNextRequest(t *testing.T) {
 	result := r.Execute(context.Background(), "continue", nil, "")
 	if result.Status != StatusCompleted {
 		t.Fatalf("%+v", result)
+	}
+}
+
+func TestContextGC_CLIDefaultAndExplicitDisable(t *testing.T) {
+	for _, test := range []struct {
+		flag string
+		want bool
+	}{{"", true}, {"--context-gc=false", false}, {"--context-gc", true}} {
+		var out, errs bytes.Buffer
+		args := []string{"run", "--show-context", "--workspace", t.TempDir(), "--no-project-instructions"}
+		if test.flag != "" {
+			args = append(args, test.flag)
+		}
+		if code := Main(context.Background(), append(args, "task"), strings.NewReader(""), &out, &errs); code != exitOK {
+			t.Fatalf("%s: %d %s", test.flag, code, errs.String())
+		}
+		if got := strings.Contains(out.String(), `"name":"recall"`); got != test.want {
+			t.Fatalf("%s: recall declared = %t, want %t", test.flag, got, test.want)
+		}
 	}
 }

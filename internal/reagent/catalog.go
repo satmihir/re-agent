@@ -17,8 +17,8 @@ var (
 
 // modelInfo is one entry of the offered catalog.
 //
-// Efforts lists exactly what the model accepts; an empty list means the model
-// rejects the parameter outright. Effort is what a run uses when this model is
+// Efforts lists locally offered effort settings; an empty list leaves the
+// parameter unset. Effort is what a run uses when this model is
 // chosen and nothing else was asked for. An empty Verbosity means the
 // parameter is never sent.
 type modelInfo struct {
@@ -53,8 +53,10 @@ var modelCatalog = []modelInfo{
 		Note: "more capable, costs more", ContextWindow: 1_000_000},
 	{ID: "claude-opus-5-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
 		Note: "most capable, costs most", ContextWindow: 1_000_000},
-	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "low", Verbosity: "low",
+	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "high", Verbosity: "low",
 		Note: "most capable, costs most", ContextWindow: 1_050_000},
+	{ID: "gpt-6.1-terra", Provider: openaiName,
+		Note: "provider defaults; effort and window unverified"},
 }
 
 // findModel returns the catalog entry for an exact model id.
