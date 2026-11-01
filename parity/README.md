@@ -6,8 +6,9 @@ All four areas have executable fixtures. **Rust is the reference at `e6c95713`;
 Go is frozen.** Current re-pin, timings, Go dependency dispositions and Mac hand-off:
 [`repin-rust-e6c95713.md`](repin-rust-e6c95713.md).
 **Linux: three clean full runs, each 4,111 passed /0 failed /10 pending.**
-Median wall time is **390.90s**, down from **845.05s** at 12 jobs; Darwin remains
-capture-required. The inventory is 4,121 leaves (was 4,140), with no current
+Median wall time is **390.90s**, down from **845.05s** at 12 jobs.
+**Darwin: captured; one full run 4,111 passed /0 failed /10 pending** (about 16
+minutes at 6 jobs, previously about 30). The inventory is 4,121 leaves (was 4,140), with no current
 machine-wide-exclusive leaves. Offline archive builds are byte-reproducible.
 The `2ab234f7` Go acceptance evidence in
 [`repin-2ab234f7-linux.md`](repin-2ab234f7-linux.md) and proofs below are historical,
@@ -37,11 +38,10 @@ is read-only; `PARITY_GO_CHECKPOINT_REFERENCE` can supply the same pinned binary
 when its old cache is absent. The fixed Go-written v1 gob and canonical v2
 contract inputs remain fixtures, never regenerated per lane.
 
-**Darwin capture and acceptance pending on the Mac.** Existing Darwin lock entries,
-sample bundles and binary hash remain byte-identical. Darwin/arm64 fails closed
-with `Darwin capture required`. The Mac must establish the new binary hash and
-platform commit, then run its own guarded `make parity-golden UPDATE=1`.
-No live Mac execution is claimed.
+**Darwin is captured at `e6c95713`** (reference `853b1aee…`, built with the
+Darwin-only ld64 OSO prefix). The capture published exactly the four rebase leaves,
+the C42 ledger-only migration and the 19 covered removals; see
+[`repin-rust-e6c95713.md`](repin-rust-e6c95713.md#darwin-capture).
 
 C18/C43/C44's 28 leaves are enabled at the new pin. Ten leaves remain pending,
 not green skips: T36.before-start's unavailable pre-dispatch barrier and nine

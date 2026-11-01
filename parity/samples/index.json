@@ -515,14 +515,24 @@
       "bundle_sha256": "36cd0fa00a09bc050191cd0e126a4c9b422926b2d4153fe4e99a1363ada99314"
     },
     {
-      "id": "W08.America-Los_Angeles-ro0-plan1",
+      "id": "W08.America-Los_Angeles-ro0-plan0",
       "description": "Unchanged preview/live body and independent local snapshot time",
-      "why": "Independent local snapshot date plus plan content ordering.",
-      "path": "W08.America-Los_Angeles-ro0-plan1.tar.gz",
+      "why": "Independent non-UTC snapshot dates and preview/live identity.",
+      "path": "W08.America-Los_Angeles-ro0-plan0.tar.gz",
       "artifacts": 14,
-      "normalized_bytes": 85058,
-      "normalized_sha256": "cea647b2bcff916b79a0e3b9339c83da490aabf767364412bae803137fee534b",
-      "bundle_sha256": "25ce4da9aeef846e5ccdb8e89e6e51d1873284e186072195aec4844eddc2cf2a"
+      "normalized_bytes": 82524,
+      "normalized_sha256": "ee166d7796735b2a0ba7d21e91cd3e904ac7266cbdba49a5497d472507da26e0",
+      "bundle_sha256": "6d4237179adaf09da4fe440864f6bc72c8a5304cc0eeccf58cc837e650888405"
+    },
+    {
+      "id": "W08.UTC-ro0-plan1",
+      "description": "Unchanged preview/live body and independent local snapshot time",
+      "why": "Plan content ordering, independent of local snapshot time.",
+      "path": "W08.UTC-ro0-plan1.tar.gz",
+      "artifacts": 14,
+      "normalized_bytes": 85038,
+      "normalized_sha256": "b1d942dbe61ee1217a8e8f4f0863de9c62bff06d5cf1885b8fc2d8845082007d",
+      "bundle_sha256": "5c7c54bb0a061df2e9460ec261850e4cad8ed1e4b2c930c7698ffbae70b86054"
     },
     {
       "id": "W09.claude-haiku-4-5-ascii-at",
@@ -1500,9 +1510,9 @@
       "why": "Conflicting rebase rolls back refs and worktree.",
       "path": "T52.conflict-lease.conflict.tar.gz",
       "artifacts": 9,
-      "normalized_bytes": 73867,
-      "normalized_sha256": "4095450159bfaa1a794385ed839fdf54f5543fcc9fd7c7096f1b7e2eca21d133",
-      "bundle_sha256": "9a6298133fdb2639e2ba3e48a0233dcc0df83070286daf6b9d87d2be01fc7ff7"
+      "normalized_bytes": 74195,
+      "normalized_sha256": "85da65671dab984484627b4fc816d147405f455a87cd8fa1d220800094277d0a",
+      "bundle_sha256": "0508888318b7d2cb5667476c9f7259cbcde804c95e1cab267f003b959f0af60f"
     },
     {
       "id": "T53.described-target.done",
@@ -2046,6 +2056,12 @@
     }
   ],
   "historical_cases": [
+    {
+      "id": "W08.America-Los_Angeles-ro0-plan1",
+      "path": "W08.America-Los_Angeles-ro0-plan1.tar.gz",
+      "bundle_sha256": "25ce4da9aeef846e5ccdb8e89e6e51d1873284e186072195aec4844eddc2cf2a",
+      "reason": "Retained historical bytes; superseded by covering-set cases, not current reference evidence."
+    },
     {
       "id": "W54.anthropic.cancel-body",
       "path": "W54.anthropic.cancel-body.tar.gz",

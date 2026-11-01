@@ -552,6 +552,30 @@ Commit the Darwin-generated changes as a reviewer follow-up; do not merge here.
 The shared source seal changes with that commit, so refresh/verify the Linux
 cache before its next comparison rather than treating the old seal as current.
 
+## Darwin capture
+
+Run on the Mac (darwin/arm64, Python 3.11.5, `RUSTUP_TOOLCHAIN=1.99.1`) with the
+hand-off above, under the `/tmp/reagent-parity.lock` flock.
+
+- Reference: `853b1aee0e4a1958e006570a19e59c1fef8159edf0ddb1b3b5ec87f998b6ffb8`.
+  The hand-off build (`/tmp`, 42-character root) and the harness builder
+  (`/var/folders`) produced the same binary, as did 21- and 54-character roots.
+- `make parity-golden UPDATE=1 JOBS=6 UNIT=0`: published in 2,101s;
+  4,111 replayed cases.
+- Authorized changes only: `T52.rebase_push.normal`, `T52.conflict-lease.conflict`,
+  `T52.conflict-lease.lease`, `T54.first-failure.rebase_push`, the
+  `C42.markdown-progress` ledger-only migration, and the 19 covered removals.
+  No W39/W47 shell-timing change: the Go Darwin ledgers already held all nine (W39)
+  and eight (W47) `duration-ms` sites, so the Linux-only allowlist is not needed.
+- Comparison of the reference binary at the default 6 jobs: **4,111 passed /
+  0 failed / 10 pending**, 4,111 clean leak checks, `gate_success: true`,
+  about 16 minutes (the Go-era Mac full run took about 30).
+- `python3 -m unittest discover -s parity -p '*test.py'`: 787 tests OK
+  (skipped=20).
+- Linux lock and Linux samples are unchanged. `cli-acceptance.json` is rewritten
+  by the Darwin capture with identical content. The suite seal changed, so the
+  Linux lane reseals on its next run.
+
 ## Pending leaves
 
 `T36.before-start` and the nine `W54.*.cancel-body` leaves stay pending. They are
