@@ -174,12 +174,20 @@ class Tools:
         result = outcome['data']
         steps = result.get('steps') or []
         failed = [step for step in steps if step.get('exit_code') != 0]
+        records = [json.loads(line) for line in self.observations.get('git/git-commands.jsonl', b'').splitlines()]
         argv = ['git', 'push', '-q', '--force-with-lease', 'origin', 'feature/parity']
+        if len(failed) == 1 and failed[0].get('argv') != argv:
+            tips = [r for r in records if r.get('argv') ==
+                    ['git', 'ls-remote', 'origin', 'refs/heads/feature/parity']]
+            if (len(tips) != 1 or type(tips[0].get('exit_code')) is not int
+                    or tips[0]['exit_code'] != 0 or tips[0].get('stderr') != ''
+                    or not re.fullmatch(r'[0-9a-f]{40}\trefs/heads/feature/parity\n', tips[0].get('stdout', ''))):
+                raise AssertionError('explicit lease lacks independently recorded original remote tip')
+            argv[3] += '=feature/parity:' + tips[0]['stdout'].split('\t')[0]
         if (len(failed) != 1 or failed[0] is not steps[-1] or failed[0].get('argv') != argv
                 or type(failed[0].get('exit_code')) is not int or failed[0]['exit_code'] != 1):
             raise AssertionError('failed Git display lacks exact final lease push')
         output = failed[0].get('output')
-        records = [json.loads(line) for line in self.observations.get('git/git-commands.jsonl', b'').splitlines()]
         witnesses = [r for r in records if r.get('argv') == argv and 'barrier' not in r]
         expected = dict(argv=argv, exit_code=1, stdout='', stderr=output)
         if len(witnesses) != 1 or witnesses[0] != expected or type(witnesses[0]['exit_code']) is not int:
@@ -200,6 +208,12 @@ class Tools:
         safe = ''.join('\\x%02x' % ord(ch) if ch not in '\n\t' and
                        (ord(ch) < 32 or 127 <= ord(ch) <= 159) else ch for ch in full)
         offset = len('step_failed: ' + ' '.join(argv) + ' exited 1: To ')
+        if offset >= 119:
+            # The explicit lease can fill the preview before any allocated path is visible.
+            line = '  ✗ git_do recipe=rebase_push → ' + safe[:119] + '…\n'
+            if value.splitlines(keepends=True).count(line) != 1:
+                raise AssertionError('failed Git display differs from exact clipped activity')
+            return normalized
         return self.clipped_allocation(value, normalized, artifact, safe, offset, 120,
                                        '  ✗ git_do recipe=rebase_push → ', '\n')
 

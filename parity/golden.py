@@ -59,9 +59,8 @@ def guard_cache(path, manifest):
     return path
 
 
-def checked(command, cwd):
+def checked(command, cwd, environment=None):
     """Run offline reference preparation and report bounded diagnostics."""
-    environment = dict(os.environ, GOPROXY="off", GOSUMDB="off", GOTOOLCHAIN="local")
     result = subprocess.run(command, cwd=cwd, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         raise run.HarnessError("reference command failed: %s\n%s" % (" ".join(command), result.stderr.decode(errors="replace")[-8000:]))
@@ -82,19 +81,39 @@ def verify_binary(binary, manifest):
 def build_reference(suite, manifest, destination, update=False):
     """Archive the pinned commit and build with the recorded flags without network access."""
     selected = reference_identity.select(manifest)
-    actual_go = checked(["go", "version"], suite.parent).decode().strip()
-    actual_python = "Python " + platform.python_version()
-    if actual_go != selected["go_version"] or actual_python != selected["python_version"]:
-        raise run.HarnessError("reference toolchain mismatch: %s; %s" % (actual_go, actual_python))
-    flags = manifest.get("reference_build_flags", ["-trimpath", "-buildvcs=false"])
-    if flags != ["-trimpath", "-buildvcs=false"]:
+    if selected["reference_language"] != "rust":
+        raise run.HarnessError("reference builder requires a Rust identity; historical Go fixtures stay frozen")
+    if selected["rustup_toolchain"] != "1.99.1":
+        raise run.HarnessError("unsupported reference rustup_toolchain")
+    flags = manifest.get("reference_build_flags")
+    if flags != ["--release", "--locked", "--offline"]:
         raise run.HarnessError("unsupported reference_build_flags: " + repr(flags))
+    rustflags = ["--remap-path-prefix=<archive>=/reagent", "--remap-path-prefix=<cargo_home>=/cargo"]
+    if manifest.get("reference_rustflags") != rustflags:
+        raise run.HarnessError("unsupported reference_rustflags")
+    home = Path.home().resolve()
+    cargo_home = home / ".cargo"
+    # Do not inherit wrappers, encoded flags, target/profile overrides or compiler settings.
+    environment = {"HOME": str(home), "PATH": str(cargo_home / "bin") + ":/usr/bin:/bin",
+                   "CARGO_HOME": str(cargo_home), "RUSTUP_HOME": str(home / ".rustup"),
+                   "RUSTUP_TOOLCHAIN": "1.99.1", "RUSTUP_AUTO_INSTALL": "0", "CARGO_NET_OFFLINE": "true",
+                   "CARGO_INCREMENTAL": "0", "SOURCE_DATE_EPOCH": "0", "TZ": "UTC", "LC_ALL": "C"}
+    actual = {key: checked([tool, "--version"], suite.parent, environment).decode().strip()
+              for key, tool in (("cargo_version", "cargo"), ("rustc_version", "rustc"))}
+    actual["python_version"] = "Python " + platform.python_version()
+    if any(value != selected[key] for key, value in actual.items()):
+        raise run.HarnessError("reference toolchain mismatch: " + "; ".join(actual.values()))
     with tempfile.TemporaryDirectory(prefix="parity-reference-build-") as temporary:
         source = Path(temporary)
         archive = checked(["git", "archive", manifest["reference_commit"]], suite.parent)
         with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
             stream.extractall(source, filter="data")
-        checked(["go", "build", *flags, "-o", str(Path(destination).absolute()), "./cmd/reagent"], source)
+        environment["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(
+            flag.replace("<archive>", str(source.resolve())).replace("<cargo_home>", str(cargo_home))
+            for flag in rustflags)
+        checked(["cargo", "build", *flags], source / "rust", environment)
+        shutil.copyfile(source / "rust" / "target" / "release" / "reagent", destination)
+        shutil.copymode(source / "rust" / "target" / "release" / "reagent", destination)
     verify_binary(destination, manifest)
     return Path(destination)
 

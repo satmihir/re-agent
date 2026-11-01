@@ -470,19 +470,30 @@ while True: time.sleep(1)
                     self.assertEqual(list(artifacts.iterdir()), [])
                     self.assertEqual(marker.read_bytes() if marker.exists() else None, before)
 
+    def test_rust_reference_rejects_go_instrumented_coverage_before_execution(self):
+        manifest = json.loads(Path(run.__file__).with_name('manifest.json').read_bytes())
+        manifest['reference_language'] = 'rust'
+        with patch.dict(os.environ, GOCOVERDIR=str(self.root / 'external-coverage')), \
+                patch('parity.run.json.loads', return_value=manifest), \
+                patch('parity.run.ProcessPoolExecutor') as pool, \
+                patch('sys.stderr', new_callable=io.StringIO) as stderr:
+            self.assertEqual(main(['--bin', str(self.binary), '--case', 'W01.case-sensitive-prefix',
+                                   '--artifacts', str(self.root / 'rust-coverage')]), 2)
+            self.assertIn('Go instrumented coverage is disabled for the Rust reference', stderr.getvalue())
+            pool.assert_not_called()
+
     def test_main_retains_only_failures_unless_requested_and_reports_total_size(self):
         def fail(ctx):
             ctx.run()
             raise AssertionError("retained failure")
 
         cases = [Case("W99.pass", "passing", lambda ctx: ctx.run()), Case("W99.fail", "failing", fail)]
-        coverage = self.root / "external-coverage"
         for jobs in (1, 2):
             for keep in (False, True):
                 with self.subTest(jobs=jobs, keep=keep):
                     artifacts = self.root / ("retention-%s-%s" % (jobs, keep))
                     output = io.StringIO()
-                    with patch.dict(os.environ, GOCOVERDIR=str(coverage)), patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=observed), patch("parity.run.load_golden", return_value={"exact": b"normalized"}), patch("parity.run.verify_inventory"), patch("parity.golden.ensure_cache", return_value=self.root / "cache"), patch("sys.stdout", output):
+                    with patch("parity.run.collect_cases", return_value=cases), patch("parity.run.ProcessPoolExecutor", ThreadPoolExecutor), patch("parity.observe.finish", side_effect=observed), patch("parity.run.load_golden", return_value={"exact": b"normalized"}), patch("parity.run.verify_inventory"), patch("parity.golden.ensure_cache", return_value=self.root / "cache"), patch("sys.stdout", output):
                         args = ["--bin", str(self.binary), "--jobs", str(jobs), "--artifacts", str(artifacts)]
                         self.assertEqual(main(args + (["--keep-artifacts"] if keep else [])), 1)
                     self.assertEqual((artifacts / "W99.pass").exists(), keep)
@@ -494,7 +505,8 @@ while True: time.sleep(1)
                     self.assertEqual(report["raw_artifact_policy"]["retention"], "all cases" if keep else "failures only; passing case artifacts deleted after comparison")
                     total = sum(path.stat().st_size for path in artifacts.rglob("*") if path.is_file())
                     self.assertIn("(%d bytes retained)" % total, output.getvalue())
-                    self.assertTrue((coverage / artifacts.name / "W99.pass/invoke-001").is_dir())
+                    if keep:
+                        self.assertTrue((artifacts / "W99.pass/coverage/invoke-001").is_dir())
 
     def test_candidate_worker_still_performs_real_golden_raw_replay(self):
         _, golden, normalized, policies = self.frozen_fixture()

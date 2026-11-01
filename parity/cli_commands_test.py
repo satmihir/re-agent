@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from parity.cases import cli_commands as commands
 from parity.run import Context
-from parity.observe import go_json
+from parity.observe import Normalizer, go_json
 from parity.observe_cli_commands import Commands, PREAMBLE
 
 
@@ -107,13 +107,13 @@ class CommandsTest(unittest.TestCase):
 
 
 class CommandSlotsTest(unittest.TestCase):
-    def fixture(self, root, identity='C17.success', change=None):
+    def fixture(self, root, identity='C17.success', change=None, output='literal'):
         trace_dir = root / 'traces'
         trace_dir.mkdir()
         trace = trace_dir / 'run.jsonl'
         record = {'workspace': str(root / 'workspace'), 'kind': 'user_shell_command',
                   'command': 'printf literal', 'exit_code': 0, 'signal': None, 'interrupted': False,
-                  'output': 'literal', 'output_bytes_seen': 7, 'output_truncated': False,
+                  'output': output, 'output_bytes_seen': len(output.encode()), 'output_truncated': False,
                   'encoding_replaced': False, 'duration_ms': 125}
         invocation = {'trace': trace_dir, 'stdin': b'!printf literal\nnext\n',
                       'started': 10., 'ended': 11.,
@@ -167,6 +167,27 @@ class CommandSlotsTest(unittest.TestCase):
                 invocation['stderr'] = corrupt.encode()
                 with self.assertRaises(AssertionError):
                     slots.display(corrupt, 'invocation-1.stderr', invocation)
+
+    def test_repeating_shell_payload_between_owned_spans_is_lossless_without_character_matching(self):
+        with tempfile.TemporaryDirectory(prefix='parity-shell-repeated-') as temporary:
+            root = Path(temporary)
+            output = 'X' * (40 * 1024) + ' /literal/root model-secret 界 🦀'
+            slots, record, _, _ = self.fixture(root, output=output)
+            normal = Normalizer(root, '')
+            normal.commands = slots
+            slots.normal = normal
+            before = PREAMBLE + go_json(record).decode()
+            after = PREAMBLE + go_json(dict(record, workspace='<ROOT>/workspace', duration_ms=0)).decode()
+            def request(text):
+                raw = go_json({'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': text}]}]})
+                return raw.replace(b'XXXX', b'\\u0058XXX', 1)
+            with patch('parity.observe.difflib.SequenceMatcher', side_effect=AssertionError('unexpected character matcher')):
+                actual = normal.json(request(before), 'http-1.body')
+            self.assertEqual(actual, request(after))
+            self.assertEqual(json.loads(json.loads(actual)['input'][0]['content'][0]['text'][len(PREAMBLE):])['output'], output)
+            duration = [row for row in normal.ledger if row['kind'] == 'cli-shell-duration-ms']
+            self.assertEqual(len(duration), 1)
+            self.assertEqual(duration[0]['path'], ['input', 0, 'content', 0, 'text', 'shell', 'duration_ms'])
 
     def test_shell_evidence_rejects_wrong_shape_owner_capture_or_range(self):
         for change in ('capture', 'duration', 'shape', 'owner'):

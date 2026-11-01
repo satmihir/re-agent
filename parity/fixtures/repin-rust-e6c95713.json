@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "previous_reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+  "reference_commit": "e6c9571396af1656c48a089e06b293165828e0c0",
+  "markdown_progress_ledger": {
+    "linux/amd64": {
+      "C42.markdown-progress": "Bind the existing progress-spinner certificate to the owned markdown-in-progress check request; normalized bytes stay identical. Remove slot 4 and reverse only footer slots 5/6 to reconstruct the original lock."
+    },
+    "darwin/arm64": {
+      "C42.markdown-progress": "Bind the existing progress-spinner certificate to the owned markdown-in-progress check request; normalized bytes stay identical. Remove slot 4 and reverse only footer slots 5/6 to reconstruct the original lock."
+    }
+  },
+  "shell_timing_ledger": {
+    "linux/amd64": {
+      "W39.shell-511-plan-0": "Go recorded zero shell milliseconds; Rust records nonzero, adding only existing duration-ms substitutions at nine embedded shell sites.",
+      "W39.shell-511-plan-1": "Go recorded zero shell milliseconds; Rust records nonzero, adding only existing duration-ms substitutions at nine embedded shell sites.",
+      "W39.shell-512-plan-0": "Go recorded zero shell milliseconds; Rust records nonzero, adding only existing duration-ms substitutions at nine embedded shell sites.",
+      "W39.shell-512-plan-1": "Go recorded zero shell milliseconds; Rust records nonzero, adding only existing duration-ms substitutions at nine embedded shell sites.",
+      "W39.shell-513-plan-0": "Go recorded zero shell milliseconds; Rust records nonzero, adding only existing duration-ms substitutions at nine embedded shell sites.",
+      "W39.shell-513-plan-1": "Go recorded zero shell milliseconds; Rust records nonzero, adding only existing duration-ms substitutions at nine embedded shell sites.",
+      "W47.projection": "Go recorded zero shell milliseconds; Rust records nonzero, adding only existing duration-ms substitutions at eight embedded shell sites."
+    }
+  },
+  "platforms": {
+    "linux/amd64": {
+      "T52.rebase_push.normal": "Rust rebase_push publishes the rebased branch using an explicit force-with-lease tip.",
+      "T52.conflict-lease.conflict": "Rust rebase_push preserves the diagnosed rebase-conflict result and cleanup.",
+      "T52.conflict-lease.lease": "Rust rebase_push rejects a stale explicit force-with-lease tip.",
+      "T54.first-failure.rebase_push": "Rust rebase_push reports its first failing phase without attempting later phases."
+    },
+    "darwin/arm64": {
+      "T52.rebase_push.normal": "Rust rebase_push publishes the rebased branch using an explicit force-with-lease tip.",
+      "T52.conflict-lease.conflict": "Rust rebase_push preserves the diagnosed rebase-conflict result and cleanup.",
+      "T52.conflict-lease.lease": "Rust rebase_push rejects a stale explicit force-with-lease tip.",
+      "T54.first-failure.rebase_push": "Rust rebase_push reports its first failing phase without attempting later phases."
+    }
+  }
+}

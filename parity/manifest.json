@@ -1,15 +1,21 @@
 {
   "schema_version": 1,
   "freeze_status": "ready",
-  "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+  "reference_commit": "e6c9571396af1656c48a089e06b293165828e0c0",
+  "reference_language": "rust",
   "reference_build_flags": [
-    "-trimpath",
-    "-buildvcs=false"
+    "--release",
+    "--locked",
+    "--offline"
   ],
-  "reference_build": "git archive 2ab234f79d1d42ba8a969ba3f4103eeeba717967; go build -trimpath -buildvcs=false -o reference ./cmd/reagent",
+  "reference_rustflags": [
+    "--remap-path-prefix=<archive>=/reagent",
+    "--remap-path-prefix=<cargo_home>=/cargo"
+  ],
+  "reference_build": "git archive e6c9571396af1656c48a089e06b293165828e0c0; cd rust; RUSTUP_TOOLCHAIN=1.99.1 cargo build --release --locked --offline (isolated environment; remap archive=/reagent, HOME/.cargo=/cargo)",
   "platforms": {
     "darwin/arm64": {
-      "capture_status": "ready",
+      "capture_status": "required",
       "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
       "reference_binary_sha256": "8d9b9cf977ba8b5abbf2c08bb070267e469a396bde244abeadf26f82b9d04524",
       "go_version": "go version go1.23.3 darwin/arm64",
@@ -18,12 +24,25 @@
       "normalized_tree_sha256": "1c3970d1ba28e6909b898fab171309fd6a5de6cea6ef74957dd07178e4630281"
     },
     "linux/amd64": {
-      "reference_binary_sha256": "9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06",
-      "go_version": "go version go1.23.3 linux/amd64",
+      "reference_binary_sha256": "5fb5c0cd1abba94bda31804ef14f9581c99f1d277a56ebda47b5e9267698cd84",
+      "rustup_toolchain": "1.99.1",
+      "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+      "rustc_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
       "python_version": "Python 3.11.5",
       "python_executable": "/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin/python3.11",
       "normalized_lock": "expected/linux.json",
-      "normalized_tree_sha256": "2cd7554ee837f92fb4fbbf93d6f33be5f70f013f703c797ecc6d2d6c69be5d75"
+      "normalized_tree_sha256": "212e40c56168dc38b11e4ac9e70b4af8de56d969782d4220c4c369a6d3fcfec6"
+    }
+  },
+  "go_checkpoint_reference": {
+    "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+    "platforms": {
+      "linux/amd64": {
+        "reference_binary_sha256": "9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06"
+      },
+      "darwin/arm64": {
+        "reference_binary_sha256": "8d9b9cf977ba8b5abbf2c08bb070267e469a396bde244abeadf26f82b9d04524"
+      }
     }
   },
   "exploratory_only": [
@@ -32,10 +51,10 @@
   ],
   "goldens_frozen": true,
   "inventory_status": "audited",
-  "inventory_scope": "Named W01-W54, T01-T60, C01-C44 and A01-A40 executable clauses against 2ab234f7. C18/C43/C44 enabled. Pending: T36.before-start's unavailable dispatch barrier and nine W54 cancel-during-body client-header witnesses. Darwin capture and acceptance pending on the Mac.",
+  "inventory_scope": "Named W01-W54, T01-T60, C01-C44 and A01-A40 executable clauses against Rust e6c95713; Go is frozen, with a separately pinned checkpoint peer. C18/C43/C44 enabled. Pending: T36.before-start's unavailable dispatch barrier and nine W54 cancel-during-body client-header witnesses. Darwin capture and acceptance pending on the Mac.",
   "leaf_inventory": {
     "path": "inventory.json",
-    "metadata_sha256": "a8eb2cdc3c17aa9f008785c8d4ef5b18676071b6f1f630509b6255d0fa7bb873",
+    "metadata_sha256": "7078967ad00b3eb5c0a8e7efcaef21f58d1d9f76701637f9f7c83a923034fc68",
     "metadata_fields": [
       "id",
       "description",
@@ -48,26 +67,26 @@
     "metadata_encoding": "Cases sorted by id; UTF-8 json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(',', ':')); no final newline"
   },
   "counts": {
-    "total": 4140,
-    "runnable": 4130,
+    "total": 4121,
+    "runnable": 4111,
     "pending": 10,
-    "slow": 106,
+    "slow": 105,
     "by_area": {
-      "wire": 2761,
+      "wire": 2743,
       "cli": 375,
-      "tools": 683,
+      "tools": 682,
       "agents": 321,
       "checkpoint": 0
     },
     "by_platform": {
-      "darwin": 4140,
-      "linux": 4140
+      "darwin": 4121,
+      "linux": 4121
     },
     "by_comparison": {
-      "N": 3713,
+      "N": 3695,
       "B": 67,
       "P": 85,
-      "N/S": 201,
+      "N/S": 200,
       "N/B": 52,
       "S": 22
     },
@@ -189,7 +208,7 @@
       "T31": 5,
       "T32": 12,
       "T33": 5,
-      "T34": 4,
+      "T34": 3,
       "T35": 2,
       "T36": 3,
       "T37": 6,
@@ -223,7 +242,7 @@
       "W05": 316,
       "W06": 42,
       "W07": 36,
-      "W08": 48,
+      "W08": 30,
       "W09": 18,
       "W10": 13,
       "W11": 23,
@@ -289,8 +308,8 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "b60915258a2e4414be5e8f2b4da1b215c6ac43e5806af966c97386982c63dd2b",
-  "verification_evidence": "repin-2ab234f7-linux.md (current re-pin and acceptance, including diagnosed prior failures); agents-area4.md, linux-lane.md and cli-acceptance.json are historical",
+  "suite_digest": "5d2a5d8a2c4a638cf106890654dd66acf36f71872a402be3ea9d186769c2c876",
+  "verification_evidence": "repin-rust-e6c95713.md (current Rust re-pin, measurements and acceptance); repin-2ab234f7-linux.md, agents-area4.md, linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin capture and acceptance pending on the Mac"
   ]

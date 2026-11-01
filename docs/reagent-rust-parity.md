@@ -4,13 +4,16 @@ Design for [#138](https://github.com/satmihir/re-agent/issues/138), step 1 of
 [#143](https://github.com/satmihir/re-agent/issues/143). Implementation and its
 approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 
-**Status:** runner/wire, tools/workspace and CLI/terminal implementation under #139;
-agents/context and checkpoints remain area 4. CLI proof status and stopped reference-defect
-families are recorded in `parity/README.md`; earlier design research/reviews are below.
+**Current status:** all four executable areas use the Rust reference at
+`e6c9571396af1656c48a089e06b293165828e0c0` (#211/#212); Go is frozen.
+The live inventory is 4,121 leaves: 4,111 runnable and ten pending. Linux timing,
+verification, dependency dispositions and the separate Mac capture hand-off are
+in `parity/repin-rust-e6c95713.md`. The design research and earlier area proofs
+below are historical.
 
-Reference pinned for the area suite: `2ab234f79d1d42ba8a969ba3f4103eeeba717967`
+The previous area-suite reference was Go `2ab234f79d1d42ba8a969ba3f4103eeeba717967`
 (#191 terminal fixes, #192 bounded compaction shortening, #193 parity race fixtures).
-Darwin capture and acceptance pending on the Mac; its old binary hash is not a new-pin identity. Observations from `7e0408f` and `f37aa5a`
+Darwin capture and acceptance remain pending on the Mac; its old binary hash is not a Rust-pin identity. Observations from `7e0408f` and `f37aa5a`
 were exploratory only and are not golden output. The earlier
 inventory reference was `3344f8ee0b8e28445f0f96af3cbc6d3d2accf492`.
 `parity/manifest.json` records the protected binary SHA-256 and executable leaf
@@ -522,8 +525,8 @@ platforms rather than counting proxy tests twice; W53 covers the new env schema.
 
 Counts below come from the shared `parity.run.collect_cases()` inventory at the
 pinned reference, including area-4 replacements. “Implemented” means a runnable
-assertion fixture exists, not overall-suite approval or repeatability. Of 2,761
-wire leaves, 2,752 are runnable and nine cancel-during-body cases are explicitly
+assertion fixture exists, not overall-suite approval or repeatability. Of 2,743
+wire leaves, 2,734 are runnable and nine cancel-during-body cases are explicitly
 pending until client-side header receipt is observable. No wire family is silently omitted.
 All named clauses above were audited against source; the finite stable-ID
 inventory is not unrestricted Cartesian exhaustion.
@@ -557,7 +560,7 @@ The digest is distinct from the suite-source and eventual golden-tree digests.
 | W05 | 316 | 316 | Implemented |
 | W06 | 42 | 42 | Implemented |
 | W07 | 36 | 36 | Implemented |
-| W08 | 48 | 48 | Implemented |
+| W08 | 30 | 30 | Implemented |
 | W09 | 18 | 18 | Implemented |
 | W10 | 13 | 13 | Implemented |
 | W11 | 23 | 23 | Implemented |

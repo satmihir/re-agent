@@ -1,6 +1,7 @@
 """Offline contracts for the installed isolated-Python Git recorder."""
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -9,11 +10,13 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 import zlib
 
-from parity.cases import tools_git
+from parity import capture_lock
+from parity.cases import tools_arguments, tools_git
 from parity.observe_tools import INSPECT_PREFIX
 from parity.run import Context
 
@@ -26,7 +29,7 @@ class RecorderTest(unittest.TestCase):
         self.ctx = Context(sys.executable, root / 'run', root / 'artifacts')
         self.addCleanup(self.ctx.close)
         tools_git._setup(self.ctx)
-        self.assertTrue(self.ctx.exclusive)
+        self.assertFalse(self.ctx.exclusive)
         self.helper = self.ctx.git_settings.parent
         self.executable = self.helper / 'git'
         self.body = self.helper / 'git_command.py'
@@ -169,8 +172,8 @@ class RecorderTest(unittest.TestCase):
                 self.assertEqual(old_record['argv'], ['git', *args])
 
 
-class StartupExclusivityTest(unittest.TestCase):
-    def test_startup_detects_fixture_repositories_without_case_metadata(self):
+class StartupIsolationTest(unittest.TestCase):
+    def test_startup_keeps_git_fixtures_shared_without_case_metadata(self):
         for kind in ('plain', 'workspace', 'gitfile', 'switch-target', 'git-env'):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory(prefix='parity-startup-') as folder:
                 root = Path(folder)
@@ -185,41 +188,125 @@ class StartupExclusivityTest(unittest.TestCase):
                         (context.root / 'destination/.git').mkdir(parents=True)
                     elif kind == 'git-env':
                         context.env['GIT_DIR'] = str(context.root / 'actual-git')
-                    with patch('parity.run.Provider') as provider:
-                        provider.return_value.url = 'http://127.0.0.1:1'
-                        context.server  # Both Context.invoke and TerminalSession enter here.
-                        self.assertEqual(context.exclusive, kind != 'plain')
-                        if kind == 'plain':
-                            context._workload.require_exclusive.assert_not_called()
-                        else:
-                            context._workload.require_exclusive.assert_called_once()
-                        context.server
-                        self.assertEqual(context._workload.require_exclusive.call_count, int(kind != 'plain'))
+                    context.server
+                    context.server
+                    self.assertFalse(context.exclusive)
+                    context._workload.require_exclusive.assert_not_called()
                 finally:
                     context.close()
 
-    def test_piped_and_terminal_setup_detect_environment_overrides_before_launch(self):
+    def test_piped_and_terminal_launch_keep_git_environment_overrides_shared(self):
         from parity.terminal import TerminalSession
         for terminal in (False, True):
             with self.subTest(terminal=terminal), tempfile.TemporaryDirectory() as folder:
-                context = Context(sys.executable, Path(folder) / 'run', Path(folder) / 'artifacts')
+                root = Path(folder)
+                binary = root / 'fixture'
+                binary.write_text('#!' + sys.executable + '\nimport json, os\nprint(json.dumps(dict(os.environ)))\n')
+                binary.chmod(0o700)
+                context = Context(binary, root / 'run', root / 'artifacts')
                 override = {'GIT_DIR': str(context.root / 'bare-fixture')}
                 try:
                     context._workload = Mock()
-                    context.prepare_startup(override)
-                    self.assertTrue(context.exclusive)
-                    context._workload.require_exclusive.assert_called_once()
-                    with patch.object(context, 'prepare_startup', side_effect=RuntimeError('before launch')) as gate:
-                        with self.assertRaisesRegex(RuntimeError, 'before launch'):
-                            if terminal:
-                                TerminalSession(context, env=override).__enter__()
-                            else:
-                                context.invoke(['run'], env=override)
-                        gate.assert_called_once_with(override)
+                    if terminal:
+                        with TerminalSession(context, env=override) as session:
+                            result = session.finish()
+                    else:
+                        result = context.invoke(['run'], env=override)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    environment = json.loads(result.stdout)
+                    self.assertEqual(environment['GIT_DIR'], override['GIT_DIR'])
+                    self.assertEqual(environment['HOME'], str(context.home))
+                    self.assertEqual(environment['REAGENT_WORKSPACE_GIT_TIMEOUT'], '60')
+                    self.assertFalse(context.exclusive)
+                    context._workload.require_exclusive.assert_not_called()
                 finally:
                     context.close()
 
-    def test_worker_keeps_detected_exclusivity_through_failure_cleanup(self):
+    def test_concurrent_recorders_isolate_settings_repositories_remotes_and_switch_targets(self):
+        with tempfile.TemporaryDirectory(prefix='parity-shared-git-') as folder:
+            root = Path(folder)
+            contexts = [Context(sys.executable, root / str(i), root / ('artifacts-' + str(i))) for i in range(2)]
+            barrier = threading.Barrier(2, timeout=10)
+            original_environment = dict(os.environ)
+
+            def exercise(index):
+                context = contexts[index]
+                with capture_lock.CaseWorkload() as workload:
+                    context._workload = workload
+                    tools_git._setup(context, remote=True)
+                    marker = 'case-' + str(index)
+                    tools_git._git(context, 'config', 'parity.case', marker)
+                    tools_git._write(context, 'a.txt', marker + '\n')
+                    tip = tools_git._commit(context, marker)
+                    tools_git._git(context, 'push', '-q', 'origin', 'main')
+                    target = context.root / 'switch-target'
+                    tools_git._git(context, 'worktree', 'add', '-q', '-b', 'switched', str(target))
+                    self.assertTrue((target / '.git').is_file())
+                    (context.home / 'marker').write_text(marker)
+                    settings = json.loads(context.git_settings.read_text())
+                    settings['fail'] = ['status'] if index == 0 else ['not-a-git-command']
+                    context.git_settings.write_text(json.dumps(settings))
+                    context.server
+                    barrier.wait()
+                    self.assertFalse(context.exclusive)
+                    self.assertFalse(workload.exclusive)
+                    self.assertEqual((context.home / 'marker').read_text(), marker)
+                    commands = [['-C', str(target), 'config', '--get', 'parity.case'],
+                                ['-C', str(target), 'rev-parse', 'HEAD'],
+                                ['--git-dir=' + str(context.git_remote), 'rev-parse', 'main'], ['status']]
+                    results = [subprocess.run(['git', *args], cwd=context.workspace, env=context.env,
+                                              capture_output=True, timeout=10) for args in commands]
+                    self.assertEqual([item.returncode for item in results], [0, 0, 0, 41 if index == 0 else 0])
+                    self.assertEqual([item.stdout.strip().decode() for item in results[:3]], [marker, tip, tip])
+                    records = [json.loads(line) for line in Path(context.env['PARITY_GIT_RECORD']).read_text().splitlines()]
+                    self.assertEqual([item['argv'] for item in records], [['git', *args] for args in commands])
+                    self.assertEqual(settings['git_record'], str(context.root / 'git-record.jsonl'))
+                    self.assertEqual(settings['gh_state'], str(context.root / 'gh-state.json'))
+                    self.assertEqual(tools_git._git(context, 'remote', 'get-url', 'origin'), str(context.git_remote))
+                    self.assertEqual(context.env['GIT_CONFIG_GLOBAL'], os.devnull)
+                    barrier.wait()
+                    return context.server.url
+
+            try:
+                with patch('parity.capture_lock.machine_lock_path', return_value=root / 'capture.lock'):
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        urls = list(pool.map(exercise, range(2)))
+                self.assertEqual(len(set(urls)), 2)
+                self.assertEqual(dict(os.environ), original_environment)
+            finally:
+                for context in contexts:
+                    context.close()
+
+    def test_concurrent_denied_command_recorders_keep_separate_logs(self):
+        with tempfile.TemporaryDirectory(prefix='parity-shared-denied-') as folder:
+            root = Path(folder)
+            barrier = threading.Barrier(2, timeout=10)
+
+            def exercise(index):
+                context = Context(sys.executable, root / str(index), root / ('artifacts-' + str(index)))
+                try:
+                    with capture_lock.CaseWorkload() as workload:
+                        context._workload = workload
+                        environment, record = tools_arguments.denied_commands(context)
+                        barrier.wait()
+                        marker = 'case-' + str(index)
+                        for command in ('git', 'gh'):
+                            result = subprocess.run([command, marker], env=dict(context.env, **environment),
+                                                    cwd=context.workspace, capture_output=True, timeout=10)
+                            self.assertEqual(result.returncode, 1)
+                        self.assertEqual([json.loads(line) for line in record.read_text().splitlines()],
+                                         [['git', marker], ['gh', marker]])
+                        self.assertFalse(context.exclusive)
+                        self.assertFalse(workload.exclusive)
+                        barrier.wait()
+                finally:
+                    context.close()
+
+            with patch('parity.capture_lock.machine_lock_path', return_value=root / 'capture.lock'):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    list(pool.map(exercise, range(2)))
+
+    def test_worker_keeps_explicit_exclusivity_through_failure_cleanup(self):
         import fcntl
         from parity import capture_lock, run
         from parity.model import Case
@@ -228,7 +315,7 @@ class StartupExclusivityTest(unittest.TestCase):
             path = root / 'capture.lock'
             cleaned = []
             def fixture(context):
-                context.require_exclusive()
+                self.assertTrue(context.exclusive)
                 original = context._process_guard.close
                 def cleanup():
                     descriptor = capture_lock.open_lock(path.with_name('workload.lock'))
@@ -241,7 +328,7 @@ class StartupExclusivityTest(unittest.TestCase):
                     original()
                 context._process_guard.close = cleanup
                 raise RuntimeError('fixture failed after promotion')
-            case = Case('W99.dynamic-exclusive', '', fixture)
+            case = Case('W99.explicit-exclusive', '', fixture, exclusive=True)
             with patch('parity.run.collect_cases', return_value=[case]), \
                     patch('parity.capture_lock.machine_lock_path', return_value=path):
                 result = run.run_case(case.id, sys.executable, root / 'run', root / 'artifacts')

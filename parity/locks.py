@@ -2,6 +2,7 @@
 
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -301,6 +302,7 @@ def validate_policy(policy):
 
 REFERENCE_FIELDS = identity.REFERENCE_FIELDS
 REPIN_REFERENCE = "2ab234f79d1d42ba8a969ba3f4103eeeba717967"
+RUST_REPIN_REFERENCE = "e6c9571396af1656c48a089e06b293165828e0c0"
 REPIN_RECEIPT = "repin-receipt.json"
 
 
@@ -364,6 +366,13 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
         allowlist = json.loads((suite / 'fixtures/repin-2ab234f7.json').read_bytes())
         repin_receipt = verify_repin(old_cases, new_cases, staging, allowlist,
                                      previous_document.get('reference_identity', {}), identity.reference(manifest), cases=cases)
+    elif manifest['reference_commit'] == RUST_REPIN_REFERENCE:
+        allowlist = json.loads((suite / 'fixtures/repin-rust-e6c95713.json').read_bytes())
+        removals = (json.loads((suite / 'fixtures/covered-removals-rust-e6c95713.json').read_bytes())
+                    if old_cases.keys() - new_cases.keys() else None)
+        repin_receipt = verify_rust_repin(old_cases, new_cases, staging, allowlist,
+                                          previous_document.get('reference_identity', {}), identity.reference(manifest),
+                                          removal_allowlist=removals)
     else:
         protected_cases, timing_updates = approved_zero_exec_timing_updates(old_cases, new_cases, staging)
         protected_cases, shell_updates = approved_shell_timing_updates(protected_cases, new_cases, staging)
@@ -388,6 +397,10 @@ def update_lock(suite, manifest, staging, cases, jobs=4):
             previous = json.loads((suite / "inventory.json").read_bytes())
             if repin_receipt is not None:
                 verify_previous_inventory(suite, previous, manifest, allowlist)
+                if manifest['reference_commit'] == RUST_REPIN_REFERENCE:
+                    verify_rust_pending_inventory(previous, inventory)
+                    if repin_receipt.get('covered_removals'):
+                        verify_covered_removal_inventory(previous, inventory, repin_receipt['covered_removals'])
             else:
                 run.verify_shared_inventory(previous, manifest)
                 inventory.update({key: previous[key] for key in ("platform", "reference_binary_sha256")})
@@ -448,7 +461,7 @@ def verify_previous_inventory(suite, inventory, manifest, allowlist):
         return
     previous = json.loads((Path(suite) / 'expected' / (system + '.json')).read_bytes())['reference_identity']
     if (previous.get('reference_platform') != names[0]
-            or previous.get('reference_commit') not in (allowlist['previous_reference_commit'], REPIN_REFERENCE)):
+            or previous.get('reference_commit') not in (allowlist['previous_reference_commit'], allowlist['reference_commit'])):
         raise run.HarnessError('previous inventory lock reference identity differs')
     historical = dict(manifest, reference_commit=previous['reference_commit'],
                       platforms={names[0]: previous})
@@ -501,6 +514,218 @@ def verify_repin(old_cases, new_cases, staging, allowlist, previous_identity, ne
     return dict(schema_version=1, platform=platform, allowlist_sha256=digest(allowlist),
                 previous_reference_identity=previous_identity, reference_identity=new_identity,
                 replayed_cases=len(new_cases), updates=sorted(updates, key=lambda row: row['id']))
+
+
+def verify_rust_repin(old_cases, new_cases, staging, allowlist, previous_identity, new_identity, removal_allowlist=None):
+    """Authorize only named existing-leaf replacements backed by complete raw replay."""
+    if (allowlist.get('schema_version') != 1
+            or allowlist.get('previous_reference_commit') != REPIN_REFERENCE
+            or allowlist.get('reference_commit') != RUST_REPIN_REFERENCE
+            or new_identity.get('reference_commit') != RUST_REPIN_REFERENCE
+            or new_identity.get('reference_language') != 'rust'
+            or previous_identity.get('reference_commit') not in (REPIN_REFERENCE, RUST_REPIN_REFERENCE)
+            or previous_identity.get('reference_platform') != new_identity.get('reference_platform')):
+        raise AssertionError('Rust re-pin allowlist reference identity differs')
+    platform = new_identity['reference_platform']
+    approved = allowlist.get('platforms', {}).get(platform)
+    if (not isinstance(approved, dict)
+            or any(not isinstance(reason, str) or not reason.strip() for reason in approved.values())):
+        raise AssertionError('invalid Rust re-pin platform allowlist: ' + platform)
+    timing = allowlist.get('shell_timing_ledger', {}).get(platform, {})
+    if (not isinstance(timing, dict)
+            or any(not isinstance(reason, str) or not reason.strip() for reason in timing.values())):
+        raise AssertionError('invalid Rust shell timing allowlist')
+    markdown = allowlist.get('markdown_progress_ledger', {}).get(platform, {})
+    if (not isinstance(markdown, dict) or set(markdown) - {'C42.markdown-progress'}
+            or any(not isinstance(reason, str) or not reason.strip() for reason in markdown.values())):
+        raise AssertionError('invalid Rust markdown progress allowlist')
+    removed = sorted(old_cases.keys() - new_cases.keys())
+    added = sorted(new_cases.keys() - old_cases.keys())
+    changed = sorted(case_id for case_id in old_cases.keys() & new_cases.keys()
+                     if old_cases[case_id] != new_cases[case_id])
+    unlisted = sorted(set(changed) - approved.keys() - timing.keys() - markdown.keys())
+    if (removed and removal_allowlist is None) or added or unlisted:
+        raise AssertionError('unlisted Rust re-pin change: removed=%s added=%s changed=%s' %
+                             (removed, added, unlisted))
+    covered = verify_covered_removals(old_cases, new_cases, staging, removal_allowlist,
+                                     previous_identity, new_identity) if removed else []
+    updates = []
+    for case_id in changed:
+        previous, actual = old_cases[case_id], new_cases[case_id]
+        if frozen_lock(Path(staging) / case_id) != actual:
+            raise AssertionError('Rust re-pin replay evidence differs: ' + case_id)
+        proof = {}
+        if case_id in timing:
+            proof = verify_rust_shell_timing(case_id, previous, actual, Path(staging) / case_id)
+        if case_id in markdown:
+            proof = verify_markdown_progress_ledger(previous, actual, Path(staging) / case_id, previous_identity)
+        updates.append(dict(id=case_id, reason=markdown.get(case_id, timing.get(case_id, approved.get(case_id))),
+                            old_case_sha256=digest(previous), new_case_sha256=digest(actual),
+                            before=previous, after=actual, full_replay_verified=True, **proof))
+    return dict(schema_version=1, platform=platform, allowlist_sha256=digest(allowlist),
+                previous_reference_identity=previous_identity, reference_identity=new_identity,
+                replayed_cases=len(new_cases), updates=updates, covered_removals=covered,
+                covered_removals_allowlist_sha256=digest(removal_allowlist) if covered else None)
+
+
+def verify_covered_removals(old_cases, new_cases, staging, allowlist, previous_identity, new_identity):
+    """Authorize the reviewed W08 covering set and one exact duplicate timeout removal."""
+    expected = {'T34.redirected-group': ['T32.timeout']}
+    for zone in ('America-Los_Angeles', 'Etc-GMT+7'):
+        for readonly, plan in ((0, 1), (1, 0), (1, 1)):
+            for suffix in ('', '-proxy', '-anthropic'):
+                case_id = f'W08.{zone}-ro{readonly}-plan{plan}{suffix}'
+                expected[case_id] = [f'W08.{zone}-ro0-plan0{suffix}', f'W08.UTC-ro{readonly}-plan{plan}{suffix}']
+    previous_commit = previous_identity.get('reference_commit')
+    if (allowlist.get('schema_version') != 1 or allowlist.get('reference_commit') != RUST_REPIN_REFERENCE
+            or allowlist.get('previous_reference_commits') != [REPIN_REFERENCE, RUST_REPIN_REFERENCE]
+            or allowlist.get('removed') != expected or not isinstance(allowlist.get('reason'), str)
+            or not allowlist['reason'].strip()
+            or previous_commit not in (REPIN_REFERENCE, RUST_REPIN_REFERENCE)
+            or new_identity.get('reference_commit') != RUST_REPIN_REFERENCE
+            or new_identity.get('reference_language') != 'rust'
+            or previous_identity.get('reference_platform') != new_identity.get('reference_platform')
+            or (previous_commit == RUST_REPIN_REFERENCE and previous_identity != new_identity)):
+        raise AssertionError('covered removal authorization or reference identity differs')
+    removed = sorted(old_cases.keys() - new_cases.keys())
+    if set(removed) - expected.keys():
+        raise AssertionError('unlisted covered removal')
+    targets = sorted({target for case_id in removed for target in expected[case_id]})
+    for target in targets:
+        if target not in old_cases or target not in new_cases or old_cases[target] != new_cases[target]:
+            raise AssertionError('covered removal target is missing or changed: ' + target)
+        if frozen_lock(Path(staging) / target) != new_cases[target]:
+            raise AssertionError('covered removal target raw replay differs: ' + target)
+    return [dict(id=case_id, old_case_sha256=digest(old_cases[case_id]), reason=allowlist['reason'],
+                 covered_by=[dict(id=target, case_sha256=digest(new_cases[target]), full_replay_verified=True)
+                             for target in expected[case_id]]) for case_id in removed]
+
+
+def verify_covered_removal_inventory(previous, current, removals):
+    """Permit only authorized removed rows, never edits to retained metadata."""
+    old = {row['id']: row for row in previous['cases']}
+    new = {row['id']: row for row in current['cases']}
+    approved = {row['id'] for row in removals}
+    if (previous['metadata_fields'] != current['metadata_fields'] or new.keys() - old.keys()
+            or (old.keys() - new.keys()) - approved
+            or any(old[case_id] != row for case_id, row in new.items())):
+        raise AssertionError('covered removal inventory changes retained metadata')
+
+
+def inverse_markdown_progress_ledger(ledger):
+    """Undo only the one C42 spinner slot and its two following footer indices."""
+    restored, spinner, footers = [], 0, set()
+    for row in ledger:
+        if row.get('artifact') != 'invoke-001.screens.json' or row.get('path', [])[:1] != ['terminal-cell-slot']:
+            restored.append(row)
+            continue
+        path, kind = row['path'], row.get('kind')
+        if path == ['terminal-cell-slot', 4] and kind == 'terminal-progress-spinner':
+            if row.get('after') != base64.b64encode('⠋'.encode()).decode():
+                raise AssertionError('markdown progress spinner replacement differs')
+            spinner += 1
+            continue
+        if kind == 'footer-elapsed' and path in (['terminal-cell-slot', 5], ['terminal-cell-slot', 6]):
+            footers.add(path[1])
+            row = dict(row, path=['terminal-cell-slot', path[1] - 1])
+        restored.append(row)
+    if spinner != 1 or footers != {5, 6}:
+        raise AssertionError('markdown progress requires exactly one slot and two footer shifts')
+    return restored
+
+
+def verify_markdown_progress_ledger(previous, actual, staged, previous_identity):
+    """Reconstruct the old C42 lock from current replay without replaying its stale ledger."""
+    from parity import golden, run
+    case_id = 'C42.markdown-progress'
+    old = golden.cache_path({'reference_commit': previous_identity['reference_commit']}) / case_id
+    documents, ledger, captured = run.read_frozen_case(old)
+    policies = json.loads(documents['artifact-policies.json'])
+    if case_lock(captured['normalized'], policies, ledger) != previous:
+        raise AssertionError('markdown progress original frozen lock differs')
+    replay = json.loads(documents['replay.json'])
+    replayed, replay_policies, replay_ledger = run.replay_case(captured['raw'], replay)
+    run.account_raw(captured['raw'], replayed, replay_policies, replay)
+    if replayed != captured['normalized'] or replay_policies != policies:
+        raise AssertionError('markdown progress old raw replay changes normalized bytes or policies')
+    if case_lock(replayed, replay_policies, inverse_markdown_progress_ledger(replay_ledger)) != previous:
+        raise AssertionError('markdown progress old contract reconstruction differs')
+    _, staged_ledger, staged_capture = run.read_frozen_case(staged)
+    if staged_capture['normalized'] != captured['normalized']:
+        raise AssertionError('markdown progress staged normalized bytes differ')
+    if case_lock(staged_capture['normalized'], policies, staged_ledger) != actual:
+        raise AssertionError('markdown progress staged lock differs')
+    if case_lock(replayed, policies, replay_ledger) != actual:
+        raise AssertionError('markdown progress staged contract differs from old raw replay')
+    if case_lock(replayed, policies, inverse_markdown_progress_ledger(staged_ledger)) != previous:
+        raise AssertionError('markdown progress staged contract reconstruction differs')
+    return dict(old_raw_replay_verified=True, normalized_bytes_unchanged=True,
+                original_contract_reconstructed=True,
+                added_sites=[['invoke-001.screens.json', ['terminal-cell-slot', 4], 'terminal-progress-spinner', 1]],
+                reindexed_footer_slots={'5': 4, '6': 5})
+
+
+def rust_shell_timing_sites(case_id):
+    """Enumerate the reviewed embedded shell timing sites, not arbitrary duration paths."""
+    match = re.fullmatch(r'W39\.shell-(511|512|513)-plan-([01])', case_id)
+    if not match and case_id != 'W47.projection':
+        raise AssertionError('unreviewed Rust shell timing case: ' + case_id)
+    index, trace = (2, 'trace-2.jsonl') if match else (4, 'trace-3.jsonl')
+    handoff = ['handoff', index, 'shell', 'duration_ms']
+    request = ['input', 0, 'content', 0, 'text', *handoff]
+    history = ['history', 0, 'user', 'text', *handoff]
+    sites = [('cache-input', history), ('http-3.body', request),
+             (trace, ['data', *history]), (trace, ['data', 'initial_history', index, 'shell', 'duration_ms']),
+             (trace, ['data', 'request_body', 'json', *request]), (trace + '.captured-request', request)]
+    if match:
+        evidence = ['state', 'json', 'recent_evidence', 1 - int(match[2]), 'shell', 'duration_ms']
+        sites += [('generation-request-source', request), ('http-2.body', evidence), ('packet-source', evidence)]
+    else:
+        sites += [('handoff-source', [index, 'shell', 'duration_ms']), ('switch-request-source', request)]
+    return [[artifact, path, 'duration-ms', 1] for artifact, path in sites]
+
+
+def verify_rust_shell_timing(case_id, previous, actual, staged):
+    """Replay both pins and permit only reviewed zero/no-op ledger sites, never output changes."""
+    from parity import golden, run
+    old = golden.cache_path({'reference_commit': REPIN_REFERENCE}) / case_id
+    if previous['artifacts'] != actual['artifacts'] or previous['normalized_sha256'] != actual['normalized_sha256']:
+        raise AssertionError('Rust shell timing normalized artifacts differ: ' + case_id)
+    if frozen_lock(old) != previous:
+        raise AssertionError('Rust shell timing old replay differs: ' + case_id)
+    contracts, normalized = [], []
+    for directory in (old, staged):
+        _, ledger, captured = run.read_frozen_case(directory)
+        normalized.append(captured['normalized'])
+        contracts.append(ledger_contract(ledger, captured['normalized']))
+    if normalized[0] != normalized[1]:
+        raise AssertionError('Rust shell timing normalized bytes differ: ' + case_id)
+    allowed = rust_shell_timing_sites(case_id)
+    stripped = [dict(contract, sites=[row for row in contract['sites'] if row not in allowed])
+                for contract in contracts]
+    if stripped[0] != stripped[1]:
+        raise AssertionError('Rust shell timing unreviewed ledger change: ' + case_id)
+    return dict(old_full_replay_verified=True, normalized_bytes_unchanged=True,
+                removed_sites=[row for row in contracts[0]['sites'] if row not in contracts[1]['sites']],
+                added_sites=[row for row in contracts[1]['sites'] if row not in contracts[0]['sites']])
+
+
+def verify_rust_pending_inventory(previous, current):
+    """Keep the ten declared pending leaves and their metadata exactly frozen."""
+    fields = ('id', 'description', 'comparison', 'slow', 'pending', 'platforms', 'exclusive')
+    pending = []
+    for inventory in (previous, current):
+        rows = inventory.get('cases')
+        if (inventory.get('metadata_fields') != list(fields) or not isinstance(rows, list)
+                or any(not isinstance(row, dict) or not set(fields) <= row.keys() for row in rows)
+                or len({row['id'] for row in rows}) != len(rows)
+                or inventory.get('metadata_sha256') != digest([{key: row[key] for key in fields} for row in rows])):
+            raise AssertionError('Rust re-pin inventory metadata digest differs')
+        pending.append({row['id']: row for row in rows if row.get('pending') or row.get('status') == 'pending'})
+    expected = {'T36.before-start'} | {'W54.' + lane + '.cancel-body' for lane in
+        ('openai', 'anthropic', 'proxy', 'chatgpt', 'jev', 'auth-discovery', 'auth-refresh', 'auth-models', 'auth-revoke')}
+    if set(pending[0]) != expected or pending[0] != pending[1]:
+        raise AssertionError('Rust re-pin must preserve the ten pending leaves')
 
 
 def pending_repin_metadata(staging, cases, pending, reference, new_cases):

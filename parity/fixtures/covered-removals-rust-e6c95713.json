@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "reference_commit": "e6c9571396af1656c48a089e06b293165828e0c0",
+  "previous_reference_commits": [
+    "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
+    "e6c9571396af1656c48a089e06b293165828e0c0"
+  ],
+  "reason": "Launch snapshot time-zone collection ignores read-only/plan authority; keep every authority combination in UTC, every zone in every lane, and all moved-root combinations where authority does interact. Remove one separately named identical timeout workload.",
+  "removed": {
+    "W08.America-Los_Angeles-ro0-plan1": ["W08.America-Los_Angeles-ro0-plan0", "W08.UTC-ro0-plan1"],
+    "W08.America-Los_Angeles-ro0-plan1-proxy": ["W08.America-Los_Angeles-ro0-plan0-proxy", "W08.UTC-ro0-plan1-proxy"],
+    "W08.America-Los_Angeles-ro0-plan1-anthropic": ["W08.America-Los_Angeles-ro0-plan0-anthropic", "W08.UTC-ro0-plan1-anthropic"],
+    "W08.America-Los_Angeles-ro1-plan0": ["W08.America-Los_Angeles-ro0-plan0", "W08.UTC-ro1-plan0"],
+    "W08.America-Los_Angeles-ro1-plan0-proxy": ["W08.America-Los_Angeles-ro0-plan0-proxy", "W08.UTC-ro1-plan0-proxy"],
+    "W08.America-Los_Angeles-ro1-plan0-anthropic": ["W08.America-Los_Angeles-ro0-plan0-anthropic", "W08.UTC-ro1-plan0-anthropic"],
+    "W08.America-Los_Angeles-ro1-plan1": ["W08.America-Los_Angeles-ro0-plan0", "W08.UTC-ro1-plan1"],
+    "W08.America-Los_Angeles-ro1-plan1-proxy": ["W08.America-Los_Angeles-ro0-plan0-proxy", "W08.UTC-ro1-plan1-proxy"],
+    "W08.America-Los_Angeles-ro1-plan1-anthropic": ["W08.America-Los_Angeles-ro0-plan0-anthropic", "W08.UTC-ro1-plan1-anthropic"],
+    "W08.Etc-GMT+7-ro0-plan1": ["W08.Etc-GMT+7-ro0-plan0", "W08.UTC-ro0-plan1"],
+    "W08.Etc-GMT+7-ro0-plan1-proxy": ["W08.Etc-GMT+7-ro0-plan0-proxy", "W08.UTC-ro0-plan1-proxy"],
+    "W08.Etc-GMT+7-ro0-plan1-anthropic": ["W08.Etc-GMT+7-ro0-plan0-anthropic", "W08.UTC-ro0-plan1-anthropic"],
+    "W08.Etc-GMT+7-ro1-plan0": ["W08.Etc-GMT+7-ro0-plan0", "W08.UTC-ro1-plan0"],
+    "W08.Etc-GMT+7-ro1-plan0-proxy": ["W08.Etc-GMT+7-ro0-plan0-proxy", "W08.UTC-ro1-plan0-proxy"],
+    "W08.Etc-GMT+7-ro1-plan0-anthropic": ["W08.Etc-GMT+7-ro0-plan0-anthropic", "W08.UTC-ro1-plan0-anthropic"],
+    "W08.Etc-GMT+7-ro1-plan1": ["W08.Etc-GMT+7-ro0-plan0", "W08.UTC-ro1-plan1"],
+    "W08.Etc-GMT+7-ro1-plan1-proxy": ["W08.Etc-GMT+7-ro0-plan0-proxy", "W08.UTC-ro1-plan1-proxy"],
+    "W08.Etc-GMT+7-ro1-plan1-anthropic": ["W08.Etc-GMT+7-ro0-plan0-anthropic", "W08.UTC-ro1-plan1-anthropic"],
+    "T34.redirected-group": ["T32.timeout"]
+  }
+}

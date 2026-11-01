@@ -617,13 +617,15 @@ def queued_delivery(ctx):
     s.tools('root', ('spawn', 'spawn', spawn('worker', 'worker')))
     s.done('worker', text='queue zero', barrier='queue-held')
     s.tools('root', ('one', 'send', {'name': 'worker', 'message': 'agent-case:one'}),
-            ('two', 'send', {'name': 'worker', 'message': 'agent-case:two'}))
+            ('two', 'send', {'name': 'worker', 'message': 'agent-case:two'}), barrier='queue-ready')
     s.done('one', text='queue one')
     s.done('two', text='queue two')
     s.tools('root', ('wait', 'wait', {'ids': ['worker']}))
     s.done('root')
     def control(_):
-        s.wait('worker'); s.wait('root', 3)
+        s.wait('worker')
+        ctx.server.release('queue-ready')
+        s.wait('root', 3)
         ctx.server.release('queue-held')
     s.run(control)
     results = assert_delivery(ctx, ['t1', 't1', 't1'])

@@ -2,14 +2,21 @@
 
 Python 3.11+ standard library only; the supplied executable is the boundary. Tests use
 loopback providers and fake credentials, never live APIs or Go internals.
-All four areas have executable fixtures. The reference pin is `2ab234f7`
-(#191 terminal fixes, #192 compaction shortening, #193 race fixtures).
-Current Linux re-pin and #139 acceptance evidence: [`repin-2ab234f7-linux.md`](repin-2ab234f7-linux.md).
-Historical proofs below are not new-pin acceptance.
+All four areas have executable fixtures. **Rust is the reference at `e6c95713`;
+Go is frozen.** Current re-pin, timings, Go dependency dispositions and Mac hand-off:
+[`repin-rust-e6c95713.md`](repin-rust-e6c95713.md).
+**Linux: three clean full runs, each 4,111 passed /0 failed /10 pending.**
+Median wall time is **390.90s**, down from **845.05s** at 12 jobs; Darwin remains
+capture-required. The inventory is 4,121 leaves (was 4,140), with no current
+machine-wide-exclusive leaves. Offline archive builds are byte-reproducible.
+The `2ab234f7` Go acceptance evidence in
+[`repin-2ab234f7-linux.md`](repin-2ab234f7-linux.md) and proofs below are historical,
+not acceptance of the Rust pin.
 
 ## Area 4 — agents and checkpoints
 
-**Linux comparison passed: 4,111 runnable /0 failed /29 pending.** Retained raw
+The following comparison-repair results predate this Rust re-pin.
+**Historical Linux comparison: 4,111 runnable /0 failed /29 pending.** Retained raw
 replay published coherent locks and 202 complete Linux samples; C23/C24/C25 each
 have one sample. A28's 31 healthy summaries follow intentional pinned behavior
 beyond eight and thirty. The comparison repair adds independently witnessed
@@ -19,13 +26,16 @@ one full run, mutations 31/34 and three requested 17-case repeat rounds passed
 at 12 jobs. See [`agents-comparison-repair.md`](agents-comparison-repair.md) for
 the exact ordered proof, negative tests, reports and preserved prior failures.
 
-The live declarations have **4,140 leaves: 4,111 runnable /29 pending**, including
+The live declarations have **4,121 leaves: 4,111 runnable /10 pending**, including
 321 A leaves (all runnable) and all 31 formerly pending agent/checkpoint
 cross-area leaves. Native/text/selected context, authority, budgets, effects,
 delivery, GC/recall/compaction, canonical v2 fixed/live imports and recovery, and
-protected-Go v1 migration use executable boundary evidence. Cross-imports run
-the supplied executable and independently verified protected Go reference in
-both directions. The root-independent v1 gob is fixed, never regenerated per lane.
+frozen-Go v1 migration use executable boundary evidence. Cross-imports retain
+the supplied executable and a separately hash-verified frozen Go `2ab234f7` peer
+in both directions, independent of the new Rust golden reference. The old peer
+is read-only; `PARITY_GO_CHECKPOINT_REFERENCE` can supply the same pinned binary
+when its old cache is absent. The fixed Go-written v1 gob and canonical v2
+contract inputs remain fixtures, never regenerated per lane.
 
 **Darwin capture and acceptance pending on the Mac.** Existing Darwin lock entries,
 sample bundles and binary hash remain byte-identical. Darwin/arm64 fails closed
@@ -206,15 +216,17 @@ The plain candidate is built independently from a separate archive.
 
 | Item | Value |
 |---|---|
-| Commit | `2ab234f79d1d42ba8a969ba3f4103eeeba717967` (#191/#192/#193) |
-| SHA-256 | `9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06` |
-| Build | `git archive 2ab234f79d1d42ba8a969ba3f4103eeeba717967`, then `GOPROXY=off GOTOOLCHAIN=local go build -trimpath -buildvcs=false -o reference ./cmd/reagent` in the independently extracted archive |
-| Go | `go version go1.23.3 linux/amd64` |
+| Commit | `e6c9571396af1656c48a089e06b293165828e0c0` (#211/#212) |
+| SHA-256 | `5fb5c0cd1abba94bda31804ef14f9581c99f1d277a56ebda47b5e9267698cd84` |
+| Build | `git archive <commit>`, then `cd rust && cargo build --release --locked --offline`; isolated environment, archive remapped to `/reagent`, Cargo cache to `/cargo` |
+| Rust toolchain | `RUSTUP_TOOLCHAIN=1.99.1`; `cargo 1.99.1 (5f94df478 2026-08-27)`; `rustc 1.99.1 (58cf8f9c3 2026-10-13)` |
 | Python | `Python 3.11.5` |
 
-Regeneration requires the exact Go/Python identities above and locally available
-Go module dependencies: the build uses `GOPROXY=off`, never a provider API.
-A verified cache can be compared without rebuilding Go. **For #141, the exact
+Regeneration requires the exact Rust/Python identities above and the existing
+`~/.cargo` registry cache: Cargo uses `--offline`, never a provider API.
+A verified cache can be compared without rebuilding Rust. Go mutation testing and
+Go instrumented coverage are explicitly disabled for this Rust reference;
+their implementations and historical reports remain for a Rust-port follow-up. **For #141, the exact
 Python 3.11.5 interpreter is a hard host prerequisite**, not just its version:
 Linux fixtures deliberately retain `sys.executable` in tool argv and display.
 The Linux identity's `python_executable` records the resolved path
@@ -229,16 +241,17 @@ Use this environment for **every** parity command, including mutations and tests
 
 ```sh
 export PATH=/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin:/usr/local/bin:/usr/bin:/bin
-export GOPROXY=off GOTOOLCHAIN=local GOCACHE=/home/mihir/.cache/go-build
+export RUSTUP_TOOLCHAIN=1.99.1
+export PATH="$HOME/.cargo/bin:$PATH"
 export REAGENT_WORKSPACE_GIT_TIMEOUT=60
 python3 --version  # Python 3.11.5
 python3 -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve())'
 ```
 
-When isolating `XDG_CACHE_HOME` for an empty parity cache, keep that explicit
-GOCACHE: the archive-built protected hash was established with this Go cache.
-The prior environment-drift failures and retained evidence are documented in
-`repin-2ab234f7-linux.md`; they are not allowlist exceptions.
+Every parity/golden command on this Linux machine must run through
+`flock /tmp/reagent-parity.lock`, with `UNIT=0 </dev/null` for parity execution.
+Do not change or remove the old `2ab234f7` cache: other sessions still use it.
+The prior Go environment-drift failures in `repin-2ab234f7-linux.md` are historical.
 
 `7e0408f` and `f37aa5a` observations were exploratory, never golden inputs.
 #160's null-final and trace UTF-8 repairs and #161's digits-only Retry-After
@@ -263,21 +276,22 @@ most twelve (six on an eight-core Mac); reference captures keep at most six beca
 they publish protected locks. Raw replay and lock derivation run no binaries, so
 they use every core but two. Slow leaves start first within each phase; reports
 keep inventory order. `UNIT=0` skips `make parity`'s unit preflight for inner
-loops; acceptance runs keep it. Actual case isolation is detected in shared fixture setup, not a
-handwritten list: Git recorder installation or fixture Git-repository discovery
-(including later switch targets and configured GIT_DIR) promotes the case to
-machine-wide exclusive ownership through cleanup. Other cases share the workload
-gate, including PTYs. Reports record detected `exclusive`; the audited Case field
-is only an initial scheduling hint, currently false for every real case.
+loops; this campaign runs the complete unit gate separately. Git recorders,
+repositories (including switch targets), settings, logs and Git configuration are
+case-local and run in the shared pool. The existing 60s startup-probe ceiling
+remains unchanged. No current leaf requires machine-wide exclusivity; explicit
+`Case.exclusive` still owns the workload gate through cleanup. Reports record
+actual `exclusive` ownership.
 
 The actual user's `~/.cache/reagent-parity/capture.lock` remains independent of
 workspace, pin, HOME and XDG overrides. Capture/cache publication owns it
 exclusively; read-only comparison invocations share it, so a targeted repeat may
 run beside a full comparison. Comparisons never regenerate or stamp a cache;
 prepare an absent/stale cache with `make parity-golden` first. A separate stable
-`workload.lock` lets fixture-detected Git cases exclude all other case workloads
-across both invocations. Promotion drops shared ownership before waiting for
-exclusive ownership, avoiding simultaneous-upgrade deadlocks. Persistent lock
+`workload.lock` retains explicit exclusive-case protection across invocations,
+without automatically promoting Git fixtures. On this Linux machine the campaign
+also serializes every parity/golden invocation with `/tmp/reagent-parity.lock`,
+so it does not overlap another session's old-pin run. Persistent lock
 inodes are never unlinked; the OS releases ownership on exit or process death. A complete cache replay is stamped (`verified.json`) with a fingerprint
 of every cached file's path, size, modification time, inode and mode, so later
 runs skip the replay while nothing in the cache has changed. They still check the
@@ -1248,7 +1262,10 @@ go test ./...
 ok  	github.com/satmihir/re-agent/internal/reagent	(cached)
 ```
 
-### Detection-driven isolation and targeted stress preparation
+### Historical detection-driven isolation and targeted stress preparation
+
+The automatic promotion described here was superseded by the measured Rust re-pin;
+see `repin-rust-e6c95713.md`. The following is historical evidence.
 
 The latest repairs are implemented and offline-tested, but not yet executable-
 validated. Shared fixture setup detects Git recorder installation and fixture

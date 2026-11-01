@@ -47,7 +47,6 @@ def _commit(ctx, message):
 
 
 def _setup(ctx, algorithm='sha1', remote=False, feature=False, pr=None):
-    ctx.require_exclusive()
     ctx.git_real = shutil.which('git', path=ctx.env['PATH'])
     assert ctx.git_real
     ctx.git_commands = []
@@ -740,7 +739,7 @@ def _rebase_barrier(ctx, variant):
         remote_tip = _git(ctx, 'commit-tree', _git(ctx, 'rev-parse', 'HEAD^{tree}'), '-p', before, '-m', 'concurrent tip')
         # Transfer the real object without updating the feature ref yet.
         _git(ctx, 'push', '-q', 'origin', remote_tip + ':refs/heads/transfer')
-        fds = _barrier(ctx, ['push', '-q', '--force-with-lease', 'origin', 'feature/parity'])
+        fds = _barrier(ctx, ['push', '-q', '--force-with-lease=feature/parity:' + before, 'origin', 'feature/parity'])
 
         def control(process):
             assert select.select([fds[0]], [], [], 20)[0], 'lease barrier not reached'
@@ -763,7 +762,7 @@ def _rebase_barrier(ctx, variant):
     else:
         assert _git(ctx, '--git-dir=' + str(ctx.git_remote), 'rev-parse', 'refs/heads/feature/parity') == remote_tip
         assert _git(ctx, 'merge-base', 'HEAD', latest) == latest
-        assert out['data']['steps'][-1]['argv'] == ['git', 'push', '-q', '--force-with-lease', 'origin', 'feature/parity']
+        assert out['data']['steps'][-1]['argv'] == ['git', 'push', '-q', '--force-with-lease=feature/parity:' + before, 'origin', 'feature/parity']
     _evidence(ctx, [out])
 
 

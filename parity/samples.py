@@ -63,7 +63,8 @@ SELECTIONS = {
     'W05.live-mapping-anthropic-ro1-plan1': 'Complete logical-to-provider tool declarations with both authority modes enabled.',
     'W06.at-limit': 'Instruction loading at the exact accepted size boundary.',
     'W07.gpt-6-luna-crlf': 'Lossless CRLF escaping, which is covered by a deliberate mutation.',
-    'W08.America-Los_Angeles-ro0-plan1': 'Independent local snapshot date plus plan content ordering.',
+    'W08.America-Los_Angeles-ro0-plan0': 'Independent non-UTC snapshot dates and preview/live identity.',
+    'W08.UTC-ro0-plan1': 'Plan content ordering, independent of local snapshot time.',
     'W09.claude-haiku-4-5-ascii-at': 'Full 10 MiB boundary payload, not an abbreviated excerpt.',
     'W10.base-proxy': 'Independent cache-key reconstruction through the proxy adapter.',
     'W11.compaction': 'Cache prefix identity across history compaction.',
@@ -224,13 +225,18 @@ SELECTIONS.update({
 
 
 RETIRED_SELECTIONS = {
+    'W08.America-Los_Angeles-ro0-plan1': 'Independent local snapshot date plus plan content ordering.',
     'W54.anthropic.cancel-body': 'Narrow fixture-input delivery projection, preserving every Go output.',
 }
 
-# These bundles predate the pending body-cancellation scope; they are not current evidence.
+# Retired bundles retain their original bytes, not current executable coverage.
 RETIRED_BUNDLES = {
-    'darwin/arm64': {'W54.anthropic.cancel-body': 'ac4f3fd58f3c6e181b330a9dc6315c7712d05256988edf2381349a0677472e33'},
-    'linux/amd64': {'W54.anthropic.cancel-body': '6f54bd003863ada7d2403e6a1c16aeff8c704179ce65e3ba2516aaac26e03cc1'},
+    'darwin/arm64': {
+        'W08.America-Los_Angeles-ro0-plan1': '25ce4da9aeef846e5ccdb8e89e6e51d1873284e186072195aec4844eddc2cf2a',
+        'W54.anthropic.cancel-body': 'ac4f3fd58f3c6e181b330a9dc6315c7712d05256988edf2381349a0677472e33'},
+    'linux/amd64': {
+        'W08.America-Los_Angeles-ro0-plan1': '1bd1b3237124d4abcaa6818fa3c7f3b4e825bd287c07743af065a2cf055348a6',
+        'W54.anthropic.cancel-body': '6f54bd003863ada7d2403e6a1c16aeff8c704179ce65e3ba2516aaac26e03cc1'},
 }
 
 
@@ -298,7 +304,9 @@ def historical_rows(directory):
         if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise HarnessError('historical sample identity violation: ' + case_id)
         rows.append({'id': case_id, 'path': path.name, 'bundle_sha256': expected,
-                     'reason': 'Retained historical bytes; body cancellation is pending, not current reference evidence.'})
+                     'reason': ('Retained historical bytes; superseded by covering-set cases, not current reference evidence.'
+                                if case_id.startswith('W08.') else
+                                'Retained historical bytes; body cancellation is pending, not current reference evidence.')})
     return rows
 
 

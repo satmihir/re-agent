@@ -426,9 +426,10 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
         assert match['elapsed'] == f'{seconds:.1f}' and configured <= int(whole) * 1000 + int(tenth) * 100 <= configured + 2000, 'terminal exec timeout differs from traced duration'
         slot(match.start('elapsed'), match['elapsed'], '0.0', 'terminal-exec-timeout-elapsed')
 
-    if Path(ctx.root).name in ('C34.typeahead-queue-long-reply', 'C35.resize-during-turn'):
+    if Path(ctx.root).name in ('C34.typeahead-queue-long-reply', 'C35.resize-during-turn', 'C42.markdown-progress'):
+        markdown = Path(ctx.root).name == 'C42.markdown-progress'
         progress = list(re.finditer(r'(?m)(?:^|\n|\x1b\[[1-9][0-9]*;1H)  (?P<glyph>[' + _SPINNER + r']) waiting for (?P<model>[a-zA-Z0-9.-]+) · API key · step (?P<step>[1-9][0-9]*)(?: of (?P<limit>[1-9][0-9]*))?(?=$|\n|\x1b)', text))
-        labels = {'queued-before-reply'}
+        labels = {'markdown-in-progress'} if markdown else {'queued-before-reply'}
         if Path(ctx.root).name == 'C35.resize-during-turn':
             labels.add('resized-retained-input')
         shots = [shot for shot in metadata['snapshots'] if shot['label'] in labels]
@@ -443,7 +444,7 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
             candidates = [match for match in progress if origins[match.start('glyph')] < shot['offset']]
             assert len(waiting) == 1 and candidates, 'terminal progress frame lacks its exact printed owner'
             match = candidates[-1]
-            held = [header for header in headers if header['data'].get('prompt') == 'start']
+            held = [header for header in headers if header['data'].get('prompt') == ('check progress' if markdown else 'start')]
             assert len(held) == 1, 'terminal progress lacks held-turn header'
             requests = [event for event in events if event.get('type') == 'model.requested'
                         and event.get('run_id') == held[0]['run_id'] and event.get('step') == int(match['step'])
@@ -475,6 +476,8 @@ def _slots(ctx, normal, invocation, index, raw, metadata, traces):
             assert screen.col == 2 and row >= 3, 'terminal spinner is not at progress cell'
             assert screen.line(row - 2) == '─' * screen.cols and screen.line(row - 3).startswith('❯'), 'terminal spinner lacks prompt frame'
             assert screen.line(row - 1).strip().split(' · ')[0] == match['model'] + ' / low', 'terminal spinner status model differs'
+            if markdown:
+                assert match['step'] == '2' and screen.line(row - 3).rstrip() == '❯ follow-up', 'terminal Markdown progress lacks held continuation/typeahead'
             state = shot['state']
             assert ''.join(cell['text'] for cell in state['grid'][row]).startswith('  ' + match['glyph'] + ' waiting for ' + match['model'] + ' · API key · step ' + match['step']), 'terminal spinner does not survive at queued progress cell'
             if position not in marked:

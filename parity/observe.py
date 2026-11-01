@@ -170,6 +170,9 @@ def string_spans(raw, before, after):
         return raw
     old, new = before.encode('utf-8'), after.encode('utf-8')
     offset = 0
+    from .observe_cli_commands import PREAMBLE
+    if before.startswith(PREAMBLE) and after.startswith(PREAMBLE):
+        offset = len(PREAMBLE.encode())
     handoff = 'Historical conversation supplied by re:agent, encoded as JSON records below.'
     if before.startswith(handoff) and after.startswith(handoff):
         prefix, _ = before.rsplit('\n', 1)

@@ -1,7 +1,9 @@
-"""Fixed checkpoint byte oracles and offline protected-Go/candidate imports.
+"""Fixed Go-written checkpoint oracles and offline reference/candidate imports.
 
-The runner supplies the identity-verified protected Go binary separately from
-its candidate. V1 uses one checked-in, root-independent gob fixture; no helper
+Cross-imports retain an independently hash-verified, frozen Go peer, separate
+from both the supplied candidate and the Rust golden reference. The old cache
+is read-only; an explicit binary override supports hosts without that cache.
+V1 uses one checked-in, root-independent gob fixture; no helper
 or production executable is built during a lane. Raw v2 checkpoints are validated
 before recording; exact-byte equality is asserted within the same absolute
 workspace. Cross-lane artifacts are N because their launch roots differ.
@@ -34,9 +36,17 @@ def _raw(value):
 
 
 def _reference(ctx):
-    binary = Path(getattr(ctx, 'reference_binary', ctx.binary)).resolve()
-    assert binary.is_file() and os.access(binary, os.X_OK), 'protected Go binary required: ' + str(binary)
-    return str(binary)
+    from parity import golden, identity
+    from parity.run import HarnessError
+    peer = json.loads((ROOT / 'parity/manifest.json').read_bytes())['go_checkpoint_reference']
+    selected = peer['platforms'][identity.current_platform()]
+    binary = Path(os.environ.get('PARITY_GO_CHECKPOINT_REFERENCE',
+                                 str(golden.cache_path(peer) / 'reference')))
+    if (binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK)
+            or hashlib.sha256(binary.read_bytes()).hexdigest() != selected['reference_binary_sha256']):
+        raise HarnessError('frozen Go checkpoint peer missing or hash mismatch: ' + str(binary)
+                           + '; supply the pinned binary with PARITY_GO_CHECKPOINT_REFERENCE')
+    return str(binary.resolve())
 
 
 @contextmanager
@@ -236,7 +246,7 @@ def v1_migration(ctx):
     assert opaque(state['history'][0]['user']['workspace']) == b' { "date" : "2026-10-14" } '
     _rewrite(ctx, reference)
     repeated, _ = _saved(ctx, 'go-migrated-repeat-v2')
-    assert repeated == migrated, 'Go migration is not stable after first save'
+    assert repeated == migrated, 'frozen Go v1 migration is not stable after first save'
     assert not ctx.server.requests, 'migration replayed a model request'
     expect(ctx, 'imports migrated continuation')
     _resume(ctx, ctx.binary, 'imports after migration\n/exit\n')

@@ -471,6 +471,20 @@ class MutationTests(unittest.TestCase):
                         self.assertFalse(destination.exists())
                     check.assert_not_called()
 
+    def test_rust_reference_disables_go_mutations_before_any_build(self):
+        with patch.object(mutate.json, 'loads', side_effect=[self.manifest,
+                dict(reference_language='rust', goldens_frozen=True)]), \
+                patch.object(mutate, 'archive_reference') as archive, \
+                patch('sys.stderr', new_callable=io.StringIO) as stderr:
+            destination = self.root / 'disabled-rust'
+            with self.assertRaises(SystemExit) as result:
+                mutate.main(['--bin', sys.executable, '--reference-tree', str(mutate.SUITE),
+                             '--artifacts', str(destination)])
+            self.assertEqual(result.exception.code, 2)
+            self.assertIn('Go mutation testing is disabled for the Rust reference', stderr.getvalue())
+            archive.assert_not_called()
+            self.assertFalse(destination.exists())
+
     def test_reference_binary_must_match_selected_lane_not_the_other_platform(self):
         digest = mutate.sha256(Path(sys.executable).resolve().read_bytes())
         for matches in (False, True):

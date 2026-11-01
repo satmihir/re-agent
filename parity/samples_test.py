@@ -24,6 +24,19 @@ class SampleTests(unittest.TestCase):
         self.assertEqual({case_id[:3] for case_id in SELECTIONS},
                          {case.id[:3] for case in cases.values() if not case.pending})
 
+    def test_removed_snapshot_sample_is_frozen_and_replaced_by_both_coverage_targets(self):
+        from unittest.mock import patch
+        from parity.samples import historical_rows
+        suite = Path(__file__).resolve().parent
+        self.assertNotIn('W08.America-Los_Angeles-ro0-plan1', SELECTIONS)
+        self.assertIn('W08.America-Los_Angeles-ro0-plan0', SELECTIONS)
+        self.assertIn('W08.UTC-ro0-plan1', SELECTIONS)
+        for platform in ('darwin/arm64', 'linux/amd64'):
+            directory = suite / 'samples' / ('linux' if platform.startswith('linux/') else '')
+            with patch('parity.samples.current_platform', return_value=platform):
+                rows = {row['id']: row for row in historical_rows(directory)}
+                self.assertIn('covering-set', rows['W08.America-Los_Angeles-ro0-plan1']['reason'])
+
     def test_bundle_preserves_all_bytes_and_is_deterministic(self):
         artifacts = {'native.bin': b'\xff\xfe\x00', 'nested/request.json': b'{ "z":1, "z":1.0 }\r\n', 'empty': b''}
         policies = {'native.bin': 'B', 'nested/request.json': 'N', 'empty': 'B'}
@@ -54,7 +67,10 @@ class SampleTests(unittest.TestCase):
         selected = {row['id'] for row in index['cases']}
         self.assertEqual(len(selected), len(index['cases']))
         # Each platform owns its captured coverage; Linux cannot add Darwin evidence.
-        self.assertEqual(selected, (SELECTIONS.keys() | RETIRED_SELECTIONS.keys()) & locks.keys())
+        expected = (SELECTIONS.keys() | RETIRED_SELECTIONS.keys()) & locks.keys()
+        if 'W08.America-Los_Angeles-ro0-plan1' in locks:
+            expected -= {'W08.America-Los_Angeles-ro0-plan0', 'W08.UTC-ro0-plan1'}
+        self.assertEqual(selected, expected)
         captured_families = {case_id[:3] for case_id in locks}
         self.assertEqual({case_id[:3] for case_id in selected}, captured_families)
         runnable = {case_id for case_id, case in cases.items() if not case['pending']}
@@ -79,7 +95,8 @@ class SampleTests(unittest.TestCase):
             from unittest.mock import patch
             from parity.samples import historical_rows
             with patch('parity.samples.current_platform', return_value=platform + ('/amd64' if platform == 'linux' else '/arm64')):
-                self.assertEqual(historical, historical_rows(directory))
+                self.assertEqual(historical, [row for row in historical_rows(directory)
+                                               if row['id'] not in selected])
         for row in index['cases']:
             with self.subTest(case=row['id']):
                 raw = (directory / row['path']).read_bytes()
@@ -90,9 +107,12 @@ class SampleTests(unittest.TestCase):
                                  for item in archive.getmembers() if item.name.startswith('artifacts/')}
                 self.assertEqual(metadata['id'], row['id'])
                 self.assertEqual(artifacts.keys(), metadata['artifact_policies'].keys())
-                if row['id'] in RETIRED_SELECTIONS:
+                if row['id'] == 'W54.anthropic.cancel-body':
                     self.assertEqual(row['description'],
                         'SIGINT after headers and a flushed body chunk; refresh rotation survives')
+                elif row['id'] == 'W08.America-Los_Angeles-ro0-plan1':
+                    self.assertEqual(row['description'],
+                                     'Unchanged preview/live body and independent local snapshot time')
                 else:
                     self.assertEqual(row['description'], cases[row['id']]['description'])
                 self.assertEqual(row['why'], (SELECTIONS | RETIRED_SELECTIONS)[row['id']])

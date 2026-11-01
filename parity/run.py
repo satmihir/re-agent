@@ -149,21 +149,14 @@ class Context:
         self._process_guard = CaseProcesses(self.root)
 
     def require_exclusive(self):
-        """Promote before installing a recorder or collecting deadline-bound Git evidence."""
+        """Promote only for an explicit case requirement needing machine-wide isolation."""
         if self._workload is not None:
             self._workload.require_exclusive()
         self.exclusive = True
 
-    def prepare_startup(self, env=None):
-        """Detect fixture Git evidence, including later workspace-switch targets."""
-        environment = self.env if env is None else dict(self.env, **env)
-        if not self.exclusive and (environment.get('GIT_DIR') or next(self.root.rglob('.git'), None) is not None):
-            self.require_exclusive()
-
     @property
     def server(self):
         """Lazily start this case's recording provider."""
-        self.prepare_startup()
         if self._server is None:
             self._server = Provider()
             base = self._server.url
@@ -207,7 +200,6 @@ class Context:
         prefix = "invoke-%03d" % index
         trace = self.artifacts / (prefix + (".trace.jsonl" if args[:1] == ["run"] else ".traces"))
         if args[:1] in (["run"], ["chat"]):
-            self.prepare_startup(env)
             self.server  # Configure every active destination before launching a client.
             managed = ("--workspace", "--trace-file", "--trace-dir")
             supplied = {}
@@ -1425,6 +1417,9 @@ def _main(argv=None):
             raise HarnessError("--artifacts must be empty")
         artifacts.mkdir(parents=True, exist_ok=True)
         coverage = os.environ.get("GOCOVERDIR")
+        if coverage and manifest.get("reference_language") == "rust":
+            raise HarnessError("Go instrumented coverage is disabled for the Rust reference; "
+                               "follow-up: add Rust coverage (historical Go support retained)")
         if coverage:
             coverage = str(Path(coverage).absolute() / artifacts.name)
             guard_artifacts(coverage)

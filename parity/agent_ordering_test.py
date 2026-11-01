@@ -12,7 +12,7 @@ from unittest.mock import patch
 from urllib.request import Request, urlopen
 
 from parity.agent_ordering import ChildReply, ordering
-from parity.cases.agents_effects import Script, assert_finish_order, lifecycle, spawn
+from parity.cases.agents_effects import Script, assert_finish_order, lifecycle, queued_delivery, spawn
 from parity.cases.agents_context import queue
 from parity.provider import Provider, Response
 
@@ -42,6 +42,37 @@ class AgentOrderingTests(unittest.TestCase):
                 child = server._scripts[-1][1].barrier
                 self.assertIsInstance(child, ChildReply)
                 self.assertIs(child.explicit, explicit)
+
+    def test_queued_sends_wait_for_child_step_before_snapshot_and_keep_child_held(self):
+        with Provider() as server:
+            ctx = SimpleNamespace(server=server)
+            seen = []
+            def run(script, controller):
+                root = [response for (path, marker, model), response in server._scripts
+                        if marker is script.markers['root']]
+                self.assertEqual(root[1].barrier, 'queue-ready')
+                def wait(who, count=1):
+                    seen.append((who, count))
+                    self.assertFalse(server.barrier('queue-held').is_set())
+                    self.assertEqual(server.barrier('queue-ready').is_set(), who == 'root')
+                with patch.object(script, 'wait', side_effect=wait):
+                    controller(None)
+                self.assertTrue(server.barrier('queue-held').is_set())
+            results = [dict(result=dict(reply='queue ' + value)) for value in ('zero', 'one', 'two')]
+            with patch.object(Script, 'run', new=run), \
+                    patch('parity.cases.agents_effects.assert_delivery', return_value=results):
+                queued_delivery(ctx)
+            self.assertEqual(seen, [('worker', 1), ('root', 3)])
+
+    def test_missing_queued_child_request_never_releases_sends_or_child(self):
+        with Provider() as server:
+            def run(script, controller):
+                with patch.object(script, 'wait', side_effect=AssertionError('missing worker')):
+                    controller(None)
+            with patch.object(Script, 'run', new=run), self.assertRaisesRegex(AssertionError, 'missing worker'):
+                queued_delivery(SimpleNamespace(server=server))
+            self.assertFalse(server.barrier('queue-ready').is_set())
+            self.assertFalse(server.barrier('queue-held').is_set())
 
     def test_early_child_reply_does_not_block_parent_request_matching(self):
         with tempfile.TemporaryDirectory() as root, Provider() as server, ThreadPoolExecutor(max_workers=1) as pool:

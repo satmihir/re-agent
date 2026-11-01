@@ -1,7 +1,7 @@
 # Terminal scenario reconciliation
 
-Reference: `2ab234f79d1d42ba8a969ba3f4103eeeba717967` (#191/#192/#193).
-`bench/tty/check.py` currently declares **29** scenarios.
+Reference: Rust `e6c9571396af1656c48a089e06b293165828e0c0`.
+`bench/tty/check.py` currently declares **30** scenarios.
 This is the complete name crosswalk; pending cases are declared, never silently
 omitted. CLI/PTy collection is `parity.cases.cli_pty.collect()`.
 
@@ -30,6 +30,7 @@ omitted. CLI/PTy collection is `parity.cases.cli_pty.collect()`.
 | resize-during-turn | C35: C34 real-PTY fixture with SIGWINCH, retained queued input, complete ordered reply and third ordinary turn |
 | edit-handoff | C36: executable editor fixture, message preview, next ordinary turn |
 | edit-error-recovery | C36 added explicit missing-editor recovery variant |
+| raw-mode-reentry | Retained bench-only regression: two editor handoffs, canonical mode in the editor and a following turn. C18/C36 cover individual handoffs, not the repeated-handoff mode invariant; no parity claim |
 | interrupt-shell-command | C37: foreground helper barrier, process/effect witnesses, typed validation of the two named signal races and next-turn history; no generic masks |
 | interrupt-running-command | C38: real exec readiness HTTP event, cancellation/uncertain effects, blocked next turn, reset recovery |
 | resize-while-typing | C39: retained input/cursor screenshot and unchanged submitted provider request |

@@ -5,6 +5,8 @@ The fixture is the independent retained-evidence audit's interned contract data
 Its full receipt SHA256 is
 63e86c31c101cb1c898dd95784327e88dbf61f0803fb8b3684d668a6656d198d.
 Artifact descriptors come from the committed Linux lock, without duplication.
+Retired T34.redirected-group uses its byte-identical retained T32.timeout
+counterpart, authenticated against the unchanged audit's complete case hashes.
 Frozen I/O, raw replay, case_lock and ledger_contract are mocked boundaries:
 these tests prove the real contract inverse and fail-closed orchestration, not
 raw artifact replay. Publication separately replays the complete retained bytes.
@@ -30,6 +32,17 @@ class ExecLedgerMigrationTests(unittest.TestCase):
     def setUpClass(cls):
         cls.fixture = json.loads((SUITE / 'fixtures/exec-ledger-migration.json').read_bytes())
         cls.committed = locks.unpack(json.loads((SUITE / 'expected/linux.json').read_bytes()))
+        if 'T34.redirected-group' not in cls.committed:
+            # Keep all 32 historical inverses after removing the duplicate workload.
+            if hashlib.sha256(locks.canonical(cls.fixture) + b'\n').hexdigest() != SOURCE_SHA256:
+                raise AssertionError('exec inverse audit fixture identity differs')
+            retired = cls.fixture['cases']['T34.redirected-group']
+            retained = cls.fixture['cases']['T32.timeout']
+            descriptor = cls.committed['T32.timeout']
+            if (retired != retained or locks.digest(descriptor) not in
+                    (retired['old_case_sha256'], retired['new_case_sha256'])):
+                raise AssertionError('retired timeout descriptor is not identical to the authenticated retained case')
+            cls.committed['T34.redirected-group'] = deepcopy(descriptor)
 
     def setUp(self):
         fixture = self.fixture
@@ -90,6 +103,16 @@ class ExecLedgerMigrationTests(unittest.TestCase):
                     if dict(self.new[case_id], ledger_sha256=locks.digest(inverse)) == self.old[case_id]:
                         matches.append(mask)
                 self.assertEqual(matches, [7])
+
+    def test_retired_timeout_keeps_its_authenticated_full_descriptor_and_inverse(self):
+        retired, retained = 'T34.redirected-group', 'T32.timeout'
+        self.assertEqual(self.fixture['cases'][retired], self.fixture['cases'][retained])
+        self.assertEqual(self.committed[retired], self.committed[retained])
+        self.assertEqual(self.old[retired], self.old[retained])
+        self.assertEqual(self.new[retired], self.new[retained])
+        self.assertEqual(self.groups[retired], self.groups[retained])
+        self.assertEqual(self.contracts[retired], self.contracts[retained])
+        self.assertEqual(len(self.old), 32)
 
     def test_exact_32_pairs_are_accepted_with_auditable_receipts_in_both_platform_contexts(self):
         # Darwin here is a platform-neutral guard context, not a Mac capture/run.

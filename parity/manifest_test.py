@@ -33,37 +33,108 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(len(cases), len({case.id.casefold() for case in cases}),
                          'case directories must not collide on case-insensitive filesystems')
 
-    def test_darwin_missing_leaves_require_capture_without_changing_old_identity(self):
+    def test_rust_reference_records_reproducible_offline_build_inputs(self):
+        manifest = json.loads(Path(__file__).with_name('manifest.json').read_text())
+        self.assertEqual(manifest['reference_commit'], 'e6c9571396af1656c48a089e06b293165828e0c0')
+        self.assertEqual(manifest['reference_language'], 'rust')
+        self.assertEqual(manifest['reference_build_flags'], ['--release', '--locked', '--offline'])
+        self.assertEqual(manifest['reference_rustflags'], [
+            '--remap-path-prefix=<archive>=/reagent', '--remap-path-prefix=<cargo_home>=/cargo'])
+        entry = manifest['platforms']['linux/amd64']
+        self.assertEqual(entry['rustup_toolchain'], '1.99.1')
+        self.assertEqual(entry['cargo_version'], 'cargo 1.99.1 (5f94df478 2026-08-27)')
+        self.assertEqual(entry['rustc_version'], 'rustc 1.99.1 (58cf8f9c3 2026-10-13)')
+        self.assertRegex(entry['reference_binary_sha256'], r'^[0-9a-f]{64}$')
+        self.assertNotIn('go_version', entry)
+
+    def test_go_checkpoint_reference_stays_frozen_separately_from_rust(self):
+        manifest = json.loads(Path(__file__).with_name('manifest.json').read_text())
+        checkpoint = manifest['go_checkpoint_reference']
+        self.assertEqual(checkpoint['reference_commit'], '2ab234f79d1d42ba8a969ba3f4103eeeba717967')
+        self.assertNotEqual(checkpoint['reference_commit'], manifest['reference_commit'])
+        self.assertEqual(checkpoint['platforms'], {
+            'linux/amd64': {
+                'reference_binary_sha256': '9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06'},
+            'darwin/arm64': {
+                'reference_binary_sha256': '8d9b9cf977ba8b5abbf2c08bb070267e469a396bde244abeadf26f82b9d04524'}})
+        self.assertNotEqual(checkpoint['platforms']['linux/amd64']['reference_binary_sha256'],
+                            manifest['platforms']['linux/amd64']['reference_binary_sha256'])
+
+    def test_darwin_capture_state_retains_old_lock_until_publication(self):
+        manifest = json.loads(Path(__file__).with_name('manifest.json').read_bytes())
+        self._assert_darwin_capture_state(manifest)
+
+    def test_prepared_darwin_rust_identity_still_requires_capture(self):
         from unittest.mock import patch
-        from parity import locks
+        from parity import identity
+        manifest = json.loads(Path(__file__).with_name('manifest.json').read_bytes())
+        entry = manifest['platforms']['darwin/arm64']
+        entry.update(capture_status='required', reference_commit=manifest['reference_commit'],
+                     reference_binary_sha256='1' * 64, rustup_toolchain='1.99.1',
+                     cargo_version='cargo fixture version', rustc_version='rustc fixture version')
+        entry.pop('go_version', None)
+        document = json.loads(Path(__file__).with_name('expected').joinpath('darwin.json').read_bytes())
+        checkpoint = manifest['go_checkpoint_reference']
+        document['reference_identity'] = {
+            'reference_commit': checkpoint['reference_commit'],
+            'reference_binary_sha256': checkpoint['platforms']['darwin/arm64']['reference_binary_sha256']}
+        self._assert_darwin_capture_state(manifest, document)
+        with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'):
+            selected = identity.select(manifest, capture=True)
+        self.assertEqual(selected['reference_language'], 'rust')
+        self.assertEqual(selected['reference_binary_sha256'], '1' * 64)
+        self.assertEqual(entry['capture_status'], 'required')
+
+    def _assert_darwin_capture_state(self, manifest, document=None):
+        from unittest.mock import patch
+        from parity import identity, locks
         suite = Path(__file__).resolve().parent
-        manifest = json.loads((suite / 'manifest.json').read_bytes())
         self.assertEqual(set(manifest['platforms']), {'darwin/arm64', 'linux/amd64'})
+        if document is None:
+            document = json.loads((suite / 'expected/darwin.json').read_bytes())
         for name, entry in manifest['platforms'].items():
             self.assertEqual(entry['normalized_lock'], 'expected/' + name.split('/')[0] + '.json')
-            self.assertEqual(entry['go_version'], 'go version go1.23.3 ' + name)
             self.assertEqual(entry['python_version'], 'Python 3.11.5')
             if name == 'linux/amd64':
                 self.assertNotIn('reference_commit', entry)
                 self.assertEqual(entry['python_executable'],
                     '/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin/python3.11')
             elif entry.get('capture_status') == 'required':
-                self.assertEqual(entry['reference_commit'], '60fda0d3f3eabc76fa11deed72aed7850532c97e')
+                if entry['reference_commit'] == manifest['reference_commit']:
+                    self.assertEqual(entry['rustup_toolchain'], '1.99.1')
+                    for key in ('cargo_version', 'rustc_version'):
+                        self.assertIsInstance(entry[key], str)
+                        self.assertTrue(entry[key])
+                    self.assertRegex(entry['reference_binary_sha256'], r'^[0-9a-f]{64}$')
+                    self.assertNotIn('go_version', entry)
+                else:
+                    previous = document['reference_identity']
+                    for key in ('reference_commit', 'reference_binary_sha256', 'go_version', 'python_version'):
+                        self.assertEqual(entry[key], previous[key])
+                    self.assertNotIn('cargo_version', entry)
+                    self.assertNotIn('rustc_version', entry)
             else:
                 self.assertEqual(entry['capture_status'], 'ready')
                 self.assertEqual(entry['reference_commit'], manifest['reference_commit'])
-        document = json.loads((suite / 'expected/darwin.json').read_bytes())
         missing = {case.id for case in collect() if not case.pending} - document['cases'].keys()
         with patch('sys.platform', 'darwin'), patch('platform.machine', return_value='arm64'):
             if manifest['platforms']['darwin/arm64'].get('capture_status') == 'required':
                 from parity.run import HarnessError
                 with self.assertRaisesRegex(HarnessError, '^Darwin capture required$'):
+                    identity.select(manifest)
+                with self.assertRaisesRegex(HarnessError, '^Darwin capture required$'):
                     locks.read_lock(suite, manifest)
             else:
                 self.assertFalse(missing, 'ready Darwin capture must contain every runnable leaf')
                 locks.read_lock(suite, manifest)
-        self.assertEqual(document['reference_identity']['reference_commit'],
-                         manifest['platforms']['darwin/arm64']['reference_commit'])
+        entry = manifest['platforms']['darwin/arm64']
+        if entry.get('capture_status') == 'required':
+            checkpoint = manifest['go_checkpoint_reference']
+            self.assertEqual(document['reference_identity']['reference_commit'], checkpoint['reference_commit'])
+            self.assertEqual(document['reference_identity']['reference_binary_sha256'],
+                             checkpoint['platforms']['darwin/arm64']['reference_binary_sha256'])
+        else:
+            self.assertEqual(document['reference_identity']['reference_commit'], entry['reference_commit'])
         self.assertEqual(document['normalized_tree_sha256'],
                          manifest['platforms']['darwin/arm64']['normalized_tree_sha256'])
 
