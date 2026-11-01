@@ -67,6 +67,11 @@ scripts instead of `edit_file`.
 
 ## Quick start
 
+`make build` builds the Rust port in `rust/` and needs `rustup` (it uses
+toolchain 1.99.1, as CI does: `rustup toolchain install 1.99.1`). The Go
+implementation is still in the tree while it is retired; `make build-go` builds
+it as `./reagent-go`.
+
 ```bash
 make build
 ./reagent login                   # use your ChatGPT Plus/Pro plan
@@ -564,13 +569,14 @@ bad invocation.
 ## Development
 
 ```bash
-make check    # gofmt, vet, and the full test suite, offline, with no keys
-make live     # two real API round trips; reads .env (or main checkout's .env from a worktree); spends tokens
-make tty-check  # drive the chat in a pseudo-terminal and check the screen; offline, needs python3
+make check    # gofmt, vet, go test, cargo fmt --check and cargo test, offline, with no keys
+make live     # two real API round trips with the Go implementation; reads .env (or main checkout's .env from a worktree); spends tokens
+make tty-check  # build ./reagent and drive the chat in a pseudo-terminal; offline, needs python3
 ```
 
-GitHub Actions builds, vets, runs Go tests with coverage, and runs the offline
-Python bench tests on pushes to `main` and on pull requests. Go coverage appears
+GitHub Actions builds, vets, runs Go tests with coverage, runs the offline
+Python bench tests, and formats, builds and tests the Rust port on Linux and
+macOS, on pushes to `main` and on pull requests. Go coverage appears
 in the run summary. On pushes to `main`, the workflow publishes the coverage
 badge to GitHub Pages; enable
 Pages with **GitHub Actions** as its build and deployment source for the badge

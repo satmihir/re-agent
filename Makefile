@@ -1,24 +1,36 @@
 # re:agent
 #
-#   make          build ./reagent
-#   make check    format, vet, and the offline suite; needs no credentials
-#   make live     conformance runs against both providers; reads ./.env or main checkout .env in a worktree
-#   make tty-check  drive the chat in a pseudo-terminal and check the screen; offline
+#   make          build ./reagent from the Rust port in rust/
+#   make build-go build ./reagent-go from the Go implementation, kept while it is retired
+#   make check    format, vet, and the offline suites of both; needs no credentials
+#   make live     Go conformance runs against both providers; reads ./.env or main checkout .env in a worktree
+#   make tty-check  drive the Rust chat in a pseudo-terminal and check the screen; offline
 #   make parity BIN=/absolute/reagent  offline executable parity against locked cached outputs
 #   make parity-golden  rebuild the pinned reference and verify regenerated outputs
 #   make git-do-eval  repeated git_do decisions; MODE=jev|recipe N=5 SET=all|tuning|held_out; Jev reads .env
 
-.PHONY: all build check live tty-check git-do-eval parity parity-golden
+.PHONY: all build build-go check live tty-check git-do-eval parity parity-golden
 
 all: build
 
+# The toolchain CI and the parity reference use.
+RUST_TOOLCHAIN ?= 1.99.1
+CARGO = cargo +$(RUST_TOOLCHAIN)
+
+# install replaces the file rather than rewriting it, so a running ./reagent is not disturbed.
 build:
-	go build -o reagent ./cmd/reagent
+	cd rust && $(CARGO) build --release --locked
+	install rust/target/release/reagent reagent
+
+build-go:
+	go build -o reagent-go ./cmd/reagent
 
 check:
 	@test -z "$$(gofmt -l .)" || { echo "gofmt: these files need formatting:"; gofmt -l .; exit 1; }
 	go vet ./...
 	go test ./...
+	cd rust && $(CARGO) fmt --check
+	cd rust && $(CARGO) test --locked
 
 # Loads ./.env first, otherwise the main checkout's .env in a linked worktree.
 # Only the path is printed, never the keys. A partial .env runs what it can;
@@ -38,12 +50,12 @@ live:
 	fi; \
 	REAGENT_LIVE_TESTS=1 go test ./internal/reagent/ -run Live -v -count=1
 
-# Builds a throwaway binary and drives it through bench/tty's scenarios, which
-# exercise the real terminal path that go test cannot: a pty, its buffer and
-# flags, and the cursor-report round trip. Needs python3; no keys or network.
-tty-check:
-	@dir=$$(mktemp -d) && go build -o $$dir/reagent ./cmd/reagent && \
-	python3 bench/tty/check.py $$dir/reagent; status=$$?; rm -rf $$dir; exit $$status
+# Drives ./reagent through bench/tty's scenarios, which exercise the real
+# terminal path that unit tests cannot: a pty, its buffer and flags, and the
+# cursor-report round trip. Needs python3; no keys or network. For the Go
+# binary: make build-go && python3 bench/tty/check.py ./reagent-go
+tty-check: build
+	python3 bench/tty/check.py ./reagent
 
 # Repeats each case; recipe mode uses only actual model-named outcomes and needs no key.
 # Wrong runs or <90% held-out real git-only right-and-ran fail (v0 §10.9).
