@@ -176,6 +176,12 @@ def assert_editor(ctx, variant, capture, terminal):
     ctx._record('editor-handoff.json', (json.dumps(record, sort_keys=True) + '\n').encode())
 
 
+def finished(terminal, turns):
+    """Wait for a turn's completion footer: the prompt is already visible while the turn runs."""
+    terminal.wait(lambda screen: sum(line.startswith('✓ completed') for line in screen.text()) >= turns,
+                  'completion footer %d' % turns)
+
+
 def edit(ctx, variant):
     env, capture, payload = editor_fixture(ctx, variant)
     accepted = variant not in ('empty', 'nonzero', 'missing')
@@ -193,6 +199,7 @@ def edit(ctx, variant):
             assert_editor(ctx, variant, capture, terminal)
             ctx.server.release('edited-message')
             answer(terminal, 'Editor message received.')
+            finished(terminal, 1)
         else:
             diagnostic = {'empty': 'nothing to send', 'nonzero': 'run editor: command exited with status 7',
                           'missing': 'run editor: path does not exist'}[variant]
@@ -207,6 +214,7 @@ def edit(ctx, variant):
         assert_editor_followup(body, payload, accepted)
         ctx.server.release('next-turn')
         answer(terminal, 'Next ordinary turn works.')
+        finished(terminal, wanted)
         settled(terminal, 'next-normal-turn')
         _done(ctx, terminal, wanted)
         assert_editor(ctx, variant, capture, terminal)
