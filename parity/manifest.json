@@ -38,7 +38,7 @@
       "python_version": "Python 3.11.5",
       "python_executable": "/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin/python3.11",
       "normalized_lock": "expected/linux.json",
-      "normalized_tree_sha256": "212e40c56168dc38b11e4ac9e70b4af8de56d969782d4220c4c369a6d3fcfec6"
+      "normalized_tree_sha256": "2cfd6da78236189d9e51ae1cf7bb3ce12139c82cf9fd4a5a7056ec0f1592d5ba"
     }
   },
   "go_checkpoint_reference": {
@@ -315,7 +315,7 @@
   "known_limitations": [
     "T36.before-start still needs the exact pre-dispatch CLI-inaccessible barrier; healthy in-run summaries are intentionally not count-bounded by eight or thirty in the pinned reference."
   ],
-  "suite_digest": "42e8a6bd16b6a7c4978b51786ee6830615c8f9fa7b11883af6f59ee0a899d540",
+  "suite_digest": "86a3d384e96ac2b72f9213617c7f7bfdf8c60f375dfdff906735d9f53e90de93",
   "verification_evidence": "repin-rust-e6c95713.md (current Rust re-pin, measurements and acceptance); repin-2ab234f7-linux.md, agents-area4.md, linux-lane.md and cli-acceptance.json are historical",
   "unverified": [
     "Darwin capture and acceptance pending on the Mac"

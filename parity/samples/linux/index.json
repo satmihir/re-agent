@@ -520,9 +520,9 @@
       "why": "Independent non-UTC snapshot dates and preview/live identity.",
       "path": "W08.America-Los_Angeles-ro0-plan0.tar.gz",
       "artifacts": 14,
-      "normalized_bytes": 82519,
-      "normalized_sha256": "3351f4b0dbb56dd448f2b5168cb0ae21476703f26414a573820f0645285bab97",
-      "bundle_sha256": "09bac7a68dc1455cf2bbe7f63f29fa7c6072f787a32de383b1cfdfda99095a0a"
+      "normalized_bytes": 82613,
+      "normalized_sha256": "bb5f4d1976db28312c6ffdfa5b4057ce8e55037c9854801022fabbdb939df47d",
+      "bundle_sha256": "20d4e239f860f0361ffc1bc86ceff9e67ddc7d2593def5920d7975a722d2a49b"
     },
     {
       "id": "W08.UTC-ro0-plan1",
