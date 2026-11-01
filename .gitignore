@@ -34,8 +34,9 @@ go.work.sum
 # macOS
 .DS_Store
 
-# Built binary
+# Built binaries
 /reagent
+/reagent-go
 
 # Benchmark output
 /bench/out/

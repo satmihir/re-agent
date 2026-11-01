@@ -91,14 +91,15 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
 - Before writing a milestone, list the files you will touch and what each
   will own. If that list is surprising, say so first.
 - Before reporting done, run and paste real output from:
-  `go build ./... && go vet ./... && go test ./...`
-  `make check` runs the same gate plus gofmt.
+  `make check`, which runs gofmt, `go vet ./...`, `go test ./...`,
+  `cargo fmt --check` and `cargo test --locked` in `rust/`.
 - A change to terminal input or display (the chat prompt, region, pickers,
   activity, reply rendering) also runs `make tty-check`, which drives the real
-  binary in a pseudo-terminal, and pastes its screens and verdict. Add a
-  scenario to `bench/tty/check.py` for new terminal behavior. Go tests with an
-  in-process fake terminal do not exercise file descriptors, the pty buffer,
-  or real concurrency, so they are not enough on their own.
+  binary (`make build`, the Rust port) in a pseudo-terminal, and pastes its
+  screens and verdict. Add a scenario to `bench/tty/check.py` for new terminal
+  behavior. Tests with an in-process fake terminal do not exercise file
+  descriptors, the pty buffer, or real concurrency, so they are not enough on
+  their own.
 - Report what works, what was tested, what was not, and anything left
   undone. Never claim a live run happened if it did not.
 - Create git worktrees outside the repository checkout (for example, as siblings), never inside it.
