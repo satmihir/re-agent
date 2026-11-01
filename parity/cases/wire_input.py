@@ -1055,7 +1055,11 @@ def collect():
     for model, roster, plan in product((OPENAI[0], ANTHROPIC[0]), (False, True), (False, True)):
         add(f"W07.{model}-order-roster{int(roster)}-plan{int(plan)}", "Prompt/workspace/roster/plan content block order",
             partial(_prompt_order, model=model, roster=roster, plan=plan))
-    for zone, readonly, plan in product(("UTC", "America/Los_Angeles", "Etc/GMT+7"), (False, True), (False, True)):
+    # Launch snapshot collection ignores authority; moved-root combinations remain exhaustive below.
+    snapshots = [(zone, readonly, plan)
+                 for zone, readonly, plan in product(("UTC", "America/Los_Angeles", "Etc/GMT+7"), (False, True), (False, True))
+                 if zone == "UTC" or not (readonly or plan)]
+    for zone, readonly, plan in snapshots:
         add(f"W08.{zone.replace('/', '-')}-ro{int(readonly)}-plan{int(plan)}", "Unchanged preview/live body and independent local snapshot time",
             partial(_snapshot, zone=zone, readonly=readonly, plan=plan))
     for model, escaping, delta in product((OPENAI[0], ANTHROPIC[0]), (False, True), (-1, 0, 1)):
@@ -1106,7 +1110,7 @@ def collect():
         if family in ("W07", "W09", "W10", "W11") and not case.pending and (family in ("W10", "W11") or OPENAI[0] in case.id):
             add(case.id + "-proxy", case.description + " via proxy",
                 partial(_lane, lane="proxy", run=case.run), comparison=case.comparison, slow=case.slow)
-    for zone, readonly, plan in product(("UTC", "America/Los_Angeles", "Etc/GMT+7"), (False, True), (False, True)):
+    for zone, readonly, plan in snapshots:
         for lane in ("proxy", "anthropic"):
             add(f"W08.{zone.replace('/', '-')}-ro{int(readonly)}-plan{int(plan)}-{lane}",
                 "Unchanged preview/live body and local snapshot time across adapters",

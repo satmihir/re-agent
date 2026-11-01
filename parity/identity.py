@@ -8,6 +8,9 @@ import sys
 
 REFERENCE_FIELDS = ("reference_commit", "reference_binary_sha256", "reference_platform",
                     "reference_build_flags", "go_version", "python_version")
+RUST_REFERENCE_FIELDS = ("reference_commit", "reference_binary_sha256", "reference_platform",
+                         "reference_language", "reference_build_flags", "reference_rustflags",
+                         "rustup_toolchain", "cargo_version", "rustc_version", "python_version")
 SUPPORTED = ("darwin/arm64", "linux/amd64")
 
 
@@ -59,16 +62,23 @@ def select(manifest, capture=False):
     digest = entry.get("reference_binary_sha256")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise HarnessError("missing or invalid reference binary SHA-256 for " + name)
-    if not all(isinstance(entry.get(key), str) and entry[key] for key in ("go_version", "python_version")):
+    language = manifest.get("reference_language", "go")
+    if language not in ("go", "rust"):
+        raise HarnessError("unsupported reference language: " + str(language))
+    toolchain = ("rustup_toolchain", "cargo_version", "rustc_version") if language == "rust" else ("go_version",)
+    if not all(isinstance(entry.get(key), str) and entry[key] for key in (*toolchain, "python_version")):
         raise HarnessError("missing reference toolchain identity for " + name)
     relative = "expected/" + sys.platform + ".json"
     if entry.get("normalized_lock") != relative:
         raise HarnessError("normalized lock must name " + relative)
     return {**entry, "reference_commit": manifest.get("reference_commit"),
-            "reference_platform": name, "reference_build_flags": manifest.get("reference_build_flags")}
+            "reference_platform": name, "reference_language": language,
+            "reference_build_flags": manifest.get("reference_build_flags"),
+            "reference_rustflags": entry.get("reference_rustflags", manifest.get("reference_rustflags"))}
 
 
 def reference(manifest):
-    """Keep the committed lock identity shape unchanged."""
+    """Bind Rust build inputs without changing historical Go lock identities."""
     selected = select(manifest)
-    return {key: selected.get(key) for key in REFERENCE_FIELDS}
+    fields = RUST_REFERENCE_FIELDS if selected["reference_language"] == "rust" else REFERENCE_FIELDS
+    return {key: selected.get(key) for key in fields}

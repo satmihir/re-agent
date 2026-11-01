@@ -136,6 +136,31 @@ class GitFixtureTests(unittest.TestCase):
             finally:
                 ctx.close()
 
+    def test_lease_controller_waits_for_explicit_original_tip(self):
+        import os
+        with tempfile.TemporaryDirectory() as folder:
+            ctx = Context(REFERENCE, Path(folder) / 'run', Path(folder) / 'artifacts')
+            try:
+                def push_at_barrier(context, calls, **kwargs):
+                    settings = json.loads(context.git_settings.read_text())
+                    argv = settings['barrier']['argv']
+                    before = tools_git._git(context, 'rev-parse', 'HEAD')
+                    self.assertEqual(argv, ['push', '-q', '--force-with-lease=feature/parity:' + before,
+                                            'origin', 'feature/parity'])
+                    tools_git._git(context, 'fetch', '-q', 'origin')
+                    tools_git._git(context, 'rebase', 'origin/main')
+                    with open(settings['barrier']['ready'], 'wb', buffering=0) as ready:
+                        ready.write(b'ready\n')
+                    kwargs['on_start'](None)
+                    with open(settings['barrier']['release'], 'rb', buffering=0) as release:
+                        self.assertEqual(os.read(release.fileno(), 128), b'release\n')
+                    return [dict(ok=False, code='step_failed', data=dict(steps=[dict(argv=['git', *argv])]))]
+                with patch.object(tools_git, 'drive', side_effect=push_at_barrier), \
+                        patch.object(tools_git, '_evidence'):
+                    tools_git._rebase_barrier(ctx, 'lease')
+            finally:
+                ctx.close()
+
     def test_line_distance_preserves_final_lf(self):
         for old, new, distance in [('a\nb\n', 'c\na\n', 2), ('same', 'same\n', 2),
                                    ('', '', 0), ('a\nb\na\n', 'a\na\nb\n', 2)]:

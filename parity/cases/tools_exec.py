@@ -423,6 +423,8 @@ def collect():
         add('T33.' + kind, 'Separate streams, byte counts and independently checked retention boundaries', bound(_output, kind))
     for pipes in ('retained', 'redirected'):
         for escape in (False, True):
+            if pipes == 'redirected' and not escape:
+                continue  # T32.timeout exercises this identical workload and assertions.
             add(f'T34.{pipes}-' + ('escape' if escape else 'group'),
                 'Real ten-second timeout; TERM-resistant descendants, independent zombie-aware witness',
                 bound(_tree, 'timeout', pipes, escape), slow=True)

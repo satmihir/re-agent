@@ -1,7 +1,7 @@
 {
-  "platform": "linux",
-  "reference_commit": "2ab234f79d1d42ba8a969ba3f4103eeeba717967",
-  "reference_binary_sha256": "9bf10981329cc4279a1c58dc191d07be410c03666b8789e1134abe47ea69ec06",
+  "platform": "darwin",
+  "reference_commit": "e6c9571396af1656c48a089e06b293165828e0c0",
+  "reference_binary_sha256": "853b1aee0e4a1958e006570a19e59c1fef8159edf0ddb1b3b5ec87f998b6ffb8",
   "metadata_fields": [
     "id",
     "description",
@@ -11,7 +11,7 @@
     "platforms",
     "exclusive"
   ],
-  "metadata_sha256": "a8eb2cdc3c17aa9f008785c8d4ef5b18676071b6f1f630509b6255d0fa7bb873",
+  "metadata_sha256": "7078967ad00b3eb5c0a8e7efcaef21f58d1d9f76701637f9f7c83a923034fc68",
   "cases": [
     {
       "id": "A01.off",
@@ -15316,19 +15316,6 @@
     },
     {
       "id": "T34.redirected-escape",
-      "description": "Real ten-second timeout; TERM-resistant descendants, independent zombie-aware witness",
-      "comparison": "N/S",
-      "slow": true,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "T34.redirected-group",
       "description": "Real ten-second timeout; TERM-resistant descendants, independent zombie-aware witness",
       "comparison": "N/S",
       "slow": true,
@@ -32072,123 +32059,6 @@
       "status": "implemented"
     },
     {
-      "id": "W08.America-Los_Angeles-ro0-plan1",
-      "description": "Unchanged preview/live body and independent local snapshot time",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro0-plan1-anthropic",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro0-plan1-proxy",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro1-plan0",
-      "description": "Unchanged preview/live body and independent local snapshot time",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro1-plan0-anthropic",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro1-plan0-proxy",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro1-plan1",
-      "description": "Unchanged preview/live body and independent local snapshot time",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro1-plan1-anthropic",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.America-Los_Angeles-ro1-plan1-proxy",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
       "id": "W08.Etc-GMT+7-ro0-plan0",
       "description": "Unchanged preview/live body and independent local snapshot time",
       "comparison": "N",
@@ -32216,123 +32086,6 @@
     },
     {
       "id": "W08.Etc-GMT+7-ro0-plan0-proxy",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro0-plan1",
-      "description": "Unchanged preview/live body and independent local snapshot time",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro0-plan1-anthropic",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro0-plan1-proxy",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro1-plan0",
-      "description": "Unchanged preview/live body and independent local snapshot time",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro1-plan0-anthropic",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro1-plan0-proxy",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro1-plan1",
-      "description": "Unchanged preview/live body and independent local snapshot time",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro1-plan1-anthropic",
-      "description": "Unchanged preview/live body and local snapshot time across adapters",
-      "comparison": "N",
-      "slow": false,
-      "pending": null,
-      "platforms": [
-        "darwin",
-        "linux"
-      ],
-      "exclusive": false,
-      "status": "implemented"
-    },
-    {
-      "id": "W08.Etc-GMT+7-ro1-plan1-proxy",
       "description": "Unchanged preview/live body and local snapshot time across adapters",
       "comparison": "N",
       "slow": false,

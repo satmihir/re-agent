@@ -195,7 +195,7 @@ class SchedulingTest(unittest.TestCase):
     def test_cases_need_no_handwritten_exclusivity(self):
         self.assertTrue(all(not case.exclusive for case in run.collect_cases()))
 
-    def test_every_recorder_case_is_exclusive_before_shared_fixture_work(self):
+    def test_every_recorder_case_stays_shared_during_fixture_setup(self):
         from parity.cases import tools_arguments
         class Prelude(Exception):
             pass
@@ -219,14 +219,14 @@ class SchedulingTest(unittest.TestCase):
         current = None
         original = tools_arguments.denied_commands
         def git(context, *args, **kwargs):
-            self.assertTrue(context.exclusive, current.id)
+            self.assertFalse(context.exclusive, current.id)
             discovered.add(current.id)
             raise Recorded
         def denied(context):
             try:
                 original(context)
             except Prelude:
-                self.assertTrue(context.exclusive, current.id)
+                self.assertFalse(context.exclusive, current.id)
                 discovered.add(current.id)
                 raise Recorded
         # Independent installer boundaries discover consumers through execution,

@@ -62,7 +62,6 @@ class TerminalSession:
         if self.process is not None:
             raise HarnessError("terminal session already started")
         ctx = self.ctx
-        ctx.prepare_startup(self.overrides)
         ctx.server
         self.prefix = "invoke-%03d" % (len(ctx.invocations) + 1)
         trace = ctx.artifacts / (self.prefix + ".traces")

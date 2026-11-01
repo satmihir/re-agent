@@ -24,7 +24,49 @@ def fixture_manifest(**fields):
     return result
 
 
+def rust_fixture_manifest(**fields):
+    """Give Rust builder tests explicit per-platform compiler identities."""
+    manifest = fixture_manifest(**fields)
+    manifest.update(reference_language="rust", reference_build_flags=["--release", "--locked", "--offline"],
+                    reference_rustflags=["--remap-path-prefix=<archive>=/reagent", "--remap-path-prefix=<cargo_home>=/cargo"])
+    for entry in manifest["platforms"].values():
+        del entry["go_version"]
+        entry.update(rustup_toolchain="1.99.1", cargo_version="cargo test version", rustc_version="rustc test version")
+    manifest["platforms"]["darwin/arm64"]["reference_rustflags"] = [
+        *manifest["reference_rustflags"], "-Clink-arg=-Wl,-oso_prefix,<archive>/"]
+    return manifest
+
+
 class IdentityTests(unittest.TestCase):
+    def test_rust_identity_binds_build_inputs_without_legacy_go_fields(self):
+        manifest = rust_fixture_manifest()
+        reference = identity.reference(manifest)
+        self.assertEqual(set(reference), set(identity.RUST_REFERENCE_FIELDS))
+        self.assertEqual(reference["cargo_version"], "cargo test version")
+        entry = manifest["platforms"][identity.current_platform()]
+        self.assertEqual(reference["reference_rustflags"], entry.get("reference_rustflags", manifest["reference_rustflags"]))
+        for system, machine, extra in (("darwin", "arm64", ["-Clink-arg=-Wl,-oso_prefix,<archive>/"]), ("linux", "x86_64", [])):
+            with patch("sys.platform", system), patch("platform.machine", return_value=machine):
+                self.assertEqual(identity.reference(manifest)["reference_rustflags"], [*manifest["reference_rustflags"], *extra])
+        self.assertNotIn("go_version", reference)
+        for key in ("rustup_toolchain", "cargo_version", "rustc_version", "python_version"):
+            for invalid in (None, "", [], 1):
+                with self.subTest(key=key, invalid=invalid):
+                    broken = rust_fixture_manifest()
+                    broken["platforms"][identity.current_platform()][key] = invalid
+                    with self.assertRaisesRegex(run.HarnessError, "toolchain identity"):
+                        identity.select(broken)
+
+    def test_historical_go_lock_identity_has_exact_original_shape(self):
+        reference = identity.reference(fixture_manifest())
+        self.assertEqual(set(reference), set(identity.REFERENCE_FIELDS))
+        self.assertEqual(reference["go_version"], "go fixture version")
+        self.assertNotIn("reference_language", reference)
+
+    def test_unknown_reference_language_is_rejected(self):
+        with self.assertRaisesRegex(run.HarnessError, "unsupported reference language"):
+            identity.select(fixture_manifest(reference_language="unknown"))
+
     def test_linux_python_guard_rejects_missing_invalid_and_different_executable(self):
         with patch("sys.platform", "linux"), patch("platform.machine", return_value="x86_64"):
             for value in (None, "", 1, [], {}, "python3", "/different/python3.11"):

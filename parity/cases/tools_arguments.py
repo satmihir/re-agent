@@ -167,7 +167,6 @@ def optional_git_inspect(ctx, field, variant):
 
 
 def denied_commands(ctx):
-    ctx.require_exclusive()
     """Prevent GitHub/network access while independently recording argument calls."""
     directory = ctx.root / 'denied-bin'
     directory.mkdir()

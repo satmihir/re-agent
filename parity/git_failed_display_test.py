@@ -19,13 +19,16 @@ ARGV = ['git', 'push', '-q', '--force-with-lease', 'origin', 'feature/parity']
 HEADER = '  ✗ git_do recipe=rebase_push → '
 
 
-def fixture(root=ROOT):
+def fixture(root=ROOT, explicit=False):
+    argv = ARGV[:]
+    if explicit:
+        argv[3] += '=feature/parity:' + 'd' * 40
     output = ('To ' + root + '/origin.git\n ! [rejected] feature/parity -> feature/parity (stale info)\n'
               "error: failed to push some refs to '" + root + "/origin.git'\n")
-    message = ' '.join(ARGV) + ' exited 1: ' + output.strip()
+    message = ' '.join(argv) + ' exited 1: ' + output.strip()
     outcome = dict(ok=False, code='step_failed', message=message, effect='applied',
                    data=dict(status='failed', reason=message, decision={},
-                             steps=[dict(argv=ARGV[:], exit_code=1, output=output)]))
+                             steps=[dict(argv=argv[:], exit_code=1, output=output)]))
     call = dict(call_id='call_git', name='git_do', arguments='{"recipe":"rebase_push"}')
     events = [dict(type='model.accepted', data=dict(blocks=[dict(kind='tool_call', call=copy.deepcopy(call))])),
               dict(type='tool.started', data=dict(call, workspace=root + '/workspace')),
@@ -39,7 +42,11 @@ def fixture(root=ROOT):
     observations = {'git/independent-commands.json': go_json([
         dict(argv=['git', 'init', '-q', '--bare', '-b', 'main', root + '/origin.git'], exit_code=0, stdout='', stderr=''),
         dict(argv=['git', 'remote', 'add', 'origin', root + '/origin.git'], exit_code=0, stdout='', stderr='')]),
-        'git/git-commands.jsonl': go_json(dict(argv=ARGV[:], exit_code=1, stdout='', stderr=output)) + b'\n'}
+        'git/git-commands.jsonl': go_json(dict(argv=argv[:], exit_code=1, stdout='', stderr=output)) + b'\n'}
+    if explicit:
+        observations['git/git-commands.jsonl'] += go_json(dict(
+            argv=['git', 'ls-remote', 'origin', 'refs/heads/feature/parity'], exit_code=0,
+            stdout='d' * 40 + '\trefs/heads/feature/parity\n', stderr='')) + b'\n'
     return events, [invocation], observations
 
 
@@ -70,6 +77,27 @@ class GitFailedDisplayTest(unittest.TestCase):
             if reference is None:
                 reference = actual
             self.assertEqual(actual, reference)
+
+    def test_explicit_lease_requires_original_remote_tip_witness(self):
+        for control in ('valid', 'missing', 'duplicate', 'tip', 'failed'):
+            with self.subTest(control=control):
+                items = fixture(explicit=True)
+                records = [json.loads(line) for line in items[2]['git/git-commands.jsonl'].splitlines()]
+                if control == 'missing':
+                    records.pop()
+                if control == 'duplicate':
+                    records.append(copy.deepcopy(records[-1]))
+                if control == 'tip':
+                    records[-1]['stdout'] = 'e' * 40 + '\trefs/heads/feature/parity\n'
+                if control == 'failed':
+                    records[-1]['exit_code'] = 1
+                items[2]['git/git-commands.jsonl'] = b'\n'.join(go_json(row) for row in records) + b'\n'
+                if control == 'valid':
+                    actual, _ = project(items)
+                    self.assertIn(b'--force-with-lease=feature/parity:' + b'd' * 40, actual)
+                else:
+                    with self.assertRaises(AssertionError):
+                        project(items)
 
     def test_recorder_and_allocation_negatives(self):
         for control in ('missing', 'duplicate', 'argv', 'exit', 'boolean-exit', 'stdout', 'output', 'shape',

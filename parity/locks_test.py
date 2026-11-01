@@ -1,5 +1,6 @@
 """Normalized locks exclude raw observations but retain typed substitution obligations."""
 
+import base64
 import copy
 import hashlib
 import json
@@ -845,3 +846,399 @@ class RepinPendingTest(unittest.TestCase):
                 self.assertEqual({row['id'] for row in receipt['updates']}, set(old))
                 self.assertTrue(all(row['status'] == 'pending' and row['full_replay_verified'] is False
                                     for row in receipt['updates']))
+
+
+class RustRepinLockTest(unittest.TestCase):
+    def setUp(self):
+        self.suite = Path(__file__).resolve().parent
+        self.allowlist = json.loads((self.suite / 'fixtures/repin-rust-e6c95713.json').read_bytes())
+        self.case_id = 'T52.rebase_push.normal'
+        self.old_lock = locks.case_lock({'out': b'old'}, {'out': 'N'}, [])
+        self.new_lock = locks.case_lock({'out': b'new'}, {'out': 'N'}, [])
+        self.old = {self.case_id: self.old_lock, 'W01.control': self.old_lock}
+        self.new = {self.case_id: self.new_lock, 'W01.control': self.old_lock}
+        self.previous_identity = dict(reference_commit=locks.REPIN_REFERENCE, reference_platform='linux/amd64')
+        self.new_identity = dict(self.previous_identity, reference_commit=locks.RUST_REPIN_REFERENCE,
+                                 reference_language='rust')
+
+    def verify(self):
+        return locks.verify_rust_repin(self.old, self.new, Path('stage'), self.allowlist,
+                                       self.previous_identity, self.new_identity)
+
+    def test_four_exact_leaf_authorizations_and_complete_replay_receipt(self):
+        expected = {'T52.rebase_push.normal', 'T52.conflict-lease.conflict',
+                    'T52.conflict-lease.lease', 'T54.first-failure.rebase_push'}
+        self.assertEqual(set(self.allowlist['platforms']), {'linux/amd64', 'darwin/arm64'})
+        for approved in self.allowlist['platforms'].values():
+            self.assertEqual(set(approved), expected)
+        with patch.object(locks, 'frozen_lock', return_value=self.new_lock) as replay:
+            receipt = self.verify()
+        replay.assert_called_once_with(Path('stage') / self.case_id)
+        update, = receipt['updates']
+        self.assertEqual(update['before'], self.old_lock)
+        self.assertEqual(update['after'], self.new_lock)
+        self.assertEqual(update['old_case_sha256'], locks.digest(self.old_lock))
+        self.assertEqual(update['new_case_sha256'], locks.digest(self.new_lock))
+        self.assertTrue(update['full_replay_verified'])
+        self.previous_identity.update(self.new_identity)
+        self.old = copy.deepcopy(self.new)
+        with patch.object(locks, 'frozen_lock') as replay:
+            self.assertEqual(self.verify()['updates'], [])
+        replay.assert_not_called()
+
+    def test_unlisted_bytes_ledger_additions_and_all_removals_fail_before_replay(self):
+        for mutation in ('bytes', 'ledger', 'listed-add', 'unlisted-add', 'listed-remove', 'unlisted-remove'):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                if mutation == 'bytes':
+                    self.new['W01.control'] = self.new_lock
+                elif mutation == 'ledger':
+                    self.new['W01.control'] = dict(self.old_lock, ledger_sha256='0' * 64)
+                elif mutation == 'listed-add':
+                    del self.old[self.case_id]
+                elif mutation == 'unlisted-add':
+                    self.new['W99.new'] = self.new_lock
+                elif mutation == 'listed-remove':
+                    del self.new[self.case_id]
+                else:
+                    del self.new['W01.control']
+                with patch.object(locks, 'frozen_lock') as replay:
+                    with self.assertRaisesRegex(AssertionError, 'unlisted Rust re-pin change'):
+                        self.verify()
+                replay.assert_not_called()
+
+    def test_tampered_replay_and_reference_identity_fail_closed(self):
+        with patch.object(locks, 'frozen_lock', return_value=self.old_lock):
+            with self.assertRaisesRegex(AssertionError, 'replay evidence differs'):
+                self.verify()
+        with patch.object(locks, 'frozen_lock', side_effect=AssertionError('raw replay failed')):
+            with self.assertRaisesRegex(AssertionError, 'raw replay failed'):
+                self.verify()
+        for field, wrong in (('reference_commit', '0' * 40), ('reference_language', 'go'),
+                             ('reference_platform', 'darwin/arm64')):
+            with self.subTest(field=field):
+                self.setUp()
+                self.new_identity[field] = wrong
+                with self.assertRaisesRegex(AssertionError, 'reference identity differs'):
+                    self.verify()
+        self.setUp()
+        self.allowlist['platforms']['linux/amd64'][self.case_id] = dict(change='pending', reason='not authorized')
+        with self.assertRaisesRegex(AssertionError, 'invalid Rust re-pin platform allowlist'):
+            self.verify()
+
+    def test_pending_inventory_is_frozen_but_runnable_metadata_may_change(self):
+        previous = json.loads((self.suite / 'inventory.json').read_bytes())
+        current = copy.deepcopy(previous)
+        current['cases'] = [row for row in current['cases'] if row['id'] != 'W01.anthropic.text']
+        current['metadata_sha256'] = locks.digest([{key: row[key] for key in current['metadata_fields']}
+                                                  for row in current['cases']])
+        locks.verify_rust_pending_inventory(previous, current)
+        for mutation in ('reason', 'activate', 'remove', 'extra', 'digest'):
+            with self.subTest(mutation=mutation):
+                current = copy.deepcopy(previous)
+                pending = next(row for row in current['cases'] if row['id'] == 'T36.before-start')
+                if mutation == 'reason':
+                    pending['pending'] = 'changed reason'
+                elif mutation == 'activate':
+                    pending.update(pending='', status='implemented')
+                elif mutation == 'remove':
+                    current['cases'].remove(pending)
+                elif mutation == 'extra':
+                    next(row for row in current['cases'] if not row['pending']).update(pending='new', status='pending')
+                else:
+                    current['cases'][0]['description'] += ' tampered'
+                if mutation != 'digest':
+                    current['metadata_sha256'] = locks.digest([{key: row[key] for key in current['metadata_fields']}
+                                                              for row in current['cases']])
+                with self.assertRaisesRegex(AssertionError, 'Rust re-pin'):
+                    locks.verify_rust_pending_inventory(previous, current)
+
+    @patch('sys.platform', 'linux')
+    @patch('platform.machine', return_value='x86_64')
+    def test_rust_publication_authenticates_go_history_and_retains_other_platform(self, machine):
+        from contextlib import redirect_stdout
+        import io
+        from parity import identity, run, samples
+        from parity.identity_test import fixture_manifest
+        from parity.model import Case
+        manifest = fixture_manifest(reference_commit=locks.RUST_REPIN_REFERENCE, reference_language='rust',
+                                    reference_build_flags=['--release', '--locked', '--offline'])
+        manifest['platforms']['linux/amd64'].update(rustup_toolchain='1.99.1',
+                                                    cargo_version='cargo fixture', rustc_version='rustc fixture')
+        cases = [Case(self.case_id, 'test', lambda ctx: None), Case('T32.timeout', 'retained timeout', lambda ctx: None)]
+        cases += [case for case in run.collect_cases() if case.pending]
+        previous_cases = [*cases, Case('T34.redirected-group', 'duplicate timeout', lambda ctx: None)]
+        previous_locks = {self.case_id: self.old_lock, 'T32.timeout': self.old_lock, 'T34.redirected-group': self.old_lock}
+        old_manifest = fixture_manifest(reference_commit=locks.REPIN_REFERENCE)
+        with tempfile.TemporaryDirectory() as temporary:
+            suite, stage = Path(temporary) / 'suite', Path(temporary) / 'stage'
+            (suite / 'fixtures').mkdir(parents=True)
+            (suite / 'expected').mkdir()
+            (suite / 'samples/linux').mkdir(parents=True)
+            (stage / self.case_id).mkdir(parents=True)
+            (stage / 'T32.timeout').mkdir()
+            (suite / 'fixtures/repin-rust-e6c95713.json').write_bytes(locks.canonical(self.allowlist))
+            (suite / 'fixtures/covered-removals-rust-e6c95713.json').write_bytes(
+                (self.suite / 'fixtures/covered-removals-rust-e6c95713.json').read_bytes())
+            (suite / 'policy.json').write_bytes((self.suite / 'policy.json').read_bytes())
+            (suite / 'inventory.json').write_bytes(locks.canonical(run.leaf_inventory(previous_cases, old_manifest)))
+            (stage / 'inventory.json').write_bytes(locks.canonical(run.leaf_inventory(cases, manifest)))
+            (suite / 'expected/linux.json').write_bytes(locks.canonical(dict(
+                locks.pack(previous_locks), reference_identity=identity.reference(old_manifest))))
+            (suite / 'expected/darwin.json').write_bytes(b'frozen Darwin lock')
+            (suite / 'samples/index.json').write_bytes(b'frozen Darwin index')
+            (suite / 'samples/A37.frozen.tar.gz').write_bytes(b'frozen Go checkpoint sample')
+            (suite / 'samples/linux/A37.frozen.tar.gz').write_bytes(b'frozen Linux checkpoint sample')
+            (suite / 'samples/linux/T34.redirected-group.tar.gz').write_bytes(b'frozen removed-leaf sample')
+            (suite / ('samples/linux/' + self.case_id + '.tar.gz')).write_bytes(b'old approved sample')
+            untouched = {p: p.read_bytes() for p in suite.rglob('*') if p.is_file()
+                         and ('darwin' in p.name or p.name in ('index.json', 'A37.frozen.tar.gz', 'T34.redirected-group.tar.gz'))}
+            def refresh(lane, prepared):
+                selected = samples.sample_directory(prepared)
+                self.assertFalse((selected / (self.case_id + '.tar.gz')).exists())
+                (selected / (self.case_id + '.tar.gz')).write_bytes(b'new approved sample')
+                (selected / 'index.json').write_text('{}')
+                return [self.case_id]
+            with patch.object(locks, 'frozen_lock', side_effect=lambda path: self.new_lock if path.name == self.case_id else self.old_lock), \
+                 patch.object(samples, 'refresh_samples', side_effect=refresh), redirect_stdout(io.StringIO()):
+                result = locks.update_lock(suite, manifest, stage, cases, jobs=1)
+            self.assertEqual(locks.read_lock(suite, manifest)['cases'], {self.case_id: self.new_lock, 'T32.timeout': self.old_lock})
+            self.assertEqual(result['repin_receipt']['covered_removals'][0]['id'], 'T34.redirected-group')
+            self.assertEqual(json.loads((suite / 'inventory.json').read_bytes()), run.leaf_inventory(cases, manifest))
+            self.assertEqual({p: p.read_bytes() for p in untouched}, untouched)
+            self.assertEqual(json.loads((stage / locks.REPIN_RECEIPT).read_bytes()), result['repin_receipt'])
+
+    def test_shell_timing_migration_only_accepts_reviewed_sites_and_unchanged_bytes(self):
+        from parity import run
+        artifacts = {'out': b'fixed'}
+        policies = {'out': 'N'}
+        for case_id, count in (('W39.shell-511-plan-0', 9), ('W39.shell-513-plan-1', 9), ('W47.projection', 8)):
+            with self.subTest(case_id=case_id):
+                sites = locks.rust_shell_timing_sites(case_id)
+                self.assertEqual(len(sites), count)
+                ledger = [row(artifact, path, kind) for artifact, path, kind, _ in sites]
+                previous = locks.case_lock(artifacts, policies, [])
+                actual = locks.case_lock(artifacts, policies, ledger)
+                for mutation in ('none', 'path', 'artifact', 'kind', 'multiplicity', 'certificate', 'bytes', 'old-replay'):
+                    with self.subTest(mutation=mutation):
+                        changed, normalized = copy.deepcopy(ledger), dict(artifacts)
+                        if mutation == 'path':
+                            changed[0]['path'].append('unexpected')
+                        elif mutation == 'artifact':
+                            changed[0]['artifact'] += '-unexpected'
+                        elif mutation == 'kind':
+                            changed[0]['kind'] = 'cli-shell-duration-ms'
+                        elif mutation == 'multiplicity':
+                            changed.append(changed[0])
+                        elif mutation == 'certificate':
+                            changed.append(dict(artifact='out', kind='independently-validated-failed-admission-guard',
+                                                classification='S', guard={}, reason='unexpected'))
+                        elif mutation == 'bytes':
+                            normalized['out'] += b' changed'
+                        snapshots = [({}, [], {'normalized': artifacts}), ({}, changed, {'normalized': normalized})]
+                        old_replay = actual if mutation == 'old-replay' else previous
+                        with patch.object(locks, 'frozen_lock', return_value=old_replay) as replay, \
+                             patch.object(run, 'read_frozen_case', side_effect=snapshots):
+                            if mutation == 'none':
+                                proof = locks.verify_rust_shell_timing(case_id, previous, actual, Path('staged'))
+                                self.assertEqual(len(proof['added_sites']), count)
+                                self.assertEqual(proof['removed_sites'], [])
+                                self.assertTrue(proof['normalized_bytes_unchanged'])
+                                replay.assert_called_once()
+                            else:
+                                with self.assertRaisesRegex(AssertionError, 'Rust shell timing'):
+                                    locks.verify_rust_shell_timing(case_id, previous, actual, Path('staged'))
+                with self.assertRaisesRegex(AssertionError, 'normalized artifacts differ'):
+                    locks.verify_rust_shell_timing(case_id, previous, dict(actual, artifacts=[]), Path('staged'))
+        with self.assertRaisesRegex(AssertionError, 'unreviewed Rust shell timing case'):
+            locks.rust_shell_timing_sites('W39.shell-514-plan-0')
+
+    def test_shell_timing_publication_requires_both_replay_and_specific_proof(self):
+        case_id = 'W47.projection'
+        self.old = {case_id: self.old_lock}
+        self.new = {case_id: dict(self.old_lock, ledger_sha256='0' * 64)}
+        with patch.object(locks, 'frozen_lock', return_value=self.new[case_id]), \
+             patch.object(locks, 'verify_rust_shell_timing', return_value={'normalized_bytes_unchanged': True}) as proof:
+            receipt = self.verify()
+        proof.assert_called_once_with(case_id, self.old_lock, self.new[case_id], Path('stage') / case_id)
+        self.assertTrue(receipt['updates'][0]['normalized_bytes_unchanged'])
+        with patch.object(locks, 'frozen_lock', return_value=self.new[case_id]), \
+             patch.object(locks, 'verify_rust_shell_timing', side_effect=AssertionError('old replay differs')):
+            with self.assertRaisesRegex(AssertionError, 'old replay differs'):
+                self.verify()
+
+    def test_markdown_progress_inverse_is_one_specific_spinner_and_two_footer_indices(self):
+        screen = 'invoke-001.screens.json'
+        original = [row(screen, ['terminal-cell-slot', n], kind) for n, kind in
+                    ((0, 'terminal-startup-session'), (1, 'terminal-startup-path'),
+                     (2, 'terminal-startup-path'), (3, 'terminal-startup-session'),
+                     (4, 'footer-elapsed'), (5, 'footer-elapsed'))]
+        spinner = dict(row(screen, ['terminal-cell-slot', 4], 'terminal-progress-spinner', '⠙'.encode(), '⠋'.encode()),
+                       after=base64.b64encode('⠋'.encode()).decode())
+        updated = original[:4] + [spinner] + [dict(r, path=['terminal-cell-slot', r['path'][1] + 1]) for r in original[4:]]
+        snapshot = copy.deepcopy(updated)
+        self.assertEqual(locks.inverse_markdown_progress_ledger(updated), original)
+        self.assertEqual(updated, snapshot)
+        for mutation in ('duplicate', 'slot', 'replacement', 'missing-footer'):
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(updated)
+                if mutation == 'duplicate':
+                    changed.append(spinner)
+                elif mutation == 'slot':
+                    changed[4]['path'][1] = 3
+                elif mutation == 'replacement':
+                    changed[4]['after'] = base64.b64encode(b'not a spinner').decode()
+                else:
+                    changed.pop()
+                with self.assertRaisesRegex(AssertionError, 'markdown progress'):
+                    locks.inverse_markdown_progress_ledger(changed)
+
+    def test_markdown_progress_migration_replays_old_raw_and_reconstructs_exact_old_lock(self):
+        from parity import golden, run
+        screen = 'invoke-001.screens.json'
+        artifacts, policies = {screen: b'fixed screens', 'http-1.body': b'unchanged'}, {screen: 'N', 'http-1.body': 'N'}
+        before = [row(screen, ['terminal-cell-slot', n], kind) for n, kind in
+                  ((0, 'terminal-startup-session'), (1, 'terminal-startup-path'),
+                   (2, 'terminal-startup-path'), (3, 'terminal-startup-session'),
+                   (4, 'footer-elapsed'), (5, 'footer-elapsed'))]
+        after = before[:4] + [dict(row(screen, ['terminal-cell-slot', 4], 'terminal-progress-spinner', '⠙'.encode(), '⠋'.encode()),
+                       after=base64.b64encode('⠋'.encode()).decode())]
+        after += [dict(r, path=['terminal-cell-slot', r['path'][1] + 1]) for r in before[4:]]
+        previous, actual = locks.case_lock(artifacts, policies, before), locks.case_lock(artifacts, policies, after)
+        documents = {'artifact-policies.json': json.dumps(policies).encode(), 'replay.json': b'{"fixture": true}'}
+        for commit in (locks.REPIN_REFERENCE, locks.RUST_REPIN_REFERENCE):
+            with self.subTest(commit=commit):
+                captured = {'normalized': artifacts, 'raw': {'raw-fixture': b'immutable'}}
+                with patch.object(golden, 'cache_path', return_value=Path('old-cache')) as cache, \
+                     patch.object(run, 'read_frozen_case', side_effect=[(documents, before, captured), (documents, after, captured)]), \
+                     patch.object(run, 'account_raw') as residuals, \
+                     patch.object(run, 'replay_case', return_value=(artifacts, policies, after)) as replay:
+                    proof = locks.verify_markdown_progress_ledger(previous, actual, Path('stage'), {'reference_commit': commit})
+                cache.assert_called_once_with({'reference_commit': commit})
+                replay.assert_called_once_with(captured['raw'], {'fixture': True})
+                residuals.assert_called_once_with(captured['raw'], artifacts, policies, {'fixture': True})
+                self.assertTrue(proof['normalized_bytes_unchanged'])
+                self.assertTrue(proof['original_contract_reconstructed'])
+        for mutation in ('original-lock', 'old-raw-bytes', 'old-raw-policy', 'old-extra-site', 'stage-bytes', 'stage-extra-site'):
+            with self.subTest(mutation=mutation):
+                old_ledger, replay_ledger, stage_ledger = before, copy.deepcopy(after), copy.deepcopy(after)
+                replayed, stage_bytes, replay_policies = dict(artifacts), dict(artifacts), dict(policies)
+                if mutation == 'original-lock':
+                    old_ledger = []
+                elif mutation == 'old-raw-bytes':
+                    replayed['http-1.body'] += b' tampered'
+                elif mutation == 'old-raw-policy':
+                    replay_policies['http-1.body'] = 'S'
+                elif mutation == 'old-extra-site':
+                    replay_ledger.append(row(screen, ['unreviewed'], 'duration-ms'))
+                elif mutation == 'stage-bytes':
+                    stage_bytes['http-1.body'] += b' tampered'
+                else:
+                    stage_ledger.append(row(screen, ['unreviewed'], 'duration-ms'))
+                snapshots = [(documents, old_ledger, {'normalized': artifacts, 'raw': {}}),
+                             (documents, stage_ledger, {'normalized': stage_bytes})]
+                with patch.object(golden, 'cache_path', return_value=Path('old-cache')), \
+                     patch.object(run, 'read_frozen_case', side_effect=snapshots), \
+                     patch.object(run, 'account_raw'), \
+                     patch.object(run, 'replay_case', return_value=(replayed, replay_policies, replay_ledger)):
+                    with self.assertRaisesRegex(AssertionError, 'markdown progress'):
+                        locks.verify_markdown_progress_ledger(previous, actual, Path('stage'), self.previous_identity)
+
+    def test_markdown_progress_publication_authorization_is_specific_on_both_platforms(self):
+        case_id = 'C42.markdown-progress'
+        for platform in ('linux/amd64', 'darwin/arm64'):
+            self.previous_identity['reference_platform'] = platform
+            self.new_identity['reference_platform'] = platform
+            self.old, self.new = {case_id: self.old_lock}, {case_id: self.new_lock}
+            self.assertEqual(set(self.allowlist['markdown_progress_ledger'][platform]), {case_id})
+            with patch.object(locks, 'frozen_lock', return_value=self.new_lock), \
+                 patch.object(locks, 'verify_markdown_progress_ledger', return_value={'original_contract_reconstructed': True}) as proof:
+                self.assertTrue(self.verify()['updates'][0]['original_contract_reconstructed'])
+            proof.assert_called_once_with(self.old_lock, self.new_lock, Path('stage') / case_id, self.previous_identity)
+        self.allowlist['markdown_progress_ledger']['darwin/arm64']['C42.other'] = 'unreviewed'
+        with self.assertRaisesRegex(AssertionError, 'invalid Rust markdown progress allowlist'):
+            self.verify()
+
+    def test_exact_covered_removals_replay_every_retained_target_on_both_pins_and_platforms(self):
+        approved = json.loads((self.suite / 'fixtures/covered-removals-rust-e6c95713.json').read_bytes())
+        self.assertEqual(len(approved['removed']), 19)
+        self.assertEqual(sum(case_id.startswith('W08.') for case_id in approved['removed']), 18)
+        self.assertEqual(approved['removed']['T34.redirected-group'], ['T32.timeout'])
+        targets = {target for values in approved['removed'].values() for target in values}
+        old = {case_id: self.old_lock for case_id in set(approved['removed']) | targets}
+        new = {case_id: self.old_lock for case_id in targets}
+        for platform in ('linux/amd64', 'darwin/arm64'):
+            for commit in (locks.REPIN_REFERENCE, locks.RUST_REPIN_REFERENCE):
+                with self.subTest(platform=platform, commit=commit):
+                    reference = dict(self.new_identity, reference_platform=platform)
+                    previous = dict(reference, reference_commit=commit)
+                    with patch.object(locks, 'frozen_lock', return_value=self.old_lock) as replay:
+                        receipt = locks.verify_rust_repin(old, new, Path('stage'), self.allowlist, previous, reference,
+                                                          removal_allowlist=approved)
+                    self.assertEqual(len(receipt['covered_removals']), 19)
+                    self.assertEqual(receipt['updates'], [])
+                    self.assertEqual(receipt['covered_removals_allowlist_sha256'], locks.digest(approved))
+                    self.assertEqual({call.args[0] for call in replay.call_args_list}, {Path('stage') / target for target in targets})
+                    self.assertEqual(replay.call_count, len(targets))
+                    for removed in receipt['covered_removals']:
+                        self.assertEqual([row['id'] for row in removed['covered_by']], approved['removed'][removed['id']])
+                        self.assertTrue(all(row['full_replay_verified'] for row in removed['covered_by']))
+
+    def test_covered_removals_reject_unlisted_ids_changed_targets_identity_and_tampered_replay(self):
+        approved = json.loads((self.suite / 'fixtures/covered-removals-rust-e6c95713.json').read_bytes())
+        case_id = 'W08.Etc-GMT+7-ro1-plan1-anthropic'
+        targets = approved['removed'][case_id]
+        old = {key: self.old_lock for key in [case_id, *targets]}
+        new = {key: self.old_lock for key in targets}
+        reference = dict(self.new_identity)
+        for mutation in ('unlisted', 'changed-target', 'missing-target', 'fixture-extra', 'wrong-cover',
+                         'wrong-ref', 'changed-rust-identity', 'different-platform', 'tampered-replay'):
+            with self.subTest(mutation=mutation):
+                before, after = copy.deepcopy(old), copy.deepcopy(new)
+                allowlist = copy.deepcopy(approved)
+                previous, current = dict(reference), dict(reference)
+                if mutation == 'unlisted':
+                    before['W08.moved-openai-ro1-plan1'] = self.old_lock
+                elif mutation == 'changed-target':
+                    after[targets[0]] = self.new_lock
+                elif mutation == 'missing-target':
+                    del before[targets[0]]
+                    del after[targets[0]]
+                elif mutation == 'fixture-extra':
+                    allowlist['removed']['W01.unlisted'] = ['W01.control']
+                elif mutation == 'wrong-cover':
+                    allowlist['removed'][case_id] = [targets[0]]
+                elif mutation == 'wrong-ref':
+                    current['reference_commit'] = locks.REPIN_REFERENCE
+                elif mutation == 'changed-rust-identity':
+                    current['reference_binary_sha256'] = '0' * 64
+                elif mutation == 'different-platform':
+                    current['reference_platform'] = 'darwin/arm64'
+                replay_result = self.new_lock if mutation == 'tampered-replay' else self.old_lock
+                with patch.object(locks, 'frozen_lock', return_value=replay_result):
+                    with self.assertRaisesRegex(AssertionError, 'covered removal'):
+                        locks.verify_covered_removals(before, after, Path('stage'), allowlist, previous, current)
+
+    def test_covered_removal_inventory_only_drops_authorized_rows_and_can_already_be_shared(self):
+        approved = json.loads((self.suite / 'fixtures/covered-removals-rust-e6c95713.json').read_bytes())
+        previous = json.loads((self.suite / 'inventory.json').read_bytes())
+        current = copy.deepcopy(previous)
+        current['cases'] = [row for row in current['cases'] if row['id'] not in approved['removed']]
+        removals = [dict(id=case_id) for case_id in approved['removed']]
+        locks.verify_covered_removal_inventory(previous, current, removals)
+        locks.verify_covered_removal_inventory(current, current, removals)
+        for mutation in ('description', 'exclusive', 'pending', 'status', 'addition', 'unlisted-removal', 'fields'):
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(current)
+                if mutation in ('description', 'pending', 'status'):
+                    changed['cases'][0][mutation] = 'tampered'
+                elif mutation == 'exclusive':
+                    changed['cases'][0]['exclusive'] = not changed['cases'][0]['exclusive']
+                elif mutation == 'addition':
+                    changed['cases'].append(dict(changed['cases'][0], id='W01.unlisted'))
+                elif mutation == 'unlisted-removal':
+                    changed['cases'].pop(0)
+                else:
+                    changed['metadata_fields'] = []
+                with self.assertRaisesRegex(AssertionError, 'covered removal inventory'):
+                    locks.verify_covered_removal_inventory(previous, changed, removals)

@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from parity import golden, identity, locks, run
-from parity.identity_test import fixture_manifest
+from parity.identity_test import fixture_manifest, rust_fixture_manifest
 from parity.model import Case
 
 
@@ -96,41 +96,75 @@ class GoldenTest(unittest.TestCase):
     def test_build_archives_exact_pin_uses_recorded_flags_and_checks_hash(self):
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode="w") as stream:
-            entry = tarfile.TarInfo("go.mod")
+            entry = tarfile.TarInfo("rust/Cargo.lock")
             entry.size = 7
             stream.addfile(entry, io.BytesIO(b"fixture"))
         binary = self.root / "reference"
-        manifest = fixture_manifest(**dict(self.manifest, go_version="go test version", python_version="Python test", reference_platform="darwin/arm64"))
+        manifest = rust_fixture_manifest(reference_binary_sha256=hashlib.sha256(b"binary").hexdigest(), python_version="Python test")
         calls = []
 
-        def command(argv, cwd):
+        def command(argv, cwd, environment=None):
             calls.append(argv)
-            if argv == ["go", "version"]:
-                return b"go test version\n"
+            if argv[0] in ("cargo", "rustc"):
+                self.assertEqual(environment["RUSTUP_AUTO_INSTALL"], "0")
+            if argv == ["cargo", "--version"]:
+                self.assertEqual(environment["RUSTUP_TOOLCHAIN"], "1.99.1")
+                return b"cargo test version\n"
+            if argv == ["rustc", "--version"]:
+                return b"rustc test version\n"
             if argv[:2] == ["git", "archive"]:
                 return archive.getvalue()
-            self.assertEqual((Path(cwd) / "go.mod").read_bytes(), b"fixture")
-            binary.write_bytes(b"binary")
+            self.assertEqual((Path(cwd) / "Cargo.lock").read_bytes(), b"fixture")
+            self.assertEqual(argv, ["cargo", "build", "--release", "--locked", "--offline"])
+            archive_root = Path(cwd).parent.resolve()
+            self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"), [
+                "--remap-path-prefix=%s=/reagent" % archive_root,
+                "--remap-path-prefix=%s=/cargo" % (Path.home().resolve() / ".cargo"),
+                *(["-Clink-arg=-Wl,-oso_prefix,%s/" % archive_root] if system == "darwin" else [])])
+            for key in ("RUSTFLAGS", "RUSTC_WRAPPER", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET", "CC", "CFLAGS"):
+                self.assertNotIn(key, environment)
+            self.assertEqual(environment["CARGO_NET_OFFLINE"], "true")
+            self.assertEqual(environment["CARGO_INCREMENTAL"], "0")
+            output = Path(cwd) / "target/release/reagent"
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b"binary")
+            output.chmod(0o755)
             return b""
 
-        with patch("parity.golden.checked", side_effect=command), patch("parity.golden.platform.python_version", return_value="test"), patch("parity.golden.platform.machine", return_value="arm64"), patch("parity.golden.sys.platform", "darwin"):
-            for update in (False, True):
-                original = dict(manifest)
-                self.assertEqual(golden.build_reference(self.suite, manifest, binary, update=update), binary)
-                self.assertEqual(manifest, original)
-                wrong = fixture_manifest(**{**manifest, "reference_binary_sha256": "0" * 64})
-                with self.assertRaisesRegex(run.HarnessError, "SHA-256 mismatch"):
-                    golden.build_reference(self.suite, wrong, binary, update=update)
-                self.assertEqual(wrong["reference_binary_sha256"], "0" * 64)
-        self.assertEqual(calls[1], ["git", "archive", "a" * 40])
-        self.assertEqual(calls[2], ["go", "build", "-trimpath", "-buildvcs=false", "-o", str(binary), "./cmd/reagent"])
+        for system, machine in (("darwin", "arm64"), ("linux", "x86_64")):
+            with self.subTest(system=system), patch("parity.golden.checked", side_effect=command), patch("parity.golden.platform.python_version", return_value="test"), patch("parity.golden.platform.machine", return_value=machine), patch("parity.golden.sys.platform", system), patch.dict(os.environ, {"RUSTFLAGS": "poison", "RUSTC_WRAPPER": "poison", "CARGO_TARGET_DIR": "poison", "CC": "poison", "CFLAGS": "poison", "RUSTUP_AUTO_INSTALL": "1"}):
+                for update in (False, True):
+                    original = dict(manifest)
+                    self.assertEqual(golden.build_reference(self.suite, manifest, binary, update=update), binary)
+                    self.assertEqual(manifest, original)
+                    self.assertTrue(os.access(binary, os.X_OK))
+                    wrong = rust_fixture_manifest(reference_binary_sha256="0" * 64, python_version="Python test")
+                    with self.assertRaisesRegex(run.HarnessError, "SHA-256 mismatch"):
+                        golden.build_reference(self.suite, wrong, binary, update=update)
+                    self.assertEqual(wrong["reference_binary_sha256"], "0" * 64)
+        self.assertEqual(calls[2], ["git", "archive", "a" * 40])
+        self.assertEqual(calls[3], ["cargo", "build", "--release", "--locked", "--offline"])
 
     def test_build_wrong_toolchain_fails_before_archive(self):
         for update in (False, True):
-            with patch("parity.golden.checked", return_value=b"different Go") as command:
+            with patch("parity.golden.checked", return_value=b"different compiler") as command:
                 with self.assertRaisesRegex(run.HarnessError, "toolchain mismatch"):
-                    golden.build_reference(self.suite, self.manifest, self.root / "reference", update=update)
-            self.assertEqual(command.call_count, 1)
+                    golden.build_reference(self.suite, rust_fixture_manifest(), self.root / "reference", update=update)
+            self.assertEqual(command.call_count, 2)
+
+    def test_build_rejects_unrecorded_build_inputs_before_archive(self):
+        for key, value in (("reference_build_flags", ["--release"]),
+                           ("reference_rustflags", [])):
+            with self.subTest(key=key), patch("parity.golden.checked") as command:
+                manifest = rust_fixture_manifest()
+                manifest[key] = value
+                with self.assertRaisesRegex(run.HarnessError, "unsupported reference_"):
+                    golden.build_reference(self.suite, manifest, self.root / "reference")
+                command.assert_not_called()
+        with patch("parity.golden.checked") as command:
+            with self.assertRaisesRegex(run.HarnessError, "historical Go fixtures stay frozen"):
+                golden.build_reference(self.suite, self.manifest, self.root / "reference")
+            command.assert_not_called()
 
     def test_missing_and_extra_case_ids_are_named(self):
         for actual, expected, message in (({"W01"}, {"W01", "W02"}, "missing=['W02']"),

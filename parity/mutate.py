@@ -393,6 +393,9 @@ def main(argv=None):
     try:
         validate_manifest(manifest)
         oracle = json.loads(MANIFEST.with_name("manifest.json").read_bytes())
+        if oracle.get("reference_language") == "rust":
+            raise ValueError("Go mutation testing is disabled for the Rust reference; "
+                             "follow-up: port the mutations to Rust (historical Go implementation retained)")
         if oracle.get("goldens_frozen") is not True:
             raise ValueError("mutation execution blocked: goldens are not frozen")
         guard_python(oracle)

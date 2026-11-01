@@ -29,6 +29,18 @@ class ExecFixtureTest(unittest.TestCase):
         self.assertTrue(all(case.slow for case in cases if case.id.startswith('T34.')))
         self.assertTrue(next(case for case in cases if case.id == 'T32.timeout').slow)
 
+    def test_chain_timeout_retains_redirected_process_group_workload_without_duplicate(self):
+        calls = []
+        def tree(ctx, mode, pipes, escape=False):
+            calls.append((ctx, mode, pipes, escape))
+        with patch.object(tools_exec, '_tree', side_effect=tree):
+            cases = {case.id: case for case in tools_exec.collect()}
+            self.assertEqual({case_id for case_id in cases if case_id.startswith('T34.')},
+                             {'T34.retained-group', 'T34.retained-escape', 'T34.redirected-escape'})
+            ctx = object()
+            cases['T32.timeout'].run(ctx)
+            self.assertEqual(calls, [(ctx, 'timeout', 'redirected', False)])
+
     def test_zombies_are_not_executing_but_stopped_and_sleeping_processes_are(self):
         for state in ('Z', 'Z+', 'X', None):
             self.assertFalse(tools_exec._executing(None if state is None else {'state': state}))

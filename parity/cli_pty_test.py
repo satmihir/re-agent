@@ -118,13 +118,13 @@ class TerminalCasesTest(unittest.TestCase):
                      patch.object(cli_pty_render, 'answer'), self.assertRaises(AssertionError):
                     cli_pty_render._edit(context, 'kill-word')
 
-    def test_all_twenty_nine_bench_names_are_reconciled(self):
+    def test_all_thirty_bench_names_are_reconciled(self):
         root = Path(__file__).resolve().parent.parent
         tree = ast.parse((root / 'bench/tty/check.py').read_text())
         declaration = next(node for node in tree.body if isinstance(node, ast.Assign)
                            and any(isinstance(target, ast.Name) and target.id == 'SCENARIOS' for target in node.targets))
         names = [ast.literal_eval(key) for key in declaration.value.keys]
-        self.assertEqual(len(names), 29)
+        self.assertEqual(len(names), 30)
         reconciliation = (root / 'parity/terminal-scenarios.md').read_text()
         for name in names:
             self.assertIn('| ' + name + ' |', reconciliation)
