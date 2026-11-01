@@ -26,13 +26,19 @@
       "T52.rebase_push.normal": "Rust rebase_push publishes the rebased branch using an explicit force-with-lease tip.",
       "T52.conflict-lease.conflict": "Rust rebase_push preserves the diagnosed rebase-conflict result and cleanup.",
       "T52.conflict-lease.lease": "Rust rebase_push rejects a stale explicit force-with-lease tip.",
-      "T54.first-failure.rebase_push": "Rust rebase_push reports its first failing phase without attempting later phases."
+      "T54.first-failure.rebase_push": "Rust rebase_push reports its first failing phase without attempting later phases.",
+      "W08.America-Los_Angeles-ro0-plan0": "Mask the PDT/PST abbreviation (snapshot-dst-zone): the Go-era lock recorded PDT, which fails from the first Sunday in November until DST resumes.",
+      "W08.America-Los_Angeles-ro0-plan0-anthropic": "Mask the PDT/PST abbreviation (snapshot-dst-zone): the Go-era lock recorded PDT, which fails from the first Sunday in November until DST resumes.",
+      "W08.America-Los_Angeles-ro0-plan0-proxy": "Mask the PDT/PST abbreviation (snapshot-dst-zone): the Go-era lock recorded PDT, which fails from the first Sunday in November until DST resumes."
     },
     "darwin/arm64": {
       "T52.rebase_push.normal": "Rust rebase_push publishes the rebased branch using an explicit force-with-lease tip.",
       "T52.conflict-lease.conflict": "Rust rebase_push preserves the diagnosed rebase-conflict result and cleanup.",
       "T52.conflict-lease.lease": "Rust rebase_push rejects a stale explicit force-with-lease tip.",
-      "T54.first-failure.rebase_push": "Rust rebase_push reports its first failing phase without attempting later phases."
+      "T54.first-failure.rebase_push": "Rust rebase_push reports its first failing phase without attempting later phases.",
+      "W08.America-Los_Angeles-ro0-plan0": "Mask the PDT/PST abbreviation (snapshot-dst-zone): the Go-era lock recorded PDT, which fails from the first Sunday in November until DST resumes.",
+      "W08.America-Los_Angeles-ro0-plan0-anthropic": "Mask the PDT/PST abbreviation (snapshot-dst-zone): the Go-era lock recorded PDT, which fails from the first Sunday in November until DST resumes.",
+      "W08.America-Los_Angeles-ro0-plan0-proxy": "Mask the PDT/PST abbreviation (snapshot-dst-zone): the Go-era lock recorded PDT, which fails from the first Sunday in November until DST resumes."
     }
   }
 }

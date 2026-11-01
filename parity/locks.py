@@ -24,7 +24,7 @@ SUBSTITUTION_KINDS = (
     "independently-validated-cache-key", "independently-validated-derived-value",
     "model-switch-latency-ms", "owned-run-reason-authority", "registered-text-span",
     "registered-fixture-cancel-delivery-projection", "retry-delay-policy",
-    "retry-display-delay", "snapshot-date", "trace-time", "typed-identity",
+    "retry-display-delay", "snapshot-date", "snapshot-dst-zone", "trace-time", "typed-identity",
     "typed-scope-identity", "validated-auth-refresh-expiry", "validated-derived-digest",
     "validated-derived-length", "exec-effective-timeout-elapsed", "git-do-jev-ms",
     "git-do-allocated-remote", "git-do-failed-display-remote-prefix", "clipped-allocated-path-prefix",

@@ -636,6 +636,17 @@ class Normalizer:
                     new, rule = shell, 'cli-shell-workspace'
                 elif not native(loc) and effect_workspace(loc, parent):
                     new, rule = self.text(value, artifact, path+loc), 'effect-record-workspace'
+                elif (last == 'time_zone' and value in ('PDT', 'PST') and isinstance(parent, dict)
+                      and parent.get('kind') == 'workspace_state' and not native(loc)):
+                    # Los Angeles is the only DST zone in the suite; its abbreviation follows the
+                    # wall clock, so a lock captured in one season would fail in the other.
+                    if self.ended != float('inf'):
+                        from zoneinfo import ZoneInfo
+                        pacific = ZoneInfo('America/Los_Angeles')
+                        if value not in {dt.datetime.fromtimestamp(moment, pacific).tzname()
+                                         for moment in (self.started, self.ended)}:
+                            raise AssertionError('snapshot zone abbreviation outside invocation bounds')
+                    new, rule = '<PACIFIC_ZONE>', 'snapshot-dst-zone'
                 elif last == 'date' and isinstance(parent, dict) and parent.get('kind') == 'workspace_state' and not native(loc):
                     # The per-case time zone and local-date invariant is also
                     # checked by W08; UTC is the runner's default.
