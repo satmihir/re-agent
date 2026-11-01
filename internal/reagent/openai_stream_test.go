@@ -363,7 +363,7 @@ func TestOpenAICacheKey_FollowsThePrefix(t *testing.T) {
 	switched := cfg
 	switched.WorkspacePath = "/elsewhere"
 	other := cfg
-	other.Model = "gpt-6.1-sol"
+	other.Model = "gpt-6-luna"
 	summary := Entry{Kind: EntrySummary, Summary: &Summary{Text: "handoff"}}
 	for name, key := range map[string]string{
 		"switch":     request(switched, user("task", `{}`)),

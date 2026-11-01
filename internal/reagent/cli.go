@@ -498,7 +498,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
 	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6-sol/medium")
 	fs.BoolVar(&o.inRunCompact, "in-run-compact", false, "opt in to bounded compaction within a long run; default off")
-	fs.BoolVar(&o.contextGC, "context-gc", false, "opt in to lossless context GC with recall; default off")
+	fs.BoolVar(&o.contextGC, "context-gc", true, "lossless context GC with recall; default on, disable with --context-gc=false")
 	fs.DurationVar(&o.modelRetryWindow, "model-retry-window", 0, "keep retrying transient model failures within this window (e.g. 12h); 0 disables")
 	fs.BoolVar(&o.agents, "agents", false, "offer concurrent agents with names, nesting and per-spawn read/write authority")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")

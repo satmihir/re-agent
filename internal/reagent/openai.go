@@ -10,12 +10,9 @@ import (
 // DefaultOpenAIModel is the model used when neither --model nor REAGENT_MODEL says
 // otherwise. v1 §9.3 calls this an experiment default rather than a fixed part
 // of the design, so changing it is expected as cheaper or better models appear.
-const DefaultOpenAIModel = "gpt-6-luna"
+const DefaultOpenAIModel = "gpt-6.1-sol"
 
-// DefaultReasoningEffort is what v0 asks for when nothing says otherwise. The
-// default model reasons at medium effort on its own, which these tasks do not
-// need. An empty value omits the parameter and leaves the model's own default
-// in place (v1 §9.2).
+// DefaultReasoningEffort is the fallback for OpenAI models outside the catalog.
 const DefaultReasoningEffort = "low"
 
 // MaxRequestBytes is the largest encoded request v0 will send.

@@ -527,9 +527,9 @@ func TestAuto_CLIExplicitSelectionsOverrideDefaults(t *testing.T) {
 		flags                    []string
 	}{
 		{"explicit effort", "", "gpt-6-sol", "high", []string{"--auto", "--reasoning-effort", "high"}},
-		{"explicit 6.1 Sol", "", "gpt-6.1-sol", "low", []string{"--auto", "--model", "gpt-6.1-sol"}},
-		{"environment 6.1 Sol", "gpt-6.1-sol", "gpt-6.1-sol", "low", []string{"--auto"}},
-		{"manual 6.1 Sol", "", "gpt-6.1-sol", "low", []string{"--model", "gpt-6.1-sol"}},
+		{"explicit 6.1 Sol", "", "gpt-6.1-sol", "high", []string{"--auto", "--model", "gpt-6.1-sol"}},
+		{"environment 6.1 Sol", "gpt-6.1-sol", "gpt-6.1-sol", "high", []string{"--auto"}},
+		{"manual 6.1 Sol", "", "gpt-6.1-sol", "high", []string{"--model", "gpt-6.1-sol"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("REAGENT_MODEL", test.env)
@@ -587,7 +587,7 @@ func TestAuto_DefaultOffAndNoKeyCLIStayOffline(t *testing.T) {
 	if err := json.Unmarshal(api.received()[1], &automatic); err != nil {
 		t.Fatal(err)
 	}
-	if normal.Model != "gpt-6-luna" || automatic.Model != "gpt-6-sol" || automatic.Reasoning.Effort != "medium" {
+	if normal.Model != "gpt-6.1-sol" || normal.Reasoning.Effort != "high" || automatic.Model != "gpt-6-sol" || automatic.Reasoning.Effort != "medium" {
 		t.Fatal("manual defaults changed or Auto fallback was not explicit")
 	}
 	for _, extra := range []string{"--show-context", "--scripted"} {

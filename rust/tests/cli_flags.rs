@@ -146,3 +146,74 @@ fn invalid_auto_fallbacks_print_usage_for_run_and_chat() {
         }
     }
 }
+
+#[test]
+fn default_model_and_effort_preview_and_explicit_overrides() {
+    for (model_env, flags, model, effort) in [
+        ("", vec![], "gpt-6.1-sol", "high"),
+        ("", vec!["--model", "gpt-6.1-sol"], "gpt-6.1-sol", "high"),
+        ("", vec!["--model", "gpt-6.1-terra"], "gpt-6.1-terra", ""),
+        ("", vec!["--reasoning-effort", "low"], "gpt-6.1-sol", "low"),
+        ("", vec!["--reasoning-effort", ""], "gpt-6.1-sol", ""),
+        ("gpt-6-luna", vec![], "gpt-6-luna", "low"),
+        (
+            "gpt-6-luna",
+            vec!["--model", "gpt-6.1-sol"],
+            "gpt-6.1-sol",
+            "high",
+        ),
+        ("", vec!["--provider", "anthropic"], "claude-haiku-4-5", ""),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let output = reagent(root.path())
+            .env("REAGENT_MODEL", model_env)
+            .args(["run", "--show-context"])
+            .args(&flags)
+            .arg("task")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(request["model"], model, "{flags:?}");
+        assert_eq!(
+            request["reasoning"]["effort"].as_str().unwrap_or(""),
+            effort,
+            "{flags:?}"
+        );
+    }
+}
+
+#[test]
+fn context_gc_is_default_and_can_be_disabled() {
+    for (flags, enabled) in [
+        (vec![], true),
+        (vec!["--context-gc=false"], false),
+        (vec!["--context-gc"], true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let output = reagent(root.path())
+            .args(["run", "--show-context"])
+            .args(&flags)
+            .arg("task")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            request["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == "recall"),
+            enabled
+        );
+    }
+}

@@ -73,10 +73,19 @@ pub fn models() -> Value {
             "gpt-6.1-sol",
             "openai",
             REASONING_EFFORTS,
-            "low",
+            "high",
             "low",
             "most capable, costs most",
             1_050_000,
+        ),
+        (
+            "gpt-6.1-terra",
+            "openai",
+            &[][..],
+            "",
+            "",
+            "provider defaults; effort and window unverified",
+            0,
         ),
     ];
     Value::Array(entries.iter().map(|(id,provider,efforts,effort,verbosity,note,window)| {
@@ -235,7 +244,11 @@ mod tests {
 
     #[test]
     fn model_positions_and_model_specific_efforts_are_fixed() {
-        assert_eq!(models().as_array().unwrap().len(), 8);
+        assert_eq!(models().as_array().unwrap().len(), 9);
+        let terra = select_model("9").unwrap();
+        assert_eq!(terra["id"], "gpt-6.1-terra");
+        assert_eq!(terra["effort"], "");
+        assert_eq!(terra["context_window"], 0);
         assert_eq!(select_model("2").unwrap()["id"], "gpt-6-sol");
         let sol = select_model("8").unwrap();
         assert_eq!(sol["id"], "gpt-6.1-sol");

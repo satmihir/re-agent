@@ -13,7 +13,7 @@ func TestResolveTarget_ProviderAndModel(t *testing.T) {
 		wantProvider, wantModel string
 		wantErr                 string
 	}{
-		"nothing given":         {"", "", openaiName, "gpt-6-luna", ""},
+		"nothing given":         {"", "", openaiName, "gpt-6.1-sol", ""},
 		"claude model infers":   {"", "claude-haiku-4-5", anthropicName, "claude-haiku-4-5", ""},
 		"other model is openai": {"", "gpt-x", openaiName, "gpt-x", ""},
 		"anthropic default":     {anthropicName, "", anthropicName, DefaultAnthropicModel, ""},
@@ -58,6 +58,9 @@ func TestResolveEffort_AutoIsPerModelThenPerProvider(t *testing.T) {
 		{"auto", openaiName, "gpt-5.6-luna", "low"},
 		{"auto", openaiName, "gpt-6-luna", "low"},
 		{"auto", openaiName, "gpt-6-sol", "low"},
+		{"auto", openaiName, "gpt-6.1-sol", "high"},
+		{"low", openaiName, "gpt-6.1-sol", "low"},
+		{"", openaiName, "gpt-6.1-sol", ""},
 		// Anything outside the catalog falls back to the provider's default.
 		{"auto", anthropicName, "claude-something-new", ""},
 		{"auto", openaiName, "gpt-experimental", DefaultReasoningEffort},

@@ -84,6 +84,12 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 			t.Fatalf("6.1 Sol selection %q got %+v %v", choice, sol, err)
 		}
 	}
+	for _, choice := range []string{"9", "gpt-6.1-terra"} {
+		terra, err := selectModel(choice)
+		if err != nil || terra.ID != "gpt-6.1-terra" || terra.Effort != "" || terra.ContextWindow != 0 {
+			t.Fatalf("6.1 Terra selection %q got %+v %v", choice, terra, err)
+		}
+	}
 	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", ""} {
 		if _, err := selectModel(choice); err == nil {
 			t.Fatalf("%q was accepted", choice)
@@ -126,6 +132,7 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 		"1  gpt-6-luna        openai",
 		"2  gpt-6-sol         openai",
 		"8  gpt-6.1-sol       openai",
+		"9  gpt-6.1-terra     openai",
 		"3  gpt-5.6-luna      openai     current",
 		"5  claude-haiku-4-5  anthropic  no key",
 		"7  claude-opus-5-5   anthropic  no key",
@@ -172,6 +179,7 @@ func TestModelCatalog_EffortSupport(t *testing.T) {
 		{"gpt-6-luna", "none,low,medium,high,xhigh,max"},
 		{"gpt-6-sol", "none,low,medium,high,xhigh,max"},
 		{"gpt-6.1-sol", "low,medium,high,xhigh,max"},
+		{"gpt-6.1-terra", ""},
 		{"claude-haiku-4-5", ""},
 		{"claude-sonnet-5-5", "low,medium,high,xhigh,max"},
 		{"claude-opus-5-5", "low,medium,high,xhigh,max"},

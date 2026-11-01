@@ -756,8 +756,8 @@ fn pty_model_picker_keeps_the_region_and_accepts_the_next_turn() {
     pty.wait("❯ ".as_bytes());
     pty.send(b"/model\r");
     pty.wait(b"Select a model");
-    let screen = String::from_utf8_lossy(&pty.raw);
-    assert!(screen.contains("current"), "{screen}");
+    // The current model is on a later row, possibly in another pty read.
+    pty.wait(b"current");
     let start = pty.raw.len();
     pty.send(b"\r");
     pty.wait("❯ ".as_bytes());
@@ -766,7 +766,8 @@ fn pty_model_picker_keeps_the_region_and_accepts_the_next_turn() {
         .any(|bytes| bytes == b"\x1b[?25l"));
     pty.send(b"after model picker\r");
     let (mut stream, body) = pty.request(&listener);
-    assert_eq!(body["model"], "gpt-6-luna");
+    assert_eq!(body["model"], "gpt-6.1-sol");
+    assert_eq!(body["reasoning"]["effort"], "high");
     assert!(body.to_string().contains("after model picker"), "{body}");
     respond(&mut stream, false);
     pty.wait(b"\x1b[?2004h");
@@ -847,6 +848,7 @@ fn pty_model_selection_dims_picker_rules_and_reprobes_after_switching() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut command = command(&directory, "chat");
+    command.args(["--model", "gpt-6-luna"]);
     command
         .env("OPENAI_API_KEY", "offline-key")
         .env_remove("NO_COLOR")

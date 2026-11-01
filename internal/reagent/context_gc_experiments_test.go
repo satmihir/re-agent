@@ -72,8 +72,8 @@ func TestMain_ContextGCExperimentEnvironment(t *testing.T) {
 			t.Setenv("REAGENT_CONTEXT_GC_AGE_STEPS", test.age)
 			t.Setenv("REAGENT_CONTEXT_GC_CONSOLIDATE", test.consolidate)
 			args := []string{"run", "--workspace", t.TempDir(), "--show-context"}
-			if test.gc {
-				args = append(args, "--context-gc")
+			if !test.gc {
+				args = append(args, "--context-gc=false")
 			}
 			var out, errs bytes.Buffer
 			code := Main(context.Background(), append(args, "task"), strings.NewReader(""), &out, &errs)

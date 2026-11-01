@@ -612,7 +612,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := Main(context.Background(), []string{"run",
-		"--workspace", root, "--show-context", "Where is the timeout set?"}, strings.NewReader(""), &stdout, &stderr)
+		"--workspace", root, "--show-context", "--context-gc=false", "Where is the timeout set?"}, strings.NewReader(""), &stdout, &stderr)
 	if code != exitOK {
 		t.Fatalf("exit %d, stderr: %s", code, stderr.String())
 	}
@@ -626,7 +626,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, err := PreviewRequest(Config{
-		Provider: openaiName, Model: DefaultOpenAIModel, ReasoningEffort: DefaultReasoningEffort,
+		Provider: openaiName, Model: DefaultOpenAIModel, ReasoningEffort: "high",
 		Registry: registry, WorkspacePath: ws.Root(),
 	}, "Where is the timeout set?", collectSnapshot(context.Background(), ws.Root(), false))
 	if err != nil {
@@ -708,10 +708,10 @@ func TestMain_ReadOnlyWithholdsMutatingTools(t *testing.T) {
 		return strings.Join(names, ",") + " | " + strings.SplitN(mode, "\n", 2)[0]
 	}
 
-	if got := declared(); got != "delete_file,edit_file,exec,git_inspect,list_files,read_file,request_workspace_access,search_text,switch_workspace,write_file | Mode: read, write, and execute" {
+	if got := declared(); got != "delete_file,edit_file,exec,git_inspect,list_files,read_file,recall,request_workspace_access,search_text,switch_workspace,write_file | Mode: read, write, and execute" {
 		t.Fatalf("default run declared %q", got)
 	}
-	if got := declared("--read-only"); got != "git_inspect,list_files,read_file,request_workspace_access,search_text,switch_workspace | Mode: read only" {
+	if got := declared("--read-only"); got != "git_inspect,list_files,read_file,recall,request_workspace_access,search_text,switch_workspace | Mode: read only" {
 		t.Fatalf("read-only run declared %q", got)
 	}
 }

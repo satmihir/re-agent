@@ -93,6 +93,24 @@ SCENARIOS = {
             ("show", "Invalid paste followed by clean Ctrl-C cancellation"),
         ],
     },
+    "default-model": {
+        "chatgpt": True,
+        "default_model": True,
+        "size": (24, 110),
+        "steps": [
+            ("wait_status", "gpt-6.1-sol / high", 5),
+            ("show", "Default model and high effort at startup"),
+            ("type", "hello"), ("key", "enter"),
+            ("wait", "ChatGPT reply.", 5),
+            ("wait_status", "gpt-6.1-sol / high", 5),
+            ("show", "Default model remains high after a request with GC enabled"),
+            ("type", "/model 9 fresh"), ("key", "enter"),
+            ("wait", "switched to gpt-6.1-terra", 5),
+            ("wait_status", "gpt-6.1-terra", 5),
+            ("show", "Terra selected by its appended catalog position"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "chatgpt-plan": {
         "chatgpt": True,
         "size": (30, 110),
@@ -581,7 +599,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -598,17 +616,21 @@ class Session:
             if login:
                 args = [binary, "login"]
             elif chatgpt:
-                args += ["--openai-auth", "chatgpt", "--no-project-instructions", "--model", "gpt-6-luna"]
+                args += ["--openai-auth", "chatgpt", "--no-project-instructions"]
+                if default_model:
+                    env["REAGENT_MODEL"] = ""
+                else:
+                    args += ["--model", "gpt-6-luna"]
             elif context_gc:
                 args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6-sol"]
             elif agents:
                 args += ["--agents", "--recap", "--no-project-instructions", "--model", "gpt-6-sol"]
             elif retry:
-                args += ["--model-retry-window", "5s", "--no-project-instructions"]
+                args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6-luna"]
             elif script_path is None:
                 args += ["--auto", "--no-project-instructions"]
             else:
-                args += ["--scripted", script_path]
+                args += ["--scripted", script_path, "--reasoning-effort", "low"]
             os.execve(binary, args, env)
         self.alive = True
 
@@ -876,6 +898,12 @@ def run(binary, name, scenario, workspace):
                         calls = []
                         if self.headers.get("Authorization") != "Bearer tty-access" or not self.headers.get("session_id"):
                             failures.append("ChatGPT request lacked bearer token or session_id")
+                        if scenario.get("default_model"):
+                            body = json.loads(request)
+                            if body.get("model") != "gpt-6.1-sol" or body.get("reasoning", {}).get("effort") != "high":
+                                failures.append("Default request did not use gpt-6.1-sol/high")
+                            if not any(tool.get("name") == "recall" for tool in body.get("tools", [])):
+                                failures.append("Default request lacked GC recall")
                         if "truncation" in json.loads(request):
                             failures.append("ChatGPT request included truncation")
                     if scenario.get("context_gc"):
@@ -976,7 +1004,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]
