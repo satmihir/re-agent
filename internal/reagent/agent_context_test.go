@@ -176,6 +176,7 @@ func TestAgents_ForkFallbackAdmissionAndFixedHistory(t *testing.T) {
 	for _, target := range []string{DefaultAnthropicModel, DefaultOpenAIModel} {
 		t.Run(target, func(t *testing.T) {
 			s := agentFixture(t)
+			s.cfg.Model = "gpt-6.1-luna"
 			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "original"}}, {Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{textBlock("visible")}, Native: NativeOutput{Provider: openaiName, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"secret"}`)}}}}}
 			n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect", Model: target, Context: &agentContext{Fork: true}})
 			if err != nil {

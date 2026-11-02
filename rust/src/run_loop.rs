@@ -1960,7 +1960,7 @@ mod boundary_tests {
         assert_eq!(recorded_pin["project"], "target project rules");
         assert_eq!(session.state["launch_instructions"], "launch project rules");
         session.config["provider"] = json!("openai");
-        session.config["model"] = json!("gpt-6-sol");
+        session.config["model"] = json!("gpt-6.1-sol");
         session.config["scripted"] = json!("");
         session.config["checkpoint_enabled"] = json!(true);
         crate::checkpoint::save(&session, "terminal", "").unwrap();
@@ -2497,9 +2497,9 @@ mod boundary_tests {
             error,
             "Auto fallback needs a catalog model with a known window and supported explicit effort"
         );
-        let mut session = Session::new(json!({"workspace":dir.path(),"provider":"openai","auth_mode":"chatgpt","model":"gpt-6-sol","reasoning_effort":"medium","auto":true})).unwrap();
+        let mut session = Session::new(json!({"workspace":dir.path(),"provider":"openai","auth_mode":"chatgpt","model":"gpt-6.1-sol","reasoning_effort":"medium","auto":true})).unwrap();
         assert_eq!(session.state["auto_enabled"], true);
-        assert_eq!(session.state["auto_fallback_model"], "gpt-6-sol");
+        assert_eq!(session.state["auto_fallback_model"], "gpt-6.1-sol");
         assert!(session.state["auto_routes"].as_array().unwrap().len() > 1);
         session.state["auto_usage"]["input_tokens"] = json!(12);
         session.state["auto_attempts"] = json!(2);
@@ -2530,11 +2530,11 @@ mod boundary_tests {
             json!({}),
         );
         session.config["provider"] = json!("openai");
-        session.config["model"] = json!("gpt-6-sol");
+        session.config["model"] = json!("gpt-6.1-sol");
         session.config["reasoning_effort"] = json!("medium");
         session.state["auto_enabled"] = json!(true);
         session.state["auto_routes"] =
-            json!([{"id":"capable","model":"gpt-6-sol","reasoning_effort":"medium"}]);
+            json!([{"id":"capable","model":"gpt-6.1-sol","reasoning_effort":"medium"}]);
         session.state["auto_usage"] = json!({"known":true,"input_tokens":12,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0});
         for turn in ["first", "second"] {
             session.state["routing_off"] = json!(true);
@@ -2578,12 +2578,12 @@ mod boundary_tests {
             json!({}),
         );
         session.config["provider"] = json!("openai");
-        session.config["model"] = json!("gpt-6-sol");
+        session.config["model"] = json!("gpt-6.1-sol");
         session.config["reasoning_effort"] = json!("low");
         session.config["scripted"] = json!(dir.path().join("removed-script.json"));
         session.state["auto_enabled"] = json!(true);
         session.state["auto_routes"] =
-            json!([{"id":"capable","model":"gpt-6-sol","reasoning_effort":"medium"}]);
+            json!([{"id":"capable","model":"gpt-6.1-sol","reasoning_effort":"medium"}]);
         let result = session.submit("task");
         assert_eq!(result["status"], "cancelled", "{result}");
         assert_eq!(result["reason"], "cancelled during routing");
@@ -3363,7 +3363,7 @@ mod boundary_tests {
         if let Ok(display) = std::env::var(CHILD) {
             let root = std::env::var("REAGENT_LOOP_LIVE_WORKSPACE").unwrap();
             let display = display == "true";
-            let mut session = Session::new(json!({"workspace":root,"provider":"openai","model":"gpt-6-sol","proxied":true,"agents":true,"_display":display,"context_window_tokens":100000,"max_steps":5,"no_project_instructions":true,"trace_dir":format!("{root}/traces")})).unwrap();
+            let mut session = Session::new(json!({"workspace":root,"provider":"openai","model":"gpt-6.1-sol","proxied":true,"agents":true,"_display":display,"context_window_tokens":100000,"max_steps":5,"no_project_instructions":true,"trace_dir":format!("{root}/traces")})).unwrap();
             session.state["last_request"] = types::usage_zero(true);
             let mut input = display.then(crate::terminal::Input::new);
             if let Some(input) = input.as_mut() {

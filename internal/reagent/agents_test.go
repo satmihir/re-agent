@@ -35,7 +35,7 @@ func agentFixture(t *testing.T) *Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Provider: openaiName, Model: "gpt-6-sol", Workspace: ws, WorkspacePath: ws.Root(), Registry: registry, Agents: true}
+	cfg := Config{Provider: openaiName, Model: "gpt-6.1-sol", Workspace: ws, WorkspacePath: ws.Root(), Registry: registry, Agents: true}
 	s := NewSession(cfg, NewScriptedModel(), NewTrace(io.Discard), io.Discard)
 	s.agentModel = func(Config, *Trace) (Model, error) { return NewScriptedModel(turn(textBlock("child done"))), nil }
 	t.Cleanup(s.closeAgents)
@@ -400,7 +400,7 @@ func TestAgents_RosterSurvivesCompactionModelSwitchAndResume(t *testing.T) {
 		t.Fatalf("compact %+v %v", compact, err)
 	}
 	c := &conversation{session: s, trace: s.trace, progress: io.Discard, client: NewHTTPClient(), keys: map[string]string{openaiName: "test"}}
-	info, _ := findModel("gpt-6-luna")
+	info, _ := findModel("gpt-6.1-luna")
 	c.switchTo(info)
 	fresh := c.session
 	t.Cleanup(func() {
@@ -734,7 +734,7 @@ func TestAgents_ModelOverrideIsFixedInNamedSession(t *testing.T) {
 	if selected.Provider != anthropicName || selected.Model != "claude-sonnet-5-5" {
 		t.Fatal("model override ignored")
 	}
-	s.cfg.Model = "gpt-6-luna"
+	s.cfg.Model = "gpt-6.1-luna"
 	s.model = NewScriptedModel(turn(callBlock("send", "send", `{"name":"named","message":"later"}`)), turn(callBlock("w2", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "later turn")
 	s.agents.mu.Lock()
@@ -1034,7 +1034,7 @@ func TestAgents_CustomTraceDirectorySurvivesNestingAndFreshSwitch(t *testing.T) 
 	s.model = NewScriptedModel(turn(spawnBlock("s", "parent", "parent"), callBlock("w", "wait", `{"ids":["parent"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "nested")
 	c := &conversation{session: s, trace: s.trace, progress: io.Discard, client: NewHTTPClient(), keys: map[string]string{openaiName: "test"}}
-	info, _ := findModel("gpt-6-luna")
+	info, _ := findModel("gpt-6.1-luna")
 	c.switchTo(info)
 	statuses, err := c.session.waitAgents(context.Background(), []string{"parent"})
 	if err != nil || len(statuses) != 1 || statuses[0].DeliveryRunID == "" {

@@ -155,7 +155,7 @@ fn default_model_and_effort_preview_and_explicit_overrides() {
         ("", vec!["--model", "gpt-6.1-terra"], "gpt-6.1-terra", ""),
         ("", vec!["--reasoning-effort", "low"], "gpt-6.1-sol", "low"),
         ("", vec!["--reasoning-effort", ""], "gpt-6.1-sol", ""),
-        ("gpt-6-luna", vec![], "gpt-6-luna", "low"),
+        ("gpt-6.1-luna", vec![], "gpt-6.1-luna", "medium"),
         (
             "gpt-6-luna",
             vec!["--model", "gpt-6.1-sol"],

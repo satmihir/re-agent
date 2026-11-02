@@ -104,10 +104,14 @@ SCENARIOS = {
             ("wait", "ChatGPT reply.", 5),
             ("wait_status", "gpt-6.1-sol / high", 5),
             ("show", "Default model remains high after a request with GC enabled"),
-            ("type", "/model 9 fresh"), ("key", "enter"),
+            ("type", "/model 8 fresh"), ("key", "enter"),
             ("wait", "switched to gpt-6.1-terra", 5),
             ("wait_status", "gpt-6.1-terra", 5),
-            ("show", "Terra selected by its appended catalog position"),
+            ("show", "Terra selected by its catalog position"),
+            ("type", "/model 1 fresh"), ("key", "enter"),
+            ("wait", "switched to gpt-6.1-luna", 5),
+            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("show", "6.1 Luna selected with its medium default"),
             ("expect", "status_row_last"),
         ],
     },
@@ -126,7 +130,7 @@ SCENARIOS = {
             ("wait", "Next ChatGPT turn.", 5),
             ("wait_status", "ChatGPT plan", 5),
             ("type", "/status"), ("key", "enter"),
-            ("wait", "model      gpt-6-luna (openai · ChatGPT plan)", 5),
+            ("wait", "model      gpt-6.1-luna (openai · ChatGPT plan)", 5),
             ("wait_status", "ChatGPT plan", 5),
             ("idle", 0.1),
             ("show", "ChatGPT reply, next turn and status after fake-server requests"),
@@ -167,7 +171,7 @@ SCENARIOS = {
             ("expect", "screen_lacks", "Status turn complete."),
             ("release", "finish"),
             ("wait", "Status turn complete.", 5),
-            ("wait_status", "gpt-6-luna / low", 5),
+            ("wait_status", "gpt-6.1-luna / medium", 5),
             ("expect", "status_row_last"),
         ],
     },
@@ -177,13 +181,13 @@ SCENARIOS = {
             ("idle", 0.5), ("type", "inspect repeatedly"), ("key", "enter"),
             ("wait", "context GC: dropped 1 results", 15),
             ("wait", "GC turn complete.", 10),
-            ("wait_status", "gpt-6-sol / low", 5),
+            ("wait_status", "gpt-6.1-sol / high", 5),
             ("show", "lossless GC notice and restored prompt"),
             ("expect", "screen_has", "context GC: dropped 1 results"),
             ("expect", "status_row_last"),
             ("type", "next question"), ("key", "enter"),
             ("wait", "Next turn works.", 5),
-            ("wait_status", "gpt-6-sol / low", 5),
+            ("wait_status", "gpt-6.1-sol / high", 5),
             ("expect", "status_row_last"),
         ],
     },
@@ -222,7 +226,7 @@ SCENARIOS = {
             ("release", "finish"),
             ("wait", "t1 research results delivered", 8),
             ("wait", "tree cost: 70 input", 8),
-            ("wait_status", "gpt-6-sol / low", 8),
+            ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "finished and delivered notices"),
             ("expect", "all_lines", ["t1 research finished · completed", "t1 research results delivered"]),
             ("expect", "all_lack", ["t2 nested finished", "PRIVATE CHILD REPLY"]),
@@ -235,7 +239,7 @@ SCENARIOS = {
         "steps": [
             ("idle", 0.5), ("type", "delegate a file change"), ("key", "enter"),
             ("wait", "agent t1: create agent.txt", 8),
-            ("wait_status", "gpt-6-sol / low", 8),
+            ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "writing agent effects in the root recap"),
             ("expect", "screen_has", "Agent changed a file."),
             ("expect", "screen_has", "agent t1: create agent.txt (applied)"),
@@ -248,14 +252,14 @@ SCENARIOS = {
         "steps": [
             ("idle", 0.5), ("type", "delegate two tasks"), ("key", "enter"),
             ("wait", "tree cost: 50 input", 8),
-            ("wait_status", "gpt-6-sol / low", 8),
+            ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "parallel agents and tree token cost"),
             ("expect", "screen_has", "tree cost: 50 input"),
             ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
             ("expect", "status_row_last"),
             ("type", "ask my tests agent again"), ("key", "enter"),
             ("wait", "tree cost: 40 input", 8),
-            ("wait_status", "gpt-6-sol / low", 8),
+            ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "named agent reused in another chat turn"),
             ("expect", "screen_has", "tree cost: 40 input"),
             ("expect", "status_row_last"),
@@ -284,11 +288,11 @@ SCENARIOS = {
             ("type", "say hello"),
             ("key", "enter"),
             ("wait", "model attempt 1 failed", 5),
-            ("wait_status", "gpt-6-luna / low", 5),
+            ("wait_status", "gpt-6.1-luna / medium", 5),
             ("show", "waiting before the next model attempt"),
             ("expect", "status_row_last"),
             ("wait", "Hello after retry", 6),
-            ("wait_status", "gpt-6-luna / low", 6),
+            ("wait_status", "gpt-6.1-luna / medium", 6),
             ("show", "model reply after retry"),
             ("expect", "screen_has", "1 unreported retry"),
             ("expect", "status_row_last"),
@@ -620,13 +624,13 @@ class Session:
                 if default_model:
                     env["REAGENT_MODEL"] = ""
                 else:
-                    args += ["--model", "gpt-6-luna"]
+                    args += ["--model", "gpt-6.1-luna"]
             elif context_gc:
-                args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6-sol"]
+                args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6.1-sol"]
             elif agents:
-                args += ["--agents", "--recap", "--no-project-instructions", "--model", "gpt-6-sol"]
+                args += ["--agents", "--recap", "--no-project-instructions", "--model", "gpt-6.1-sol"]
             elif retry:
-                args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6-luna"]
+                args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6.1-luna"]
             elif script_path is None:
                 args += ["--auto", "--no-project-instructions"]
             else:

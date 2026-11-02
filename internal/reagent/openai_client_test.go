@@ -178,9 +178,9 @@ func TestOpenAI_RoundTripPreservesNativeItems(t *testing.T) {
 }
 
 func TestOpenAI_CatalogPreviewMatchesFirstLiveRequest(t *testing.T) {
-	api := newFakeAPI(t, okReply(strings.ReplaceAll(textReply, "test-model", "gpt-6-luna")))
+	api := newFakeAPI(t, okReply(strings.ReplaceAll(textReply, "test-model", "gpt-6.1-luna")))
 	cfg := testConfig(t, NewEchoTool())
-	cfg.Provider, cfg.Model, cfg.ReasoningEffort = openaiName, "gpt-6-luna", "low"
+	cfg.Provider, cfg.Model, cfg.ReasoningEffort = openaiName, "gpt-6.1-luna", "low"
 	trace := NewTrace(io.Discard)
 	model := NewOpenAIModel("sk-secret-key", api.server.URL, api.server.Client(), trace)
 	_, result := oneTurn(t, context.Background(), cfg, model, trace, filepath.Join(t.TempDir(), "events.jsonl"), "find the marker")

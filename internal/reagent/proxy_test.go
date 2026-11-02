@@ -51,7 +51,7 @@ func proxiedRun(t *testing.T, proxyURL, openAIKey string) (code int, stdout, std
 	t.Setenv("OPENAI_API_KEY", openAIKey)
 	tracePath := filepath.Join(t.TempDir(), "events.jsonl")
 	var out, errs bytes.Buffer
-	code = Main(context.Background(), []string{"run", "--workspace", t.TempDir(), "--model", "gpt-6-luna",
+	code = Main(context.Background(), []string{"run", "--workspace", t.TempDir(), "--model", "gpt-6.1-luna",
 		"--trace-file", tracePath, "where is the marker?"}, strings.NewReader(""), &out, &errs)
 	raw, _ := os.ReadFile(tracePath)
 	return code, out.String(), errs.String(), string(raw)
@@ -133,8 +133,8 @@ func TestConversation_ProxyMakesOpenAIModelsUsable(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	c.commandModel(context.Background(), "gpt-6-luna", nil, &stderr)
-	if !strings.Contains(stderr.String(), "switched to gpt-6-luna (openai via API_PROXY_URL)") {
+	c.commandModel(context.Background(), "gpt-6.1-luna", nil, &stderr)
+	if !strings.Contains(stderr.String(), "switched to gpt-6.1-luna (openai via API_PROXY_URL)") {
 		t.Fatalf("switch: %s", stderr.String())
 	}
 	stderr.Reset()
@@ -185,7 +185,7 @@ func TestMain_PreviewShowsTheProxyForm(t *testing.T) {
 	preview := func() map[string]any {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
-		if code := Main(context.Background(), []string{"run", "--workspace", t.TempDir(), "--model", "gpt-6-luna", "--show-context", "x"},
+		if code := Main(context.Background(), []string{"run", "--workspace", t.TempDir(), "--model", "gpt-6.1-luna", "--show-context", "x"},
 			strings.NewReader(""), &stdout, &stderr); code != exitOK {
 			t.Fatalf("exit %d: %s", code, stderr.String())
 		}

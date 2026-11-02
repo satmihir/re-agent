@@ -321,11 +321,11 @@ mod tests {
     use super::*;
 
     fn config() -> Value {
-        json!({"workspace":"/work","model":"gpt-6-sol","reasoning_effort":"medium"})
+        json!({"workspace":"/work","model":"gpt-6.1-sol","reasoning_effort":"medium"})
     }
 
     fn routes() -> Vec<Value> {
-        ["low", "medium"].into_iter().map(|effort| json!({"id":effort,"model":"gpt-6-sol","reasoning_effort":effort,"description":"route"})).collect()
+        ["low", "medium"].into_iter().map(|effort| json!({"id":effort,"model":"gpt-6.1-sol","reasoning_effort":effort,"description":"route"})).collect()
     }
 
     fn user(text: &str) -> Value {
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn declaration_order_nulls_and_project_presence_match_go() {
         let packet = build(&config(), &[user("task")], false, &routes()).unwrap();
-        assert_eq!(packet["state"], "{\"workspace\":\"/work\",\"mode\":\"read, write, and execute\",\"plan_mode\":false,\"current_model\":\"gpt-6-sol\",\"current_effort\":\"medium\",\"user_requests_and_summaries\":[{\"entry\":1,\"kind\":\"user\",\"user\":{\"text\":\"task\"}}],\"recent_evidence\":null,\"omitted_earlier_entries\":0,\"omitted_native_items\":0}");
+        assert_eq!(packet["state"], "{\"workspace\":\"/work\",\"mode\":\"read, write, and execute\",\"plan_mode\":false,\"current_model\":\"gpt-6.1-sol\",\"current_effort\":\"medium\",\"user_requests_and_summaries\":[{\"entry\":1,\"kind\":\"user\",\"user\":{\"text\":\"task\"}}],\"recent_evidence\":null,\"omitted_earlier_entries\":0,\"omitted_native_items\":0}");
         assert!(packet["truncations"].is_null());
         let mut config = config();
         config["project_instructions"] = json!("");
@@ -542,8 +542,8 @@ mod boundary_tests {
     use super::*;
 
     fn build_history(history: &[Value]) -> Value {
-        let routes: Vec<_> = ["low", "medium"].into_iter().map(|effort| json!({"id":effort,"model":"gpt-6-sol","reasoning_effort":effort,"description":"route"})).collect();
-        build(&json!({"model":"gpt-6-sol"}), history, false, &routes).unwrap()
+        let routes: Vec<_> = ["low", "medium"].into_iter().map(|effort| json!({"id":effort,"model":"gpt-6.1-sol","reasoning_effort":effort,"description":"route"})).collect();
+        build(&json!({"model":"gpt-6.1-sol"}), history, false, &routes).unwrap()
     }
 
     #[test]

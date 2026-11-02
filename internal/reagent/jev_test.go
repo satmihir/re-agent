@@ -20,7 +20,7 @@ const jevReply = `{"model":"jev-1.13.0","answers":{"route":{"type":"choice","cho
 
 func jevTestRoutes() []jevRoute {
 	return []jevRoute{
-		{ID: "fast", Model: "gpt-6-luna", Effort: "low", Description: "Clear lookups and mechanical changes with straightforward tool results."},
+		{ID: "fast", Model: "gpt-6.1-luna", Effort: "low", Description: "Clear lookups and mechanical changes with straightforward tool results."},
 		{ID: "capable", Model: "gpt-6.1-sol", Effort: "medium", Description: "A concrete multi-step task needing integration of several findings."},
 	}
 }
@@ -112,7 +112,7 @@ func TestJev_DecideAcceptsRoundedProbabilities(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			reply := fmt.Sprintf(`{"model":"jev-1.13.0","answers":{"route":{"type":"choice","choice":"fast","confidence":0.33,"probabilities":{"fast":%s,"capable":%s,"high":%s}}},"usage":{"input_tokens":1,"output_tokens":1}}`, test.fast, test.capable, test.high)
 			api := newFakeAPI(t, okReply(reply))
-			routes := append(jevTestRoutes(), jevRoute{ID: "high", Model: "gpt-6-sol", Effort: "high", Description: "Difficult reasoning."})
+			routes := append(jevTestRoutes(), jevRoute{ID: "high", Model: "gpt-6.1-sol", Effort: "high", Description: "Difficult reasoning."})
 			decision, err := newJevClient("fake", api.server.URL, api.server.Client()).decide(context.Background(), "synthetic task", routes)
 			if err != nil || decision.Route != "fast" || len(decision.Probabilities) != 3 || decision.Probabilities["high"] != 0.33 {
 				t.Fatalf("rounded decision: %+v, %v", decision, err)

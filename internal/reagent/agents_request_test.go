@@ -18,8 +18,8 @@ func TestAgents_DisabledRequestBytes(t *testing.T) {
 		readOnly bool
 		digest   string
 	}{
-		{openaiName, false, "6a522f77ee047bed903fde40494aa063d6bb17887bd099c3ad929a043cc1f215"},
-		{openaiName, true, "debeeae4c855561849d882ab24f674fea921227c905ddbfce27cd32baca8d9c1"},
+		{openaiName, false, "c125fdab7be1d3cdaf9d004803588039ee9c4b4f5de3a5760e726990283cb227"},
+		{openaiName, true, "11ead07940577186f1472dcd01faa678081093efadcb44f2e3e31b5402c999ac"},
 		{anthropicName, false, "581b698d8e551b3ba49ae1f1b79d988d2f28105dcdbac22636ce0105bd262648"},
 		{anthropicName, true, "13a10d400c2e4c810614ba09459986bb5f4de15e3a66ba4f203091fb5a3e66e9"},
 	} {
@@ -28,7 +28,7 @@ func TestAgents_DisabledRequestBytes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			model := "gpt-6-sol"
+			model := "gpt-6.1-sol"
 			if scenario.provider == anthropicName {
 				model = "claude-sonnet-5-5"
 			}
