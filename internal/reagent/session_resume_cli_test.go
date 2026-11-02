@@ -156,7 +156,7 @@ func TestChat_AgentsResumeEndsRosterWithoutRestart(t *testing.T) {
 	t.Setenv("API_PROXY_URL", server.URL)
 	var out, errOut bytes.Buffer
 	traceDir := t.TempDir()
-	if code := Main(context.Background(), []string{"chat", "--agents", "--trace-dir", traceDir, "--workspace", t.TempDir()}, strings.NewReader("before\n/exit\n"), &out, &errOut); code != exitOK {
+	if code := Main(context.Background(), []string{"chat", "--trace-dir", traceDir, "--workspace", t.TempDir()}, strings.NewReader("before\n/exit\n"), &out, &errOut); code != exitOK {
 		t.Fatalf("first %d %s", code, errOut.String())
 	}
 	paths, err := filepath.Glob(filepath.Join(traceDir, "agent-*", "events.jsonl"))

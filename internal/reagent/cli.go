@@ -81,12 +81,19 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		}
 	}
 
-	resumeFlag := false
+	resumeFlag, agentsFlag := false, false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "resume" {
 			resumeFlag = true
 		}
+		if f.Name == "agents" {
+			agentsFlag = true
+		}
 	})
+	// Scripted replay cannot start live child sessions.
+	if options.script != "" && !agentsFlag {
+		options.agents = false
+	}
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	switch {
 	case command == "run" && resumeFlag:
@@ -500,7 +507,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.inRunCompact, "in-run-compact", false, "opt in to bounded compaction within a long run; default off")
 	fs.BoolVar(&o.contextGC, "context-gc", true, "lossless context GC with recall; default on, disable with --context-gc=false")
 	fs.DurationVar(&o.modelRetryWindow, "model-retry-window", 0, "keep retrying transient model failures within this window (e.g. 12h); 0 disables")
-	fs.BoolVar(&o.agents, "agents", false, "offer concurrent agents with names, nesting and per-spawn read/write authority")
+	fs.BoolVar(&o.agents, "agents", true, "offer concurrent agents; default on except scripted replay, disable with --agents=false")
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")

@@ -20,7 +20,7 @@ fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("in-run-compact", "", "opt in to bounded compaction within a long run; default off", json!(false)),
         ("context-gc", "", "lossless context GC with recall; default on, disable with --context-gc=false", json!(true)),
         ("model-retry-window", "DURATION", "keep retrying transient model failures within this window (e.g. 12h); 0 disables", json!(0)),
-        ("agents", "", "offer concurrent agents with names, nesting and per-spawn read/write authority", json!(false)),
+        ("agents", "", "offer concurrent agents; default on except scripted replay, disable with --agents=false", json!(true)),
         ("no-project-instructions", "", "do not load the workspace root's AGENTS.md", json!(false)),
         ("recap", "", "show the completed run's operation recap", json!(false)),
         ("report-friction", "", "offer a trace-only harness friction reporter; at most 10 reports per process", json!(false)),
@@ -374,6 +374,10 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
     };
     let mut prompt = trim_bytes(&joined).to_vec();
     let scripted = !text(&cfg, "scripted").is_empty();
+    // Scripted replay cannot start live child sessions.
+    if scripted && !used.contains("agents") {
+        cfg["agents"] = json!(false);
+    }
     let preview = yes(&cfg, "show_context");
     let resume = !text(&cfg, "resume").is_empty();
     let bad = if command == "run" && used.contains("resume") {
