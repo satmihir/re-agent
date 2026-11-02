@@ -85,8 +85,8 @@ func TestAgents_SubtreeAccountsCollectedNestedAgents(t *testing.T) {
 func TestAgents_VisibilitySnapshotConcurrentMetering(t *testing.T) {
 	s := agentFixture(t)
 	s.agents.mu.Lock()
-	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", State: "running", Cost: Usage{Known: true}}, depth: 1, working: true}
-	s.agents.nodes["t2"] = &agentThread{AgentThread: AgentThread{ID: "t2", ParentID: "t1", State: "running", Cost: Usage{Known: true}}, depth: 2, working: true}
+	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", Kind: "task", State: "running", Cost: Usage{Known: true}}, depth: 1, working: true}
+	s.agents.nodes["t2"] = &agentThread{AgentThread: AgentThread{ID: "t2", ParentID: "t1", Kind: "task", State: "running", Cost: Usage{Known: true}}, depth: 2, working: true}
 	s.agents.mu.Unlock()
 	// Synthetic workers exercise the same meter as a running Turn without sharing Sessions.
 	child := &Session{agents: s.agents, agentID: "t2"}
@@ -139,7 +139,7 @@ func TestAgents_SubtreePagingRetainsFullCost(t *testing.T) {
 	s := agentFixture(t)
 	for i := 1; i <= 300; i++ {
 		id := fmt.Sprintf("t%d", i)
-		s.agents.archive[id] = agentObservation{AgentThread: AgentThread{ID: id, ParentID: "root", Task: strings.Repeat("task", 40), Cost: Usage{Known: true, InputTokens: 1}}, Depth: 1}
+		s.agents.archive[id] = agentObservation{AgentThread: AgentThread{ID: id, ParentID: "root", Kind: "task", Task: strings.Repeat("task", 40), Cost: Usage{Known: true, InputTokens: 1}}, Depth: 1}
 	}
 	tool, _ := s.cfg.Registry.Lookup("threads")
 	offset, seen := 0, 0

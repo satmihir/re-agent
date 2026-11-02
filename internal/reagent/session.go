@@ -163,6 +163,9 @@ func (s *Session) restore(cp chatCheckpoint) {
 		if cp.AgentSubtree != nil {
 			s.agents.accountingComplete = cp.AgentSubtree.AccountingComplete
 			for _, record := range cp.AgentSubtree.Threads {
+				if record.Kind == "" {
+					record.Kind = "task"
+				}
 				if record.State == "running" {
 					record.EffectsUnknown = true
 				}
@@ -178,6 +181,9 @@ func (s *Session) restore(cp chatCheckpoint) {
 			}
 		}
 		for _, record := range cp.AgentRoster {
+			if record.Kind == "" {
+				record.Kind = "task"
+			}
 			if record.State == "running" {
 				record.EffectsUnknown = true
 			}

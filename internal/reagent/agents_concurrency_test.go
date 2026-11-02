@@ -236,7 +236,7 @@ func TestAgents_SwitchedAndAliasedPathsKeepSharedPublicationGuard(t *testing.T) 
 	if err := os.Symlink("sub", filepath.Join(root, "alias")); err != nil {
 		t.Fatal(err)
 	}
-	s.model = NewScriptedModel(turn(writeSpawnBlock("spawn", "writer", "writer"), callBlock("wait", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(writeTeammateBlock("spawn", "writer", "writer"), callBlock("wait", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "prepare writer")
 	child := s.agents.nodes["t1"].session.workspace.active
 	destination, bad := workspaceDestinationAt(context.Background(), filepath.Join(root, "sub"), false)
@@ -389,7 +389,7 @@ func TestAgents_ChildReadsDoNotAuthorizeUnreadParentOrSibling(t *testing.T) {
 		}
 		return NewScriptedModel(turn(callBlock("write", "write_file", `{"path":"existing","content":"unread overwrite"}`)), turn(textBlock("done"))), nil
 	}
-	s.model = NewScriptedModel(turn(spawnBlock("read", "read", "reader"), callBlock("wait", "wait", `{"ids":["reader"]}`)), turn(callBlock("write", "write_file", `{"path":"existing","content":"unread parent overwrite"}`), writeSpawnBlock("sibling", "write", "writer"), callBlock("w2", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(spawnBlock("read", "read", "reader"), callBlock("wait", "wait", `{"ids":["reader"]}`)), turn(callBlock("write", "write_file", `{"path":"existing","content":"unread parent overwrite"}`), writeTeammateBlock("sibling", "write", "writer"), callBlock("w2", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
 	result := agentTurn(t, s, "read evidence stays local")
 	if results(s)[2].Outcome.Code != "invalid_arguments" || results(s.agents.nodes["t2"].session)[0].Outcome.Code != "invalid_arguments" || len(result.Effects) != 0 {
 		t.Fatalf("read widened authority: %+v %+v", results(s), result.Effects)
@@ -405,7 +405,7 @@ func TestAgents_CancelExecKeepsUncertaintyAndRequiresResetBeforeSend(t *testing.
 	s.model = agentTestModel{generate: func(ctx context.Context, _ ModelRequest) (ModelResponse, error) {
 		step++
 		if step == 1 {
-			return turn(writeSpawnBlock("spawn", "sleep", "writer")), nil
+			return turn(writeTeammateBlock("spawn", "sleep", "writer")), nil
 		}
 		if step == 2 {
 			if err := waitForAgentFile(ctx, filepath.Join(s.cfg.WorkspacePath, "ready")); err != nil {

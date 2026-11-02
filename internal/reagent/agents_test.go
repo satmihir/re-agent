@@ -58,6 +58,11 @@ func spawnBlock(id, task, name string) OutputBlock {
 	return callBlock(id, "spawn", string(args))
 }
 
+func teammateBlock(id, task, name string) OutputBlock {
+	args, _ := json.Marshal(spawnArgs{Kind: "teammate", Task: task, Name: name, Context: &agentContext{Brief: "inspect independently"}})
+	return callBlock(id, "spawn", string(args))
+}
+
 func agentResults(history []Entry) []agentResult {
 	var results []agentResult
 	for _, e := range history {
@@ -165,12 +170,13 @@ func TestAgents_NestedDepthCapAndParentLocalControl(t *testing.T) {
 	agentTurn(t, s, "nested")
 	ttree := s.agents
 	ttree.mu.Lock()
-	if len(ttree.nodes) != 3 {
-		t.Errorf("tree size %d", len(ttree.nodes))
+	tree := ttree.subtreeLocked("root")
+	if tree.TotalAgents != 3 {
+		t.Errorf("tree size %d", tree.TotalAgents)
 	}
 	paths := make([]string, 0)
-	for _, n := range ttree.nodes {
-		if n.depth == 3 {
+	for _, n := range tree.Threads {
+		if n.Depth == 3 {
 			paths = append(paths, n.TracePath)
 		}
 	}
@@ -195,21 +201,21 @@ func TestAgents_NestedDepthCapAndParentLocalControl(t *testing.T) {
 func TestAgents_CapacityFailsWithoutWaitingAndNamesAreUnique(t *testing.T) {
 	s := agentFixture(t)
 	var batch []OutputBlock
-	for i := 0; i < 9; i++ {
-		batch = append(batch, spawnBlock(fmt.Sprintf("s%d", i), "work", fmt.Sprintf("agent-%d", i)))
+	for i := 0; i < 17; i++ {
+		batch = append(batch, teammateBlock(fmt.Sprintf("s%d", i), "work", fmt.Sprintf("agent-%d", i)))
 	}
 	s.model = NewScriptedModel(turn(batch...), turn(textBlock("done")), turn(textBlock("done")))
 	agentTurn(t, s, "capacity")
 	got := results(s)
-	if len(got) != 9 || got[8].Outcome.OK || !strings.Contains(got[8].Outcome.Message, "at capacity: wait for or dismiss an agent") {
+	if len(got) != 17 || got[16].Outcome.OK || !strings.Contains(got[16].Outcome.Message, "at capacity: wait for or dismiss an agent") {
 		t.Fatalf("capacity: %+v", got)
 	}
-	if len(s.agentRoster()) != 8 {
+	if len(s.agentRoster()) != 16 {
 		t.Fatal("wrong live capacity")
 	}
-	s.model = NewScriptedModel(turn(callBlock("dismiss", "dismiss", `{"name":"agent-0"}`), spawnBlock("replace", "new", "agent-0")), turn(textBlock("done")), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(callBlock("dismiss", "dismiss", `{"name":"agent-0"}`), teammateBlock("replace", "new", "agent-0")), turn(textBlock("done")), turn(textBlock("done")))
 	agentTurn(t, s, "reuse name and slot")
-	if !results(s)[10].Outcome.OK {
+	if !results(s)[18].Outcome.OK {
 		t.Fatal("dismiss did not release slot/name")
 	}
 }
@@ -226,7 +232,7 @@ func TestAgents_NamedHistoryAndBusyMessagesSurviveLaterTurn(t *testing.T) {
 			return turn(textBlock("remembered result")), nil
 		}}, nil
 	}
-	s.model = NewScriptedModel(turn(spawnBlock("spawn", "first task", "tests"), callBlock("send", "send", `{"name":"tests","message":"queued task"}`)), turn(callBlock("wait", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(teammateBlock("spawn", "first task", "tests"), callBlock("send", "send", `{"name":"tests","message":"queued task"}`)), turn(callBlock("wait", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "first user turn")
 	s.model = NewScriptedModel(turn(callBlock("later", "send", `{"name":"tests","message":"later task"}`)), turn(callBlock("wait-later", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "ask my tests agent")
@@ -312,7 +318,7 @@ func TestAgents_ResetBlockedAgent(t *testing.T) {
 	s.agentModel = func(Config, *Trace) (Model, error) {
 		return NewScriptedModel(turn(), turn(textBlock("recovered"))), nil
 	}
-	s.model = NewScriptedModel(turn(spawnBlock("s", "invalid", "blocked")), turn(callBlock("w", "wait", `{"ids":["blocked"]}`)), turn(callBlock("deny", "send", `{"name":"blocked","message":"no"}`), callBlock("r", "reset", `{"name":"blocked"}`), callBlock("send", "send", `{"name":"blocked","message":"new task"}`)), turn(callBlock("w2", "wait", `{"ids":["blocked"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(teammateBlock("s", "invalid", "blocked")), turn(callBlock("w", "wait", `{"ids":["blocked"]}`)), turn(callBlock("deny", "send", `{"name":"blocked","message":"no"}`), callBlock("r", "reset", `{"name":"blocked"}`), callBlock("send", "send", `{"name":"blocked","message":"new task"}`)), turn(callBlock("w2", "wait", `{"ids":["blocked"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "reset")
 	if results(s)[2].Outcome.OK || !results(s)[3].Outcome.OK || s.agentRoster()[0].State != "idle" {
 		t.Fatalf("reset outcomes %+v", results(s))
@@ -350,7 +356,7 @@ func TestAgents_ReadOnlyPlanAndWorkspaceFixedAtSpawn(t *testing.T) {
 				}
 				return NewScriptedModel(turn(callBlock("write", "write_file", `{"path":"live.txt","content":"changed"}`), callBlock("exec", "exec", `{"argv":["touch","bad"],"cwd":"."}`), callBlock("read", "read_file", `{"path":"live.txt"}`)), turn(callBlock("switch", "switch_workspace", `{"path":"/"}`)), turn(textBlock("read-only result"))), nil
 			}
-			s.model = NewScriptedModel(turn(spawnBlock("s", "read", "reader")), turn(callBlock("w", "wait", `{"ids":["reader"]}`)), turn(textBlock("done")))
+			s.model = NewScriptedModel(turn(teammateBlock("s", "read", "reader")), turn(callBlock("w", "wait", `{"ids":["reader"]}`)), turn(textBlock("done")))
 			agentTurn(t, s, "plan parent can delegate")
 			path := s.agentRoster()[0].TracePath
 			denied, read := 0, false
@@ -387,7 +393,7 @@ func TestAgents_ReadOnlyPlanAndWorkspaceFixedAtSpawn(t *testing.T) {
 func TestAgents_RosterSurvivesCompactionModelSwitchAndResume(t *testing.T) {
 	s := agentFixture(t)
 	s.store = testSessionStore(t, s.ID)
-	s.model = NewScriptedModel(turn(spawnBlock("s", "inspect tests", "tests")), turn(callBlock("w", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(teammateBlock("s", "inspect tests", "tests")), turn(callBlock("w", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "keep named agent")
 	for _, e := range s.history {
 		if e.Assistant != nil {
@@ -492,7 +498,7 @@ func TestAgents_TokenAndStepCapsAndTreeCost(t *testing.T) {
 			if tokens && all[0].Result.Steps != 1 || !tokens && all[0].Result.Steps != maxAgentSteps+1 {
 				t.Fatal("cap not enforced")
 			}
-			if result.TreeCost.InputTokens != s.agentRoster()[0].Cost.InputTokens+result.Usage.InputTokens {
+			if result.TreeCost.InputTokens != s.agentSubtree().TotalCost.InputTokens+result.Usage.InputTokens {
 				t.Fatal("tree tokens double-counted")
 			}
 		})
@@ -667,7 +673,7 @@ func TestAgents_ResetInSpawnBatchDoesNotEraseUndeliveredResult(t *testing.T) {
 
 func TestAgents_NormalModelSwitchRetainsNamedAgentAndFreshRoster(t *testing.T) {
 	s := agentFixture(t)
-	s.model = NewScriptedModel(agentNativeResponse(turn(spawnBlock("s", "task", "named")), openaiName), agentNativeResponse(turn(callBlock("w", "wait", `{"ids":["named"]}`)), openaiName), agentNativeResponse(turn(textBlock("done")), openaiName))
+	s.model = NewScriptedModel(agentNativeResponse(turn(teammateBlock("s", "task", "named")), openaiName), agentNativeResponse(turn(callBlock("w", "wait", `{"ids":["named"]}`)), openaiName), agentNativeResponse(turn(textBlock("done")), openaiName))
 	agentTurn(t, s, "first turn")
 	c := &conversation{session: s, trace: s.trace, progress: io.Discard, client: NewHTTPClient(), keys: map[string]string{anthropicName: "test"}, traceDir: t.TempDir()}
 	info, _ := findModel("claude-sonnet-5-5")
@@ -693,7 +699,7 @@ func TestAgents_NormalModelSwitchRetainsNamedAgentAndFreshRoster(t *testing.T) {
 
 func TestAgents_ExplicitNameIsNotConfusedWithAnotherThreadID(t *testing.T) {
 	s := agentFixture(t)
-	s.model = NewScriptedModel(turn(spawnBlock("a", "first task", "first"), spawnBlock("b", "second task", "t1"), callBlock("send", "send", `{"name":"t1","message":"named target"}`)), turn(callBlock("wait", "wait", `{"ids":["t1","t2"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(teammateBlock("a", "first task", "first"), teammateBlock("b", "second task", "t1"), callBlock("send", "send", `{"name":"t1","message":"named target"}`)), turn(callBlock("wait", "wait", `{"ids":["t1","t2"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "ID and slug collision")
 	roster := s.agentRoster()
 	if len(roster) != 2 || roster[0].Task != "first task" || roster[1].Task != "named target" {
@@ -729,7 +735,7 @@ func TestAgents_ModelOverrideIsFixedInNamedSession(t *testing.T) {
 		selected = cfg
 		return NewScriptedModel(turn(textBlock("done")), turn(textBlock("later"))), nil
 	}
-	s.model = NewScriptedModel(turn(callBlock("s", "spawn", `{"task":"inspect","context":{"brief":"fresh"},"name":"named","model":"claude-sonnet-5-5"}`)), turn(callBlock("w", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(callBlock("s", "spawn", `{"kind":"teammate","task":"inspect","context":{"brief":"fresh"},"name":"named","model":"claude-sonnet-5-5"}`)), turn(callBlock("w", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "override")
 	if selected.Provider != anthropicName || selected.Model != "claude-sonnet-5-5" {
 		t.Fatal("model override ignored")
@@ -746,7 +752,7 @@ func TestAgents_ModelOverrideIsFixedInNamedSession(t *testing.T) {
 
 func TestAgents_WaitZeroOnIdleAgentIsNotTimeout(t *testing.T) {
 	s := agentFixture(t)
-	s.model = NewScriptedModel(turn(spawnBlock("s", "task", "named"), callBlock("w", "wait", `{"ids":["named"]}`), callBlock("zero", "wait", `{"ids":["named"],"timeout":0}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(teammateBlock("s", "task", "named"), callBlock("w", "wait", `{"ids":["named"]}`), callBlock("zero", "wait", `{"ids":["named"],"timeout":0}`)), turn(textBlock("done")))
 	agentTurn(t, s, "already idle")
 	var data struct {
 		TimedOut bool `json:"timed_out"`
@@ -1011,7 +1017,7 @@ func TestAgents_ResumedTombstonesDismissByIDAndName(t *testing.T) {
 			if strings.Contains(string(s.history[0].User.Roster), "tests") {
 				t.Fatal("next message retained tombstone")
 			}
-			s.model = NewScriptedModel(turn(spawnBlock("s", "replacement", "tests"), callBlock("w", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
+			s.model = NewScriptedModel(turn(teammateBlock("s", "replacement", "tests"), callBlock("w", "wait", `{"ids":["tests"]}`)), turn(textBlock("done")))
 			agentTurn(t, s, "reuse name")
 			if s.agentRoster()[0].ID != "t2" {
 				t.Fatal("ID reused")
@@ -1036,7 +1042,7 @@ func TestAgents_CustomTraceDirectorySurvivesNestingAndFreshSwitch(t *testing.T) 
 	c := &conversation{session: s, trace: s.trace, progress: io.Discard, client: NewHTTPClient(), keys: map[string]string{openaiName: "test"}}
 	info, _ := findModel("gpt-6.1-luna")
 	c.switchTo(info)
-	statuses, err := c.session.waitAgents(context.Background(), []string{"parent"})
+	statuses, err := c.session.waitAgents(context.Background(), []string{"t1"})
 	if err != nil || len(statuses) != 1 || statuses[0].DeliveryRunID == "" {
 		t.Fatalf("fresh switch lost delivery receipt: %+v %v", statuses, err)
 	}
@@ -1044,10 +1050,11 @@ func TestAgents_CustomTraceDirectorySurvivesNestingAndFreshSwitch(t *testing.T) 
 	agentTurn(t, c.session, "after fresh switch")
 	s.agents.mu.Lock()
 	defer s.agents.mu.Unlock()
-	if len(s.agents.nodes) != 3 {
+	tree := s.agents.subtreeLocked("root")
+	if tree.TotalAgents != 3 {
 		t.Fatal("missing nested or fresh agent")
 	}
-	for _, n := range s.agents.nodes {
+	for _, n := range tree.Threads {
 		if filepath.Dir(filepath.Dir(n.TracePath)) != s.agentTraceDir {
 			t.Fatalf("trace outside override: %s", n.TracePath)
 		}
@@ -1060,7 +1067,7 @@ func TestAgents_CustomTraceDirectorySurvivesNestingAndFreshSwitch(t *testing.T) 
 func TestAgents_LiveNameWinsOverResumedTombstone(t *testing.T) {
 	s := agentFixture(t)
 	s.restore(chatCheckpoint{ID: s.ID, Agents: true, AgentRoster: []AgentThread{{ID: "t1", ParentID: "root", Name: "tests"}}})
-	s.model = NewScriptedModel(turn(spawnBlock("s", "replacement", "tests"), callBlock("w", "wait", `{"ids":["tests"]}`), callBlock("dismiss-old", "dismiss", `{"id":"t1"}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(teammateBlock("s", "replacement", "tests"), callBlock("w", "wait", `{"ids":["tests"]}`), callBlock("dismiss-old", "dismiss", `{"id":"t1"}`)), turn(textBlock("done")))
 	agentTurn(t, s, "reuse ended name")
 	if !results(s)[1].Outcome.OK || !results(s)[2].Outcome.OK || len(s.agentRoster()) != 1 || s.agentRoster()[0].ID != "t2" {
 		t.Fatalf("live name/tombstone targeting: %+v %+v", results(s), s.agentRoster())

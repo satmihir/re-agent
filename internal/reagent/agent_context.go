@@ -94,8 +94,8 @@ func (s *Session) prepareAgentContext(ctx context.Context, cfg *Config, a spawnA
 	}
 	mode := "fork_native"
 	if cfg.Provider == s.cfg.Provider && cfg.Model == s.cfg.Model {
-		limits := fmt.Sprintf("\nFixed agent authority: %s; inherited plan mode: %t. Per-task limits: %d steps, %d calls, %d uncached-input plus output tokens.\n", a.Authority, cfg.PlanMode, maxAgentSteps, maxAgentCalls, maxAgentTokens)
-		prompt = "# Agent task\n\n" + agentInstructions + limits + prompt
+		limits := fmt.Sprintf("\nFixed agent authority: %s; inherited plan mode: %t.\n", a.Authority, cfg.PlanMode)
+		prompt = "# Agent task\n\n" + agentInstructions + agentKindPolicy(cfg.agentKind) + limits + prompt
 		// A switched parent's request view, not its foreign native history, is
 		// the prefix its provider actually cached.
 		if s.handoff != nil {

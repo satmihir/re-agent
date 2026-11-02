@@ -27,19 +27,19 @@ func (t agentTool) Spec() ToolSpec {
 	schema := `{"type":"object","properties":{},"additionalProperties":false}`
 	switch t.name {
 	case "spawn":
-		description = "Delegate substantial independent implementation, research or review, not tiny lookups you can do in a few reads. Every child request resends its context, so choose it by cost: for a task scoped to named files or one module, or when your own context is large (over about 100k tokens), omit fork and entries and write a complete brief; fork only when the child needs the conversation itself. Gather shared prerequisites first, put every known constraint and command in the brief, and batch later amendments into one send. Start a concurrent agent with a task, prose brief and optional live paths. context.fork copies history through the complete boundary before the current tool batch; same-model forks preserve the request prefix, other models use admitted labelled text (reported in context_mode). context.entries selects 1-based accepted history entries before that boundary as labelled data, in supplied order. fork and entries are exclusive. Both use /model's uncertainty gate for direct tool outcomes; descendant uncertainty remains labelled data to inspect. History is fixed at spawn; later parent entries never reach the child. Authority defaults to read; write grants only your available edit_file, write_file, delete_file and exec. Read-only launch and plan mode remain inherited. Only the root has git_do or workspace access/switching. File writes reject stale observations; overlapping exec returns a notice, not a block. Returns an ID immediately. Optional name is a lowercase slug local to you; named agents retain history for later send. Depth at most 3, tree capacity 8; admission never waits. Workspace and mode are fixed at spawn. Each task has 32 steps, 128 calls and a 200,000 reported uncached-input plus output token cap. You cannot finish while children are running."
-		schema = `{"type":"object","properties":{"task":{"type":"string"},"context":{"type":"object","properties":{"brief":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"fork":{"type":"boolean"},"entries":{"type":"array","items":{"type":"integer","minimum":1}}},"additionalProperties":false},"name":{"type":"string"},"model":{"type":"string"},"authority":{"type":"string","enum":["read","write"]}},"required":["task","context"],"additionalProperties":false}`
+		description = "Delegate substantial independent implementation, research or review, not tiny lookups you can do in a few reads. Every child request resends its context, so choose it by cost: for a task scoped to named files or one module, or when your own context is large (over about 100k tokens), omit fork and entries and write a complete brief; fork only when the child needs the conversation itself. Gather shared prerequisites first, put every known constraint and command in the brief, and batch later amendments into one send. Start a concurrent agent with a task, prose brief and optional live paths. context.fork copies history through the complete boundary before the current tool batch; same-model forks preserve the request prefix, other models use admitted labelled text (reported in context_mode). context.entries selects 1-based accepted history entries before that boundary as labelled data, in supplied order. fork and entries are exclusive. Both use /model's uncertainty gate for direct tool outcomes; descendant uncertainty remains labelled data to inspect. History is fixed at spawn; later parent entries never reach the child. Authority defaults to read; write grants only your available edit_file, write_file, delete_file and exec. Read-only launch and plan mode remain inherited. Only the root has git_do or workspace access/switching. File writes reject stale observations; overlapping exec returns a notice, not a block. Returns an ID immediately. Kind defaults to task; tasks end after final result delivery even when named. Only the root may spawn teammates; teammates require a name and retain their Session across turns until dismissed or shutdown, without step, call or reported-token caps. Names are lowercase slugs local to you. Kind, workspace and mode are fixed at spawn. Depth at most 3, live tree capacity 16; admission never waits. Tasks have 64 steps, 256 calls and a 400,000 reported uncached-input plus output token cap. You cannot finish while children are running."
+		schema = `{"type":"object","properties":{"task":{"type":"string"},"context":{"type":"object","properties":{"brief":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"fork":{"type":"boolean"},"entries":{"type":"array","items":{"type":"integer","minimum":1}}},"additionalProperties":false},"name":{"type":"string"},"kind":{"type":"string","enum":["task","teammate"]},"model":{"type":"string"},"authority":{"type":"string","enum":["read","write"]}},"required":["task","context"],"additionalProperties":false}`
 	case "send":
-		description = "Queue a follow-up message to your own child by ID or name; idle named agents retain their Session across chat turns. Busy agents handle messages sequentially. Blocked agents require reset. In plan mode, new work for a non-planning writer is refused."
+		description = "Queue a follow-up message to your own child by ID or name; idle teammates retain their Session across chat turns; tasks end after final result delivery. Busy agents handle messages sequentially. Blocked agents require reset. In plan mode, new work for a non-planning writer is refused."
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"message":{"type":"string"}},"required":["message"],"additionalProperties":false}`
 	case "wait":
 		description = "Wait for your given children (IDs or names) to finish current and queued work; returns statuses only; results arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened; bounded file effects and exec uncertainty survive reply truncation). Recent delivered IDs return their delivery run and step. Omit timeout to wait until done (cancellation still works). An explicit timeout is opt-in polling, in seconds (0–600); it does not cancel children. If timed_out is true, do other useful work and wait again before relying on their results."
 		schema = `{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"timeout":{"type":"integer","minimum":0,"maximum":600}},"required":["ids"],"additionalProperties":false}`
 	case "threads":
 		schema = `{"type":"object","properties":{"subtree":{"type":"boolean"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}`
-		description = "List your direct children by default. With subtree=true, list every descendant, including delivered/dismissed agents retained for lifetime accounting, with parent, depth, state, own cost and trace path, plus total_agents and total_cost excluding you. Follow next_offset with subtree=true and offset to page bounded output. Accounting survives resume; accounting_complete=false flags legacy checkpoints with missing historical descendants. Never blocks. Use the subtree view to report every agent used and costs."
+		description = "List your direct children by default. With subtree=true, list every descendant, including delivered/dismissed agents retained for lifetime accounting, with parent, kind, depth, state, own cost and trace path, plus total_agents and total_cost excluding you. Follow next_offset with subtree=true and offset to page bounded output. Accounting survives resume; accounting_complete=false flags legacy checkpoints with missing historical descendants. Never blocks. Use the subtree view to report every agent used and costs."
 	default:
-		description = map[string]string{"cancel": "Cancel current and queued work in your child and its whole subtree. The named child can accept later send unless uncertain effects block its Session; then reset it first and inspect before retrying.", "dismiss": "End your child and its whole subtree; releases live capacity and the name. Also removes ended-at-resume roster observations.", "reset": "Clear a blocked, stopped child's history, preserving its name, fixed workspace and authority; dismisses its descendants. Then send new work."}[t.name]
+		description = map[string]string{"cancel": "Cancel current and queued work in your child and its whole subtree. The child can accept later send before task retirement (teammates remain available) unless uncertain effects block its Session; then reset it first and inspect before retrying.", "dismiss": "End your child and its whole subtree; releases live capacity and the name. Also removes ended-at-resume roster observations.", "reset": "Clear a blocked, stopped child's history, preserving its kind, name, fixed workspace and authority; dismisses its descendants. Then send new work."}[t.name]
 		schema = `{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}`
 	}
 	return ToolSpec{Name: t.name, Description: description, InputSchema: json.RawMessage(schema), Effect: EffectClassRead}
@@ -47,6 +47,7 @@ func (t agentTool) Spec() ToolSpec {
 
 type spawnArgs struct {
 	Task      string        `json:"task"`
+	Kind      agentKind     `json:"kind,omitempty"`
 	Context   *agentContext `json:"context"`
 	Name      string        `json:"name"`
 	Model     string        `json:"model"`
@@ -111,6 +112,9 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		if strings.TrimSpace(a.Task) == "" || len(a.Task) > 8192 || a.Context == nil || len(a.Context.Brief) > 32768 || len(a.Context.Files) > 20 || a.Name != "" && (len(a.Name) > 64 || !agentNamePattern.MatchString(a.Name)) {
 			return failOutcome("invalid_arguments", "task, context or name is missing, invalid or oversized"), nil
 		}
+		if a.Kind != "" && a.Kind != "task" && a.Kind != "teammate" || a.Kind == "teammate" && a.Name == "" {
+			return failOutcome("invalid_arguments", "kind must be task or teammate; teammates require a name"), nil
+		}
 		if a.Authority != "" && a.Authority != "read" && a.Authority != "write" {
 			return failOutcome("invalid_arguments", "authority must be read or write"), nil
 		}
@@ -163,8 +167,8 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		if bad != nil {
 			return *bad, nil
 		}
-		if len(a.IDs) == 0 || len(a.IDs) > 8 || seconds > 600 {
-			return failOutcome("invalid_arguments", "wait requires 1–8 children and timeout 0–600 seconds"), nil
+		if len(a.IDs) == 0 || len(a.IDs) > maxLiveAgents || seconds > 600 {
+			return failOutcome("invalid_arguments", "wait requires 1–16 children and timeout 0–600 seconds"), nil
 		}
 		s.display.agentWaitStarted(a.IDs)
 		defer s.display.stopStatus()
@@ -216,4 +220,15 @@ func (t agentTool) Execute(ctx context.Context, raw json.RawMessage) (ToolOutcom
 		}
 		return okOutcome(map[string]string{"id": target.ID, "name": target.Name, "action": t.name})
 	}
+}
+
+type agentKind string
+
+func (k *agentKind) UnmarshalJSON(raw []byte) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value != "task" && value != "teammate" {
+		return argumentError("kind must be task or teammate")
+	}
+	*k = agentKind(value)
+	return nil
 }

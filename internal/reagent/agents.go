@@ -14,10 +14,10 @@ import (
 
 const (
 	maxAgentDepth  = 3
-	maxLiveAgents  = 8
-	maxAgentSteps  = 32
-	maxAgentTokens = 200_000
-	maxAgentCalls  = 128
+	maxLiveAgents  = 16
+	maxAgentSteps  = 64
+	maxAgentTokens = 400_000
+	maxAgentCalls  = 256
 )
 
 var agentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
@@ -26,6 +26,7 @@ var agentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 type AgentThread struct {
 	ID             string `json:"id"`
 	ParentID       string `json:"parent_id"`
+	Kind           string `json:"kind"`
 	Name           string `json:"name,omitempty"`
 	State          string `json:"state"`
 	Task           string `json:"task"`
@@ -148,6 +149,20 @@ func (t *agentTree) rosterLocked(parent string) []AgentThread {
 }
 
 func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, error) {
+	if a.Kind == "" {
+		a.Kind = "task"
+	}
+	if a.Kind != "task" && a.Kind != "teammate" {
+		return AgentThread{}, fmt.Errorf("kind must be task or teammate")
+	}
+	if a.Kind == "teammate" {
+		if a.Name == "" {
+			return AgentThread{}, fmt.Errorf("teammates require a name")
+		}
+		if s.agentID != "" {
+			return AgentThread{}, fmt.Errorf("only the root may spawn teammates")
+		}
+	}
 	if s.agentModel == nil || s.workspace == nil {
 		return AgentThread{}, fmt.Errorf("agents are unavailable here")
 	}
@@ -222,6 +237,10 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	cfg.Registry, cfg.Workspace, cfg.WorkspacePath = registry, ws, ws.Root()
 	cfg.approvedWorkspaces = nil
 	cfg.MaxSteps, cfg.MaxToolCalls = maxAgentSteps, maxAgentCalls
+	if a.Kind == "teammate" {
+		cfg.MaxSteps, cfg.MaxToolCalls = 0, 0
+	}
+	cfg.agentKind = string(a.Kind)
 	cfg.InRunCompact, cfg.agent = false, true
 	cfg.PlanMode = s.planMode
 	history, prompt, contextMode, err := s.prepareAgentContext(ctx, &cfg, a)
@@ -301,7 +320,7 @@ func (s *Session) spawnAgent(ctx context.Context, a spawnArgs) (AgentThread, err
 	if err != nil {
 		return AgentThread{}, err
 	}
-	n := &agentThread{AgentThread: AgentThread{ID: id, ParentID: s.agentParent(), Name: a.Name, Authority: a.Authority, ContextMode: contextMode, State: "running", Task: a.Task, Cost: Usage{Known: true}, TracePath: path}, depth: depth, session: child}
+	n := &agentThread{AgentThread: AgentThread{ID: id, ParentID: s.agentParent(), Name: a.Name, Kind: string(a.Kind), Authority: a.Authority, ContextMode: contextMode, State: "running", Task: a.Task, Cost: Usage{Known: true}, TracePath: path}, depth: depth, session: child}
 	child.agents, child.agentID = t, id
 	trace.parentID, trace.agentID = n.ParentID, id
 	t.nodes[id] = n
@@ -601,7 +620,7 @@ func (r *Run) deliverAgents() bool {
 		}
 		hadResult := len(n.results) > 0
 		n.results = nil
-		if hadResult && !n.working && (n.Name == "" || n.ended) {
+		if hadResult && !n.working && (n.Kind != "teammate" || n.ended) {
 			t.cancelLocked(n, true)
 			t.removeEndedLocked(n.ID)
 			t.retireLocked(n.ID)

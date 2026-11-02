@@ -145,7 +145,7 @@ func TestChat_AgentsResumeEndsRosterWithoutRestart(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		switch number {
 		case 1:
-			fmt.Fprint(w, sse(itemDone(0, `{"type":"function_call","id":"fc_spawn","status":"completed","call_id":"spawn","name":"spawn","arguments":"{\"task\":\"inspect\",\"context\":{\"brief\":\"fresh\"},\"name\":\"tests\"}"}`), completed(`[]`)))
+			fmt.Fprint(w, sse(itemDone(0, `{"type":"function_call","id":"fc_spawn","status":"completed","call_id":"spawn","name":"spawn","arguments":"{\"task\":\"inspect\",\"context\":{\"brief\":\"fresh\"},\"name\":\"tests\",\"kind\":\"teammate\"}"}`), completed(`[]`)))
 		case 2:
 			fmt.Fprint(w, sse(itemDone(0, `{"type":"function_call","id":"fc_wait","status":"completed","call_id":"wait","name":"wait","arguments":"{\"ids\":[\"tests\"]}"}`), completed(`[]`)))
 		default:

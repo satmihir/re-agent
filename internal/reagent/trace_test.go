@@ -125,7 +125,7 @@ func TestTrace_WrittenEventTypesDocumented(t *testing.T) {
 
 func TestTrace_AgentEventsAreParentLocalAndTraceContinues(t *testing.T) {
 	s := agentFixture(t)
-	s.model = NewScriptedModel(turn(spawnBlock("spawn", "private-child-task", "named")), turn(callBlock("wait", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(teammateBlock("spawn", "private-child-task", "named")), turn(callBlock("wait", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))
 	result := agentTurn(t, s, "task")
 	childPath := s.agentRoster()[0].TracePath
 	s.model = NewScriptedModel(turn(callBlock("send", "send", `{"name":"named","message":"follow-up"}`)), turn(callBlock("wait2", "wait", `{"ids":["named"]}`)), turn(textBlock("done")))

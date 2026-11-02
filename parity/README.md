@@ -14,6 +14,13 @@ The `2ab234f7` Go acceptance evidence in
 [`repin-2ab234f7-linux.md`](repin-2ab234f7-linux.md) and proofs below are historical,
 not acceptance of the Rust pin.
 
+Current agent behavior intentionally differs from this historical pin: `spawn.kind`
+now separates retiring tasks from retained, root-created teammates; tree capacity
+is 16 and task caps are 64 steps, 256 calls and 400,000 uncached-input plus output
+tokens. The pinned agent fixtures still exercise the old named-agent lifecycle
+and budgets. They are not acceptance of these changes; a reference re-pin and
+fixture migration have not been performed.
+
 ## Area 4 — agents and checkpoints
 
 The following comparison-repair results predate this Rust re-pin.

@@ -10,7 +10,7 @@ import (
 
 func TestAgents_SubtreeRetainsPartiallyKnownUsage(t *testing.T) {
 	s := agentFixture(t)
-	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", Cost: Usage{Known: true}}, depth: 1}
+	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", Kind: "task", Cost: Usage{Known: true}}, depth: 1}
 	child := &Session{agents: s.agents, agentID: "t1"}
 	r := Run{session: child, steps: 1}
 	r.meterAgent(Usage{Known: true, InputTokens: 30, CachedInputTokens: 10, OutputTokens: 5})
@@ -36,9 +36,9 @@ func TestAgents_ResumePreservesSubtreeAccounting(t *testing.T) {
 	}
 	defer store.close()
 	s.store = store
-	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", Name: "tests", State: "idle", Cost: Usage{Known: true, InputTokens: 10}}, depth: 1}
-	s.agents.nodes["t2"] = &agentThread{AgentThread: AgentThread{ID: "t2", ParentID: "t1", State: "running", Cost: Usage{Known: true, InputTokens: 20}}, depth: 2}
-	s.agents.archive["t3"] = agentObservation{AgentThread: AgentThread{ID: "t3", ParentID: "root", State: "dismissed", Cost: Usage{Known: false, InputTokens: 30}}, Depth: 1}
+	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", Name: "tests", Kind: "teammate", State: "idle", Cost: Usage{Known: true, InputTokens: 10}}, depth: 1}
+	s.agents.nodes["t2"] = &agentThread{AgentThread: AgentThread{ID: "t2", ParentID: "t1", Kind: "task", State: "running", Cost: Usage{Known: true, InputTokens: 20}}, depth: 2}
+	s.agents.archive["t3"] = agentObservation{AgentThread: AgentThread{ID: "t3", ParentID: "root", Kind: "task", State: "dismissed", Cost: Usage{Known: false, InputTokens: 30}}, Depth: 1}
 	if err := s.checkpoint("idle", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestAgents_ResumePreservesSubtreeAccounting(t *testing.T) {
 	if len(tree.Threads) != 3 || !tree.AccountingComplete || tree.TotalCost.InputTokens != 60 || tree.TotalCost != resumed.agents.usage() || resumed.agents.next != 3 {
 		t.Fatalf("resume lost accounting %+v", tree)
 	}
-	if tree.Threads[0].Depth != 1 || tree.Threads[1].Depth != 2 || tree.Threads[0].State != "ended at resume" || tree.Threads[1].State != "ended at resume" || !tree.Threads[1].EffectsUnknown {
+	if tree.Threads[0].Kind != "teammate" || tree.Threads[1].Kind != "task" || tree.Threads[2].Kind != "task" || tree.Threads[0].Depth != 1 || tree.Threads[1].Depth != 2 || tree.Threads[0].State != "ended at resume" || tree.Threads[1].State != "ended at resume" || !tree.Threads[1].EffectsUnknown {
 		t.Fatalf("depth/state %+v", tree.Threads)
 	}
 	legacy := NewSession(s.cfg, NewScriptedModel(), NewTrace(io.Discard), io.Discard)
@@ -66,7 +66,7 @@ func TestAgents_ResumePreservesSubtreeAccounting(t *testing.T) {
 func TestAgents_DisplayNameReuseMatchesWait(t *testing.T) {
 	s := agentFixture(t)
 	s.restore(chatCheckpoint{Agents: true, AgentRoster: []AgentThread{{ID: "t1", ParentID: "root", Name: "tests", Cost: Usage{Known: true}}}})
-	s.agents.nodes["t2"] = &agentThread{AgentThread: AgentThread{ID: "t2", ParentID: "root", Name: "tests", Steps: 7, Cost: Usage{Known: true}}, depth: 1}
+	s.agents.nodes["t2"] = &agentThread{AgentThread: AgentThread{ID: "t2", ParentID: "root", Name: "tests", Kind: "teammate", Steps: 7, Cost: Usage{Known: true}}, depth: 1}
 	_, label, _ := s.agents.displaySnapshot("root", []string{"tests"})
 	if !strings.Contains(label, "t2 tests (step 7)") || strings.Contains(label, "t1") {
 		t.Fatalf("wrong reused name %q", label)
@@ -79,7 +79,7 @@ func TestAgents_DisplayNameReuseMatchesWait(t *testing.T) {
 
 func TestAgents_CheckpointRosterAndSubtreeShareSnapshot(t *testing.T) {
 	s := agentFixture(t)
-	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", Cost: Usage{Known: true}}, depth: 1}
+	s.agents.nodes["t1"] = &agentThread{AgentThread: AgentThread{ID: "t1", ParentID: "root", Kind: "task", Cost: Usage{Known: true}}, depth: 1}
 	child := &Session{agents: s.agents, agentID: "t1"}
 	var wg sync.WaitGroup
 	wg.Add(1)

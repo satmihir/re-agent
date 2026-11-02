@@ -270,6 +270,19 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "agents-task-retirement": {
+        "agents": True,
+        "agents_retirement": True,
+        "steps": [
+            ("idle", 0.5), ("type", "delegate a temporary task"), ("key", "enter"),
+            ("wait", "Named task retired after delivery.", 8),
+            ("wait_status", "gpt-6.1-sol / high", 8),
+            ("show", "named task retires instead of retaining a teammate Session"),
+            ("expect", "screen_has", "Named task retired after delivery."),
+            ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
+            ("expect", "status_row_last"),
+        ],
+    },
     "agents-tree-cost": {
         "agents": True,
         "steps": [
@@ -283,7 +296,7 @@ SCENARIOS = {
             ("type", "ask my tests agent again"), ("key", "enter"),
             ("wait", "tree cost: 40 input", 8),
             ("wait_status", "gpt-6.1-sol / high", 8),
-            ("show", "named agent reused in another chat turn"),
+            ("show", "teammate reused in another chat turn"),
             ("expect", "screen_has", "tree cost: 40 input"),
             ("expect", "status_row_last"),
         ],
@@ -908,7 +921,7 @@ def run(binary, name, scenario, workspace):
                         type(self).root_requests += 1
                         number = type(self).root_requests
                     calls = {
-                        1: [("spawn", {"task": "check tests", "context": {"brief": "independent"}, "name": "tests"}),
+                        1: [("spawn", {"task": "check tests", "context": {"brief": "independent"}, "name": "tests", "kind": "teammate"}),
                             ("spawn", {"task": "research", "context": {"brief": "independent"}})],
                         2: [("wait", {"ids": ["t1", "t2"]})],
                         4: [("send", {"name": "tests", "message": "check again"})],
@@ -917,6 +930,17 @@ def run(binary, name, scenario, workspace):
                     if scenario.get("agents_progress"):
                         calls = [("spawn", {"task": "research task", "context": {"brief": "independent"}, "name": "research"}),
                                  ("wait", {"ids": ["research"]})] if number == 1 else []
+                    if scenario.get("agents_retirement"):
+                        calls = {
+                            1: [("spawn", {"task": "temporary task", "context": {"brief": "independent"}, "name": "temporary"}),
+                                ("wait", {"ids": ["temporary"]})],
+                            2: [("send", {"name": "temporary", "message": "must not restart a retired task"})],
+                        }.get(number, [])
+                        if number == 3:
+                            results = [json.loads(item["output"]) for item in json.loads(request).get("input", [])
+                                       if item.get("type") == "function_call_output" and item.get("call_id") == "c2-0"]
+                            if len(results) != 1 or results[0].get("ok") or results[0].get("code") != "send_denied":
+                                failures.append("named task retained a Session after delivery: %r" % results)
                     if scenario.get("agents_write"):
                         calls = [("spawn", {"task": "create a file", "context": {"brief": "independent"},
                                             "name": "writer", "authority": "write"}),
@@ -946,6 +970,8 @@ def run(binary, name, scenario, workspace):
                               for index, (name, arguments) in enumerate(calls)]
                     if not output:
                         text = "Agent results received." if number == 3 else "Named agent reused."
+                        if scenario.get("agents_retirement"):
+                            text = "Named task retired after delivery."
                         if scenario.get("agents_write"):
                             text = "Agent changed a file."
                         if scenario.get("context_gc"):

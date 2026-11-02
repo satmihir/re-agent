@@ -1001,12 +1001,12 @@ func TestChat_ReviewNamedFinderRecoversTruncatedDeliveryWithoutTrace(t *testing.
 		switch phase {
 		case "spawn":
 			phase = "wait"
-			for _, rule := range []string{"JSON-encoded payload is <=8 KiB", "record <=2 KiB", "Use unique named review agents", "Dismiss only then", "not reconstruction from the truncated parent copy", "Do not claim missing candidates were retained or verified", "reuse a verifier for another candidate; page retrieval alone", "is permitted"} {
+			for _, rule := range []string{"JSON-encoded payload is <=8 KiB", "record <=2 KiB", "Use unique named kind:\"teammate\" review agents", "Dismiss only then", "not reconstruction from the truncated parent copy", "Do not claim missing candidates were retained or verified", "reuse a verifier for another candidate; page retrieval alone", "is permitted"} {
 				if !strings.Contains(req.History[0].User.Text, rule) {
 					t.Errorf("prompt lacks recovery rule %s", rule)
 				}
 			}
-			args, _ := json.Marshal(spawnArgs{Name: "finder-pages", Task: "find candidates; Do not spawn or delegate.", Authority: "read", Context: &agentContext{Brief: "Retain records; stable IDs/count/cursor. Pages <=8 KiB, records <=2 KiB."}})
+			args, _ := json.Marshal(spawnArgs{Name: "finder-pages", Kind: "teammate", Task: "find candidates; Do not spawn or delegate.", Authority: "read", Context: &agentContext{Brief: "Retain records; stable IDs/count/cursor. Pages <=8 KiB, records <=2 KiB."}})
 			return turn(callBlock(id, "spawn", string(args))), nil
 		case "wait":
 			phase = "collect"
@@ -1344,7 +1344,7 @@ func TestChat_ReviewBudgetStopsWithUnverifiedCandidates(t *testing.T) {
 						name, task, model = fmt.Sprintf("verifier-%02d", verified), "verify "+candidates[verified], s.cfg.Model
 						verified++
 					}
-					args, _ := json.Marshal(spawnArgs{Task: task, Name: name, Model: model, Authority: "read", Context: &agentContext{Brief: "Do not spawn or delegate. Independent candidate work; respect remaining medium budget."}})
+					args, _ := json.Marshal(spawnArgs{Task: task, Name: name, Kind: "teammate", Model: model, Authority: "read", Context: &agentContext{Brief: "Do not spawn or delegate. Independent candidate work; respect remaining medium budget."}})
 					calls = append(calls, callBlock(id(name), "spawn", string(args)))
 					batchNames = append(batchNames, name)
 				}
@@ -1393,7 +1393,7 @@ func TestChat_ReviewTaskTurnBudgetStopsNamedPaging(t *testing.T) {
 	s.model = agentTestModel{generate: func(_ context.Context, req ModelRequest) (ModelResponse, error) {
 		id := func(name string) string { return fmt.Sprintf("%s-%d", name, req.Scope.Step) }
 		if stage == "start" {
-			args, _ := json.Marshal(spawnArgs{Task: "page 0", Name: "pages", Model: DefaultOpenAIModel, Context: &agentContext{Brief: "Do not spawn or delegate. Retain bounded pages; medium task-turn budget 32."}})
+			args, _ := json.Marshal(spawnArgs{Task: "page 0", Name: "pages", Kind: "teammate", Model: DefaultOpenAIModel, Context: &agentContext{Brief: "Do not spawn or delegate. Retain bounded pages; medium task-turn budget 32."}})
 			turns, stage = 1, "wait"
 			return turn(callBlock(id("finder"), "spawn", string(args))), nil
 		}
@@ -1444,7 +1444,7 @@ func TestReviewPrompt_AllReviewAgentsStartFresh(t *testing.T) {
 		"not copied author history or reasoning",
 		"Independence overrides cache savings and budgets",
 		"stop and report uncovered scope rather than share history to reduce cost",
-		"Named-agent send is only for bounded page retrieval from that agent's own fresh Session",
+		"Teammate send is only for bounded page retrieval from that agent's own fresh Session",
 		"does not permit importing parent history or reusing a verifier",
 	} {
 		if !strings.Contains(text, rule) {

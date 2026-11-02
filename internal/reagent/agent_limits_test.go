@@ -27,7 +27,7 @@ func TestAgents_ReportFrictionInherited(t *testing.T) {
 					}
 					return NewScriptedModel(turn(callBlock("report", "report_friction", `{"category":"other","summary":"child rough edge"}`)), turn(textBlock("done"))), nil
 				}
-				s.model = NewScriptedModel(turn(callBlock("spawn", "spawn", fmt.Sprintf(`{"task":"report","name":"reporter","context":{"fork":%t}}`, fork))), turn(callBlock("wait", "wait", `{"ids":["reporter"]}`)), turn(textBlock("done")))
+				s.model = NewScriptedModel(turn(callBlock("spawn", "spawn", fmt.Sprintf(`{"task":"report","name":"reporter","kind":"teammate","context":{"fork":%t}}`, fork))), turn(callBlock("wait", "wait", `{"ids":["reporter"]}`)), turn(textBlock("done")))
 				agentTurn(t, s, "report friction")
 				n := s.agents.nodes["t1"]
 				var found bool
@@ -79,7 +79,7 @@ func TestAgents_ReportFrictionSharesRootCap(t *testing.T) {
 	for i := 0; i < 9; i++ {
 		reports = append(reports, callBlock(fmt.Sprint(i), "report_friction", `{"category":"other","summary":"root rough edge"}`))
 	}
-	s.model = NewScriptedModel(turn(reports...), turn(spawnBlock("spawn", "report", "reporter")), turn(callBlock("wait", "wait", `{"ids":["reporter"]}`)), turn(callBlock("last-report", "report_friction", `{"category":"other","summary":"eleventh"}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(reports...), turn(teammateBlock("spawn", "report", "reporter")), turn(callBlock("wait", "wait", `{"ids":["reporter"]}`)), turn(callBlock("last-report", "report_friction", `{"category":"other","summary":"eleventh"}`)), turn(textBlock("done")))
 	agentTurn(t, s, "shared cap")
 	for _, entry := range s.agents.nodes["t1"].session.history {
 		if entry.Tool != nil && entry.Tool.Name == "report_friction" && !entry.Tool.Outcome.OK {
