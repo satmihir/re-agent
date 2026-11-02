@@ -16,6 +16,15 @@ pub fn models() -> Value {
             1_050_000,
         ),
         (
+            "gpt-6.1-terra",
+            "openai",
+            &[][..],
+            "",
+            "",
+            "provider defaults; effort and window unverified",
+            0,
+        ),
+        (
             "gpt-6.1-sol",
             "openai",
             REASONING_EFFORTS,
@@ -25,31 +34,13 @@ pub fn models() -> Value {
             1_050_000,
         ),
         (
-            "gpt-5.6-luna",
-            "openai",
-            OPENAI_EFFORTS,
-            "low",
-            "low",
-            "cheap",
-            0,
-        ),
-        (
-            "gpt-5.6-terra",
-            "openai",
-            OPENAI_EFFORTS,
-            "low",
-            "low",
-            "more capable, costs more",
-            0,
-        ),
-        (
-            "claude-haiku-4-5",
+            "claude-haiku-5-5",
             "anthropic",
             &[][..],
             "",
             "",
-            "cheapest; no effort setting",
-            200_000,
+            "provider defaults; effort and window unverified",
+            0,
         ),
         (
             "claude-sonnet-5-5",
@@ -68,15 +59,6 @@ pub fn models() -> Value {
             "",
             "most capable, costs most",
             1_000_000,
-        ),
-        (
-            "gpt-6.1-terra",
-            "openai",
-            &[][..],
-            "",
-            "",
-            "provider defaults; effort and window unverified",
-            0,
         ),
     ];
     Value::Array(entries.iter().map(|(id,provider,efforts,effort,verbosity,note,window)| {
@@ -235,12 +217,39 @@ mod tests {
 
     #[test]
     fn model_positions_and_model_specific_efforts_are_fixed() {
-        assert_eq!(models().as_array().unwrap().len(), 8);
-        let terra = select_model("8").unwrap();
+        let catalog = models();
+        let ids: Vec<_> = catalog
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "gpt-6.1-luna",
+                "gpt-6.1-terra",
+                "gpt-6.1-sol",
+                "claude-haiku-5-5",
+                "claude-sonnet-5-5",
+                "claude-opus-5-5"
+            ]
+        );
+        let haiku = select_model("4").unwrap();
+        assert_eq!(haiku["provider"], "anthropic");
+        assert_eq!(haiku["efforts"], json!([]));
+        assert_eq!(haiku["effort"], "");
+        assert_eq!(haiku["verbosity"], "");
+        assert_eq!(haiku["context_window"], 0);
+        assert_eq!(
+            haiku["note"],
+            "provider defaults; effort and window unverified"
+        );
+        let terra = select_model("2").unwrap();
         assert_eq!(terra["id"], "gpt-6.1-terra");
         assert_eq!(terra["effort"], "");
         assert_eq!(terra["context_window"], 0);
-        let sol = select_model("2").unwrap();
+        let sol = select_model("3").unwrap();
         let luna = select_model("1").unwrap();
         assert_eq!(luna["id"], "gpt-6.1-luna");
         assert_eq!(luna["effort"], "medium");
@@ -258,11 +267,15 @@ mod tests {
             "medium"
         );
         assert_eq!(
-            select_effort(&model_info("claude-haiku-4-5"), "low").unwrap_err(),
-            "claude-haiku-4-5 takes no reasoning effort setting"
+            select_effort(&model_info("claude-haiku-5-5"), "low").unwrap_err(),
+            "claude-haiku-5-5 takes no reasoning effort setting"
         );
         for invalid in [
             "0",
+            "7",
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+            "claude-haiku-4-5",
             "99",
             "-1",
             "",
@@ -281,6 +294,8 @@ mod tests {
             ("gpt-6.1-luna", 500, 500),
             ("unlisted", 500, 500),
             ("gpt-5.6-luna", 0, 0),
+            ("claude-haiku-5-5", 0, 0),
+            ("claude-haiku-5-5", 500, 500),
         ] {
             assert_eq!(
                 effective_context_window(&json!({"model":model,"context_window_tokens":cap})),
@@ -291,9 +306,9 @@ mod tests {
 
     #[test]
     fn catalog_display_marks_availability_without_trailing_space() {
-        let listing = render_models("gpt-5.6-luna", &json!({"openai":true}));
-        assert!(listing.contains("3  gpt-5.6-luna      openai     current"));
-        assert!(listing.contains("5  claude-haiku-4-5  anthropic  no key"));
+        let listing = render_models("gpt-6.1-luna", &json!({"openai":true}));
+        assert!(listing.contains("1  gpt-6.1-luna      openai     current"));
+        assert!(listing.contains("4  claude-haiku-5-5  anthropic  no key"));
         assert!(listing.contains("models marked no key need ANTHROPIC_API_KEY"));
         assert!(listing
             .lines()

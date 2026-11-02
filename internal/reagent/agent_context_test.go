@@ -48,7 +48,7 @@ func TestAgents_ForkEncodedPrefixAndUnansweredBoundary(t *testing.T) {
 				s := agentFixture(t)
 				s.cfg.Provider = provider
 				if provider == anthropicName {
-					s.cfg.Model = DefaultAnthropicModel
+					s.cfg.Model = "claude-sonnet-5-5"
 				}
 				var parent ModelRequest
 				var child ModelRequest
@@ -147,7 +147,7 @@ func TestAgents_ContextUncertainEffectsAndSelectedData(t *testing.T) {
 					sharing.Entries = []int{3, 1}
 				}
 				// Projection avoids requiring synthetic source-native items here.
-				n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect", Model: DefaultAnthropicModel, Context: sharing})
+				n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect", Model: "claude-sonnet-5-5", Context: sharing})
 				if state != "acknowledged_timeout" {
 					if err == nil || !strings.Contains(err.Error(), "uncertain") {
 						t.Fatalf("wanted refusal: %+v %v", n, err)
@@ -173,7 +173,7 @@ func TestAgents_ContextUncertainEffectsAndSelectedData(t *testing.T) {
 }
 
 func TestAgents_ForkFallbackAdmissionAndFixedHistory(t *testing.T) {
-	for _, target := range []string{DefaultAnthropicModel, DefaultOpenAIModel} {
+	for _, target := range []string{"claude-sonnet-5-5", DefaultOpenAIModel} {
 		t.Run(target, func(t *testing.T) {
 			s := agentFixture(t)
 			s.cfg.Model = "gpt-6.1-luna"
@@ -194,8 +194,9 @@ func TestAgents_ForkFallbackAdmissionAndFixedHistory(t *testing.T) {
 		})
 	}
 	s := agentFixture(t)
+	s.cfg.ContextWindowTokens = 200_000
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("x", 600_000)}}}
-	_, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect", Model: DefaultAnthropicModel, Context: &agentContext{Fork: true}})
+	_, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect", Model: "claude-sonnet-5-5", Context: &agentContext{Fork: true}})
 	if err == nil || !strings.Contains(err.Error(), "window") {
 		t.Fatalf("admission: %v", err)
 	}
@@ -263,9 +264,9 @@ func TestAgents_ContextArgumentIndices(t *testing.T) {
 func TestAgents_CurrentSpawnResponseAcknowledgesTimeout(t *testing.T) {
 	s := agentFixture(t)
 	s.history = timeoutHistory("timeout")
-	s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{forkBlock("spawn", DefaultAnthropicModel, "read", &agentContext{Fork: true})}}})
+	s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &ModelResponse{Blocks: []OutputBlock{forkBlock("spawn", "claude-sonnet-5-5", "read", &agentContext{Fork: true})}}})
 	s.currentRun = newRun(s, "current")
-	n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect timeout", Model: DefaultAnthropicModel, Context: &agentContext{Fork: true}})
+	n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "inspect timeout", Model: "claude-sonnet-5-5", Context: &agentContext{Fork: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +362,7 @@ func TestAgents_ForkNativeHistoryIsOwnedAndPlanInherited(t *testing.T) {
 
 func TestAgents_NestedForksKeepAnthropicBreakpointsWithinLimit(t *testing.T) {
 	s := agentFixture(t)
-	s.cfg.Provider, s.cfg.Model = anthropicName, DefaultAnthropicModel
+	s.cfg.Provider, s.cfg.Model = anthropicName, "claude-sonnet-5-5"
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "root"}}}
 	for depth := 1; depth <= maxAgentDepth; depth++ {
 		parent := BuildContext(s.cfg, RequestScope{}, s.history)
@@ -442,7 +443,7 @@ func TestAgents_NativeForkRefusesOversizedFirstRequestBeforePublication(t *testi
 			s := agentFixture(t)
 			s.cfg.Provider = provider
 			if provider == anthropicName {
-				s.cfg.Model = DefaultAnthropicModel
+				s.cfg.Model = "claude-sonnet-5-5"
 			}
 			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: ""}}}
 			base, err := encodeRequest(s.cfg, BuildContext(s.cfg, RequestScope{}, s.history))
@@ -466,7 +467,7 @@ func TestAgents_NativeForkRefusesOversizedFirstRequestBeforePublication(t *testi
 
 func TestAgents_NativeForkTracePrefixAndGrowingSuffixCache(t *testing.T) {
 	s := agentFixture(t)
-	s.cfg.Provider, s.cfg.Model = anthropicName, DefaultAnthropicModel
+	s.cfg.Provider, s.cfg.Model = anthropicName, "claude-sonnet-5-5"
 	response := contextResponse(anthropicName, callBlock("old-read", "list_files", `{"path":"."}`))
 	s.history = []Entry{
 		{Kind: EntryUser, User: &UserTurn{Text: "root"}},
@@ -552,7 +553,7 @@ func TestAgents_NativeForkUnseenAndAcknowledgedExecTimeout(t *testing.T) {
 				s := agentFixture(t)
 				s.cfg.Provider = provider
 				if provider == anthropicName {
-					s.cfg.Model = DefaultAnthropicModel
+					s.cfg.Model = "claude-sonnet-5-5"
 				}
 				s.history = timeoutHistory("timeout")
 				response := contextResponse(provider, callBlock("timed", "exec", `{"argv":["true"],"cwd":"."}`))
@@ -705,7 +706,7 @@ func TestAgents_NativeForkUsesDestinationWindowAdmission(t *testing.T) {
 				s := agentFixture(t)
 				s.cfg.Provider = provider
 				if provider == anthropicName {
-					s.cfg.Model = DefaultAnthropicModel
+					s.cfg.Model = "claude-sonnet-5-5"
 				}
 				s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: ""}}}
 				base, err := encodeRequest(s.cfg, BuildContext(s.cfg, RequestScope{}, s.history))

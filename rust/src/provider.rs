@@ -109,7 +109,7 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
     }
     if model.is_empty() {
         model = if provider == "anthropic" {
-            "claude-haiku-4-5"
+            "claude-haiku-5-5"
         } else {
             "gpt-6.1-sol"
         }

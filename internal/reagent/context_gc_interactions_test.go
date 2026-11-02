@@ -16,7 +16,7 @@ func TestContextGC_ForkPrefixAndAgentRecallInPlanMode(t *testing.T) {
 			s.cfg.Provider = provider
 			s.planMode = true
 			if provider == anthropicName {
-				s.cfg.Model = DefaultAnthropicModel
+				s.cfg.Model = "claude-sonnet-5-5"
 			}
 			var tools []Tool
 			for _, spec := range s.cfg.Registry.Specs() {

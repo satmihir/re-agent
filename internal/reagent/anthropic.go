@@ -6,7 +6,7 @@ import (
 )
 
 // DefaultAnthropicModel is the Anthropic model used when nothing says otherwise.
-const DefaultAnthropicModel = "claude-haiku-4-5"
+const DefaultAnthropicModel = "claude-haiku-5-5"
 
 // anthropicMaxTokens is the default output ceiling required by Messages.
 const anthropicMaxTokens = 16000

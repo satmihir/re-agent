@@ -6,15 +6,18 @@ import (
 )
 
 func TestModelCatalog_ContextWindows(t *testing.T) {
+	haiku, found := findModel("claude-haiku-5-5")
+	if !found || haiku.Provider != anthropicName || len(haiku.Efforts) != 0 || haiku.Effort != "" || haiku.Verbosity != "" || haiku.Note != "provider defaults; effort and window unverified" {
+		t.Fatalf("Haiku metadata: %+v (found %t)", haiku, found)
+	}
 	for _, test := range []struct {
 		id     string
 		window int64
 	}{
 		{"gpt-6.1-luna", 1_050_000},
 		{"gpt-6.1-sol", 1_050_000},
-		{"gpt-5.6-luna", 0},
-		{"gpt-5.6-terra", 0},
-		{"claude-haiku-4-5", 200_000},
+		{"gpt-6.1-terra", 0},
+		{"claude-haiku-5-5", 0},
 		{"claude-sonnet-5-5", 1_000_000},
 		{"claude-opus-5-5", 1_000_000},
 	} {
@@ -35,13 +38,13 @@ func TestModelChoices_AgreeWithTheCatalogAndAvailability(t *testing.T) {
 			t.Fatalf("choice %d: %+v", i, choices[i])
 		}
 	}
-	if choices[0].disabled || !strings.Contains(choices[0].note, "current") || !choices[4].disabled || !strings.Contains(choices[4].note, "needs ANTHROPIC_API_KEY") {
+	if choices[0].disabled || !strings.Contains(choices[0].note, "current") || !choices[3].disabled || !strings.Contains(choices[3].note, "needs ANTHROPIC_API_KEY") {
 		t.Fatalf("availability: %+v", choices)
 	}
-	if row := renderPicker(choices, 0, 80, false)[4]; !strings.Contains(row, "needs ANTHROPIC_API_KEY") {
+	if row := renderPicker(choices, 0, 80, false)[3]; !strings.Contains(row, "needs ANTHROPIC_API_KEY") {
 		t.Fatalf("missing requirement was cut off: %q", row)
 	}
-	if modelChoices("claude-haiku-4-5", map[string]bool{openaiName: true})[4].disabled {
+	if modelChoices("claude-haiku-5-5", map[string]bool{openaiName: true})[3].disabled {
 		t.Fatal("the current model must remain selectable without a key")
 	}
 }
@@ -75,21 +78,18 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 	if err != nil || byPosition.ID != "gpt-6.1-luna" {
 		t.Fatalf("position 1 got %+v %v", byPosition, err)
 	}
-	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6.1-sol" {
-		t.Fatalf("position 2 got %+v %v", sol, err)
-	}
-	for _, choice := range []string{"2", "gpt-6.1-sol"} {
+	for _, choice := range []string{"3", "gpt-6.1-sol"} {
 		if sol, err := selectModel(choice); err != nil || sol.ID != "gpt-6.1-sol" {
 			t.Fatalf("6.1 Sol selection %q got %+v %v", choice, sol, err)
 		}
 	}
-	for _, choice := range []string{"8", "gpt-6.1-terra"} {
+	for _, choice := range []string{"2", "gpt-6.1-terra"} {
 		terra, err := selectModel(choice)
 		if err != nil || terra.ID != "gpt-6.1-terra" || terra.Effort != "" || terra.ContextWindow != 0 {
 			t.Fatalf("6.1 Terra selection %q got %+v %v", choice, terra, err)
 		}
 	}
-	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", "gpt-6-luna", "gpt-6-sol", ""} {
+	for _, choice := range []string{"0", "7", "99", "-1", "gpt-nonexistent", "gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "claude-haiku-4-5", ""} {
 		if _, err := selectModel(choice); err == nil {
 			t.Fatalf("%q was accepted", choice)
 		}
@@ -98,8 +98,8 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 
 func TestSelectEffort_AgainstTheModelsOwnVocabulary(t *testing.T) {
 	sonnet, _ := findModel("claude-sonnet-5-5")
-	haiku, _ := findModel("claude-haiku-4-5")
-	luna, _ := findModel("gpt-5.6-luna")
+	haiku, _ := findModel("claude-haiku-5-5")
+	luna, _ := findModel("gpt-6.1-luna")
 
 	if got, err := selectEffort(sonnet, "2"); err != nil || got != "medium" {
 		t.Fatalf("got %q %v", got, err)
@@ -125,15 +125,15 @@ func TestSelectEffort_AgainstTheModelsOwnVocabulary(t *testing.T) {
 }
 
 func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
-	listing := renderModels("gpt-5.6-luna", map[string]bool{openaiName: true})
+	listing := renderModels("gpt-6.1-luna", map[string]bool{openaiName: true})
 
 	for _, want := range []string{
-		"1  gpt-6.1-luna      openai",
-		"2  gpt-6.1-sol       openai",
-		"8  gpt-6.1-terra     openai",
-		"3  gpt-5.6-luna      openai     current",
-		"5  claude-haiku-4-5  anthropic  no key",
-		"7  claude-opus-5-5   anthropic  no key",
+		"1  gpt-6.1-luna      openai     current",
+		"2  gpt-6.1-terra     openai",
+		"3  gpt-6.1-sol       openai",
+		"4  claude-haiku-5-5  anthropic  no key",
+		"5  claude-sonnet-5-5 anthropic  no key",
+		"6  claude-opus-5-5   anthropic  no key",
 		"models marked no key need ANTHROPIC_API_KEY",
 		"a model change starts a fresh session",
 	} {
@@ -148,7 +148,7 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 		}
 	}
 
-	both := renderModels("gpt-5.6-luna", map[string]bool{openaiName: true, anthropicName: true})
+	both := renderModels("gpt-6.1-luna", map[string]bool{openaiName: true, anthropicName: true})
 	if strings.Contains(both, "no key") {
 		t.Fatalf("a usable provider was marked:\n%s", both)
 	}
@@ -159,8 +159,8 @@ func TestRenderEfforts_ListsOrExplainsAbsence(t *testing.T) {
 	if got := renderEfforts(sonnet, "high"); !strings.Contains(got, "3  high  [current]") {
 		t.Fatalf("got:\n%s", got)
 	}
-	haiku, _ := findModel("claude-haiku-4-5")
-	if got := renderEfforts(haiku, ""); got != "claude-haiku-4-5 takes no reasoning effort setting" {
+	haiku, _ := findModel("claude-haiku-5-5")
+	if got := renderEfforts(haiku, ""); got != "claude-haiku-5-5 takes no reasoning effort setting" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -172,12 +172,10 @@ func TestModelCatalog_EffortSupport(t *testing.T) {
 		id      string
 		efforts string
 	}{
-		{"gpt-5.6-luna", "none,low,medium,high,xhigh,max"},
-		{"gpt-5.6-terra", "none,low,medium,high,xhigh,max"},
 		{"gpt-6.1-luna", "none,low,medium,high,xhigh,max"},
 		{"gpt-6.1-sol", "low,medium,high,xhigh,max"},
 		{"gpt-6.1-terra", ""},
-		{"claude-haiku-4-5", ""},
+		{"claude-haiku-5-5", ""},
 		{"claude-sonnet-5-5", "low,medium,high,xhigh,max"},
 		{"claude-opus-5-5", "low,medium,high,xhigh,max"},
 	} {
@@ -191,6 +189,18 @@ func TestModelCatalog_EffortSupport(t *testing.T) {
 		// A model's own default must be one it accepts, or unset.
 		if info.Effort != "" && !info.accepts(info.Effort) {
 			t.Fatalf("%s defaults to %q, which it does not accept", c.id, info.Effort)
+		}
+	}
+}
+
+func TestModelCatalog_Order(t *testing.T) {
+	want := []string{"gpt-6.1-luna", "gpt-6.1-terra", "gpt-6.1-sol", "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"}
+	if len(modelCatalog) != len(want) {
+		t.Fatalf("catalog has %d models, want %d", len(modelCatalog), len(want))
+	}
+	for i, id := range want {
+		if modelCatalog[i].ID != id {
+			t.Fatalf("position %d = %s, want %s", i+1, modelCatalog[i].ID, id)
 		}
 	}
 }

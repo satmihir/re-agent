@@ -106,7 +106,7 @@ Review budget and model choice
   be established; don't pretend reported lower bounds are a spending ceiling.
 - Keep verifiers and the sweep on the current review model recorded at entry.
   Finders should use spawn.model="gpt-6.1-luna" for an OpenAI review or
-  spawn.model="claude-haiku-4-5" for an Anthropic review, when available. If the
+  spawn.model="claude-haiku-5-5" for an Anthropic review, when available. If the
   cheaper model is unavailable, disclose it, recompute the planned cost on the
   available model, and proceed only within budget; no automatic launch retry.
   Minimize briefs, name concrete file shards, and do not fork author reasoning.

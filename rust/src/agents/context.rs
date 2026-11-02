@@ -880,7 +880,7 @@ mod tests {
         let before = session.history.clone();
         let mut config = session.config.clone();
         config["provider"] = json!("anthropic");
-        config["model"] = json!("claude-haiku-4-5");
+        config["model"] = json!("claude-sonnet-5-5");
         config["agent_prefix"] = json!({"instructions":"wrong inherited"});
         let (history, _, mode) =
             prepare(&session, &mut config, &args(json!({"fork":true})), "read").unwrap();
@@ -1039,7 +1039,7 @@ mod tests {
             let mut config = session.config.clone();
             config["provider"] = json!(provider);
             if provider == "anthropic" {
-                config["model"] = json!("claude-haiku-4-5");
+                config["model"] = json!("claude-sonnet-5-5");
                 config["reasoning_effort"] = json!("");
             }
             let history = vec![user("root")];

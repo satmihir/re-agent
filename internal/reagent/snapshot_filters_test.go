@@ -97,7 +97,7 @@ func TestSnapshot_CleanFilterCannotRunInRestrictedSwitchedWorkspace(t *testing.T
 			// Recovery paths must not forget which root was selected at launch.
 			s.Reset()
 			c := &conversation{session: s, trace: s.trace, client: NewHTTPClient(), progress: io.Discard}
-			info, _ := findModel("claude-haiku-4-5")
+			info, _ := findModel("claude-haiku-5-5")
 			c.switchTo(info)
 			c.session.model = NewScriptedModel(turn(textBlock("after model change")))
 			if result, err := c.session.Turn(context.Background(), "continue", "replacement", filepath.Join(t.TempDir(), "events.jsonl")); err != nil || result.Status != StatusCompleted {

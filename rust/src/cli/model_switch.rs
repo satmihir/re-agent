@@ -289,7 +289,7 @@ mod tests {
     fn stage_matches_independent_destination_encoding_and_omits_empty_plan_and_model_fields() {
         for (provider, model) in [
             ("openai", "gpt-6.1-luna"),
-            ("anthropic", "claude-haiku-4-5"),
+            ("anthropic", "claude-sonnet-5-5"),
         ] {
             let mut config = config();
             config["provider"] = json!(provider);

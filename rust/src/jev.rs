@@ -434,9 +434,12 @@ mod tests {
         let mut duplicate = route.clone();
         duplicate["id"] = json!("b");
         assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
-        duplicate["model"] = json!("claude-haiku-4-5");
+        duplicate["model"] = json!("claude-haiku-5-5");
         assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
         duplicate["reasoning_effort"] = json!("");
+        assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
+        duplicate["model"] = json!("claude-sonnet-5-5");
+        duplicate["reasoning_effort"] = json!("low");
         let request = encode_request("<&>", &[route, duplicate]).unwrap();
         let wire = json_string(&request);
         assert!(wire.starts_with("{\"state\":\"\\u003c\\u0026\\u003e\",\"model\":"));
@@ -457,7 +460,7 @@ mod http_tests {
     fn routes() -> Vec<Value> {
         vec![
             json!({"id":"a","model":"gpt-6.1-luna","reasoning_effort":"low","description":"cheap"}),
-            json!({"id":"b","model":"claude-haiku-4-5","reasoning_effort":"","description":"alternative"}),
+            json!({"id":"b","model":"claude-sonnet-5-5","reasoning_effort":"low","description":"alternative"}),
         ]
     }
     #[test]

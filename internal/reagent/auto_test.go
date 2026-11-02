@@ -506,7 +506,8 @@ func TestAuto_CooldownEndsOnlyAtNextUserTurn(t *testing.T) {
 
 func TestAuto_OverfullFallbackDefersWithoutDiscardingHistory(t *testing.T) {
 	cfg := autoConfig(t, NewEchoTool())
-	cfg.Model, cfg.Provider, cfg.ReasoningEffort = "claude-haiku-4-5", anthropicName, ""
+	cfg.Model, cfg.Provider, cfg.ReasoningEffort = "claude-sonnet-5-5", anthropicName, "low"
+	cfg.ContextWindowTokens = 200_000
 	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("capable", 0.95))
 	s := autoSession(t, cfg, NewScriptedModel(), fast, api)

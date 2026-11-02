@@ -222,17 +222,22 @@ func TestEncodeRequest_CatalogVerbosityInDirectAndProxyForms(t *testing.T) {
 }
 
 func TestEncodeRequest_UnknownModelOmitsVerbosity(t *testing.T) {
-	for _, proxied := range []bool{false, true} {
-		body, err := encodeOpenAIRequest(ModelRequest{Model: "gpt-test-unknown", ReasoningEffort: "low"}, proxied)
-		if err != nil {
-			t.Fatal(err)
+	for _, model := range []string{"gpt-test-unknown", "gpt-5.6-luna", "gpt-5.6-terra"} {
+		if contextWindow(model) != 0 {
+			t.Fatalf("%s has a known window", model)
 		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(body, &fields); err != nil {
-			t.Fatal(err)
-		}
-		if _, found := fields["text"]; found {
-			t.Fatalf("unknown model sent text: %s", body)
+		for _, proxied := range []bool{false, true} {
+			body, err := encodeOpenAIRequest(ModelRequest{Model: model, ReasoningEffort: "low"}, proxied)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(body, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if _, found := fields["text"]; found {
+				t.Fatalf("unknown model sent text: %s", body)
+			}
 		}
 	}
 }

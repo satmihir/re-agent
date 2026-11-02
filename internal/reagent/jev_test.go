@@ -86,7 +86,9 @@ func TestJev_InvalidArgumentsNeverSend(t *testing.T) {
 		{"unknown window", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[0].Model = "gpt-5.6-luna" }},
 		{"unsupported effort", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[1].Effort = "none" }},
 		{"unset effort", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[1].Effort = "" }},
-		{"Haiku effort", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[0].Model = "claude-haiku-4-5" }},
+		{"Haiku unknown window", func(_ *jevClient, _ *string, routes *[]jevRoute) {
+			(*routes)[0].Model, (*routes)[0].Effort = "claude-haiku-5-5", ""
+		}},
 		{"blank ID", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[0].ID = " " }},
 		{"blank rubric", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[0].Description = " " }},
 	} {
@@ -118,16 +120,6 @@ func TestJev_DecideAcceptsRoundedProbabilities(t *testing.T) {
 				t.Fatalf("rounded decision: %+v, %v", decision, err)
 			}
 		})
-	}
-}
-
-func TestJev_ModelWithoutEffortOmitsItFromPair(t *testing.T) {
-	api := newFakeAPI(t, okReply(jevReply))
-	routes := jevTestRoutes()
-	routes[0].Model, routes[0].Effort = "claude-haiku-4-5", ""
-	decision, err := newJevClient("fake", api.server.URL, api.server.Client()).decide(context.Background(), "simple task", routes)
-	if err != nil || decision.Route != "fast" {
-		t.Fatalf("no-effort route: %+v, %v", decision, err)
 	}
 }
 

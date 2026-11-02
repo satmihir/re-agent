@@ -22,7 +22,7 @@ func gcAgentFixture(t *testing.T, provider string) *Session {
 	s.cfg.ContextGC = true
 	s.cfg.Provider = provider
 	if provider == anthropicName {
-		s.cfg.Model = DefaultAnthropicModel
+		s.cfg.Model = "claude-sonnet-5-5"
 	}
 	var tools []Tool
 	for _, spec := range s.cfg.Registry.Specs() {
@@ -109,7 +109,7 @@ func TestContextGC_TextSharingRecallAndIDReservation(t *testing.T) {
 				a := spawnArgs{Task: "inspect", Authority: "read", Context: &agentContext{Entries: []int{3}}}
 				if mode == "text" {
 					a.Context = &agentContext{Fork: true}
-					a.Model = DefaultAnthropicModel
+					a.Model = "claude-sonnet-5-5"
 				}
 				thread, err := s.spawnAgent(context.Background(), a)
 				if err != nil {

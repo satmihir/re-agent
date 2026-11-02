@@ -1195,7 +1195,7 @@ func TestReviewPrompt_BudgetsModelChoiceAndUncoveredPolicy(t *testing.T) {
 		"STOP new work", "unverified (never plausible/confirmed by default)",
 		"Do not bypass the stop by replacing agents with inline work", "has unreported attempts",
 		"Keep verifiers and the sweep on the current review model",
-		`spawn.model="gpt-6.1-luna"`, `spawn.model="claude-haiku-4-5"`,
+		`spawn.model="gpt-6.1-luna"`, `spawn.model="claude-haiku-5-5"`,
 	} {
 		if !strings.Contains(text, rule) {
 			t.Errorf("missing review budget rule: %s", rule)
