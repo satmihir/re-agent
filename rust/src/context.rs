@@ -75,6 +75,7 @@ fn render_instructions(config: &Value) -> String {
     if agent {
         text.push_str("\n# Agent task\n\n");
         text.push_str(AGENT_INSTRUCTIONS);
+        text.push_str(crate::agents::policy(config));
     }
     let mode = if config["read_only"].as_bool().unwrap_or(false) {
         "read only"
@@ -130,7 +131,7 @@ mod tests {
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(AGENT_INSTRUCTIONS.as_bytes())),
-            "eb367f91c0448bfec1fcae551340772c9479f319a136bcba5442f5b09a8ed3aa"
+            "b1bb5ab8f5ab36008461cae3559402d2a59ae8598264217d97b979255aa140be"
         );
     }
 

@@ -213,7 +213,7 @@ func TestGitInspect_ReadAgentReviewAndRootPlan(t *testing.T) {
 			s.agentModel = func(Config, *Trace) (Model, error) {
 				return NewScriptedModel(turn(inspect), turn(textBlock("reviewed"))), nil
 			}
-			s.model = NewScriptedModel(turn(spawnBlock("spawn", "review branch", "reviewer"), callBlock("wait", "wait", `{"ids":["reviewer"]}`)), turn(textBlock("done")))
+			s.model = NewScriptedModel(turn(teammateBlock("spawn", "review branch", "reviewer"), callBlock("wait", "wait", `{"ids":["reviewer"]}`)), turn(textBlock("done")))
 			agentTurn(t, s, "review")
 			if len(agentResults(s.history)) != 1 || agentResults(s.history)[0].Result.Reply != "reviewed" {
 				t.Fatal("agent review failed")

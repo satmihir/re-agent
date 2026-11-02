@@ -638,9 +638,9 @@ fn checkpoint_fields(kind: &str) -> &'static str {
         "drop" => "reason:string step:int placeholder:string",
         "handoff" => "text:string plan:string entries:int native_items:int",
         "prompt" => "text:string project:string",
-        "thread" => "id:string parent_id:string name:string state:string task:string steps:int \
+        "thread" => "id:string parent_id:string kind:string name:string state:string task:string steps:int \
             cost:usage trace_path:string authority:string context_mode:string effects_unknown:bool",
-        "observation" => "id:string parent_id:string name:string state:string task:string steps:int \
+        "observation" => "id:string parent_id:string kind:string name:string state:string task:string steps:int \
             cost:usage trace_path:string authority:string context_mode:string effects_unknown:bool depth:int",
         "subtree" => "threads:[]observation total_cost:usage total_agents:int next_offset:int accounting_complete:bool",
         _ => unreachable!("unknown checkpoint type"),
@@ -707,6 +707,17 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
         return Err(corrupt("invalid checkpoint state"));
     }
     convert_raw(&mut cp, true).map_err(|e| corrupt(&e))?;
+    for path in ["/agent_roster", "/agent_subtree/threads"] {
+        if let Some(records) = cp.pointer_mut(path).and_then(Value::as_array_mut) {
+            for record in records {
+                if let Some(record) = record.as_object_mut() {
+                    if !record.contains_key("kind") || (env.version == 1 && record["kind"] == "") {
+                        record.insert("kind".into(), json!("task"));
+                    }
+                }
+            }
+        }
+    }
     if cp["version"] != env.version {
         return Err(corrupt("mismatched version"));
     }
@@ -1142,7 +1153,7 @@ mod tests {
         let roster = &persisted["state"]["agent_roster"][0];
         assert_eq!(
             crate::types::json_string(roster),
-            r#"{"id":"t1","parent_id":"root","name":"worker","state":"idle","task":"inspect","steps":0,"cost":{"known":true,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0}}"#
+            r#"{"id":"t1","parent_id":"root","kind":"task","name":"worker","state":"idle","task":"inspect","steps":0,"cost":{"known":true,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0}}"#
         );
         let observation = &persisted["state"]["agent_subtree"]["threads"][0];
         assert_eq!(
@@ -1162,6 +1173,109 @@ mod tests {
                 "total_agents",
                 "accounting_complete"
             ]
+        );
+    }
+
+    #[test]
+    fn agent_kinds_and_lifetime_accounting_survive_save_load_and_recovery() {
+        const CHILD: &str = "REAGENT_CHECKPOINT_AGENT_KINDS_TEST";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = std::path::PathBuf::from(root);
+            let script = root.join("script.json");
+            fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#).unwrap();
+            let mut session = crate::runtime::Session::new(json!({"session_id":"0123456789abcdef","provider":"scripted","model":"scripted","scripted":script,"workspace":root,"checkpoint_enabled":true,"agents":true})).unwrap();
+            session.config["provider"] = json!("openai");
+            session.config["model"] = json!("gpt-6-sol");
+            session.config["scripted"] = json!("");
+            let records: Vec<Value> = ["task", "teammate", "task", "teammate"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, kind)| {
+                    let mut cost = crate::types::usage_zero(true);
+                    cost["input_tokens"] = json!((index + 1) * 11);
+                    json!({"id":format!("t{}", index + 1),"parent_id":"root","kind":kind,"name":format!("worker-{}", index + 1),"state":if index < 2 {"idle"} else {"dismissed"},"steps":index + 1,"cost":cost,"depth":1})
+                })
+                .collect();
+            session.state["phase"] = json!("idle");
+            let mut roster = records[..2].to_vec();
+            for record in &mut roster {
+                record.as_object_mut().unwrap().remove("depth");
+            }
+            session.state["agent_roster"] = json!(roster);
+            session.state["agent_subtree"] = json!({"threads":records,"accounting_complete":true});
+            crate::agents::restore(&session);
+            let expected = crate::agents::snapshot(&session);
+            assert_eq!(expected.0.as_array().unwrap().len(), 2);
+            assert_eq!(expected.1["total_agents"], 4);
+            assert_eq!(expected.1["total_cost"]["input_tokens"], 110);
+            assert_eq!(expected.1["accounting_complete"], true);
+            save(&session, "idle", "").unwrap();
+            close("0123456789abcdef");
+            let saved = load("0123456789abcdef").unwrap();
+            assert_eq!(saved["state"]["agent_roster"], expected.0);
+            assert_eq!(saved["state"]["agent_subtree"], expected.1);
+            for (index, kind) in ["task", "teammate", "task", "teammate"]
+                .into_iter()
+                .enumerate()
+            {
+                assert_eq!(
+                    saved["state"]["agent_subtree"]["threads"][index]["kind"],
+                    kind
+                );
+            }
+            crate::agents::retire(&session);
+            session.config = saved["config"].clone();
+            session.state = saved["state"].clone();
+            session.history = saved["history"].as_array().cloned().unwrap_or_default();
+            assert_eq!(recover(&mut session).unwrap(), "");
+            assert_eq!(crate::agents::snapshot(&session), expected);
+            save(&session, "idle", "").unwrap();
+            let saved_again = load("0123456789abcdef").unwrap();
+            assert_eq!(saved_again["state"]["agent_subtree"], expected.1);
+
+            let path = directory("0123456789abcdef")
+                .unwrap()
+                .join("checkpoint.json");
+            let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            for path in ["/agent_roster", "/agent_subtree/threads"] {
+                for record in legacy["state"]
+                    .pointer_mut(path)
+                    .unwrap()
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    record.as_object_mut().unwrap().remove("kind");
+                }
+            }
+            fs::write(path, checked_envelope(&legacy["state"])).unwrap();
+            let legacy = load("0123456789abcdef").unwrap();
+            for path in ["/agent_roster", "/agent_subtree/threads"] {
+                for record in legacy["state"].pointer(path).unwrap().as_array().unwrap() {
+                    assert_eq!(record["kind"], "task");
+                }
+            }
+            assert_eq!(legacy["state"]["agent_subtree"]["total_agents"], 4);
+            assert_eq!(
+                legacy["state"]["agent_subtree"]["total_cost"],
+                expected.1["total_cost"]
+            );
+            crate::agents::retire(&session);
+            close("0123456789abcdef");
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "checkpoint::tests::agent_kinds_and_lifetime_accounting_survive_save_load_and_recovery", "--nocapture"])
+            .env(CHILD, root.path())
+            .env("XDG_CACHE_HOME", root.path().join("cache"))
+            .env("HOME", root.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
         );
     }
 
@@ -1263,6 +1377,8 @@ mod tests {
                 ("/pending_submission", json!([])),
                 ("/prompt", json!({"text":true})),
                 ("/agent_roster", json!([{"steps":"1"}])),
+                ("/agent_roster", json!([{"kind":true}])),
+                ("/agent_subtree", json!({"threads":[{"kind":1}]})),
             ] {
                 let mut malformed = rewritten["state"].clone();
                 malformed
@@ -1342,6 +1458,7 @@ mod tests {
         assert_eq!(cp["gc_state"]["dropped"]["c1"]["step"], 2);
         assert_eq!(cp["agent_subtree"]["threads"][0]["id"], "t1");
         assert_eq!(cp["agent_subtree"]["threads"][0]["depth"], 2);
+        assert_eq!(cp["agent_subtree"]["threads"][0]["kind"], "task");
         assert_eq!(cp["agent_subtree"]["next_offset"], 3);
         assert_eq!(cp["context_window_tokens"], 0);
         assert_eq!(cp["context_gc_consolidate"], false);

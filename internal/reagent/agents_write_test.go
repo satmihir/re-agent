@@ -45,7 +45,7 @@ func TestAgents_SeparateHandlesDetectSequentialStaleEdit(t *testing.T) {
 func TestAgents_ConcurrentPublicationNeverLosesUpdate(t *testing.T) {
 	s := agentFixture(t)
 	// Actual spawned handles must share the guard, not their observations.
-	s.model = NewScriptedModel(turn(writeSpawnBlock("a", "one", "one"), writeSpawnBlock("b", "two", "two"), callBlock("wait", "wait", `{"ids":["one","two"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(writeTeammateBlock("a", "one", "one"), writeTeammateBlock("b", "two", "two"), callBlock("wait", "wait", `{"ids":["one","two"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "prepare handles")
 	s.agents.mu.Lock()
 	handles := []*Workspace{s.agents.nodes["t1"].session.workspace.active, s.agents.nodes["t2"].session.workspace.active}
@@ -132,6 +132,11 @@ func writeSpawnBlock(id, task, name string) OutputBlock {
 	return callBlock(id, "spawn", string(args))
 }
 
+func writeTeammateBlock(id, task, name string) OutputBlock {
+	args, _ := json.Marshal(spawnArgs{Task: task, Name: name, Kind: "teammate", Authority: "write", Context: &agentContext{Brief: "work independently"}})
+	return callBlock(id, "spawn", string(args))
+}
+
 func TestAgents_WriteEditsReachRootAndRecapWithoutAuthorizingParent(t *testing.T) {
 	s := agentFixture(t)
 	path := filepath.Join(s.cfg.WorkspacePath, "shared")
@@ -151,7 +156,7 @@ func TestAgents_WriteEditsReachRootAndRecapWithoutAuthorizingParent(t *testing.T
 			turn(textBlock(strings.Repeat("雪\x00\"\\<", 20000)))), nil
 	}
 	s.model = NewScriptedModel(
-		turn(callBlock("read", "read_file", `{"path":"shared"}`), writeSpawnBlock("spawn", "edit", "writer"), callBlock("wait", "wait", `{"ids":["writer"]}`)),
+		turn(callBlock("read", "read_file", `{"path":"shared"}`), writeTeammateBlock("spawn", "edit", "writer"), callBlock("wait", "wait", `{"ids":["writer"]}`)),
 		turn(callBlock("stale", "write_file", `{"path":"shared","content":"parent based on original"}`)),
 		turn(callBlock("reread", "read_file", `{"path":"shared"}`)),
 		turn(callBlock("edit", "edit_file", `{"path":"shared","old_text":"child","new_text":"parent after reread"}`)),
@@ -182,7 +187,7 @@ func TestAgents_WriteEditsReachRootAndRecapWithoutAuthorizingParent(t *testing.T
 			t.Errorf("recap missing %q: %s", text, recap.String())
 		}
 	}
-	// A named agent retains both write authority and its own latest observations.
+	// A teammate retains both write authority and its own latest observations.
 	s.model = NewScriptedModel(turn(callBlock("send", "send", `{"name":"writer","message":"continue"}`), callBlock("w2", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
 	s.agents.nodes["t1"].session.model = NewScriptedModel(turn(callBlock("old", "edit_file", `{"path":"shared","append_text":"!"}`)), turn(textBlock("done")))
 	later := agentTurn(t, s, "continue writing")
@@ -224,7 +229,7 @@ func TestAgents_WriteAuthorityOnlyShrinks(t *testing.T) {
 				}
 				return NewScriptedModel(turn(callBlock("write", "write_file", `{"path":"forbidden","content":"bad"}`)), turn(textBlock("done"))), nil
 			}
-			args, _ := json.Marshal(spawnArgs{Task: "try write", Name: "child", Authority: scenario.authority, Context: &agentContext{}})
+			args, _ := json.Marshal(spawnArgs{Task: "try write", Name: "child", Kind: "teammate", Authority: scenario.authority, Context: &agentContext{}})
 			responses := []ModelResponse{turn(callBlock("spawn", "spawn", string(args)))}
 			if scenario.spawnCode == "ok" {
 				responses = append(responses, turn(callBlock("wait", "wait", `{"ids":["child"]}`)))
@@ -294,7 +299,7 @@ func TestAgents_WriteChildGetsOnlyParentsAvailableToolsAndNoWorkspaceOrGitTools(
 
 func TestAgents_ParentPlanModeRefusesSendingNewWorkToExistingWriter(t *testing.T) {
 	s := agentFixture(t)
-	s.model = NewScriptedModel(turn(writeSpawnBlock("spawn", "write", "writer"), callBlock("wait", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
+	s.model = NewScriptedModel(turn(writeTeammateBlock("spawn", "write", "writer"), callBlock("wait", "wait", `{"ids":["writer"]}`)), turn(textBlock("done")))
 	agentTurn(t, s, "write phase")
 	s.planMode = true
 	s.model = NewScriptedModel(turn(callBlock("send", "send", `{"name":"writer","message":"write again"}`)), turn(textBlock("done")))
@@ -430,7 +435,7 @@ func TestAgents_DeletionMakesOmittedDigestOverwriteStaleUntilAbsenceRead(t *test
 			}
 			first := turn(callBlock("read", "read_file", `{"path":"shared"}`))
 			if writer == "sibling" {
-				first = turn(writeSpawnBlock("reader", "read", "writer"), callBlock("w1", "wait", `{"ids":["writer"]}`))
+				first = turn(writeTeammateBlock("reader", "read", "writer"), callBlock("w1", "wait", `{"ids":["writer"]}`))
 			}
 			responses := []ModelResponse{first, turn(writeSpawnBlock("deleter", "delete", "deleter"), callBlock("w2", "wait", `{"ids":["deleter"]}`))}
 			if writer == "root" {

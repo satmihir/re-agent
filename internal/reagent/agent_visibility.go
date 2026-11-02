@@ -19,7 +19,7 @@ type agentSubtree struct {
 	AccountingComplete bool               `json:"accounting_complete"`
 }
 
-// Retain accounting, not Sessions, when anonymous or dismissed agents release capacity.
+// Retain accounting, not Sessions, when tasks or dismissed teammates release capacity.
 func (t *agentTree) retireLocked(id string) {
 	n := t.nodes[id]
 	t.archive[id] = agentObservation{AgentThread: n.AgentThread, Depth: n.depth}

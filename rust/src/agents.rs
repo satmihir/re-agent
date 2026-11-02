@@ -106,11 +106,16 @@ fn ordered(value: &Value, fields: &[&str]) -> Value {
 }
 
 pub(crate) fn thread_record(value: &Value) -> Value {
+    let mut value = value.clone();
+    if value.get("kind").is_none() {
+        value["kind"] = json!("task");
+    }
     let mut value = ordered(
-        value,
+        &value,
         &[
             "id",
             "parent_id",
+            "kind",
             "name",
             "state",
             "task",
@@ -256,7 +261,7 @@ fn decode_fields(
 ) -> Result<(), String> {
     use crate::provider::raw_tokens;
     let keys: &[&str] = match name {
-        "spawn" => &["task", "context", "name", "model", "authority"],
+        "spawn" => &["task", "context", "kind", "name", "model", "authority"],
         "context" => &["brief", "files", "fork", "entries"],
         "send" => &["id", "name", "message"],
         "wait" => &["ids", "timeout"],
@@ -359,6 +364,9 @@ fn decode_fields(
             "files" | "ids" => {
                 first_error.get_or_insert_with(|| crate::errors::field_error(&field));
             }
+            "kind" if raw == b"null" => {
+                return Err("kind must be omitted rather than null".into());
+            }
             _ if raw == b"null" => {}
             _ if raw.starts_with(b"\"") => {
                 a[key] =
@@ -410,6 +418,14 @@ fn roster_record(n: &Node) -> Value {
     thread_record(&record)
 }
 
+/// Policy describes the immutable child kind, budget and delivery lifetime.
+pub(crate) fn policy(config: &Value) -> &'static str {
+    if config["agent_kind"] == "teammate" {
+        return "\nAgent kind: teammate. Your Session is retained across turns until explicit dismissal or shutdown. There are no step, tool-call or reported-token caps. Only the root may spawn teammates; you may spawn only tasks.\n";
+    }
+    "\nAgent kind: task. You end after final result delivery, even when named. Per-task limits: 64 steps, 256 calls, 400000 reported uncached-input plus output tokens. Only the root may spawn teammates; you may spawn only tasks.\n"
+}
+
 fn child_config(s: &Session, a: &Value, authority: &str) -> Value {
     let mut c = s.config.clone();
     c["agent"] = json!(true);
@@ -424,8 +440,10 @@ fn child_config(s: &Session, a: &Value, authority: &str) -> Value {
     c["allow_workspaces"] = json!([]);
     c["allow_workspace"] = json!([]);
     c["allowed_workspaces"] = json!([]);
-    c["max_steps"] = json!(32);
-    c["max_tool_calls"] = json!(128);
+    let kind = a["kind"].as_str().unwrap_or("task");
+    c["agent_kind"] = json!(kind);
+    c["max_steps"] = json!(if kind == "teammate" { 0 } else { 64 });
+    c["max_tool_calls"] = json!(if kind == "teammate" { 0 } else { 256 });
     c["in_run_compact"] = json!(false);
     c["checkpoint_enabled"] = json!(false);
     c["agent_tree_id"] = json!(s.config["agent_tree_id"]
@@ -451,6 +469,16 @@ fn child_config(s: &Session, a: &Value, authority: &str) -> Value {
 fn spawn(s: &mut Session, a: &Value) -> Value {
     let context = &a["context"];
     let name = text(&a["name"]);
+    let kind = a["kind"].as_str().unwrap_or("task");
+    if !["task", "teammate"].contains(&kind) {
+        return fail("invalid_arguments", "kind must be task or teammate");
+    }
+    if kind == "teammate" && name.is_empty() {
+        return fail("invalid_arguments", "teammates require a name");
+    }
+    if kind == "teammate" && parent(s) != "root" {
+        return fail("spawn_denied", "only the root may spawn teammates");
+    }
     let valid_name = name.is_empty()
         || (name.len() <= 64
             && regex::Regex::new(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
@@ -582,7 +610,7 @@ fn spawn(s: &mut Session, a: &Value) -> Value {
     child.trace.persistent = true;
     child.trace.agent_id = id.clone();
     child.trace.parent_id = p.clone();
-    let mut record = json!({"id":id,"parent_id":p,"state":"running","task":a["task"],"steps":0,"cost":crate::types::usage_zero(true),"trace_path":path,"authority":authority,"context_mode":mode});
+    let mut record = json!({"id":id,"parent_id":p,"kind":kind,"state":"running","task":a["task"],"steps":0,"cost":crate::types::usage_zero(true),"trace_path":path,"authority":authority,"context_mode":mode});
     if !name.is_empty() {
         record["name"] = json!(name);
     }
@@ -617,7 +645,7 @@ fn spawn_admission(t: &Tree, parent: &str, name: &str) -> Result<usize, String> 
     if depth > 3 {
         return Err("maximum agent depth is 3".into());
     }
-    if t.nodes.values().filter(|n| !n.ended || n.working).count() >= 8 {
+    if t.nodes.values().filter(|n| !n.ended || n.working).count() >= 16 {
         return Err("at capacity: wait for or dismiss an agent".into());
     }
     if !name.is_empty()
@@ -794,10 +822,10 @@ fn wait(s: &Session, a: &Value) -> Value {
         Err(e) => return fail("invalid_arguments", &e),
     };
     let ids = a["ids"].as_array();
-    if ids.is_none_or(|a| a.is_empty() || a.len() > 8) || timeout > 600 {
+    if ids.is_none_or(|a| a.is_empty() || a.len() > 16) || timeout > 600 {
         return fail(
             "invalid_arguments",
-            "wait requires 1–8 children and timeout 0–600 seconds",
+            "wait requires 1–16 children and timeout 0–600 seconds",
         );
     }
     let display_targets = ids
@@ -1203,7 +1231,7 @@ pub fn notices(s: &Session) -> Vec<String> {
 pub fn token_limit(usage: &Value) -> bool {
     let input = usage["input_tokens"].as_i64().unwrap_or(0);
     let cached = usage["cached_input_tokens"].as_i64().unwrap_or(0);
-    (input - cached).max(0) + usage["output_tokens"].as_i64().unwrap_or(0) >= 200_000
+    (input - cached).max(0) + usage["output_tokens"].as_i64().unwrap_or(0) >= 400_000
 }
 
 /// Running lists direct child IDs whose current task has not stopped.
@@ -1323,7 +1351,7 @@ pub fn deliver(s: &mut Session) -> bool {
             }
             delivered = true;
         }
-        if had && !n.working && (n.ended || text(&n.record["name"]).is_empty()) {
+        if had && !n.working && (n.ended || n.record["kind"] != "teammate") {
             n.ended = true;
             n.record["state"] = json!("dismissed");
             let mut record = n.record.clone();
@@ -1498,6 +1526,131 @@ pub fn meter(s: &Session, usage: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kinds_validate_names_root_only_creation_and_inherited_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = Session::new(json!({"provider":"openai","model":"test","workspace":dir.path(),"agents":true,"read_only":true,"plan":true})).unwrap();
+        for arguments in [
+            r#"{"task":"inspect","context":{},"kind":"invalid"}"#,
+            r#"{"task":"inspect","context":{},"kind":""}"#,
+            r#"{"task":"inspect","context":{},"kind":null}"#,
+            r#"{"task":"inspect","context":{},"kind":42}"#,
+            r#"{"task":"inspect","context":{},"kind":"teammate"}"#,
+            r#"{"task":"inspect","context":{},"kind":"teammate","name":"Bad Name"}"#,
+        ] {
+            assert_eq!(
+                execute(&mut root, "spawn", arguments).unwrap().unwrap()["code"],
+                "invalid_arguments",
+                "{arguments}"
+            );
+        }
+        for kind in ["task", "teammate"] {
+            let args = json!({"task":"inspect","context":{},"name":"worker","kind":kind});
+            let config = child_config(&root, &args, "read");
+            assert_eq!(config["agent_kind"], kind);
+            assert_eq!(config["read_only"], true);
+            assert_eq!(config["plan"], true);
+            assert_eq!(config["git_do"], false);
+            assert_eq!(config["approved_workspaces"], json!([]));
+            assert_eq!(config["max_steps"], if kind == "task" { 64 } else { 0 });
+            assert_eq!(
+                config["max_tool_calls"],
+                if kind == "task" { 256 } else { 0 }
+            );
+            let mut denied = args.clone();
+            denied["authority"] = json!("write");
+            assert_eq!(
+                execute(&mut root, "spawn", &crate::types::json_string(&denied))
+                    .unwrap()
+                    .unwrap()["code"],
+                "spawn_denied"
+            );
+            let mut child = Session::new(config).unwrap();
+            child.config["agent_id"] = json!("t1");
+            let teammate = r#"{"task":"inspect","context":{},"kind":"teammate","name":"nested"}"#;
+            let result = execute(&mut child, "spawn", teammate).unwrap().unwrap();
+            assert_eq!(result["code"], "spawn_denied", "{kind}: {result}");
+            assert_eq!(result["message"], "only the root may spawn teammates");
+            child.reset();
+            assert_eq!(child.config["agent_kind"], kind);
+        }
+        assert_eq!(
+            child_config(&root, &json!({}), "read")["agent_kind"],
+            "task"
+        );
+        let spec = specs().remove(0);
+        assert_eq!(
+            spec["input_schema"]["properties"]["kind"]["enum"],
+            json!(["task", "teammate"])
+        );
+    }
+
+    #[test]
+    fn named_tasks_retire_after_delivery_and_sixteen_live_agents_can_be_waited() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("script.json");
+        std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"done"}]}]"#).unwrap();
+        let mut root = Session::new(json!({"provider":"scripted","model":"scripted","scripted":script,"workspace":dir.path(),"trace_dir":dir.path(),"agents":true})).unwrap();
+        let mut ids = Vec::new();
+        for index in 0..16 {
+            let mut args = json!({"task":"inspect","context":{},"name":format!("worker-{index}")});
+            if index % 2 == 1 {
+                args["kind"] = json!("task");
+            }
+            let result = execute(&mut root, "spawn", &crate::types::json_string(&args))
+                .unwrap()
+                .unwrap();
+            assert_eq!(result["ok"], true, "{index}: {result}");
+            assert_eq!(result["data"]["kind"], "task");
+            ids.push(result["data"]["id"].clone());
+        }
+        let denied = execute(
+            &mut root,
+            "spawn",
+            r#"{"task":"inspect","context":{},"kind":"teammate","name":"overflow"}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(denied["code"], "spawn_denied");
+        assert!(text(&denied["message"]).contains("at capacity"));
+        let waited = wait(&root, &json!({"ids":ids,"timeout":5}));
+        assert_eq!(waited["data"]["timed_out"], false);
+        assert_eq!(waited["data"]["statuses"].as_array().unwrap().len(), 16);
+        assert_eq!(roster(&root)["threads"].as_array().unwrap().len(), 16);
+        assert!(deliver(&mut root));
+        assert_eq!(roster(&root)["threads"], json!([]));
+        assert_eq!(snapshot(&root).1["total_agents"], 16);
+        for record in snapshot(&root).1["threads"].as_array().unwrap() {
+            assert_eq!(record["kind"], "task");
+            assert_eq!(record["state"], "dismissed");
+        }
+        assert_eq!(
+            send(&mut root, &json!({"name":"worker-0","message":"again"}))["code"],
+            "send_denied"
+        );
+        let reused = execute(
+            &mut root,
+            "spawn",
+            r#"{"task":"inspect","context":{},"kind":"teammate","name":"worker-0"}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(reused["ok"], true, "{reused}");
+        assert_eq!(
+            wait(&root, &json!({"ids":["worker-0"],"timeout":5}))["data"]["timed_out"],
+            false
+        );
+        assert!(deliver(&mut root));
+        assert_eq!(roster(&root)["threads"][0]["kind"], "teammate");
+        assert_eq!(
+            control(&root, &json!({"name":"worker-0"}), "dismiss")["ok"],
+            true
+        );
+        assert_eq!(roster(&root)["threads"], json!([]));
+        assert_eq!(snapshot(&root).1["total_agents"], 17);
+    }
+
     fn stopped_node(id: &str, parent: &str) -> Node {
         Node {
             record: json!({"id":id,"parent_id":parent,"name":"worker","authority":"write","state":"idle"}),
@@ -1608,28 +1761,39 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let records = first["data"]["threads"].as_array().unwrap();
-            assert_eq!(records.len(), 24, "trace length {trace_bytes}");
-            assert_eq!(records.last().unwrap()["id"], "t30");
-            assert_eq!(first["data"]["next_offset"], 24);
+            let count = if trace_bytes == 136 { 24 } else { 23 };
+            assert_eq!(records.len(), count, "trace length {trace_bytes}");
+            assert_eq!(
+                records.last().unwrap()["id"],
+                if count == 24 { "t30" } else { "t3" }
+            );
+            assert_eq!(first["data"]["next_offset"], count);
             assert_eq!(first["truncated"], true);
-            let second = execute(&mut session, "threads", r#"{"subtree":true,"offset":24}"#)
-                .unwrap()
-                .unwrap();
-            assert_eq!(second["data"]["threads"].as_array().unwrap().len(), 6);
-            assert_eq!(second["data"]["threads"][0]["id"], "t4");
+            let second = execute(
+                &mut session,
+                "threads",
+                &format!(r#"{{"subtree":true,"offset":{count}}}"#),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                second["data"]["threads"].as_array().unwrap().len(),
+                30 - count
+            );
+            assert_eq!(
+                second["data"]["threads"][0]["id"],
+                if count == 24 { "t4" } else { "t30" }
+            );
             assert!(second["data"].get("next_offset").is_none());
             assert_eq!(second["truncated"], false);
             assert_eq!(second["data"]["total_cost"], first["data"]["total_cost"]);
-            assert_eq!(
-                crate::types::json_bytes(&first).len(),
-                if trace_bytes == 136 { 31965 } else { 32733 }
-            );
+            assert!(crate::types::json_bytes(&first).len() <= crate::workspace::MAX_RESULT_BYTES);
             let mut next_candidate = first.clone();
             next_candidate["data"]["threads"]
                 .as_array_mut()
                 .unwrap()
                 .push(second["data"]["threads"][0].clone());
-            next_candidate["data"]["next_offset"] = json!(25);
+            next_candidate["data"]["next_offset"] = json!(count + 1);
             next_candidate["truncated"] = json!(false);
             assert!(
                 crate::types::json_bytes(&next_candidate).len()
@@ -2209,7 +2373,7 @@ mod tests {
             let unlocked = match shared.tree.try_lock() {
                 Ok(mut t) => {
                     if mode != "cancel" {
-                        let count = if mode == "capacity" { 8 } else { 1 };
+                        let count = if mode == "capacity" { 16 } else { 1 };
                         for i in 1..=count {
                             let id = format!("t{i}");
                             let mut n = stopped_node(&id, "root");
@@ -2246,7 +2410,7 @@ mod tests {
             assert_eq!(
                 t.next,
                 if mode == "capacity" {
-                    8
+                    16
                 } else if mode == "name" {
                     1
                 } else {
@@ -2299,7 +2463,7 @@ mod tests {
         let mut session = Session::new(json!({"provider":"scripted","model":"scripted","scripted":root_script,"workspace":dir.path(),"trace_file":trace,"trace_dir":dir.path(),"agents":true,"_display":true,"_chat":true})).unwrap();
         session.config["scripted"] = json!(child_script);
         crate::render::begin_turn(&mut session.state);
-        assert_eq!(execute(&mut session,"spawn",r#"{"task":"child","name":"worker","authority":"write","context":{"brief":"private"}}"#).unwrap().unwrap()["ok"],true);
+        assert_eq!(execute(&mut session,"spawn",r#"{"task":"child","kind":"teammate","name":"worker","authority":"write","context":{"brief":"private"}}"#).unwrap().unwrap()["ok"],true);
         let release = dir.path().join("release-child");
         let releaser = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -2454,7 +2618,7 @@ mod tests {
     }
 
     #[test]
-    fn child_result_is_delivered_once_and_named_session_accepts_send() {
+    fn teammate_result_is_delivered_once_and_session_accepts_send() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("script.json");
         std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"first"}]},{"blocks":[{"kind":"text","text":"second"}]}]"#).unwrap();
@@ -2470,7 +2634,7 @@ mod tests {
         let spawned = execute(
             &mut session,
             "spawn",
-            r#"{"task":"read and report","context":{"brief":"do not write"},"name":"worker"}"#,
+            r#"{"task":"read and report","context":{"brief":"do not write"},"kind":"teammate","name":"worker"}"#,
         )
         .unwrap()
         .unwrap();
@@ -2479,7 +2643,7 @@ mod tests {
         assert_eq!(
             crate::types::json_string(&spawned["data"]),
             format!(
-                r#"{{"id":"t1","parent_id":"root","name":"worker","state":"running","task":"read and report","steps":0,"cost":{{"known":true,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0}},"trace_path":{},"authority":"read","context_mode":{}}}"#,
+                r#"{{"id":"t1","parent_id":"root","kind":"teammate","name":"worker","state":"running","task":"read and report","steps":0,"cost":{{"known":true,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0}},"trace_path":{},"authority":"read","context_mode":{}}}"#,
                 crate::types::json_string(&spawned["data"]["trace_path"]),
                 crate::types::json_string(&spawned["data"]["context_mode"]),
             )
@@ -2869,13 +3033,13 @@ mod tests {
     #[test]
     fn reported_token_cap_counts_only_uncached_input_and_output() {
         for (input, cached, output, reasoning, limited) in [
-            (200000, 0, 1, 0, true),
-            (200000, 199999, 1, 0, false),
-            (200000, 200001, 1, 0, false),
-            (1, 0, 200000, 0, true),
-            (1, 0, 1, 200000, false),
-            (199999, 0, 1, 0, true),
-            (199998, 0, 1, 0, false),
+            (400000, 0, 1, 0, true),
+            (400000, 399999, 1, 0, false),
+            (400000, 400001, 1, 0, false),
+            (1, 0, 400000, 0, true),
+            (1, 0, 1, 400000, false),
+            (399999, 0, 1, 0, true),
+            (399998, 0, 1, 0, false),
         ] {
             assert_eq!(
                 token_limit(
@@ -3014,7 +3178,7 @@ mod tests {
             execute(
                 &mut session,
                 "spawn",
-                r#"{"task":"report","context":{"brief":"test"},"name":"worker"}"#
+                r#"{"task":"report","context":{"brief":"test"},"kind":"teammate","name":"worker"}"#
             )
             .unwrap()
             .unwrap()["ok"],
@@ -3552,7 +3716,7 @@ mod tests {
         let encoded = crate::types::json_string(&thread_record(&value));
         assert_eq!(
             encoded,
-            r#"{"id":"t1","parent_id":"root","name":"worker","state":"idle","task":"inspect","steps":0,"cost":{"known":true,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0},"authority":"read"}"#
+            r#"{"id":"t1","parent_id":"root","kind":"task","name":"worker","state":"idle","task":"inspect","steps":0,"cost":{"known":true,"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_tokens":0},"authority":"read"}"#
         );
         let mut anonymous = value;
         anonymous["name"] = json!("");

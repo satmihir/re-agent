@@ -155,6 +155,9 @@ impl Session {
             "context_window_tokens":window(&self.config),"context_window_override":number(&self.config["context_window_tokens"]),
             "gc_requests":number(&self.state["gc_requests"]),"prompt":crate::raw::string(text),"instructions":prefix["instructions"],"tools":prefix["tools"],
             "initial_history":initial_history});
+        if flag(&self.config["agent"]) {
+            header["agent_kind"] = json!(string(&self.config["agent_kind"]));
+        }
         if self.config["agent_prefix"].is_object() {
             header["dispatch_tools"] = tools::specs(&self.config);
             header["dispatch_mode"] = json!(if flag(&self.config["read_only"]) {
@@ -211,11 +214,15 @@ impl Session {
                 return self.finish("persistence_error", &error, "");
             }
             if flag(&self.config["agent"])
+                && number(&self.config["max_steps"]) > 0
                 && number(&self.state["steps"]) >= number(&self.config["max_steps"])
             {
                 return self.agent_cap_summary("agent model step budget exhausted");
             }
-            if flag(&self.config["agent"]) && crate::agents::token_limit(&self.state["run_usage"]) {
+            if flag(&self.config["agent"])
+                && string(&self.config["agent_kind"]) != "teammate"
+                && crate::agents::token_limit(&self.state["run_usage"])
+            {
                 return self.finish("limit_exceeded", "agent reported token cap reached", "");
             }
             let step = number(&self.state["steps"]) + 1;
@@ -1268,6 +1275,34 @@ mod boundary_tests {
         Session::new(config).unwrap()
     }
     #[test]
+    fn child_run_headers_record_kind_but_root_headers_do_not() {
+        for kind in [None, Some("task"), Some("teammate")] {
+            let dir = tempfile::tempdir().unwrap();
+            let extra = match kind {
+                Some(kind) => json!({"agent":true,"agent_kind":kind}),
+                None => json!({}),
+            };
+            let mut session = scripted(
+                &dir,
+                json!([{"blocks":[{"kind":"text","text":"done"}]}]),
+                extra,
+            );
+            let result = session.submit("inspect");
+            assert_eq!(result["status"], "completed", "{result}");
+            let trace = std::fs::read_to_string(string(&result["trace_path"])).unwrap();
+            let header = trace
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .find(|event| event["type"] == "run.started")
+                .unwrap();
+            assert_eq!(
+                header["data"].get("agent_kind").and_then(Value::as_str),
+                kind
+            );
+        }
+    }
+
+    #[test]
     fn native_fork_header_distinguishes_inherited_declarations_from_dispatch_registry() {
         for read_only in [false, true] {
             for native in [false, true] {
@@ -1529,12 +1564,12 @@ mod boundary_tests {
             for summary in ["valid", "tools", "refusal", "exhausted"] {
                 let dir = tempfile::tempdir().unwrap();
                 let mut responses = Vec::new();
-                let turns = if cap == "steps" { 32 } else { 2 };
+                let turns = if cap == "steps" { 64 } else { 2 };
                 for step in 1..=turns {
                     let count = if cap == "calls" && step == 2 {
-                        128
+                        256
                     } else if cap == "calls-exact" && step == 1 {
-                        128
+                        256
                     } else {
                         1
                     };
@@ -1566,7 +1601,7 @@ mod boundary_tests {
                 let mut session = scripted(
                     &dir,
                     json!(responses),
-                    json!({"agent":true,"agent_id":"test-child","max_steps":32,"max_tool_calls":128}),
+                    json!({"agent":true,"agent_id":"test-child","max_steps":64,"max_tool_calls":256}),
                 );
                 let result = session.submit("work");
                 assert_eq!(
@@ -1577,11 +1612,11 @@ mod boundary_tests {
                 assert_eq!(
                     result["tool_calls"],
                     if cap == "steps" {
-                        31
+                        63
                     } else if cap == "calls" {
                         1
                     } else {
-                        128
+                        256
                     }
                 );
                 assert_eq!(
@@ -1652,16 +1687,16 @@ mod boundary_tests {
     #[test]
     fn child_exact_call_cap_can_finish_without_summary() {
         let dir = tempfile::tempdir().unwrap();
-        let blocks: Vec<_> = (0..128).map(|index| json!({"kind":"tool_call","call":{"call_id":index.to_string(),"name":"list_files","arguments":"{\"path\":\".\"}"}})).collect();
+        let blocks: Vec<_> = (0..256).map(|index| json!({"kind":"tool_call","call":{"call_id":index.to_string(),"name":"list_files","arguments":"{\"path\":\".\"}"}})).collect();
         let mut session = scripted(
             &dir,
             json!([{"blocks":blocks},{"blocks":[{"kind":"text","text":"done"}]}]),
-            json!({"agent":true,"max_steps":32,"max_tool_calls":128}),
+            json!({"agent":true,"max_steps":64,"max_tool_calls":256}),
         );
         let result = session.submit("work");
         assert_eq!(result["status"], "completed");
         assert_eq!(result["steps"], 2);
-        assert_eq!(result["tool_calls"], 128);
+        assert_eq!(result["tool_calls"], 256);
         assert!(!std::fs::read_to_string(string(&result["trace_path"]))
             .unwrap()
             .contains("agent.cap_summary"));
@@ -1670,10 +1705,10 @@ mod boundary_tests {
     #[test]
     fn child_token_cap_stops_only_before_the_next_generation() {
         for (agent, input, cached, output, limited) in [
-            (true, 199_999, 0, 1, true),
-            (true, 250_000, 100_000, 49_999, false),
-            (true, 250_000, 100_000, 50_000, true),
-            (false, 200_000, 0, 0, false),
+            (true, 399_999, 0, 1, true),
+            (true, 450_000, 100_000, 49_999, false),
+            (true, 450_000, 100_000, 50_000, true),
+            (false, 400_000, 0, 0, false),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let usage = json!({"known":true,"input_tokens":input,"cached_input_tokens":cached,"output_tokens":output});
@@ -1683,7 +1718,7 @@ mod boundary_tests {
                     {"blocks":[{"kind":"tool_call","call":{"call_id":"read","name":"list_files","arguments":"{\"path\":\".\"}"}}],"usage":usage},
                     {"blocks":[{"kind":"text","text":"done"}]}
                 ]),
-                json!({"agent":agent,"max_steps":32}),
+                json!({"agent":agent,"max_steps":64,"max_tool_calls":256}),
             );
             let result = session.submit("task");
             assert_eq!(
@@ -1703,6 +1738,54 @@ mod boundary_tests {
                 assert_eq!(result["reason"], "agent reported token cap reached");
             }
         }
+    }
+
+    #[test]
+    fn teammate_crosses_task_budgets_in_one_run_and_accepts_followup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut responses = Vec::new();
+        for step in 1..=65 {
+            let blocks: Vec<_> = (0..5)
+                .map(|index| {
+                    json!({"kind":"tool_call","call":{"call_id":format!("{step}-{index}"),"name":"list_files","arguments":"{\"path\":\".\"}"}})
+                })
+                .collect();
+            responses.push(json!({"blocks":blocks,"usage":{"known":true,"input_tokens":5000,"cached_input_tokens":1000,"output_tokens":3000}}));
+        }
+        responses.push(json!({"blocks":[{"kind":"text","text":"done"}]}));
+        responses.push(json!({"blocks":[{"kind":"text","text":"followup done"}]}));
+        let mut session = scripted(
+            &dir,
+            json!(responses),
+            json!({"agent":true,"agent_kind":"teammate","max_steps":0,"max_tool_calls":0}),
+        );
+        let result = session.submit("work across all task budgets");
+        assert_eq!(result["status"], "completed", "{result}");
+        assert_eq!(result["reply"], "done");
+        assert_eq!(result["steps"], 66);
+        assert_eq!(result["tool_calls"], 325);
+        assert_eq!(result["usage"]["input_tokens"], 325_000);
+        assert_eq!(result["usage"]["cached_input_tokens"], 65_000);
+        assert_eq!(result["usage"]["output_tokens"], 195_000);
+        let tools: Vec<_> = session
+            .history
+            .iter()
+            .filter(|entry| entry["kind"] == "tool")
+            .collect();
+        assert_eq!(tools.len(), 325);
+        assert!(tools
+            .iter()
+            .all(|entry| entry["tool"]["outcome"]["ok"] == true));
+        let trace = std::fs::read_to_string(string(&result["trace_path"])).unwrap();
+        assert!(!trace.contains("agent.cap_summary"));
+        assert_eq!(session.state["blocked"], "");
+
+        let followup = session.submit("continue");
+        assert_eq!(followup["status"], "completed", "{followup}");
+        assert_eq!(followup["reply"], "followup done");
+        assert_eq!(followup["steps"], 1);
+        assert_eq!(followup["tool_calls"], 0);
+        assert_eq!(session.state["blocked"], "");
     }
 
     #[test]

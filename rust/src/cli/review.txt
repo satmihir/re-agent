@@ -62,14 +62,15 @@ Levels and scheduling
   the phase-specific task, brief and live file paths allowed below, not copied
   author history or reasoning. Independence overrides cache savings and budgets:
   stop and report uncovered scope rather than share history to reduce cost.
-  Named-agent send is only for bounded page retrieval from that agent's own
+  Teammate send is only for bounded page retrieval from that agent's own
   fresh Session; it does not permit importing parent history or reusing a verifier.
 - Finders run independently in parallel by angle; only the root coordinates.
   All review agents must be told "Do not spawn or delegate." No nesting. Finder
-  authority is read. Respect the eight-live-agent tree cap and other active work:
+  authority is read. Respect the sixteen-live-agent tree cap and other active work:
   batch launches, wait for results, collect all pages, then dismiss finished
-  agents before the next batch. Use unique named review agents, not anonymous
-  agents, so their retained Session can answer page requests. Never retry failed
+  agents before the next batch. Use unique named kind:"teammate" review agents
+  so their retained Session can answer page requests. The review budgets below
+  still apply even though teammates have no fixed task caps. Never retry failed
   tool calls automatically; adjust the plan or report the limit.
 - If agents are disabled/unavailable, do these phases inline with separate
   passes and state that verification is not independent. Read-only/plan mode

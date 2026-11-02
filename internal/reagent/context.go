@@ -77,7 +77,7 @@ func pinInstructions(cfg *Config) {
 	cfg.prompt = &pinnedPrompt{Project: cfg.ProjectInstructions}
 	cfg.prompt.Text = renderInstructions(Config{Provider: cfg.Provider, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort,
 		Registry: cfg.Registry, WorkspacePath: cfg.WorkspacePath, ProjectInstructions: cfg.ProjectInstructions,
-		MaxSteps: cfg.MaxSteps, MaxToolCalls: cfg.MaxToolCalls, agent: cfg.agent, ReportFriction: cfg.ReportFriction})
+		MaxSteps: cfg.MaxSteps, MaxToolCalls: cfg.MaxToolCalls, agent: cfg.agent, agentKind: cfg.agentKind, ReportFriction: cfg.ReportFriction})
 }
 
 // promptProject is the AGENTS.md text the request instructions actually carry.
@@ -108,7 +108,7 @@ func renderInstructions(cfg Config) string {
 	// snapshot of it, which the trace records separately from the response.
 	fixed := defaultInstructions
 	if cfg.agent {
-		fixed += "\n# Agent task\n\n" + agentInstructions
+		fixed += "\n# Agent task\n\n" + agentInstructions + agentKindPolicy(cfg.agentKind)
 	}
 	text := fixed + fmt.Sprintf(
 		"\n# Runtime\n\nProvider: %s\nModel: %s\nReasoning effort: %s\nPlatform: %s\n"+
@@ -136,4 +136,11 @@ func formatLimit(limit int) string {
 		return "unlimited"
 	}
 	return fmt.Sprint(limit)
+}
+
+func agentKindPolicy(kind string) string {
+	if kind == "teammate" {
+		return "\nAgent kind: teammate. Your Session is retained across turns until explicit dismissal or shutdown. There are no step, tool-call or reported-token caps. Only the root may spawn teammates; you may spawn only tasks.\n"
+	}
+	return fmt.Sprintf("\nAgent kind: task. You end after final result delivery, even when named. Per-task limits: %d steps, %d calls, %d reported uncached-input plus output tokens. Only the root may spawn teammates; you may spawn only tasks.\n", maxAgentSteps, maxAgentCalls, maxAgentTokens)
 }

@@ -69,9 +69,12 @@ pub(super) fn prepare(
         && config["model"] == session.config["model"]
     {
         prompt = format!(
-            "# Agent task\n\n{}\nFixed agent authority: {}; inherited plan mode: {}. Per-task limits: 32 steps, 128 calls, 200000 uncached-input plus output tokens.\n{}",
-            include_str!("../prompts/agent_instructions.txt"), authority,
-            config["plan"].as_bool().unwrap_or(false), prompt
+            "# Agent task\n\n{}{}\nFixed agent authority: {}; inherited plan mode: {}.\n{}",
+            include_str!("../prompts/agent_instructions.txt"),
+            super::policy(config),
+            authority,
+            config["plan"].as_bool().unwrap_or(false),
+            prompt
         );
         let handoff = &session.state["handoff"];
         if handoff.is_object() {
@@ -639,7 +642,10 @@ mod tests {
             prepare(&session, &mut config, &args(json!({"fork":true})), "read").unwrap();
         assert_eq!(history, vec![user("root")]);
         assert_eq!(mode, "fork_native");
-        assert!(prompt.contains("Per-task limits: 32 steps, 128 calls, 200000 uncached-input plus output tokens.\ninspect"));
+        assert!(prompt.contains("Agent kind: task. You end after final result delivery, even when named. Per-task limits: 64 steps, 256 calls, 400000 reported uncached-input plus output tokens."));
+        assert!(
+            prompt.contains("Fixed agent authority: read; inherited plan mode: false.\ninspect")
+        );
         assert_eq!(config["agent_prefix"]["cache_entries"], json!([1]));
         assert_eq!(session.history, before);
     }

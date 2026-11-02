@@ -41,6 +41,11 @@ func forkBlock(id, model, authority string, context *agentContext) OutputBlock {
 	return callBlock(id, "spawn", string(raw))
 }
 
+func forkTeammateBlock(id, model, authority string, context *agentContext) OutputBlock {
+	raw, _ := json.Marshal(spawnArgs{Task: "independent task", Name: "fork", Kind: "teammate", Model: model, Authority: authority, Context: context})
+	return callBlock(id, "spawn", string(raw))
+}
+
 func TestAgents_ForkEncodedPrefixAndUnansweredBoundary(t *testing.T) {
 	for _, provider := range []string{openaiName, anthropicName} {
 		for _, toolBoundary := range []bool{false, true} {
@@ -212,7 +217,7 @@ func TestAgents_ForkAuthorityAndReset(t *testing.T) {
 			s.agentModel = func(Config, *Trace) (Model, error) {
 				return NewScriptedModel(turn(callBlock("write", "write_file", `{"path":"child.txt","content":"ok"}`)), turn(callBlock("workspace", "switch_workspace", `{"path":"/tmp"}`)), turn(textBlock("done"))), nil
 			}
-			s.model = NewScriptedModel(turn(forkBlock("spawn", "", authority, &agentContext{Fork: true})), turn(callBlock("wait", "wait", `{"ids":["fork"]}`)), turn(textBlock("done")))
+			s.model = NewScriptedModel(turn(forkTeammateBlock("spawn", "", authority, &agentContext{Fork: true})), turn(callBlock("wait", "wait", `{"ids":["fork"]}`)), turn(textBlock("done")))
 			agentTurn(t, s, "fork")
 			child := s.agents.nodes["t1"].session
 			for _, e := range child.history {
@@ -503,7 +508,7 @@ func TestAgents_NativeForkTracePrefixAndGrowingSuffixCache(t *testing.T) {
 			return contextResponse(anthropicName, textBlock("done")), nil
 		}}, nil
 	}
-	n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "read more", Name: "cached", Context: &agentContext{Fork: true}})
+	n, err := s.spawnAgent(context.Background(), spawnArgs{Task: "read more", Name: "cached", Kind: "teammate", Context: &agentContext{Fork: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +637,7 @@ func TestAgents_RootOnlyRefusalsExplainAuthorityForFreshAndForkedAgents(t *testi
 				s.agentModel = func(Config, *Trace) (Model, error) {
 					return NewScriptedModel(turn(callBlock("git", "git_do", `{}`)), turn(callBlock("grant", "request_workspace_access", `{"path":"/tmp"}`)), turn(callBlock("switch", "switch_workspace", `{"path":"/tmp"}`)), turn(textBlock("done"))), nil
 				}
-				s.model = NewScriptedModel(turn(forkBlock("spawn", "", authority, &agentContext{Fork: agentFork(fork)})), turn(callBlock("wait", "wait", `{"ids":["fork"]}`)), turn(textBlock("done")))
+				s.model = NewScriptedModel(turn(forkTeammateBlock("spawn", "", authority, &agentContext{Fork: agentFork(fork)})), turn(callBlock("wait", "wait", `{"ids":["fork"]}`)), turn(textBlock("done")))
 				agentTurn(t, s, "authority")
 				child := s.agents.nodes["t1"].session
 				count := 0

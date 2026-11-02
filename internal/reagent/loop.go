@@ -37,6 +37,7 @@ type Config struct {
 	ContextGCConsolidate bool
 	Agents               bool
 	agent                bool
+	agentKind            string
 	agentPrefix          *agentRequestPrefix
 	prompt               *pinnedPrompt // the session's pinned instructions; nil renders from the fields
 	// Proxied means requests go to an API_PROXY_URL endpoint, which is sent
@@ -134,6 +135,9 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		"tools":                     prefix.Tools,
 		"initial_history":           s.history,
 	}
+	if r.cfg.agent {
+		header["agent_kind"] = r.cfg.agentKind
+	}
 	if r.cfg.agentPrefix != nil {
 		header["dispatch_tools"] = r.cfg.Registry.Specs()
 		header["dispatch_mode"] = r.cfg.Registry.Mode().String()
@@ -169,10 +173,10 @@ func (r *Run) Execute(ctx context.Context, prompt string, workspace json.RawMess
 		if err := s.checkpointWithUsage("model", "", r.usage); err != nil {
 			return r.persistenceFailure(err)
 		}
-		if s.agentID != "" && r.steps >= r.cfg.MaxSteps {
+		if s.agentID != "" && r.cfg.MaxSteps > 0 && r.steps >= r.cfg.MaxSteps {
 			return r.agentCapSummary(ctx, "agent model step budget exhausted")
 		}
-		if s.agentID != "" && agentTokenLimit(r.usage) {
+		if s.agentID != "" && r.cfg.agentKind != "teammate" && agentTokenLimit(r.usage) {
 			return r.finish(StatusLimitExceeded, "agent reported token cap reached", "")
 		}
 		r.steps++
