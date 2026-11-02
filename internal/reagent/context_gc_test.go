@@ -23,7 +23,7 @@ func gcFixture(t *testing.T, provider string) *Session {
 	}
 	cfg := Config{Provider: provider, Model: DefaultOpenAIModel, Registry: registry, Workspace: ws, WorkspacePath: ws.Root(), ContextGC: true}
 	if provider == anthropicName {
-		cfg.Model = DefaultAnthropicModel
+		cfg.Model = "claude-sonnet-5-5"
 	}
 	return NewSession(cfg, nil, NewTrace(io.Discard), io.Discard)
 }

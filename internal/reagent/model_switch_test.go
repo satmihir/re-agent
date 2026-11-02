@@ -17,8 +17,8 @@ func TestModelSwitch_PreservesSourceAndSessionWithoutGeneration(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"gpt-6.1-sol", "gpt-6.1-luna"},
 		{"gpt-6.1-luna", "gpt-6.1-sol"},
-		{"gpt-6.1-sol", "claude-haiku-4-5"},
-		{"claude-haiku-4-5", "gpt-6.1-sol"},
+		{"gpt-6.1-sol", "claude-sonnet-5-5"},
+		{"claude-sonnet-5-5", "gpt-6.1-sol"},
 	} {
 		t.Run(pair[0]+"->"+pair[1], func(t *testing.T) {
 			c := newConversation(t, pair[0], "high", 1)
@@ -104,8 +104,12 @@ func TestModelSwitch_RefusalPreservesUsableState(t *testing.T) {
 		change                    func(*Session)
 	}{
 		{"encoded size", "gpt-6.1-luna", "byte limit", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", MaxRequestBytes) }},
-		{"smaller window", "claude-haiku-4-5", "window allowance", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", 400_000) }},
-		{"unknown window", "gpt-5.6-luna", "unknown", func(*Session) {}},
+		{"smaller window", "claude-sonnet-5-5", "window allowance", func(s *Session) {
+			s.cfg.ContextWindowTokens = 200_000
+			s.history[0].User.Text = strings.Repeat("x", 400_000)
+		}},
+		{"unknown window", "gpt-6.1-terra", "unknown", func(*Session) {}},
+		{"Haiku unknown window", "claude-haiku-5-5", "unknown", func(*Session) {}},
 		{"malformed snapshot", "gpt-6.1-luna", "encode historical", func(s *Session) { s.history[0].User.Workspace = json.RawMessage(`{`) }},
 		{"unsupported block", "gpt-6.1-luna", "unsupported block", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{{Kind: "image"}} }},
 		{"pending call", "gpt-6.1-luna", "unresolved tool batch", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{callBlock("pending", "echo", `{}`)} }},
@@ -210,7 +214,7 @@ func TestModelSwitch_NonTurnHistoryAndEscapedExternalText(t *testing.T) {
 }
 
 func TestModelSwitch_RoundTripKeepsNativeTailAndNeverReplaysTools(t *testing.T) {
-	for _, destination := range []string{"gpt-6.1-luna", "claude-haiku-4-5"} {
+	for _, destination := range []string{"gpt-6.1-luna", "claude-sonnet-5-5"} {
 		t.Run(destination, func(t *testing.T) {
 			c := newConversation(t, "gpt-6.1-sol", "high", 1)
 			s := c.session
@@ -224,7 +228,7 @@ func TestModelSwitch_RoundTripKeepsNativeTailAndNeverReplaysTools(t *testing.T) 
 			c.commandModel(context.Background(), destination, nil, io.Discard)
 			prefix := s.handoff.Text
 			call, final, opaque := callReply, textReply, "opaque-blob"
-			if destination == "claude-haiku-4-5" {
+			if destination == "claude-sonnet-5-5" {
 				call, final, opaque = anthropicCallReply, anthropicTextReply, "opaque-sig"
 			}
 			api := newFakeAPI(t, okReply(strings.ReplaceAll(call, `"echo"`, `"counter"`)), okReply(final))
@@ -304,7 +308,7 @@ func TestModelSwitch_GrantsBindingsAndPermissionCeilingSurvive(t *testing.T) {
 			s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "Do not write files.", Plan: "on"}}}
 			workspace, registry, grants := s.workspace, s.cfg.Registry, s.approvedWorkspacePaths()
 			c := &conversation{session: s, keys: map[string]string{anthropicName: "test"}, client: NewHTTPClient(), trace: s.trace, traceDir: t.TempDir()}
-			c.commandModel(context.Background(), "claude-haiku-4-5", nil, io.Discard)
+			c.commandModel(context.Background(), "claude-sonnet-5-5", nil, io.Discard)
 			if c.session != s || s.workspace != workspace || s.cfg.Registry != registry || !reflect.DeepEqual(s.approvedWorkspacePaths(), grants) || s.cfg.WorkspacePath != workspace.active.Root() || s.cfg.Registry.Mode().ReadOnly != readOnly || !s.planMode {
 				t.Fatal("model switch replaced workspace authority or bindings")
 			}
@@ -324,7 +328,7 @@ func TestModelSwitch_GrantsBindingsAndPermissionCeilingSurvive(t *testing.T) {
 func TestModelSwitch_CompactAndResetClearViewOnlyOnSuccess(t *testing.T) {
 	c := newConversation(t, "gpt-6.1-sol", "high", 1)
 	c.session.history[0].User.Plan = "on"
-	c.commandModel(context.Background(), "claude-haiku-4-5", nil, io.Discard)
+	c.commandModel(context.Background(), "claude-sonnet-5-5", nil, io.Discard)
 	s, handoff := c.session, c.session.handoff
 	s.tokensPerByte = 0.211
 	model := &compactModel{err: fmt.Errorf("provider down")}
@@ -360,7 +364,7 @@ func TestModelSwitch_CalibratedAdmissionAndCompactOffer(t *testing.T) {
 		{"measured with margin", "gpt-6.1-luna", 2_400_000, 0.211, true},
 		{"dense tokens", "gpt-6.1-luna", 600_000, 1, true},
 		{"dense tokens overflow", "gpt-6.1-luna", 800_000, 1, false},
-		{"provider change uses fallback", "claude-haiku-4-5", 400_000, 0.1, false},
+		{"provider change uses fallback", "claude-sonnet-5-5", 2_000_000, 0.1, false},
 		{"minimum estimate", "gpt-6.1-luna", 4_200_000, 0.001, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

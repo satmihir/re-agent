@@ -63,7 +63,6 @@ func TestAuto_JointCandidateAvailabilityAndDeduplication(t *testing.T) {
 		{"other model", "claude-sonnet-5-5", anthropicName, "low", map[string]string{openaiName: "fake", anthropicName: "fake"}, apiProxy{}, 8},
 		{"other high deduplicated", "claude-sonnet-5-5", anthropicName, "high", map[string]string{openaiName: "fake", anthropicName: "fake"}, apiProxy{}, 7},
 		{"no OpenAI credentials", "claude-sonnet-5-5", anthropicName, "low", map[string]string{anthropicName: "fake"}, apiProxy{}, 2},
-		{"no effort support", "claude-haiku-4-5", anthropicName, "", map[string]string{anthropicName: "fake"}, apiProxy{}, 1},
 		{"OpenAI proxy", "gpt-6.1-sol", openaiName, "medium", nil, apiProxy{provider: openaiName}, 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -257,7 +256,8 @@ func TestAuto_UnsupportedFallbackRefusesEnablement(t *testing.T) {
 		{"unknown", openaiName, "medium", map[string]string{openaiName: "fake"}},
 		{"gpt-5.6-luna", openaiName, "medium", map[string]string{openaiName: "fake"}},
 		{"gpt-6.1-sol", openaiName, "none", map[string]string{openaiName: "fake"}},
-		{"claude-haiku-4-5", anthropicName, "high", map[string]string{anthropicName: "fake"}},
+		{"claude-haiku-5-5", anthropicName, "high", map[string]string{anthropicName: "fake"}},
+		{"claude-haiku-5-5", anthropicName, "", map[string]string{anthropicName: "fake"}},
 		{"gpt-6.1-sol", openaiName, "medium", nil},
 	} {
 		cfg := autoConfig(t, NewEchoTool())

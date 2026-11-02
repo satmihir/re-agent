@@ -17,7 +17,9 @@ func TestContextWindow_CapsKnownModelsAndAdmitsUnknown(t *testing.T) {
 	}{
 		{"gpt-6.1-sol", 0, 1_050_000},
 		{"gpt-6.1-sol", 70_000, 70_000},
-		{"claude-haiku-4-5", 300_000, 200_000},
+		{"claude-sonnet-5-5", 2_000_000, 1_000_000},
+		{"claude-haiku-5-5", 0, 0},
+		{"claude-haiku-5-5", 300_000, 300_000},
 		{"unknown", 70_000, 70_000},
 		{"unknown", 0, 0},
 	} {

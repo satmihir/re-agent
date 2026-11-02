@@ -319,7 +319,7 @@ func TestContextGC_RepeatedConsolidationAfterProviderSwitchPreservesBoundaries(t
 		t.Fatal("first pass missing")
 	}
 	boundary := len(s.history)
-	s.cfg.Provider, s.cfg.Model = anthropicName, DefaultAnthropicModel
+	s.cfg.Provider, s.cfg.Model = anthropicName, "claude-sonnet-5-5"
 	var err error
 	s.handoff, _, err = stageModelSwitch(context.Background(), s.gcHistory(), s.cfg, 1_000_000, .5)
 	if err != nil {

@@ -226,7 +226,7 @@ func TestAgents_CapSummaryKeepsEncodedDeclarations(t *testing.T) {
 				s := agentFixture(t)
 				s.cfg.Provider = provider
 				if provider == anthropicName {
-					s.cfg.Model = DefaultAnthropicModel
+					s.cfg.Model = "claude-sonnet-5-5"
 				}
 				encode := EncodeOpenAIRequest
 				if provider == anthropicName {

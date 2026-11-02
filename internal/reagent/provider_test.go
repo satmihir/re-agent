@@ -1,6 +1,8 @@
 package reagent
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -16,7 +18,9 @@ func TestResolveTarget_ProviderAndModel(t *testing.T) {
 		"nothing given":         {"", "", openaiName, "gpt-6.1-sol", ""},
 		"claude model infers":   {"", "claude-haiku-4-5", anthropicName, "claude-haiku-4-5", ""},
 		"other model is openai": {"", "gpt-x", openaiName, "gpt-x", ""},
-		"anthropic default":     {anthropicName, "", anthropicName, DefaultAnthropicModel, ""},
+		"removed luna":          {"", "gpt-5.6-luna", openaiName, "gpt-5.6-luna", ""},
+		"removed terra":         {"", "gpt-5.6-terra", openaiName, "gpt-5.6-terra", ""},
+		"anthropic default":     {anthropicName, "", anthropicName, "claude-haiku-5-5", ""},
 		"openai default":        {openaiName, "", openaiName, DefaultOpenAIModel, ""},
 		"explicit agrees":       {anthropicName, "claude-sonnet-5-5", anthropicName, "claude-sonnet-5-5", ""},
 		"claude under openai":   {openaiName, "claude-haiku-4-5", "", "", "selects the anthropic provider"},
@@ -47,15 +51,13 @@ func TestResolveTarget_EnvironmentModelSelectsProvider(t *testing.T) {
 	}
 }
 
-// The per-provider default exists because the default Anthropic model rejects
-// the effort parameter. An explicit value, even empty, always passes through.
+// An explicit value, even empty, always passes through.
 func TestResolveEffort_AutoIsPerModelThenPerProvider(t *testing.T) {
 	cases := []struct{ flag, provider, model, want string }{
 		// A catalog model knows its own; effort support varies inside a
 		// provider, not only between providers.
-		{"auto", anthropicName, "claude-haiku-4-5", ""},
+		{"auto", anthropicName, "claude-haiku-5-5", ""},
 		{"auto", anthropicName, "claude-sonnet-5-5", "low"},
-		{"auto", openaiName, "gpt-5.6-luna", "low"},
 		{"auto", openaiName, "gpt-6.1-luna", "medium"},
 		{"auto", openaiName, "gpt-6.1-sol", "high"},
 		{"low", openaiName, "gpt-6.1-sol", "low"},
@@ -63,6 +65,8 @@ func TestResolveEffort_AutoIsPerModelThenPerProvider(t *testing.T) {
 		// Anything outside the catalog falls back to the provider's default.
 		{"auto", anthropicName, "claude-something-new", ""},
 		{"auto", openaiName, "gpt-experimental", DefaultReasoningEffort},
+		{"auto", openaiName, "gpt-5.6-luna", "low"},
+		{"auto", openaiName, "gpt-5.6-terra", "low"},
 		// An explicit value always wins, including an empty one.
 		{"high", anthropicName, "claude-haiku-4-5", "high"},
 		{"", openaiName, "gpt-5.6-luna", ""},
@@ -87,5 +91,15 @@ func TestEncoders_RefuseTheOtherProvidersItems(t *testing.T) {
 	}
 	if _, err := EncodeAnthropicRequest(ModelRequest{History: turn(openaiProvider)}); err == nil {
 		t.Fatal("the Anthropic encoder accepted OpenAI items")
+	}
+}
+
+func TestAnthropicDefault_OfflinePreview(t *testing.T) {
+	t.Setenv("REAGENT_MODEL", "")
+	var out, errs bytes.Buffer
+	code := Main(context.Background(), []string{"run", "--workspace", t.TempDir(), "--provider", "anthropic", "--show-context", "task"}, strings.NewReader(""), &out, &errs)
+	var request map[string]json.RawMessage
+	if code != exitOK || json.Unmarshal(out.Bytes(), &request) != nil || string(request["model"]) != `"claude-haiku-5-5"` || request["output_config"] != nil {
+		t.Fatalf("exit %d, request %s, stderr %s", code, out.String(), errs.String())
 	}
 }

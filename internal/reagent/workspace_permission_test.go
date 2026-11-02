@@ -204,7 +204,7 @@ func TestWorkspaceConsent_ResetModelAndCompactionKeepCurrentRootAndCopy(t *testi
 		t.Fatalf("compaction %+v %v", result, err)
 	}
 	c := &conversation{session: s, trace: s.trace, client: NewHTTPClient(), progress: io.Discard}
-	info, _ := findModel("claude-haiku-4-5")
+	info, _ := findModel("claude-haiku-5-5")
 	c.switchTo(info)
 	if c.session.workspace == s.workspace || c.session.cfg.WorkspacePath != current.WorkspacePath || c.session.cfg.ProjectInstructions != current.ProjectInstructions || !c.session.planMode {
 		t.Fatal("model change discarded selection or shared mutable state")

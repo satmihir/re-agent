@@ -780,7 +780,7 @@ func TestChat_ProjectInstructionsSurviveSwitchAndReset(t *testing.T) {
 func TestChat_ModelPickerSwitches(t *testing.T) {
 	c := newConversation(t, "gpt-6.1-luna", "low", 1)
 	before := c.session
-	input := &fakeLineReader{chosen: 1}
+	input := &fakeLineReader{chosen: 2}
 	input.reads = append(input.reads, struct {
 		line string
 		err  error
@@ -789,7 +789,7 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.session.cfg.Model != modelCatalog[1].ID || c.session != before || c.session.Turns() != 1 || out.Len() != 0 {
+	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.session.cfg.Model != modelCatalog[2].ID || c.session != before || c.session.Turns() != 1 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.session.cfg.Model, out.String())
 	}
 	if len(c.session.history) != 2 || c.session.handoff == nil || !strings.Contains(errs.String(), "switched to gpt-6.1-sol") || !strings.Contains(errs.String(), "carried 2 entries") {
@@ -886,7 +886,7 @@ func TestConversation_SwitchingModelStartsAFreshSession(t *testing.T) {
 	before := c.session
 
 	var stderr bytes.Buffer
-	c.commandModel(context.Background(), "claude-haiku-4-5 fresh", nil, &stderr)
+	c.commandModel(context.Background(), "claude-haiku-5-5 fresh", nil, &stderr)
 
 	if c.session == before || c.session.ID == before.ID {
 		t.Fatal("the session was reused across a model change")
@@ -894,10 +894,10 @@ func TestConversation_SwitchingModelStartsAFreshSession(t *testing.T) {
 	if len(c.session.history) != 0 || c.session.Turns() != 0 {
 		t.Fatalf("the new session carries %d entries", len(c.session.history))
 	}
-	if c.session.cfg.Model != "claude-haiku-4-5" || c.session.cfg.Provider != anthropicName {
+	if c.session.cfg.Model != "claude-haiku-5-5" || c.session.cfg.Provider != anthropicName {
 		t.Fatalf("got %+v", c.session.cfg)
 	}
-	// Effort resets to the new model's own default: Haiku rejects the value
+	// Effort resets to the new model's unverified default rather than retaining the value
 	// the previous model was using.
 	if c.session.cfg.ReasoningEffort != "" {
 		t.Fatalf("effort survived the switch: %q", c.session.cfg.ReasoningEffort)
@@ -918,7 +918,7 @@ func TestConversation_ModelSelectionRefusals(t *testing.T) {
 		},
 		"already current": {
 			map[string]string{openaiName: "sk-openai"},
-			"gpt-5.6-luna", "already using",
+			"gpt-6.1-luna", "already using",
 		},
 		"unknown name": {
 			map[string]string{openaiName: "sk-openai"},
@@ -927,7 +927,7 @@ func TestConversation_ModelSelectionRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			conv := newConversation(t, "gpt-5.6-luna", "low", 2)
+			conv := newConversation(t, "gpt-6.1-luna", "low", 2)
 			conv.keys = c.keys
 			before := conv.session
 
@@ -964,7 +964,7 @@ func TestConversation_EffortChangeKeepsTheConversation(t *testing.T) {
 	}
 
 	// A model that rejects the parameter is refused locally, without a request.
-	haiku := newConversation(t, "claude-haiku-4-5", "", 0)
+	haiku := newConversation(t, "claude-haiku-5-5", "", 0)
 	stderr.Reset()
 	haiku.commandEffort("high", nil, &stderr)
 	if haiku.session.cfg.ReasoningEffort != "" || !strings.Contains(stderr.String(), "takes no reasoning effort") {
@@ -1048,7 +1048,7 @@ func TestChat_WindowMeterInStatusAndContext(t *testing.T) {
 		t.Fatalf("reset left a meter: %s", status.String())
 	}
 	c.session.lastRequest = Usage{Known: true, InputTokens: 152_300}
-	info, _ := findModel("claude-haiku-4-5")
+	info, _ := findModel("claude-haiku-5-5")
 	c.switchTo(info)
 	status.Reset()
 	c.commandStatus(&status)
@@ -1067,7 +1067,8 @@ func TestChat_WarnsFromLastRequestNotTurnTotal(t *testing.T) {
 		{"at", 120_000, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			c := newConversation(t, "claude-haiku-4-5", "", 0)
+			c := newConversation(t, "claude-haiku-5-5", "", 0)
+			c.session.cfg.ContextWindowTokens = 200_000
 			first := turn(callBlock("call_1", "echo", `{"text":"hi"}`))
 			first.Usage = Usage{Known: true, InputTokens: 190_000}
 			second := turn(textBlock("done"))
@@ -1087,10 +1088,10 @@ func TestChat_WarnsFromLastRequestNotTurnTotal(t *testing.T) {
 }
 
 func TestChat_StatusFormatsModel(t *testing.T) {
-	c := newConversation(t, "claude-haiku-4-5", "", 0)
+	c := newConversation(t, "claude-haiku-5-5", "", 0)
 	var stderr bytes.Buffer
 	c.commandStatus(&stderr)
-	if !strings.Contains(stderr.String(), "model      claude-haiku-4-5 (anthropic), default effort") {
+	if !strings.Contains(stderr.String(), "model      claude-haiku-5-5 (anthropic), default effort") {
 		t.Fatalf("status: %s", stderr.String())
 	}
 

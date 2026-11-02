@@ -153,6 +153,8 @@ fn default_model_and_effort_preview_and_explicit_overrides() {
         ("", vec![], "gpt-6.1-sol", "high"),
         ("", vec!["--model", "gpt-6.1-sol"], "gpt-6.1-sol", "high"),
         ("", vec!["--model", "gpt-6.1-terra"], "gpt-6.1-terra", ""),
+        ("", vec!["--model", "gpt-5.6-luna"], "gpt-5.6-luna", "low"),
+        ("", vec!["--model", "gpt-5.6-terra"], "gpt-5.6-terra", "low"),
         ("", vec!["--reasoning-effort", "low"], "gpt-6.1-sol", "low"),
         ("", vec!["--reasoning-effort", ""], "gpt-6.1-sol", ""),
         ("gpt-6.1-luna", vec![], "gpt-6.1-luna", "medium"),
@@ -162,7 +164,13 @@ fn default_model_and_effort_preview_and_explicit_overrides() {
             "gpt-6.1-sol",
             "high",
         ),
-        ("", vec!["--provider", "anthropic"], "claude-haiku-4-5", ""),
+        ("", vec!["--provider", "anthropic"], "claude-haiku-5-5", ""),
+        (
+            "",
+            vec!["--model", "claude-haiku-4-5"],
+            "claude-haiku-4-5",
+            "",
+        ),
     ] {
         let root = tempfile::tempdir().unwrap();
         let output = reagent(root.path())
@@ -179,6 +187,12 @@ fn default_model_and_effort_preview_and_explicit_overrides() {
         );
         let request: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(request["model"], model, "{flags:?}");
+        if model == "claude-haiku-5-5" {
+            assert!(request.get("output_config").is_none(), "{flags:?}");
+        }
+        if model.starts_with("gpt-5.6-") {
+            assert!(request.get("text").is_none(), "{flags:?}");
+        }
         assert_eq!(
             request["reasoning"]["effort"].as_str().unwrap_or(""),
             effort,
