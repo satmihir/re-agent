@@ -97,7 +97,8 @@ fn worker_panic_restores_terminal_and_resume_does_not_replay() {
         let mut output = Vec::new();
         let mut released = false;
         let status = loop {
-            if poll_read(master.as_raw_fd(), 10).unwrap() != 0 {
+            // Leave panic output queued until the child exits.
+            if !released && poll_read(master.as_raw_fd(), 10).unwrap() != 0 {
                 let mut bytes = [0; 4096];
                 if let Ok(n) = master.read(&mut bytes) {
                     output.extend_from_slice(&bytes[..n]);
@@ -123,7 +124,17 @@ fn worker_panic_restores_terminal_and_resume_does_not_replay() {
                     String::from_utf8_lossy(&output)
                 );
             }
+            std::thread::sleep(Duration::from_millis(5));
         };
+        // Process exit does not consume buffered PTY output.
+        while poll_read(master.as_raw_fd(), 10).unwrap() != 0 {
+            // Exercise fragmented reads as well as output arriving after try_wait.
+            let mut byte = [0; 1];
+            if master.read(&mut byte).unwrap() == 0 {
+                break;
+            }
+            output.extend_from_slice(&byte);
+        }
         assert!(
             released,
             "worker did not reach the wait checkpoint: {}",
