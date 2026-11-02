@@ -23,7 +23,7 @@ fn chat(commands: &str, auto: bool, scripted: bool) -> Output {
         .unwrap();
         command.arg("--scripted").arg(script);
     } else {
-        command.args(["--model", "gpt-6-sol", "--reasoning-effort", "medium"]);
+        command.args(["--model", "gpt-6.1-sol", "--reasoning-effort", "medium"]);
     }
     if auto {
         command.arg("--auto");
@@ -76,8 +76,8 @@ fn auto_status_does_not_toggle_and_enable_is_explicit() {
 #[test]
 fn manual_valid_controls_pin_but_rejected_controls_leave_auto_enabled() {
     for (command, enabled) in [
-        ("/model gpt-6-sol", false),
-        ("/model gpt-6-luna", false),
+        ("/model gpt-6.1-sol", false),
+        ("/model gpt-6.1-luna", false),
         ("/effort high", false),
         ("/model unknown", true),
         ("/effort unsupported", true),
@@ -88,7 +88,7 @@ fn manual_valid_controls_pin_but_rejected_controls_leave_auto_enabled() {
         assert!(output.stdout.is_empty());
         assert!(
             stderr.contains(&format!(
-                "auto       {enabled} · fallback gpt-6-sol / medium · 0 router attempts\n"
+                "auto       {enabled} · fallback gpt-6.1-sol / medium · 0 router attempts\n"
             )),
             "{command}: {stderr}"
         );
@@ -116,7 +116,7 @@ fn reset_preserves_auto_enabled_and_pinned_settings() {
         assert!(output.status.success(), "{stderr}");
         assert!(
             stderr.contains(&format!(
-                "auto       {enabled} · fallback gpt-6-sol / medium · 0 router attempts\n"
+                "auto       {enabled} · fallback gpt-6.1-sol / medium · 0 router attempts\n"
             )),
             "{stderr}"
         );

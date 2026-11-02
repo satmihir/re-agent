@@ -76,7 +76,7 @@ func TestChat_ResetPrintsNewIDAndScriptedHasNone(t *testing.T) {
 	}
 	out.Reset()
 	errOut.Reset()
-	if code := Main(context.Background(), []string{"chat", "--workspace", t.TempDir()}, strings.NewReader("/model gpt-6-sol fresh\n/exit\n"), &out, &errOut); code != exitOK {
+	if code := Main(context.Background(), []string{"chat", "--workspace", t.TempDir()}, strings.NewReader("/model gpt-6.1-luna fresh\n/exit\n"), &out, &errOut); code != exitOK {
 		t.Fatalf("fresh switch: %d %s", code, errOut.String())
 	}
 	switchIDs := regexp.MustCompile(`session ID: ([0-9a-f]{16})`).FindAllStringSubmatch(errOut.String(), -1)

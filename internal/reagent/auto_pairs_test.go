@@ -57,15 +57,14 @@ func TestAuto_JointCandidateAvailabilityAndDeduplication(t *testing.T) {
 		proxy                         apiProxy
 		want                          int
 	}{
-		{"default", "gpt-6-sol", openaiName, "medium", map[string]string{openaiName: "fake"}, apiProxy{}, 6},
-		{"luna high fallback", "gpt-6-luna", openaiName, "high", map[string]string{openaiName: "fake"}, apiProxy{}, 6},
-		{"explicit max retained", "gpt-6-sol", openaiName, "max", map[string]string{openaiName: "fake"}, apiProxy{}, 7},
-		{"explicit 6.1 Sol retained", "gpt-6.1-sol", openaiName, "medium", map[string]string{openaiName: "fake"}, apiProxy{}, 8},
+		{"default", "gpt-6.1-sol", openaiName, "medium", map[string]string{openaiName: "fake"}, apiProxy{}, 6},
+		{"luna high fallback", "gpt-6.1-luna", openaiName, "high", map[string]string{openaiName: "fake"}, apiProxy{}, 6},
+		{"explicit max retained", "gpt-6.1-sol", openaiName, "max", map[string]string{openaiName: "fake"}, apiProxy{}, 7},
 		{"other model", "claude-sonnet-5-5", anthropicName, "low", map[string]string{openaiName: "fake", anthropicName: "fake"}, apiProxy{}, 8},
 		{"other high deduplicated", "claude-sonnet-5-5", anthropicName, "high", map[string]string{openaiName: "fake", anthropicName: "fake"}, apiProxy{}, 7},
 		{"no OpenAI credentials", "claude-sonnet-5-5", anthropicName, "low", map[string]string{anthropicName: "fake"}, apiProxy{}, 2},
 		{"no effort support", "claude-haiku-4-5", anthropicName, "", map[string]string{anthropicName: "fake"}, apiProxy{}, 1},
-		{"OpenAI proxy", "gpt-6-sol", openaiName, "medium", nil, apiProxy{provider: openaiName}, 6},
+		{"OpenAI proxy", "gpt-6.1-sol", openaiName, "medium", nil, apiProxy{provider: openaiName}, 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := autoConfig(t, NewEchoTool())
@@ -80,9 +79,6 @@ func TestAuto_JointCandidateAvailabilityAndDeduplication(t *testing.T) {
 				info, known := findModel(route.Model)
 				if pairs[pair] || !known || info.ContextWindow == 0 || (route.Effort != "" && !info.accepts(route.Effort)) || !strings.Contains(route.Description, route.Model+" / "+route.Effort) {
 					t.Fatalf("invalid or duplicate pair: %+v", route)
-				}
-				if test.model != "gpt-6.1-sol" && route.Model == "gpt-6.1-sol" {
-					t.Fatal("6.1 Sol offered without explicit selection")
 				}
 				pairs[pair] = true
 			}
@@ -105,11 +101,11 @@ func TestAuto_CheapestSufficientLadder(t *testing.T) {
 		probabilities     map[string]float64
 		wantLadder        []string
 	}{
-		{"turn decisive low", "", "gpt-6-luna/low", map[string]float64{"gpt-6-luna/low": 0.99, "capable": 0.01}, nil},
-		{"turn cheap uncertainty", "", "gpt-6-luna/medium", map[string]float64{"capable": 0.04, "gpt-6-luna/low": 0.53, "gpt-6-luna/medium": 0.39, "gpt-6-sol/low": 0.04}, nil},
-		{"turn needs sol medium", "", "capable", map[string]float64{"capable": 0.36, "gpt-6-luna/low": 0.10, "gpt-6-luna/medium": 0.48, "gpt-6-sol/low": 0.06}, nil},
-		{"mid-run stays medium", "gpt-6-sol", "capable", map[string]float64{"gpt-6-sol/low": 0.74, "capable": 0.25, "gpt-6-sol/high": 0.01}, []string{"gpt-6-sol/low", "capable", "gpt-6-sol/high"}},
-		{"tool failure reaches high", "gpt-6-sol", "gpt-6-sol/high", map[string]float64{"gpt-6-sol/low": 0.09, "capable": 0.49, "gpt-6-sol/high": 0.42}, nil},
+		{"turn decisive low", "", "gpt-6.1-luna/low", map[string]float64{"gpt-6.1-luna/low": 0.99, "capable": 0.01}, nil},
+		{"turn cheap uncertainty", "", "gpt-6.1-luna/medium", map[string]float64{"capable": 0.04, "gpt-6.1-luna/low": 0.53, "gpt-6.1-luna/medium": 0.39, "gpt-6.1-sol/low": 0.04}, nil},
+		{"turn needs sol medium", "", "capable", map[string]float64{"capable": 0.36, "gpt-6.1-luna/low": 0.10, "gpt-6.1-luna/medium": 0.48, "gpt-6.1-sol/low": 0.06}, nil},
+		{"mid-run stays medium", "gpt-6.1-sol", "capable", map[string]float64{"gpt-6.1-sol/low": 0.74, "capable": 0.25, "gpt-6.1-sol/high": 0.01}, []string{"gpt-6.1-sol/low", "capable", "gpt-6.1-sol/high"}},
+		{"tool failure reaches high", "gpt-6.1-sol", "gpt-6.1-sol/high", map[string]float64{"gpt-6.1-sol/low": 0.09, "capable": 0.49, "gpt-6.1-sol/high": 0.42}, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := autoConfig(t, NewEchoTool())
@@ -136,17 +132,17 @@ func TestAuto_CheapestSufficientLadder(t *testing.T) {
 
 func TestAuto_ConfiguredModelLastAndCatalogEffortOrder(t *testing.T) {
 	cfg := autoConfig(t, NewEchoTool())
-	cfg.Model, cfg.ReasoningEffort = "gpt-6.1-sol", "medium"
-	a, err := newAutoRouting(cfg, "fake", map[string]string{openaiName: "fake"}, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard))
+	cfg.Model, cfg.Provider, cfg.ReasoningEffort = "claude-sonnet-5-5", anthropicName, "medium"
+	a, err := newAutoRouting(cfg, "fake", map[string]string{openaiName: "fake", anthropicName: "fake"}, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, ladder, _ := autoCheapestSufficient(a.routes, nil)
-	want := []string{"gpt-6-luna/low", "gpt-6-luna/medium", "gpt-6-luna/high", "gpt-6-sol/low", "gpt-6-sol/medium", "gpt-6-sol/high", "capable", "gpt-6.1-sol/high"}
+	want := []string{"gpt-6.1-luna/low", "gpt-6.1-luna/medium", "gpt-6.1-luna/high", "gpt-6.1-sol/low", "gpt-6.1-sol/medium", "gpt-6.1-sol/high", "capable", "claude-sonnet-5-5/high"}
 	if !reflect.DeepEqual(ladder, want) {
 		t.Fatalf("ladder: %v", ladder)
 	}
-	cfg.Model, cfg.ReasoningEffort = "gpt-6-sol", "max"
+	cfg.Model, cfg.Provider, cfg.ReasoningEffort = "gpt-6.1-sol", openaiName, "max"
 	a, err = newAutoRouting(cfg, "fake", map[string]string{openaiName: "fake"}, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard))
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +154,7 @@ func TestAuto_ConfiguredModelLastAndCatalogEffortOrder(t *testing.T) {
 }
 
 func TestAuto_AllSixPairsSelectedInOneDecision(t *testing.T) {
-	for _, model := range []string{"gpt-6-luna", "gpt-6-sol"} {
+	for _, model := range []string{"gpt-6.1-luna", "gpt-6.1-sol"} {
 		for _, effort := range []string{"low", "medium", "high"} {
 			t.Run(model+"/"+effort, func(t *testing.T) {
 				generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply(model, textBlock("done")))}
@@ -191,19 +187,19 @@ func TestAuto_MidRunFailureChoices(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runs := 0
-			generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-luna", textBlock("done")))}
+			generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6.1-luna", textBlock("done")))}
 			s, api := jointAutoSession(t, autoConfig(t, autoEffectTool{runs: &runs, failUntil: 1}), generator)
-			second := jointChoice(t, s.auto, "gpt-6-luna", "gpt-6-luna", test.selected, test.confidence)
+			second := jointChoice(t, s.auto, "gpt-6.1-luna", "gpt-6.1-luna", test.selected, test.confidence)
 			if test.status != 0 {
 				second = apiReply{status: test.status, body: "private"}
 			}
-			api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6-luna", "low", 0.95), second}
+			api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6.1-luna", "low", 0.95), second}
 			result, err := s.Turn(context.Background(), "fix", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-			if err != nil || result.Status != StatusCompleted || len(api.received()) != 2 || len(generator.requests) != 2 || runs != 1 || s.cfg.Model != "gpt-6-luna" || s.cfg.ReasoningEffort != test.want || s.handoff != nil {
+			if err != nil || result.Status != StatusCompleted || len(api.received()) != 2 || len(generator.requests) != 2 || runs != 1 || s.cfg.Model != "gpt-6.1-luna" || s.cfg.ReasoningEffort != test.want || s.handoff != nil {
 				t.Fatalf("mid-run choice: %+v, %v; cfg=%+v", result, err, s.cfg)
 			}
 			body, err := EncodeOpenAIRequest(generator.requests[1])
-			if err != nil || !bytes.Contains(body, []byte("opaque-gpt-6-luna")) {
+			if err != nil || !bytes.Contains(body, []byte("opaque-gpt-6.1-luna")) {
 				t.Fatal("effort transition lost native state")
 			}
 			var request jevRequest
@@ -211,7 +207,7 @@ func TestAuto_MidRunFailureChoices(t *testing.T) {
 				t.Fatalf("within-run candidates: %+v, %v", request, err)
 			}
 			for _, description := range request.Questions["route"].Criteria {
-				if !strings.Contains(description, "gpt-6-luna / ") {
+				if !strings.Contains(description, "gpt-6.1-luna / ") {
 					t.Fatal("other model offered within run")
 				}
 			}
@@ -237,12 +233,12 @@ func TestAuto_HighToMediumAfterDwell(t *testing.T) {
 	runs := 0
 	var replies []ModelResponse
 	for _, id := range []string{"1", "2", "3"} {
-		replies = append(replies, autoTestReply("gpt-6-luna", callBlock(id, "counter", `{}`)))
+		replies = append(replies, autoTestReply("gpt-6.1-luna", callBlock(id, "counter", `{}`)))
 	}
-	replies = append(replies, autoTestReply("gpt-6-luna", textBlock("done")))
+	replies = append(replies, autoTestReply("gpt-6.1-luna", textBlock("done")))
 	generator := &requestRecorder{ScriptedModel: NewScriptedModel(replies...)}
 	s, api := jointAutoSession(t, autoConfig(t, autoEffectTool{runs: &runs}), generator)
-	api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6-luna", "high", 0.95), jointChoice(t, s.auto, "gpt-6-luna", "gpt-6-luna", "medium", 0.05)}
+	api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6.1-luna", "high", 0.95), jointChoice(t, s.auto, "gpt-6.1-luna", "gpt-6.1-luna", "medium", 0.05)}
 	result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	var efforts []string
 	for _, request := range generator.requests {
@@ -262,7 +258,7 @@ func TestAuto_UnsupportedFallbackRefusesEnablement(t *testing.T) {
 		{"gpt-5.6-luna", openaiName, "medium", map[string]string{openaiName: "fake"}},
 		{"gpt-6.1-sol", openaiName, "none", map[string]string{openaiName: "fake"}},
 		{"claude-haiku-4-5", anthropicName, "high", map[string]string{anthropicName: "fake"}},
-		{"gpt-6-sol", openaiName, "medium", nil},
+		{"gpt-6.1-sol", openaiName, "medium", nil},
 	} {
 		cfg := autoConfig(t, NewEchoTool())
 		cfg.Model, cfg.Provider, cfg.ReasoningEffort = test.model, test.provider, test.effort
@@ -274,19 +270,19 @@ func TestAuto_UnsupportedFallbackRefusesEnablement(t *testing.T) {
 
 func TestAuto_MissingHighCandidateKeepsCurrentOnRouterError(t *testing.T) {
 	runs := 0
-	generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-luna", textBlock("done")))}
+	generator := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6.1-luna", textBlock("done")))}
 	s, api := jointAutoSession(t, autoConfig(t, autoEffectTool{runs: &runs, failUntil: 1}), generator)
 	// Isolate fallback designation when high is absent, without changing the catalog.
 	var routes []jevRoute
 	for _, route := range s.auto.routes {
-		if route.Model != "gpt-6-luna" || route.Effort != "high" {
+		if route.Model != "gpt-6.1-luna" || route.Effort != "high" {
 			routes = append(routes, route)
 		}
 	}
 	s.auto.routes = routes
-	api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6-luna", "low", 0.95), apiReply{status: 429, body: "private"}}
+	api.replies = []apiReply{jointChoice(t, s.auto, "", "gpt-6.1-luna", "low", 0.95), apiReply{status: 429, body: "private"}}
 	result, err := s.Turn(context.Background(), "fix", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-	if err != nil || result.Status != StatusCompleted || len(api.received()) != 2 || runs != 1 || s.cfg.Model != "gpt-6-luna" || s.cfg.ReasoningEffort != "low" {
+	if err != nil || result.Status != StatusCompleted || len(api.received()) != 2 || runs != 1 || s.cfg.Model != "gpt-6.1-luna" || s.cfg.ReasoningEffort != "low" {
 		t.Fatalf("substituted fallback: %+v, %v; cfg=%+v", result, err, s.cfg)
 	}
 	found := false

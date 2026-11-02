@@ -282,12 +282,15 @@ mod tests {
         assert!(text(&out, "text").contains("omitted_native_items"));
     }
     fn config() -> Value {
-        json!({"provider":"openai","model":"gpt-6-luna","reasoning_effort":"low","workspace":".","prompt":{"text":""}})
+        json!({"provider":"openai","model":"gpt-6.1-luna","reasoning_effort":"low","workspace":".","prompt":{"text":""}})
     }
 
     #[test]
     fn stage_matches_independent_destination_encoding_and_omits_empty_plan_and_model_fields() {
-        for (provider, model) in [("openai", "gpt-6-luna"), ("anthropic", "claude-haiku-4-5")] {
+        for (provider, model) in [
+            ("openai", "gpt-6.1-luna"),
+            ("anthropic", "claude-haiku-4-5"),
+        ] {
             let mut config = config();
             config["provider"] = json!(provider);
             config["model"] = json!(model);
@@ -403,7 +406,7 @@ mod tests {
     fn refused_transition_reports_destination_bytes_and_keeps_source_state() {
         let directory = tempfile::tempdir().unwrap();
         let mut config = config();
-        config["model"] = json!("gpt-6-sol");
+        config["model"] = json!("gpt-6.1-sol");
         config["workspace"] = json!(directory.path());
         config["trace_dir"] = json!(directory.path());
         config["show_context"] = json!(true);
@@ -421,7 +424,7 @@ mod tests {
         );
         assert!(transition(
             &mut session,
-            &crate::catalog::model_info("gpt-6-luna"),
+            &crate::catalog::model_info("gpt-6.1-luna"),
             false
         )
         .unwrap_err()
@@ -446,7 +449,8 @@ mod tests {
         assert_eq!(events[0]["type"], "model.switch.requested");
         assert_eq!(events[1]["type"], "model.switch.failed");
         let mut destination = session.config.clone();
-        destination["model"] = json!("gpt-6-luna");
+        destination["model"] = json!("gpt-6.1-luna");
+        destination["reasoning_effort"] = json!("medium");
         provider::configure(&mut destination).unwrap();
         context::pin_instructions(&mut destination);
         let (size, _) = stage_measured(&destination, &session.history, 0.211 * 1.5).unwrap_err();

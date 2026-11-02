@@ -350,7 +350,7 @@ mod tests {
 
     fn session() -> (tempfile::TempDir, Session) {
         let directory = tempfile::tempdir().unwrap();
-        let session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","reasoning_effort":"low","workspace":directory.path(),"agents":true})).unwrap();
+        let session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","reasoning_effort":"low","workspace":directory.path(),"agents":true})).unwrap();
         (directory, session)
     }
 
@@ -400,10 +400,10 @@ mod tests {
     fn gc_child(parent: &Session, arguments: &Value, foreign: bool) -> (Session, String) {
         let mut config = parent.config.clone();
         if foreign {
-            config["model"] = json!(if parent.config["model"] == "gpt-6-luna" {
-                "gpt-6-sol"
+            config["model"] = json!(if parent.config["model"] == "gpt-6.1-luna" {
+                "gpt-6.1-sol"
             } else {
-                "gpt-6-luna"
+                "gpt-6.1-luna"
             });
         }
         let (history, _, mode) = prepare(parent, &mut config, arguments, "write").unwrap();
@@ -875,7 +875,7 @@ mod tests {
         let (_directory, mut session) = session();
         session.history = vec![
             json!({"kind":"user","user":{"text":"agent datum","source":"agent"}}),
-            json!({"kind":"assistant","assistant":{"model":"gpt-6-sol","response_id":"r","blocks":[{"kind":"text","text":"answer"}],"native":{"provider":"openai.responses","items":[raw::new(b" { \"type\":\"reasoning\", \"data\":\"opaque\" } ")]}}}),
+            json!({"kind":"assistant","assistant":{"model":"gpt-6.1-sol","response_id":"r","blocks":[{"kind":"text","text":"answer"}],"native":{"provider":"openai.responses","items":[raw::new(b" { \"type\":\"reasoning\", \"data\":\"opaque\" } ")]}}}),
         ];
         let before = session.history.clone();
         let mut config = session.config.clone();
@@ -895,7 +895,7 @@ mod tests {
         assert!(!data.contains("opaque"));
         let records: Value = serde_json::from_str(data).unwrap();
         assert_eq!(records[1]["assistant"]["omitted_native_items"], 1);
-        assert!(data.contains("\"model\":\"gpt-6-sol\",\"provider\":\"openai.responses\",\"response_id\":\"r\",\"blocks\""));
+        assert!(data.contains("\"model\":\"gpt-6.1-sol\",\"provider\":\"openai.responses\",\"response_id\":\"r\",\"blocks\""));
         assert_eq!(session.history, before);
     }
 
@@ -962,7 +962,7 @@ mod tests {
                 json!({"fork":true})
             });
             if mode == "foreign" {
-                arguments["model"] = json!("gpt-6-luna");
+                arguments["model"] = json!("gpt-6.1-luna");
             }
             let mut child = super::super::child_config(&session, &arguments, "read");
             let (history, prompt, context_mode) =

@@ -275,9 +275,9 @@ go run ./cmd/reagent run --auto --workspace ./repo "Fix the bug and run the test
 ```
 
 Without an explicit provider/model or `REAGENT_MODEL`, `--auto` starts with
-`gpt-6-sol / medium` as fallback. An explicit effort still wins. Otherwise the
+`gpt-6.1-sol / medium` as fallback. An explicit effort still wins. Otherwise the
 configured model/effort is the fallback; Auto requires a supported catalog pair
-with a known window. Auto offers **`gpt-6-luna` and `gpt-6-sol` at low, medium
+with a known window. Auto offers **`gpt-6.1-luna` and `gpt-6.1-sol` at low, medium
 and high effort** when supported and usable with the process's OpenAI
 credentials or proxy:
 six default pairs, selected in one joint Jev decision. Low targets clear mechanical
@@ -286,13 +286,14 @@ invariants. These are routing heuristics, not measured capability rankings;
 Luna/high is not assumed to outrank Sol/low. The configured fallback is retained
 and deduplicated; a different configured model also contributes its high pair
 when supported (at most eight pairs). A sole candidate or missing TypeSafe key
-needs no router calls. `gpt-6.1-sol` remains in the model picker and accepts
-explicit selection with `--model gpt-6.1-sol` or `/model gpt-6.1-sol`; it is not
-a standard Auto candidate, but can be an explicitly configured fallback.
+needs no router calls. The picker offers 6.1 Luna and Sol instead of GPT-6 Luna
+and Sol; older models remain available via the `--model` flag. 6.1 Luna defaults to
+medium, supports none, low, medium, high, xhigh and max, and has a 1,050,000-token
+context window.
 Normal run/chat defaults are **`gpt-6.1-sol` at high effort**; explicit model,
 `REAGENT_MODEL` and effort selections still win. Selecting 6.1 Sol in the picker
 also defaults to high. Opt-in Auto keeps its separate fallback described above.
-`gpt-6.1-terra` is available as model **9** or by name. Its effort support and
+`gpt-6.1-terra` is available as model **8** or by name. Its effort support and
 context window are unverified: selection leaves effort/verbosity to the provider,
 and Auto is unavailable until its catalog window is verified. GC passes and
 nonempty model handoffs require a known window or a context-window override.

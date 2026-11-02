@@ -63,7 +63,7 @@ func TestChat_ReviewInvalidOrBlockedSpendsNothing(t *testing.T) {
 	for _, argument := range []string{"unknown", "HIGH", "medium extra", "low\nextra"} {
 		t.Run(argument, func(t *testing.T) {
 			model := &compactModel{}
-			c := newConversation(t, "gpt-6-luna", "low", 0)
+			c := newConversation(t, "gpt-6.1-luna", "low", 0)
 			c.session.model = model
 			var out, errs bytes.Buffer
 			input := &fakeLineReader{reads: []struct {
@@ -75,7 +75,7 @@ func TestChat_ReviewInvalidOrBlockedSpendsNothing(t *testing.T) {
 			}
 		})
 	}
-	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c := newConversation(t, "gpt-6.1-luna", "low", 0)
 	model := &compactModel{}
 	c.session.model, c.session.blocked = model, string(StatusProtocolError)
 	var out, errs bytes.Buffer
@@ -86,7 +86,7 @@ func TestChat_ReviewInvalidOrBlockedSpendsNothing(t *testing.T) {
 }
 
 func TestChat_ReviewCompletionAndCompaction(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c := newConversation(t, "gpt-6.1-luna", "low", 0)
 	if !strings.Contains(chatHelp(), "/review") || !commandTakesArgument("/review") || !reflect.DeepEqual(c.completionArguments("/review"), []string{"low", "medium", "high", "max"}) {
 		t.Fatal("review help/completion missing")
 	}
@@ -1195,7 +1195,7 @@ func TestReviewPrompt_BudgetsModelChoiceAndUncoveredPolicy(t *testing.T) {
 		"STOP new work", "unverified (never plausible/confirmed by default)",
 		"Do not bypass the stop by replacing agents with inline work", "has unreported attempts",
 		"Keep verifiers and the sweep on the current review model",
-		`spawn.model="gpt-6-luna"`, `spawn.model="claude-haiku-4-5"`,
+		`spawn.model="gpt-6.1-luna"`, `spawn.model="claude-haiku-4-5"`,
 	} {
 		if !strings.Contains(text, rule) {
 			t.Errorf("missing review budget rule: %s", rule)
@@ -1214,7 +1214,7 @@ func TestChat_ReviewBudgetStopsWithUnverifiedCandidates(t *testing.T) {
 			s := agentFixture(t)
 			cheap, strong := 0, 0
 			s.agentModel = func(cfg Config, _ *Trace) (Model, error) {
-				if cfg.Model == DefaultOpenAIModel {
+				if cfg.Model == "gpt-6.1-luna" {
 					cheap++
 				} else if cfg.Model == s.cfg.Model {
 					strong++
@@ -1225,7 +1225,7 @@ func TestChat_ReviewBudgetStopsWithUnverifiedCandidates(t *testing.T) {
 					task := req.History[0].User.Text
 					var reply string
 					if strings.HasPrefix(task, "find ") {
-						if cfg.Model != DefaultOpenAIModel {
+						if cfg.Model != "gpt-6.1-luna" {
 							t.Error("finder not on cheaper model")
 						}
 						var index int
@@ -1338,7 +1338,7 @@ func TestChat_ReviewBudgetStopsWithUnverifiedCandidates(t *testing.T) {
 				for i := 0; i < count; i++ {
 					var name, task, model string
 					if finders < 10 {
-						name, task, model = fmt.Sprintf("finder-%02d", finders), fmt.Sprintf("find %d", finders), DefaultOpenAIModel
+						name, task, model = fmt.Sprintf("finder-%02d", finders), fmt.Sprintf("find %d", finders), "gpt-6.1-luna"
 						finders++
 					} else {
 						name, task, model = fmt.Sprintf("verifier-%02d", verified), "verify "+candidates[verified], s.cfg.Model

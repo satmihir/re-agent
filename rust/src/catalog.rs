@@ -7,21 +7,21 @@ const REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 pub fn models() -> Value {
     let entries = [
         (
-            "gpt-6-luna",
+            "gpt-6.1-luna",
             "openai",
             OPENAI_EFFORTS,
-            "low",
+            "medium",
             "low",
             "cheapest",
             1_050_000,
         ),
         (
-            "gpt-6-sol",
+            "gpt-6.1-sol",
             "openai",
-            OPENAI_EFFORTS,
+            REASONING_EFFORTS,
+            "high",
             "low",
-            "low",
-            "more capable, costs more",
+            "most capable, costs most",
             1_050_000,
         ),
         (
@@ -68,15 +68,6 @@ pub fn models() -> Value {
             "",
             "most capable, costs most",
             1_000_000,
-        ),
-        (
-            "gpt-6.1-sol",
-            "openai",
-            REASONING_EFFORTS,
-            "high",
-            "low",
-            "most capable, costs most",
-            1_050_000,
         ),
         (
             "gpt-6.1-terra",
@@ -244,17 +235,22 @@ mod tests {
 
     #[test]
     fn model_positions_and_model_specific_efforts_are_fixed() {
-        assert_eq!(models().as_array().unwrap().len(), 9);
-        let terra = select_model("9").unwrap();
+        assert_eq!(models().as_array().unwrap().len(), 8);
+        let terra = select_model("8").unwrap();
         assert_eq!(terra["id"], "gpt-6.1-terra");
         assert_eq!(terra["effort"], "");
         assert_eq!(terra["context_window"], 0);
-        assert_eq!(select_model("2").unwrap()["id"], "gpt-6-sol");
-        let sol = select_model("8").unwrap();
+        let sol = select_model("2").unwrap();
+        let luna = select_model("1").unwrap();
+        assert_eq!(luna["id"], "gpt-6.1-luna");
+        assert_eq!(luna["effort"], "medium");
+        assert_eq!(luna["context_window"], 1_050_000);
+        assert!(model_info("gpt-6-luna").is_null());
+        assert!(model_info("gpt-6-sol").is_null());
         assert_eq!(sol["id"], "gpt-6.1-sol");
         assert!(select_effort(&sol, "none").is_err());
         assert_eq!(
-            select_effort(&model_info("gpt-6-luna"), "1").unwrap(),
+            select_effort(&model_info("gpt-6.1-luna"), "1").unwrap(),
             "none"
         );
         assert_eq!(
@@ -281,8 +277,8 @@ mod tests {
     #[test]
     fn context_override_caps_known_models_and_admits_unknown() {
         for (model, cap, want) in [
-            ("gpt-6-luna", 2_000_000, 1_050_000),
-            ("gpt-6-luna", 500, 500),
+            ("gpt-6.1-luna", 2_000_000, 1_050_000),
+            ("gpt-6.1-luna", 500, 500),
             ("unlisted", 500, 500),
             ("gpt-5.6-luna", 0, 0),
         ] {

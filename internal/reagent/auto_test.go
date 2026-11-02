@@ -92,23 +92,23 @@ func autoSession(t *testing.T, cfg Config, capable, fast Model, api *fakeAPI) *S
 	}
 	s.auto.jev = newJevClient("fake-router-key", api.server.URL, api.server.Client())
 	// Two-pair fixtures isolate loop invariants; production candidates are covered in auto_pairs_test.go.
-	s.auto.routes = []jevRoute{{ID: "fast", Model: "gpt-6-luna", Effort: "low", Description: "gpt-6-luna / low: straightforward work"}, s.auto.fallback}
+	s.auto.routes = []jevRoute{{ID: "fast", Model: "gpt-6.1-luna", Effort: "low", Description: "gpt-6.1-luna / low: straightforward work"}, s.auto.fallback}
 	s.auto.models = map[string]Model{"capable": capable, "fast": fast}
 	return s
 }
 
 func autoConfig(t *testing.T, tool Tool) Config {
 	cfg := testConfig(t, tool)
-	cfg.Provider, cfg.Model, cfg.ReasoningEffort, cfg.WorkspacePath = openaiName, "gpt-6-sol", "medium", "/repo"
+	cfg.Provider, cfg.Model, cfg.ReasoningEffort, cfg.WorkspacePath = openaiName, "gpt-6.1-sol", "medium", "/repo"
 	return cfg
 }
 
 func TestAuto_StagedSwitchAndPostSwitchRequestUseDestinationVerbosity(t *testing.T) {
 	cfg := autoConfig(t, NewEchoTool())
-	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("fast", 0.95))
 	s := autoSession(t, cfg, NewScriptedModel(), fast, api)
-	previous := autoTestReply("gpt-6-sol", textBlock("prior answer"))
+	previous := autoTestReply("gpt-6.1-sol", textBlock("prior answer"))
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "prior task"}}, {Kind: EntryAssistant, Assistant: &previous}}
 
 	candidate, err := stageAutoCandidate(context.Background(), s, s.auto.routes[0])
@@ -125,13 +125,13 @@ func TestAuto_StagedSwitchAndPostSwitchRequestUseDestinationVerbosity(t *testing
 		t.Fatalf("switch: %+v, %v", result, err)
 	}
 	postSwitch, err := EncodeOpenAIRequest(fast.requests[0])
-	if err != nil || fast.requests[0].Model != "gpt-6-luna" || !bytes.Contains(postSwitch, []byte(`"text":{"verbosity":"low"}`)) {
+	if err != nil || fast.requests[0].Model != "gpt-6.1-luna" || !bytes.Contains(postSwitch, []byte(`"text":{"verbosity":"low"}`)) {
 		t.Fatalf("post-switch request: %s, %v", postSwitch, err)
 	}
 }
 
 func TestAuto_ModelChangesOnlyBetweenTurnsKeepEvidenceAndCacheUsage(t *testing.T) {
-	for _, fallbackModel := range []string{"gpt-6-sol", "claude-sonnet-5-5"} {
+	for _, fallbackModel := range []string{"gpt-6.1-sol", "claude-sonnet-5-5"} {
 		t.Run(fallbackModel, func(t *testing.T) {
 			runs := 0
 			cfg := autoConfig(t, autoEffectTool{runs: &runs, failUntil: 1})
@@ -140,8 +140,8 @@ func TestAuto_ModelChangesOnlyBetweenTurnsKeepEvidenceAndCacheUsage(t *testing.T
 				cfg.Provider = anthropicName
 			}
 			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply(fallbackModel, textBlock("verified")))}
-			fastFinal := autoTestReply("gpt-6-luna", textBlock("done"))
-			fastFirst := autoTestReply("gpt-6-luna", callBlock("c1", "counter", `{}`))
+			fastFinal := autoTestReply("gpt-6.1-luna", textBlock("done"))
+			fastFirst := autoTestReply("gpt-6.1-luna", callBlock("c1", "counter", `{}`))
 			fastFirst.Usage.CachedInputTokens = 7
 			fast := &requestRecorder{ScriptedModel: NewScriptedModel(fastFirst, fastFinal)}
 			api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95))
@@ -214,13 +214,13 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			runs := 0
 			capable := &requestRecorder{ScriptedModel: NewScriptedModel(
-				autoTestReply("gpt-6-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6-sol", textBlock("done")),
+				autoTestReply("gpt-6.1-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6.1-sol", textBlock("done")),
 			)}
 			fast := &requestRecorder{ScriptedModel: NewScriptedModel()}
 			api := newFakeAPI(t, test.reply, test.reply)
 			s := autoSession(t, autoConfig(t, autoEffectTool{runs: &runs}), capable, fast, api)
 			s.auto.jev.key = test.key
-			s.cfg.Model, s.cfg.ReasoningEffort, s.model = "gpt-6-luna", "low", fast
+			s.cfg.Model, s.cfg.ReasoningEffort, s.model = "gpt-6.1-luna", "low", fast
 			result, err := s.Turn(context.Background(), test.prompt, "run", filepath.Join(t.TempDir(), "events.jsonl"))
 			if err != nil || result.Status != StatusCompleted || len(capable.requests) != 4 || len(fast.requests) != 0 || runs != 3 || len(api.received()) != test.calls || !result.Usage.Known {
 				t.Fatalf("fallback: %+v, %v; requests=%d", result, err, len(api.received()))
@@ -237,11 +237,11 @@ func TestAuto_FallbackAndCooldownDoNotBreakGeneration(t *testing.T) {
 
 func TestAuto_ToolFailureEscalatesButDwellPreventsThrashing(t *testing.T) {
 	runs := 0
-	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`)))}
-	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6-luna", textBlock("done")))}
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", callBlock("1", "counter", `{}`)))}
+	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6.1-luna", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6.1-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95), autoChoice("fast", 0.95), autoChoice("fast", 0.95))
 	cfg := autoConfig(t, autoEffectTool{runs: &runs, failUntil: 3})
-	cfg.Model, cfg.ReasoningEffort = "gpt-6-luna", "high"
+	cfg.Model, cfg.ReasoningEffort = "gpt-6.1-luna", "high"
 	s := autoSession(t, cfg, capable, fast, api)
 	result, err := s.Turn(context.Background(), "Resolve the failures without changing the API.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || len(fast.requests) != 1 || len(capable.requests) != 3 || len(api.received()) != 4 || runs != 3 {
@@ -252,7 +252,7 @@ func TestAuto_ToolFailureEscalatesButDwellPreventsThrashing(t *testing.T) {
 	}
 	for _, request := range capable.requests {
 		body, err := EncodeOpenAIRequest(request)
-		if err != nil || !bytes.Contains(body, []byte("opaque-gpt-6-luna")) {
+		if err != nil || !bytes.Contains(body, []byte("opaque-gpt-6.1-luna")) {
 			t.Fatal("mid-run effort change lost native continuation")
 		}
 	}
@@ -271,18 +271,18 @@ func TestAuto_SwitchLimitStopsRouterCallsNotTheRun(t *testing.T) {
 	runs := 0
 	var fastReplies, capableReplies []ModelResponse
 	for step := 1; step <= 10; step++ {
-		reply := autoTestReply("gpt-6-luna", callBlock(fmt.Sprint(step), "counter", `{}`))
+		reply := autoTestReply("gpt-6.1-luna", callBlock(fmt.Sprint(step), "counter", `{}`))
 		if step >= 4 && step <= 6 {
 			capableReplies = append(capableReplies, reply)
 		} else {
 			fastReplies = append(fastReplies, reply)
 		}
 	}
-	fastReplies = append(fastReplies, autoTestReply("gpt-6-luna", textBlock("done")))
+	fastReplies = append(fastReplies, autoTestReply("gpt-6.1-luna", textBlock("done")))
 	fast, capable := &requestRecorder{ScriptedModel: NewScriptedModel(fastReplies...)}, &requestRecorder{ScriptedModel: NewScriptedModel(capableReplies...)}
 	api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95), autoChoice("fast", 0.95), autoChoice("capable", 0.95))
 	cfg := autoConfig(t, autoEffectTool{runs: &runs})
-	cfg.Model = "gpt-6-luna"
+	cfg.Model = "gpt-6.1-luna"
 	s := autoSession(t, cfg, capable, fast, api)
 	result, err := s.Turn(context.Background(), "Finish the whole task.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil || result.Status != StatusCompleted || result.Steps != 11 || runs != 10 || len(api.received()) != 3 || len(result.Effects) != 10 {
@@ -291,8 +291,8 @@ func TestAuto_SwitchLimitStopsRouterCallsNotTheRun(t *testing.T) {
 }
 
 func TestAuto_LowConfidenceValidChoiceAndTrace(t *testing.T) {
-	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-sol", textBlock("done")))}
-	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+	capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-sol", textBlock("done")))}
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("fast", 0.05))
 	s := autoSession(t, autoConfig(t, NewEchoTool()), capable, fast, api)
 	result, err := s.Turn(context.Background(), "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
@@ -317,11 +317,11 @@ func TestAuto_LowConfidenceValidChoiceAndTrace(t *testing.T) {
 
 func TestAuto_EffortOnlyChangePreservesNativeState(t *testing.T) {
 	cfg := autoConfig(t, NewEchoTool())
-	cfg.Model = "gpt-6-luna"
-	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+	cfg.Model = "gpt-6.1-luna"
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("fast", 0.95))
 	s := autoSession(t, cfg, NewScriptedModel(), fast, api)
-	previous := autoTestReply("gpt-6-luna", textBlock("earlier"))
+	previous := autoTestReply("gpt-6.1-luna", textBlock("earlier"))
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "Keep constraints"}}, {Kind: EntryAssistant, Assistant: &previous}}
 	id := s.ID
 	result, err := s.Turn(context.Background(), "continue", "run", filepath.Join(t.TempDir(), "events.jsonl"))
@@ -329,7 +329,7 @@ func TestAuto_EffortOnlyChangePreservesNativeState(t *testing.T) {
 		t.Fatalf("effort-only: %+v, %v", result, err)
 	}
 	body, err := EncodeOpenAIRequest(fast.requests[0])
-	if err != nil || !bytes.Contains(body, []byte("opaque-gpt-6-luna")) {
+	if err != nil || !bytes.Contains(body, []byte("opaque-gpt-6.1-luna")) {
 		t.Fatal("effort change discarded native reasoning")
 	}
 }
@@ -344,10 +344,10 @@ func TestAuto_PlanAndReadOnlySurviveIntraRunSwitches(t *testing.T) {
 			}
 			cfg := autoConfig(t, NewEchoTool())
 			cfg.Registry = registry
-			cfg.Model = "gpt-6-luna"
+			cfg.Model = "gpt-6.1-luna"
 			cfg.PlanMode = true
-			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-luna", callBlock("3", "counter", `{}`)))}
-			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6.1-luna", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6.1-luna", callBlock("3", "counter", `{}`)))}
+			capable := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", textBlock("done")))}
 			api := newFakeAPI(t, autoChoice("fast", 0.95), autoChoice("capable", 0.95))
 			s := autoSession(t, cfg, capable, fast, api)
 			result, err := s.Turn(context.Background(), "Explore only.", "run", filepath.Join(t.TempDir(), "events.jsonl"))
@@ -377,7 +377,7 @@ func TestAuto_GenerationFailureAndUnknownEffectsNeverRerouteOrReplay(t *testing.
 	for _, unknown := range []bool{false, true} {
 		t.Run(fmt.Sprint(unknown), func(t *testing.T) {
 			runs := 0
-			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", callBlock("1", "counter", `{}`), callBlock("2", "counter", `{}`)))}
+			fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", callBlock("1", "counter", `{}`), callBlock("2", "counter", `{}`)))}
 			capable := NewScriptedModel()
 			api := newFakeAPI(t, autoChoice("fast", 0.95))
 			s := autoSession(t, autoConfig(t, autoEffectTool{runs: &runs, unknownAt: 1}), capable, fast, api)
@@ -420,14 +420,14 @@ func TestAuto_CancelledRouterNeverStartsGeneration(t *testing.T) {
 	s := autoSession(t, autoConfig(t, NewEchoTool()), capable, fast, api)
 	s.auto.jev = newJevClient("fake", server.URL, server.Client())
 	result, err := s.Turn(ctx, "task", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-	if err != nil || result.Status != StatusCancelled || result.Steps != 0 || len(capable.requests) != 0 || len(fast.requests) != 0 || s.cfg.Model != "gpt-6-sol" || result.RouterUsage == nil || result.RouterUsage.Known {
+	if err != nil || result.Status != StatusCancelled || result.Steps != 0 || len(capable.requests) != 0 || len(fast.requests) != 0 || s.cfg.Model != "gpt-6.1-sol" || result.RouterUsage == nil || result.RouterUsage.Known {
 		t.Fatalf("cancelled routing: %+v, %v", result, err)
 	}
 }
 
 func TestAuto_ManualSelectionPinsAndRejectedSelectionDoesNot(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "")
-	c := newConversation(t, "gpt-6-sol", "medium", 0)
+	c := newConversation(t, "gpt-6.1-sol", "medium", 0)
 	c.commandAuto("on", io.Discard)
 	if c.session.auto == nil || !c.session.auto.enabled {
 		t.Fatal("Auto did not enable")
@@ -438,7 +438,7 @@ func TestAuto_ManualSelectionPinsAndRejectedSelectionDoesNot(t *testing.T) {
 	if !c.session.auto.enabled {
 		t.Fatal("rejected/cancelled selection disabled Auto")
 	}
-	c.commandModel(context.Background(), "gpt-6-sol", nil, io.Discard)
+	c.commandModel(context.Background(), "gpt-6.1-sol", nil, io.Discard)
 	if c.session.auto.enabled {
 		t.Fatal("explicit current-model selection did not pin")
 	}
@@ -486,7 +486,7 @@ func TestAuto_DisabledWithKeyLeavesProviderRequestUnchanged(t *testing.T) {
 func TestAuto_CooldownEndsOnlyAtNextUserTurn(t *testing.T) {
 	runs := 0
 	capable := &requestRecorder{ScriptedModel: NewScriptedModel(
-		autoTestReply("gpt-6-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6-sol", textBlock("done")), autoTestReply("gpt-6-sol", textBlock("next")),
+		autoTestReply("gpt-6.1-sol", callBlock("1", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("2", "counter", `{}`)), autoTestReply("gpt-6.1-sol", callBlock("3", "counter", `{}`)), autoTestReply("gpt-6.1-sol", textBlock("done")), autoTestReply("gpt-6.1-sol", textBlock("next")),
 	)}
 	api := newFakeAPI(t, apiReply{status: 529, body: "overloaded"}, autoChoice("capable", 0.95))
 	s := autoSession(t, autoConfig(t, autoEffectTool{runs: &runs}), capable, NewScriptedModel(), api)
@@ -507,15 +507,15 @@ func TestAuto_CooldownEndsOnlyAtNextUserTurn(t *testing.T) {
 func TestAuto_OverfullFallbackDefersWithoutDiscardingHistory(t *testing.T) {
 	cfg := autoConfig(t, NewEchoTool())
 	cfg.Model, cfg.Provider, cfg.ReasoningEffort = "claude-haiku-4-5", anthropicName, ""
-	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("done")))}
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", textBlock("done")))}
 	api := newFakeAPI(t, autoChoice("capable", 0.95))
 	s := autoSession(t, cfg, NewScriptedModel(), fast, api)
-	s.cfg.Model, s.cfg.Provider, s.cfg.ReasoningEffort, s.model = "gpt-6-luna", openaiName, "low", fast
-	old := autoTestReply("gpt-6-luna", textBlock("accepted evidence"))
+	s.cfg.Model, s.cfg.Provider, s.cfg.ReasoningEffort, s.model = "gpt-6.1-luna", openaiName, "low", fast
+	old := autoTestReply("gpt-6.1-luna", textBlock("accepted evidence"))
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: strings.Repeat("critical constraint ", 22000)}}, {Kind: EntryAssistant, Assistant: &old}}
 	before, id := string(mustJSON(t, s.history)), s.ID
 	result, err := s.Turn(context.Background(), "continue", "run", filepath.Join(t.TempDir(), "events.jsonl"))
-	if err != nil || result.Status != StatusCompleted || s.ID != id || s.cfg.Model != "gpt-6-luna" || string(mustJSON(t, s.history[:2])) != before || len(api.received()) != 0 || s.handoff != nil {
+	if err != nil || result.Status != StatusCompleted || s.ID != id || s.cfg.Model != "gpt-6.1-luna" || string(mustJSON(t, s.history[:2])) != before || len(api.received()) != 0 || s.handoff != nil {
 		t.Fatalf("unsafe capacity fallback: %+v, %v", result, err)
 	}
 }
@@ -526,7 +526,7 @@ func TestAuto_CLIExplicitSelectionsOverrideDefaults(t *testing.T) {
 		name, env, model, effort string
 		flags                    []string
 	}{
-		{"explicit effort", "", "gpt-6-sol", "high", []string{"--auto", "--reasoning-effort", "high"}},
+		{"explicit effort", "", "gpt-6.1-sol", "high", []string{"--auto", "--reasoning-effort", "high"}},
 		{"explicit 6.1 Sol", "", "gpt-6.1-sol", "high", []string{"--auto", "--model", "gpt-6.1-sol"}},
 		{"environment 6.1 Sol", "gpt-6.1-sol", "gpt-6.1-sol", "high", []string{"--auto"}},
 		{"manual 6.1 Sol", "", "gpt-6.1-sol", "high", []string{"--model", "gpt-6.1-sol"}},
@@ -587,7 +587,7 @@ func TestAuto_DefaultOffAndNoKeyCLIStayOffline(t *testing.T) {
 	if err := json.Unmarshal(api.received()[1], &automatic); err != nil {
 		t.Fatal(err)
 	}
-	if normal.Model != "gpt-6.1-sol" || normal.Reasoning.Effort != "high" || automatic.Model != "gpt-6-sol" || automatic.Reasoning.Effort != "medium" {
+	if normal.Model != "gpt-6.1-sol" || normal.Reasoning.Effort != "high" || automatic.Model != "gpt-6.1-sol" || automatic.Reasoning.Effort != "medium" {
 		t.Fatal("manual defaults changed or Auto fallback was not explicit")
 	}
 	for _, extra := range []string{"--show-context", "--scripted"} {
@@ -621,10 +621,10 @@ func TestAuto_CLIStartsWithoutRoutingBanner(t *testing.T) {
 
 func TestAuto_ExecTimeoutDefersOnlyUntilTheNextModelResponse(t *testing.T) {
 	cfg := autoConfig(t, NewEchoTool())
-	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6-luna", textBlock("routed after timeout")))}
+	fast := &requestRecorder{ScriptedModel: NewScriptedModel(autoTestReply("gpt-6.1-luna", textBlock("routed after timeout")))}
 	api := newFakeAPI(t, autoChoice("fast", 0.95))
 	s := autoSession(t, cfg, NewScriptedModel(), fast, api)
-	call := autoTestReply("gpt-6-sol", callBlock("slow", "exec", `{"argv":["sleep","30"],"cwd":"."}`))
+	call := autoTestReply("gpt-6.1-sol", callBlock("slow", "exec", `{"argv":["sleep","30"],"cwd":"."}`))
 	timeout := ToolResult{CallID: "slow", Name: "exec", Outcome: ToolOutcome{Code: "timeout", Effect: EffectUnknown, Message: "exec request timed out"}}
 	s.history = []Entry{
 		{Kind: EntryUser, User: &UserTurn{Text: "check the tests"}},
@@ -635,10 +635,10 @@ func TestAuto_ExecTimeoutDefersOnlyUntilTheNextModelResponse(t *testing.T) {
 	if err := r.routeNext(context.Background()); err != nil || r.routingOff || len(api.received()) != 0 {
 		t.Fatalf("pending timeout disabled routing: %v, off=%t, requests=%d", err, r.routingOff, len(api.received()))
 	}
-	ack := autoTestReply("gpt-6-sol", textBlock("I saw the timeout and inspected the workspace."))
+	ack := autoTestReply("gpt-6.1-sol", textBlock("I saw the timeout and inspected the workspace."))
 	s.history = append(s.history, Entry{Kind: EntryAssistant, Assistant: &ack})
 	result, err := s.Turn(context.Background(), "what next?", "after", filepath.Join(t.TempDir(), "after.jsonl"))
-	if err != nil || result.Status != StatusCompleted || result.Reply != "routed after timeout" || s.cfg.Model != "gpt-6-luna" || len(fast.requests) != 1 || len(api.received()) != 1 {
+	if err != nil || result.Status != StatusCompleted || result.Reply != "routed after timeout" || s.cfg.Model != "gpt-6.1-luna" || len(fast.requests) != 1 || len(api.received()) != 1 {
 		t.Fatalf("routing after acknowledgement: result %+v, model %s, requests %d, router %d, err %v", result, s.cfg.Model, len(fast.requests), len(api.received()), err)
 	}
 	if !strings.Contains(s.handoff.Text, `"effect":"unknown"`) || !strings.Contains(s.handoff.Text, `"code":"timeout"`) {

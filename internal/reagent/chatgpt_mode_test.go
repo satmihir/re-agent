@@ -169,7 +169,7 @@ func TestChatGPTMode_SourceSurvivesAutoAndModelSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := testConfig(t)
-	cfg.Provider, cfg.Model, cfg.ReasoningEffort = openaiName, "gpt-6-sol", "low"
+	cfg.Provider, cfg.Model, cfg.ReasoningEffort = openaiName, "gpt-6.1-sol", "low"
 	cfg.chatGPTSource = source
 	setConfigAuth(&cfg, apiProxy{})
 	auto, err := newAutoRouting(cfg, "", nil, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard))
@@ -190,7 +190,7 @@ func TestChatGPTMode_SourceSurvivesAutoAndModelSwitches(t *testing.T) {
 	if c.session.cfg.AuthMode != "key" || c.session.cfg.chatGPTSource != source {
 		t.Fatal("cross-provider switch lost source or billing mode")
 	}
-	openai, _ := findModel("gpt-6-luna")
+	openai, _ := findModel("gpt-6.1-luna")
 	c.switchTo(openai)
 	if c.session.cfg.AuthMode != "chatgpt" || c.session.model.(*OpenAIModel).transport.tokenSource != source {
 		t.Fatal("switch back lost shared token source")
@@ -307,7 +307,7 @@ func TestChatGPTMode_AnthropicKeyVisibleAtStartupAndAfterSwitch(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
 	t.Setenv("OPENAI_API_KEY", "openai-test-key")
 	var output, progress bytes.Buffer
-	input := "/status\n/model gpt-6-luna fresh\n/status\n/model " + DefaultAnthropicModel + " fresh\n/status\n/exit\n"
+	input := "/status\n/model gpt-6.1-luna fresh\n/status\n/model " + DefaultAnthropicModel + " fresh\n/status\n/exit\n"
 	code := Main(context.Background(), []string{"chat", "--provider", anthropicName, "--workspace", t.TempDir()}, strings.NewReader(input), &output, &progress)
 	if code != exitOK {
 		t.Fatalf("chat exit %d: %s", code, progress.String())

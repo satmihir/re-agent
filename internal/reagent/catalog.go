@@ -38,11 +38,10 @@ type modelInfo struct {
 // a year, and --model still accepts any name a provider knows.
 var modelCatalog = []modelInfo{
 	// v0 §10 amendment (2026-10-02): catalog OpenAI models request low verbosity.
-	{ID: "gpt-6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
+	{ID: "gpt-6.1-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "medium", Verbosity: "low",
 		Note: "cheapest", ContextWindow: 1_050_000},
-	// v0 §10 amendment (2026-10-02): restore Sol for Auto; retain 6.1 for selection.
-	{ID: "gpt-6-sol", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
-		Note: "more capable, costs more", ContextWindow: 1_050_000},
+	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "high", Verbosity: "low",
+		Note: "most capable, costs most", ContextWindow: 1_050_000},
 	{ID: "gpt-5.6-luna", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
 		Note: "cheap"},
 	{ID: "gpt-5.6-terra", Provider: openaiName, Efforts: openaiEfforts, Effort: "low", Verbosity: "low",
@@ -53,8 +52,6 @@ var modelCatalog = []modelInfo{
 		Note: "more capable, costs more", ContextWindow: 1_000_000},
 	{ID: "claude-opus-5-5", Provider: anthropicName, Efforts: anthropicEfforts, Effort: "low",
 		Note: "most capable, costs most", ContextWindow: 1_000_000},
-	{ID: "gpt-6.1-sol", Provider: openaiName, Efforts: openaiReasoningEfforts, Effort: "high", Verbosity: "low",
-		Note: "most capable, costs most", ContextWindow: 1_050_000},
 	{ID: "gpt-6.1-terra", Provider: openaiName,
 		Note: "provider defaults; effort and window unverified"},
 }

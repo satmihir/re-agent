@@ -15,8 +15,8 @@ import (
 
 func TestModelSwitch_PreservesSourceAndSessionWithoutGeneration(t *testing.T) {
 	for _, pair := range [][2]string{
-		{"gpt-6.1-sol", "gpt-6-luna"},
-		{"gpt-6-luna", "gpt-6.1-sol"},
+		{"gpt-6.1-sol", "gpt-6.1-luna"},
+		{"gpt-6.1-luna", "gpt-6.1-sol"},
 		{"gpt-6.1-sol", "claude-haiku-4-5"},
 		{"claude-haiku-4-5", "gpt-6.1-sol"},
 	} {
@@ -103,13 +103,13 @@ func TestModelSwitch_RefusalPreservesUsableState(t *testing.T) {
 		name, destination, reason string
 		change                    func(*Session)
 	}{
-		{"encoded size", "gpt-6-luna", "byte limit", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", MaxRequestBytes) }},
+		{"encoded size", "gpt-6.1-luna", "byte limit", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", MaxRequestBytes) }},
 		{"smaller window", "claude-haiku-4-5", "window allowance", func(s *Session) { s.history[0].User.Text = strings.Repeat("x", 400_000) }},
 		{"unknown window", "gpt-5.6-luna", "unknown", func(*Session) {}},
-		{"malformed snapshot", "gpt-6-luna", "encode historical", func(s *Session) { s.history[0].User.Workspace = json.RawMessage(`{`) }},
-		{"unsupported block", "gpt-6-luna", "unsupported block", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{{Kind: "image"}} }},
-		{"pending call", "gpt-6-luna", "unresolved tool batch", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{callBlock("pending", "echo", `{}`)} }},
-		{"unknown effect", "gpt-6-luna", "uncertain tool effects", func(s *Session) {
+		{"malformed snapshot", "gpt-6.1-luna", "encode historical", func(s *Session) { s.history[0].User.Workspace = json.RawMessage(`{`) }},
+		{"unsupported block", "gpt-6.1-luna", "unsupported block", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{{Kind: "image"}} }},
+		{"pending call", "gpt-6.1-luna", "unresolved tool batch", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{callBlock("pending", "echo", `{}`)} }},
+		{"unknown effect", "gpt-6.1-luna", "uncertain tool effects", func(s *Session) {
 			s.history[1].Assistant.Blocks = []OutputBlock{callBlock("uncertain", "echo", `{}`)}
 			s.history = append(s.history, Entry{Kind: EntryTool, Tool: &ToolResult{CallID: "uncertain", Name: "echo", Outcome: ToolOutcome{Effect: EffectUnknown}}})
 		}},
@@ -147,7 +147,7 @@ func TestModelSwitch_CancelledKeepsConversation(t *testing.T) {
 		cfg, model, history := s.cfg, s.model, string(mustJSON(t, s.history))
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		choice := "gpt-6-luna"
+		choice := "gpt-6.1-luna"
 		if fresh {
 			choice += " fresh"
 		}
@@ -165,8 +165,8 @@ func TestModelSwitch_FreshEmptyAndSameModel(t *testing.T) {
 		turns  int
 		fresh  bool
 	}{
-		{"gpt-6-luna fresh", 1, true},
-		{"gpt-6-luna", 0, false},
+		{"gpt-6.1-luna fresh", 1, true},
+		{"gpt-6.1-luna", 0, false},
 		{"gpt-6.1-sol fresh", 1, false},
 	} {
 		t.Run(test.choice+fmt.Sprint(test.turns), func(t *testing.T) {
@@ -198,7 +198,7 @@ func TestModelSwitch_NonTurnHistoryAndEscapedExternalText(t *testing.T) {
 	} {
 		c := newConversation(t, "gpt-6.1-sol", "high", 0)
 		c.session.history = []Entry{entry}
-		c.commandModel(context.Background(), "gpt-6-luna", nil, io.Discard)
+		c.commandModel(context.Background(), "gpt-6.1-luna", nil, io.Discard)
 		if c.session.handoff == nil {
 			t.Fatal("non-turn history was not carried")
 		}
@@ -210,7 +210,7 @@ func TestModelSwitch_NonTurnHistoryAndEscapedExternalText(t *testing.T) {
 }
 
 func TestModelSwitch_RoundTripKeepsNativeTailAndNeverReplaysTools(t *testing.T) {
-	for _, destination := range []string{"gpt-6-luna", "claude-haiku-4-5"} {
+	for _, destination := range []string{"gpt-6.1-luna", "claude-haiku-4-5"} {
 		t.Run(destination, func(t *testing.T) {
 			c := newConversation(t, "gpt-6.1-sol", "high", 1)
 			s := c.session
@@ -279,13 +279,13 @@ func (c *cancelAfterValidation) Err() error {
 
 func TestModelSwitch_CancellationAfterDestinationValidationPreservesView(t *testing.T) {
 	c := newConversation(t, "gpt-6.1-sol", "high", 1)
-	c.commandModel(context.Background(), "gpt-6-luna", nil, io.Discard)
+	c.commandModel(context.Background(), "gpt-6.1-luna", nil, io.Discard)
 	s, handoff, model := c.session, c.session.handoff, c.session.model
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	info, _ := findModel("gpt-6.1-sol")
 	_, err := c.transitionModel(&cancelAfterValidation{Context: ctx, cancel: cancel}, info, false)
-	if err != context.Canceled || c.session != s || s.handoff != handoff || s.model != model || s.cfg.Model != "gpt-6-luna" {
+	if err != context.Canceled || c.session != s || s.handoff != handoff || s.model != model || s.cfg.Model != "gpt-6.1-luna" {
 		t.Fatalf("post-validation cancellation committed: %v, %+v", err, s)
 	}
 }
@@ -355,13 +355,13 @@ func TestModelSwitch_CalibratedAdmissionAndCompactOffer(t *testing.T) {
 		rate              float64
 		admitted          bool
 	}{
-		{"review reproduction", "gpt-6-luna", 600_000, 0, true},
-		{"unknown measurement", "gpt-6-luna", 2_400_000, 0, false},
-		{"measured with margin", "gpt-6-luna", 2_400_000, 0.211, true},
-		{"dense tokens", "gpt-6-luna", 600_000, 1, true},
-		{"dense tokens overflow", "gpt-6-luna", 800_000, 1, false},
+		{"review reproduction", "gpt-6.1-luna", 600_000, 0, true},
+		{"unknown measurement", "gpt-6.1-luna", 2_400_000, 0, false},
+		{"measured with margin", "gpt-6.1-luna", 2_400_000, 0.211, true},
+		{"dense tokens", "gpt-6.1-luna", 600_000, 1, true},
+		{"dense tokens overflow", "gpt-6.1-luna", 800_000, 1, false},
 		{"provider change uses fallback", "claude-haiku-4-5", 400_000, 0.1, false},
-		{"minimum estimate", "gpt-6-luna", 4_200_000, 0.001, false},
+		{"minimum estimate", "gpt-6.1-luna", 4_200_000, 0.001, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			c := newConversation(t, "gpt-6.1-sol", "medium", 1)
@@ -425,7 +425,7 @@ func TestModelSwitch_ReasoningBytesDoNotDiluteAdmission(t *testing.T) {
 			if s.tokensPerByte != want || string(mustJSON(t, s.history[:2])) != before {
 				t.Fatal("measurement changed native state or counted reasoning bytes")
 			}
-			info, _ := findModel("gpt-6-luna")
+			info, _ := findModel("gpt-6.1-luna")
 			if s.cfg.Provider == anthropicName {
 				info, _ = findModel("claude-opus-5-5")
 			}
@@ -454,12 +454,12 @@ func TestModelSwitch_CalibrationIgnoresSourceOnlyReasoning(t *testing.T) {
 	s := c.session
 	s.history[1].Assistant.Native.Items = append(s.history[1].Assistant.Native.Items,
 		json.RawMessage(`{"type":"reasoning","encrypted_content":"`+strings.Repeat("A", 2_000_000)+`"}`))
-	c.commandModel(context.Background(), "gpt-6-luna", nil, io.Discard)
+	c.commandModel(context.Background(), "gpt-6.1-luna", nil, io.Discard)
 	if s.handoff == nil {
 		t.Fatal("switch did not create an outgoing view")
 	}
 	before := string(mustJSON(t, s.history))
-	response := autoTestReply("gpt-6-luna", textBlock("done"))
+	response := autoTestReply("gpt-6.1-luna", textBlock("done"))
 	response.Usage.InputTokens = 500
 	model := &requestRecorder{ScriptedModel: NewScriptedModel(response)}
 	s.model = model
@@ -500,8 +500,8 @@ func TestModelSwitch_AdmissionUsesReportedGenerationBytes(t *testing.T) {
 	if s.tokensPerByte != want {
 		t.Fatal("effort change discarded measurement")
 	}
-	c.commandModel(context.Background(), "gpt-6-luna", nil, io.Discard)
-	if s.cfg.Model != "gpt-6-luna" || s.tokensPerByte != 0 {
+	c.commandModel(context.Background(), "gpt-6.1-luna", nil, io.Discard)
+	if s.cfg.Model != "gpt-6.1-luna" || s.tokensPerByte != 0 {
 		t.Fatal("calibrated switch failed or retained measurement")
 	}
 	s.tokensPerByte = want
@@ -529,8 +529,8 @@ func TestModelSwitch_ExecTimeoutAfterModelReplyCanBeProjected(t *testing.T) {
 		t.Fatalf("unresolved timeout was accepted: %v", err)
 	}
 	var stderr bytes.Buffer
-	c.commandModel(context.Background(), "gpt-6-luna", nil, &stderr)
-	if c.session.cfg.Model != "gpt-6-luna" || c.session.handoff == nil || strings.Contains(stderr.String(), "switch failed") {
+	c.commandModel(context.Background(), "gpt-6.1-luna", nil, &stderr)
+	if c.session.cfg.Model != "gpt-6.1-luna" || c.session.handoff == nil || strings.Contains(stderr.String(), "switch failed") {
 		t.Fatalf("acknowledged timeout blocked switch: %s", stderr.String())
 	}
 	var records []transcriptEntry

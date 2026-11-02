@@ -15,8 +15,8 @@ func TestContextWindow_CapsKnownModelsAndAdmitsUnknown(t *testing.T) {
 		model     string
 		cap, want int64
 	}{
-		{"gpt-6-sol", 0, 1_050_000},
-		{"gpt-6-sol", 70_000, 70_000},
+		{"gpt-6.1-sol", 0, 1_050_000},
+		{"gpt-6.1-sol", 70_000, 70_000},
 		{"claude-haiku-4-5", 300_000, 200_000},
 		{"unknown", 70_000, 70_000},
 		{"unknown", 0, 0},
@@ -88,7 +88,7 @@ func TestSessionStore_ContextWindowSurvivesResume(t *testing.T) {
 
 func TestChat_ContextWindowStatusAndAutomaticCompaction(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.Provider, cfg.Model, cfg.ContextWindowTokens = openaiName, "gpt-6-sol", 70_000
+	cfg.Provider, cfg.Model, cfg.ContextWindowTokens = openaiName, "gpt-6.1-sol", 70_000
 	s := NewSession(cfg, NewScriptedModel(), NewTrace(io.Discard), io.Discard)
 	s.history = []Entry{{Kind: EntryUser, User: &UserTurn{Text: "task"}}}
 	s.lastRequest = Usage{Known: true, InputTokens: 56_000}
@@ -123,14 +123,14 @@ func TestAgents_ContextWindowInherited(t *testing.T) {
 }
 
 func TestModelSwitch_ContextWindowAdmission(t *testing.T) {
-	c := newConversation(t, "gpt-6-sol", "low", 1)
+	c := newConversation(t, "gpt-6.1-sol", "low", 1)
 	c.session.cfg.ContextWindowTokens = 70_000
 	c.session.history[0].User.Text = strings.Repeat("x", 150_000)
-	info, _ := findModel("gpt-6-luna")
+	info, _ := findModel("gpt-6.1-luna")
 	if _, err := c.transitionModel(context.Background(), info, false); err == nil {
 		t.Fatal("model switch ignored the testing window")
 	}
-	if c.session.cfg.Model != "gpt-6-sol" {
+	if c.session.cfg.Model != "gpt-6.1-sol" {
 		t.Fatal("failed admission changed the model")
 	}
 	c.session.history[0].User.Text = "small task"
@@ -195,7 +195,7 @@ func TestMain_ContextEnvironmentDoesNotOverrideResume(t *testing.T) {
 			t.Setenv("REAGENT_CONTEXT_GC_AGE_STEPS", test.envAge)
 			t.Setenv("REAGENT_CONTEXT_GC_CONSOLIDATE", test.envConsol)
 			cfg := testConfig(t)
-			cfg.Provider, cfg.Model, cfg.WorkspacePath = openaiName, "gpt-6-sol", t.TempDir()
+			cfg.Provider, cfg.Model, cfg.WorkspacePath = openaiName, "gpt-6.1-sol", t.TempDir()
 			cfg.ContextWindowTokens, cfg.ContextGC = 70_000, test.gc
 			cfg.ContextGCAgeSteps, cfg.ContextGCConsolidate = test.age, test.consolidate
 			s := NewSession(cfg, NewScriptedModel(), NewTrace(io.Discard), io.Discard)

@@ -48,13 +48,13 @@ func newAutoRouting(cfg Config, key string, keys map[string]string, proxy apiPro
 	a := &autoRouting{enabled: true, jev: newJevClient(key, "", client), fallback: fallback, proxy: proxy, usage: Usage{Known: true}, models: make(map[string]Model)}
 	// v0 §10 amendment (2026-10-02): one Choice over at most eight joint pairs.
 	a.routes = append(a.routes, fallback)
-	for _, modelID := range []string{"gpt-6-luna", "gpt-6-sol", cfg.Model} {
+	for _, modelID := range []string{"gpt-6.1-luna", "gpt-6.1-sol", cfg.Model} {
 		model, known := findModel(modelID)
 		if !known || model.ContextWindow == 0 || !providerAvailable(model.Provider, keys, proxy, cfg.chatGPTSource) {
 			continue
 		}
 		for _, effort := range []string{"low", "medium", "high"} {
-			if !model.accepts(effort) || (modelID != "gpt-6-luna" && modelID != "gpt-6-sol" && effort != "high") {
+			if !model.accepts(effort) || (modelID != "gpt-6.1-luna" && modelID != "gpt-6.1-sol" && effort != "high") {
 				continue
 			}
 			duplicate := false
@@ -90,9 +90,9 @@ func autoRouteDescription(model, effort string) string {
 	}
 	modelDescription := "Configured model."
 	switch model {
-	case "gpt-6-luna":
+	case "gpt-6.1-luna":
 		modelDescription = "Designated faster model; do not assume high effort equals the stronger model."
-	case "gpt-6-sol":
+	case "gpt-6.1-sol":
 		modelDescription = "Stronger model for work that needs more capability than the faster model provides."
 	}
 	return fmt.Sprintf("%s / %s. %s %s", model, effort, modelDescription, description)
@@ -155,9 +155,9 @@ func autoCheapestSufficient(routes []jevRoute, probabilities map[string]float64)
 	ladder := append([]jevRoute(nil), routes...)
 	rank := func(route jevRoute) int {
 		switch route.Model {
-		case "gpt-6-luna":
+		case "gpt-6.1-luna":
 			return 0
-		case "gpt-6-sol":
+		case "gpt-6.1-sol":
 			return 1
 		default:
 			return 2

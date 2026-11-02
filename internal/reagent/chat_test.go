@@ -89,7 +89,7 @@ func TestChat_FrictionSendsTheReviewPrompt(t *testing.T) {
 func TestChat_FrictionBlockedAndExtraArgumentsSpendNothing(t *testing.T) {
 	for _, blocked := range []string{"", string(StatusProtocolError)} {
 		model := &compactModel{}
-		c := newConversation(t, "gpt-6-luna", "low", 0)
+		c := newConversation(t, "gpt-6.1-luna", "low", 0)
 		c.session.model, c.session.blocked = model, blocked
 		input := "/friction extra\n/exit\n"
 		want := "usage: /friction"
@@ -118,7 +118,7 @@ func TestChat_FrictionAutoCompactsBeforeReview(t *testing.T) {
 
 func TestChat_ReportFrictionCapSurvivesResetAndModel(t *testing.T) {
 	tool := NewReportFrictionTool()
-	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c := newConversation(t, "gpt-6.1-luna", "low", 0)
 	cfg := testConfig(t, tool)
 	cfg.ReportFriction = true
 	c.session.cfg.Registry, c.session.cfg.ReportFriction = cfg.Registry, true
@@ -665,7 +665,7 @@ func TestChat_PlanWithTextSendsInPlanMode(t *testing.T) {
 }
 
 func TestChat_PlanSurvivesResetAndModel(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c := newConversation(t, "gpt-6.1-luna", "low", 0)
 	c.session.planMode = true
 	c.session.Reset()
 	if !c.session.planMode {
@@ -763,7 +763,7 @@ func newConversation(t *testing.T, model, effort string, turns int) *conversatio
 }
 
 func TestChat_ProjectInstructionsSurviveSwitchAndReset(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 1)
+	c := newConversation(t, "gpt-6.1-luna", "low", 1)
 	project := "launch-time instructions\n"
 	c.session.cfg.ProjectInstructions = &project
 	c.session.cfg.ProjectInstructions = &project
@@ -778,7 +778,7 @@ func TestChat_ProjectInstructionsSurviveSwitchAndReset(t *testing.T) {
 }
 
 func TestChat_ModelPickerSwitches(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 1)
+	c := newConversation(t, "gpt-6.1-luna", "low", 1)
 	before := c.session
 	input := &fakeLineReader{chosen: 1}
 	input.reads = append(input.reads, struct {
@@ -792,13 +792,13 @@ func TestChat_ModelPickerSwitches(t *testing.T) {
 	if input.chooseCalls != 1 || !input.choiceConfig.shortcuts || input.choiceCurrent != 0 || c.session.cfg.Model != modelCatalog[1].ID || c.session != before || c.session.Turns() != 1 || out.Len() != 0 {
 		t.Fatalf("picker calls %d, current %d, model %s, output %q", input.chooseCalls, input.choiceCurrent, c.session.cfg.Model, out.String())
 	}
-	if len(c.session.history) != 2 || c.session.handoff == nil || !strings.Contains(errs.String(), "switched to gpt-6-sol") || !strings.Contains(errs.String(), "carried 2 entries") {
+	if len(c.session.history) != 2 || c.session.handoff == nil || !strings.Contains(errs.String(), "switched to gpt-6.1-sol") || !strings.Contains(errs.String(), "carried 2 entries") {
 		t.Fatalf("stderr: %s", errs.String())
 	}
 }
 
 func TestChat_ModelPickerCancelKeepsTheModel(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 2)
+	c := newConversation(t, "gpt-6.1-luna", "low", 2)
 	before := c.session
 	input := &fakeLineReader{chooseErr: errCancelled}
 	input.reads = append(input.reads, struct {
@@ -809,7 +809,7 @@ func TestChat_ModelPickerCancelKeepsTheModel(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d", code)
 	}
-	if c.session != before || c.session.Turns() != 2 || strings.TrimSpace(errs.String()) != "kept gpt-6-luna" {
+	if c.session != before || c.session.Turns() != 2 || strings.TrimSpace(errs.String()) != "kept gpt-6.1-luna" {
 		t.Fatalf("session changed or wrong result: %s", errs.String())
 	}
 }
@@ -823,7 +823,7 @@ func TestChat_ModelPickerTitleMentionsHistoricalText(t *testing.T) {
 		{0, "Select a model"},
 		{2, "Select a model · carries text; /model N fresh discards"},
 	} {
-		c := newConversation(t, "gpt-6-luna", "low", test.turns)
+		c := newConversation(t, "gpt-6.1-luna", "low", test.turns)
 		input := &fakeLineReader{chooseErr: errCancelled}
 		c.commandModel(context.Background(), "", input, io.Discard)
 		if input.choiceTitle != test.title {
@@ -834,20 +834,20 @@ func TestChat_ModelPickerTitleMentionsHistoricalText(t *testing.T) {
 
 func TestChat_ModelWithoutATerminalPrintsTheList(t *testing.T) {
 	model := &requestRecorder{ScriptedModel: NewScriptedModel(turn(textBlock("reply")))}
-	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c := newConversation(t, "gpt-6.1-luna", "low", 0)
 	c.session = NewSession(c.session.cfg, model, NewTrace(io.Discard), io.Discard)
 	var out, errs bytes.Buffer
 	input := newLineReader(strings.NewReader("/model\n2\n"), &errs, nil)
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if len(model.requests) != 1 || model.requests[0].History[0].User.Text != "2" || c.session.cfg.Model != "gpt-6-luna" || !strings.Contains(errs.String(), "/model <number or name> switches\n") {
+	if len(model.requests) != 1 || model.requests[0].History[0].User.Text != "2" || c.session.cfg.Model != "gpt-6.1-luna" || !strings.Contains(errs.String(), "/model <number or name> switches\n") {
 		t.Fatalf("requests %+v; stderr %s", model.requests, errs.String())
 	}
 }
 
 func TestChat_EffortPickerKeepsSession(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 2)
+	c := newConversation(t, "gpt-6.1-luna", "low", 2)
 	before := c.session
 	input := &fakeLineReader{chosen: 3}
 	input.reads = append(input.reads, struct {
@@ -864,7 +864,7 @@ func TestChat_EffortPickerKeepsSession(t *testing.T) {
 }
 
 func TestChat_EffortPickerCancelWithUnsetEffort(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "", 1)
+	c := newConversation(t, "gpt-6.1-luna", "", 1)
 	before := c.session
 	input := &fakeLineReader{chooseErr: errCancelled}
 	input.reads = append(input.reads, struct {
@@ -875,7 +875,7 @@ func TestChat_EffortPickerCancelWithUnsetEffort(t *testing.T) {
 	if code := chat(context.Background(), c, input, &out, &errs); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if input.choiceCurrent != 1 || c.session.cfg.ReasoningEffort != "" || c.session != before || c.session.Turns() != 1 || strings.TrimSpace(errs.String()) != "kept provider default" {
+	if input.choiceCurrent != 2 || c.session.cfg.ReasoningEffort != "" || c.session != before || c.session.Turns() != 1 || strings.TrimSpace(errs.String()) != "kept provider default" {
 		t.Fatalf("cursor %d, effort %q, session %p/%p, stderr %q", input.choiceCurrent, c.session.cfg.ReasoningEffort, c.session, before, errs.String())
 	}
 }
@@ -1013,7 +1013,7 @@ func TestChat_StatusReportsSessionState(t *testing.T) {
 func TestChat_OverflowOnlyOffersReset(t *testing.T) {
 	var out, errs bytes.Buffer
 	cfg := testConfig(t)
-	cfg.Model = "gpt-6-luna"
+	cfg.Model = "gpt-6.1-luna"
 	model := &failingThen{
 		err:  &ModelError{Status: StatusLimitExceeded, Message: "the conversation no longer fits the model's context window", Usage: Usage{Known: true, InputTokens: 700_000}},
 		next: NewScriptedModel(),
@@ -1032,7 +1032,7 @@ func TestChat_OverflowOnlyOffersReset(t *testing.T) {
 }
 
 func TestChat_WindowMeterInStatusAndContext(t *testing.T) {
-	c := newConversation(t, "gpt-6-luna", "low", 0)
+	c := newConversation(t, "gpt-6.1-luna", "low", 0)
 	c.session.lastRequest = Usage{Known: true, InputTokens: 152_300, CachedInputTokens: 90_000}
 	var status, context bytes.Buffer
 	c.commandStatus(&status)
@@ -1391,8 +1391,8 @@ func TestChat_FailedCompactDoesNotClaimSuccess(t *testing.T) {
 }
 
 func TestConversation_ModelSwitchArgumentValidation(t *testing.T) {
-	for _, argument := range []string{"2 wrong", "2 fresh extra", "gpt-6-luna fresh", "fresh"} {
-		c := newConversation(t, "gpt-6-luna", "low", 1)
+	for _, argument := range []string{"2 wrong", "2 fresh extra", "gpt-6.1-luna fresh", "fresh"} {
+		c := newConversation(t, "gpt-6.1-luna", "low", 1)
 		before := c.session
 		model := &compactModel{}
 		before.model = model
@@ -1406,7 +1406,7 @@ func TestConversation_ModelSwitchArgumentValidation(t *testing.T) {
 
 func autoCompactConversation(t *testing.T, model Model, lastInput int64) *conversation {
 	t.Helper()
-	c := newConversation(t, "gpt-6-luna", "low", 1)
+	c := newConversation(t, "gpt-6.1-luna", "low", 1)
 	c.session.model = model
 	c.session.lastRequest = Usage{Known: true, InputTokens: lastInput}
 	c.usage = Usage{Known: true}

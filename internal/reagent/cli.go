@@ -228,7 +228,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		return usage(stderr, command, err.Error())
 	}
 	if options.auto && options.provider == "" && options.model == "" && os.Getenv("REAGENT_MODEL") == "" {
-		options.model = "gpt-6-sol"
+		options.model = "gpt-6.1-sol"
 		explicitEffort := false
 		fs.Visit(func(f *flag.Flag) {
 			if f.Name == "reasoning-effort" {
@@ -496,7 +496,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.showContext, "show-context", false, "print the request the first step would send, then exit")
 	fs.BoolVar(&o.readOnly, "read-only", false, "withhold write and exec tools; only allow reading")
 	fs.BoolVar(&o.plan, "plan", false, "start in plan mode; model edits and commands are refused")
-	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6-sol/medium")
+	fs.BoolVar(&o.auto, "auto", false, "opt in to TypeSafe routing; default fallback gpt-6.1-sol/medium")
 	fs.BoolVar(&o.inRunCompact, "in-run-compact", false, "opt in to bounded compaction within a long run; default off")
 	fs.BoolVar(&o.contextGC, "context-gc", true, "lossless context GC with recall; default on, disable with --context-gc=false")
 	fs.DurationVar(&o.modelRetryWindow, "model-retry-window", 0, "keep retrying transient model failures within this window (e.g. 12h); 0 disables")

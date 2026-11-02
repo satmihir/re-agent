@@ -1517,7 +1517,7 @@ mod tests {
     fn root_reset_releases_retired_agent_trees() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::new(
-            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
         )
         .unwrap();
         for _ in 0..3 {
@@ -1586,7 +1586,7 @@ mod tests {
         for trace_bytes in [136, 168] {
             let dir = tempfile::tempdir().unwrap();
             let mut session = Session::new(
-                json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+                json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
             )
             .unwrap();
             {
@@ -1643,7 +1643,7 @@ mod tests {
         for (candidate_bytes, expected_count) in [(32767, 2), (32768, 2), (32769, 1), (66000, 0)] {
             let dir = tempfile::tempdir().unwrap();
             let mut session = Session::new(
-                json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+                json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
             )
             .unwrap();
             let shared = tree(&session);
@@ -1693,7 +1693,7 @@ mod tests {
     fn subtree_pages_serialize_optional_offset_before_accounting_complete() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::new(
-            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
         )
         .unwrap();
         {
@@ -1848,7 +1848,7 @@ mod tests {
                 write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             }
         });
-        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"trace_dir":dir.path(),"agents":true})).unwrap();
+        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"trace_dir":dir.path(),"agents":true})).unwrap();
         let spawned = spawn(
             &mut session,
             &json!({"task":"write then report","context":{},"name":"worker","authority":"write"}),
@@ -2032,7 +2032,7 @@ mod tests {
         let script = dir.path().join("script.json");
         std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"done"}]}]"#).unwrap();
         for context in [json!({"fork":true}), json!({"entries":[3]}), json!({})] {
-            let mut session = Session::new(json!({"provider":"scripted","model":"gpt-6-sol","scripted":script,"workspace":dir.path(),"trace_dir":dir.path(),"agents":true,"context_gc":true,"context_window_tokens":200000})).unwrap();
+            let mut session = Session::new(json!({"provider":"scripted","model":"gpt-6.1-sol","scripted":script,"workspace":dir.path(),"trace_dir":dir.path(),"agents":true,"context_gc":true,"context_window_tokens":200000})).unwrap();
             session.history = vec![
                 json!({"kind":"user","user":{"text":"inspect"}}),
                 json!({"kind":"assistant","assistant":{"blocks":[{"kind":"tool_call","call":{"call_id":"old-read","name":"read_file","arguments":"{\"path\":\"evidence\"}"}}],"native":{"provider":"openai.responses","items":[{"type":"function_call","call_id":"old-read","name":"read_file","arguments":"{\"path\":\"evidence\"}"}]}}}),
@@ -2072,7 +2072,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for working in [false, true] {
             for plan in [false, true] {
-                let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true,"plan":true})).unwrap();
+                let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true,"plan":true})).unwrap();
                 let shared = tree(&session);
                 let mut node = stopped_node("t1", "root");
                 node.working = working;
@@ -2101,7 +2101,7 @@ mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
         let dir = tempfile::tempdir().unwrap();
         for action in ["cancel", "dismiss", "reset"] {
-            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true})).unwrap();
+            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true})).unwrap();
             let shared = tree(&session);
             let token = Arc::new(AtomicBool::new(false));
             let mut node = stopped_node("t1", "root");
@@ -2186,7 +2186,7 @@ mod tests {
             paths.extend(std::env::split_paths(&path));
             std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
             let trace_dir = dir.path().join("traces");
-            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"trace_dir":trace_dir,"agents":true})).unwrap();
+            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"trace_dir":trace_dir,"agents":true})).unwrap();
             session
                 .history
                 .push(json!({"kind":"user","user":{"text":"prior evidence"}}));
@@ -2372,7 +2372,7 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let trace_dir = dir.path().join("traces");
-            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"trace_dir":trace_dir,"agents":true,"context_window_tokens":window})).unwrap();
+            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"trace_dir":trace_dir,"agents":true,"context_window_tokens":window})).unwrap();
             session.state["current_run"] = json!(true);
             session.history = vec![
                 json!({"kind":"user","user":{"text":"historical task"}}),
@@ -2635,7 +2635,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true,"_display":true})).unwrap();
+        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true,"_display":true})).unwrap();
         let shared = tree(&session);
         shared.tree.lock().unwrap().nodes.insert("t1".into(), Node {
             record: json!({"id":"t1","parent_id":"root","name":"worker","state":"running","steps":0}),
@@ -2727,7 +2727,7 @@ mod tests {
     fn display_snapshot_counts_all_workers_and_resolves_only_direct_targets() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::new(
-            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
         )
         .unwrap();
         let shared = tree(&session);
@@ -2891,7 +2891,7 @@ mod tests {
     fn undelivered_effects_are_visible_in_parent_roster_until_delivery() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::new(
-            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
         )
         .unwrap();
         let result = json!({"id":"t1","run_id":"child-run","result":{"effects":[{"effect":"applied","tool":"write_file","paths":["f"]}]}});
@@ -2942,12 +2942,12 @@ mod tests {
     #[test]
     fn child_launch_keeps_snapshot_restriction_and_resolves_only_changed_model_effort() {
         let dir = tempfile::tempdir().unwrap();
-        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","reasoning_effort":"high","workspace":dir.path(),"plan":true})).unwrap();
+        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","reasoning_effort":"high","workspace":dir.path(),"plan":true})).unwrap();
         for authority in ["read", "write"] {
             for (model, effort) in [
                 ("", "high"),
-                ("gpt-6-sol", "high"),
-                ("gpt-6-luna", "low"),
+                ("gpt-6.1-sol", "high"),
+                ("gpt-6.1-luna", "medium"),
                 ("claude-haiku-4-5", ""),
                 ("claude-future", ""),
             ] {
@@ -2973,10 +2973,10 @@ mod tests {
     fn selected_entries_keep_transcript_field_order_and_trust() {
         let dir = tempfile::tempdir().unwrap();
         let mut session =
-            Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path()}))
+            Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path()}))
                 .unwrap();
         session.history = vec![
-            json!({"kind":"assistant","assistant":{"model":"gpt-6-sol","response_id":"response","native":{"provider":"openai.responses","items":[{"opaque":true}]},"blocks":[{"kind":"tool_call","call":{"call_id":"read","name":"read_file","arguments":"{}"}}]}}),
+            json!({"kind":"assistant","assistant":{"model":"gpt-6.1-sol","response_id":"response","native":{"provider":"openai.responses","items":[{"opaque":true}]},"blocks":[{"kind":"tool_call","call":{"call_id":"read","name":"read_file","arguments":"{}"}}]}}),
             json!({"kind":"tool","tool":{"call_id":"read","name":"read_file","outcome":{"ok":true}}}),
             json!({"kind":"assistant","assistant":{"blocks":[]}}),
         ];
@@ -2990,7 +2990,7 @@ mod tests {
         assert_eq!(mode, "selected_text");
         assert_eq!(
             prompt.rsplit('\n').next().unwrap(),
-            r#"[{"entry":1,"kind":"assistant","assistant":{"model":"gpt-6-sol","provider":"openai.responses","response_id":"response","blocks":[{"kind":"tool_call","call":{"call_id":"read","name":"read_file","arguments":"{}"}}],"omitted_native_items":1}},{"entry":2,"trust":"untrusted_tool_data","kind":"tool","tool":{"call_id":"read","name":"read_file","outcome":{"ok":true}}}]"#
+            r#"[{"entry":1,"kind":"assistant","assistant":{"model":"gpt-6.1-sol","provider":"openai.responses","response_id":"response","blocks":[{"kind":"tool_call","call":{"call_id":"read","name":"read_file","arguments":"{}"}}],"omitted_native_items":1}},{"entry":2,"trust":"untrusted_tool_data","kind":"tool","tool":{"call_id":"read","name":"read_file","outcome":{"ok":true}}}]"#
         );
     }
 
@@ -3129,7 +3129,7 @@ mod tests {
             );
             std::env::set_var("OPENAI_API_KEY", "local-test-key");
             config["provider"] = json!("openai");
-            config["model"] = json!("gpt-6-sol");
+            config["model"] = json!("gpt-6.1-sol");
             config["scripted"] = json!("");
             let marker = ready.clone();
             server = Some(std::thread::spawn(move || {
@@ -3254,7 +3254,7 @@ mod tests {
     fn agent_decode_retains_occurrence_errors_without_starting_work() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::new(
-            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
         )
         .unwrap();
         for (tool, raw, expected) in [
@@ -3372,8 +3372,8 @@ mod tests {
         for (tool, raw, expected) in [
             (
                 "spawn",
-                r#"{"task":"valid","task":null,"name":"worker","name":null,"model":"gpt-6-sol","model":null,"authority":"write","authority":null,"context":{"brief":"kept","files":["a"],"fork":false},"context":{"brief":null,"entries":[]}}"#,
-                json!({"task":"valid","name":"worker","model":"gpt-6-sol","authority":"write","context":{"brief":"kept","files":["a"],"fork":false,"entries":[]}}),
+                r#"{"task":"valid","task":null,"name":"worker","name":null,"model":"gpt-6.1-sol","model":null,"authority":"write","authority":null,"context":{"brief":"kept","files":["a"],"fork":false},"context":{"brief":null,"entries":[]}}"#,
+                json!({"task":"valid","name":"worker","model":"gpt-6.1-sol","authority":"write","context":{"brief":"kept","files":["a"],"fork":false,"entries":[]}}),
             ),
             (
                 "spawn",
@@ -3436,7 +3436,7 @@ mod tests {
         // RawMessage null is retained, not given the typed-string null behavior.
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::new(
-            json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true}),
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
         )
         .unwrap();
         for (tool, raw, message) in [
@@ -3597,7 +3597,7 @@ mod tests {
             (String::new(), "\\\"<&雪".repeat(20000), json!([]), 0),
         ] {
             let dir = tempfile::tempdir().unwrap();
-            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6-sol","workspace":dir.path(),"agents":true})).unwrap();
+            let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true})).unwrap();
             let result = json!({"id":"t1","name":"worker","run_id":"child-run","result":{"status":"completed","reason":reason,"reply":reply,"steps":1,"tool_calls":0,"usage":crate::types::usage_zero(true),"effects":effects}});
             tree(&session).tree.lock().unwrap().nodes.insert("t1".into(),Node {
                 record:json!({"id":"t1","parent_id":"root","name":"worker","state":"idle","trace_path":"child-trace","cost":crate::types::usage_zero(true)}),

@@ -10,8 +10,7 @@ func TestModelCatalog_ContextWindows(t *testing.T) {
 		id     string
 		window int64
 	}{
-		{"gpt-6-luna", 1_050_000},
-		{"gpt-6-sol", 1_050_000},
+		{"gpt-6.1-luna", 1_050_000},
 		{"gpt-6.1-sol", 1_050_000},
 		{"gpt-5.6-luna", 0},
 		{"gpt-5.6-terra", 0},
@@ -27,7 +26,7 @@ func TestModelCatalog_ContextWindows(t *testing.T) {
 }
 
 func TestModelChoices_AgreeWithTheCatalogAndAvailability(t *testing.T) {
-	choices := modelChoices("gpt-6-luna", map[string]bool{openaiName: true})
+	choices := modelChoices("gpt-6.1-luna", map[string]bool{openaiName: true})
 	if len(choices) != len(modelCatalog) {
 		t.Fatalf("got %d choices", len(choices))
 	}
@@ -73,24 +72,24 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 		t.Fatalf("got %+v %v", byName, err)
 	}
 	byPosition, err := selectModel("1")
-	if err != nil || byPosition.ID != "gpt-6-luna" {
+	if err != nil || byPosition.ID != "gpt-6.1-luna" {
 		t.Fatalf("position 1 got %+v %v", byPosition, err)
 	}
-	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6-sol" {
+	if sol, err := selectModel("2"); err != nil || sol.ID != "gpt-6.1-sol" {
 		t.Fatalf("position 2 got %+v %v", sol, err)
 	}
-	for _, choice := range []string{"8", "gpt-6.1-sol"} {
+	for _, choice := range []string{"2", "gpt-6.1-sol"} {
 		if sol, err := selectModel(choice); err != nil || sol.ID != "gpt-6.1-sol" {
 			t.Fatalf("6.1 Sol selection %q got %+v %v", choice, sol, err)
 		}
 	}
-	for _, choice := range []string{"9", "gpt-6.1-terra"} {
+	for _, choice := range []string{"8", "gpt-6.1-terra"} {
 		terra, err := selectModel(choice)
 		if err != nil || terra.ID != "gpt-6.1-terra" || terra.Effort != "" || terra.ContextWindow != 0 {
 			t.Fatalf("6.1 Terra selection %q got %+v %v", choice, terra, err)
 		}
 	}
-	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", ""} {
+	for _, choice := range []string{"0", "99", "-1", "gpt-nonexistent", "gpt-6-luna", "gpt-6-sol", ""} {
 		if _, err := selectModel(choice); err == nil {
 			t.Fatalf("%q was accepted", choice)
 		}
@@ -129,10 +128,9 @@ func TestRenderModels_MarksCurrentAndUnusable(t *testing.T) {
 	listing := renderModels("gpt-5.6-luna", map[string]bool{openaiName: true})
 
 	for _, want := range []string{
-		"1  gpt-6-luna        openai",
-		"2  gpt-6-sol         openai",
-		"8  gpt-6.1-sol       openai",
-		"9  gpt-6.1-terra     openai",
+		"1  gpt-6.1-luna      openai",
+		"2  gpt-6.1-sol       openai",
+		"8  gpt-6.1-terra     openai",
 		"3  gpt-5.6-luna      openai     current",
 		"5  claude-haiku-4-5  anthropic  no key",
 		"7  claude-opus-5-5   anthropic  no key",
@@ -176,8 +174,7 @@ func TestModelCatalog_EffortSupport(t *testing.T) {
 	}{
 		{"gpt-5.6-luna", "none,low,medium,high,xhigh,max"},
 		{"gpt-5.6-terra", "none,low,medium,high,xhigh,max"},
-		{"gpt-6-luna", "none,low,medium,high,xhigh,max"},
-		{"gpt-6-sol", "none,low,medium,high,xhigh,max"},
+		{"gpt-6.1-luna", "none,low,medium,high,xhigh,max"},
 		{"gpt-6.1-sol", "low,medium,high,xhigh,max"},
 		{"gpt-6.1-terra", ""},
 		{"claude-haiku-4-5", ""},
