@@ -217,3 +217,83 @@ fn context_gc_is_default_and_can_be_disabled() {
         );
     }
 }
+
+#[test]
+fn agents_are_default_and_can_be_disabled() {
+    for provider in ["openai", "anthropic"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut default = Vec::new();
+        for (flags, enabled) in [
+            (vec![], true),
+            (vec!["--agents=false"], false),
+            (vec!["--agents"], true),
+        ] {
+            let output = reagent(root.path())
+                .args(["run", "--show-context", "--provider", provider])
+                .args(&flags)
+                .arg("task")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let request: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let tools = request["tools"].as_array().unwrap();
+            for name in [
+                "spawn", "send", "wait", "threads", "cancel", "dismiss", "reset",
+            ] {
+                assert_eq!(
+                    tools.iter().any(|tool| tool["name"] == name),
+                    enabled,
+                    "{provider} {flags:?} {name}"
+                );
+            }
+            if flags.is_empty() {
+                default = output.stdout;
+            } else if enabled {
+                assert_eq!(output.stdout, default);
+            }
+        }
+    }
+}
+
+#[test]
+fn scripted_replay_keeps_agents_disabled() {
+    for mode in ["run", "chat"] {
+        for flags in [vec![], vec!["--agents=false"], vec!["--agents"]] {
+            let root = tempfile::tempdir().unwrap();
+            let script = root.path().join("responses.json");
+            std::fs::write(
+                &script,
+                r#"[{"blocks":[{"kind":"text","text":"offline reply"}]}]"#,
+            )
+            .unwrap();
+            let input = root.path().join("input");
+            std::fs::write(&input, "task\n/exit\n").unwrap();
+            let mut command = reagent(root.path());
+            command
+                .args([mode, "--scripted"])
+                .arg(script)
+                .args(&flags)
+                .stdin(std::fs::File::open(input).unwrap());
+            if mode == "run" {
+                command.arg("task");
+            }
+            let output = command.output().unwrap();
+            if flags == ["--agents"] {
+                assert_eq!(output.status.code(), Some(2));
+                assert!(String::from_utf8_lossy(&output.stderr)
+                    .contains("--agents cannot be combined with --scripted"));
+                continue;
+            }
+            assert!(
+                output.status.success(),
+                "{mode} {flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("offline reply"));
+        }
+    }
+}

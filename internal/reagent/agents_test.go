@@ -435,10 +435,10 @@ func TestAgents_RosterSurvivesCompactionModelSwitchAndResume(t *testing.T) {
 	}
 }
 
-func TestAgents_OptInAndDisabledRequestBytes(t *testing.T) {
+func TestAgents_DefaultOnAndExplicitOptOut(t *testing.T) {
 	root := t.TempDir()
-	var disabled, explicit bytes.Buffer
 	for _, provider := range []string{openaiName, anthropicName} {
+		var enabled, explicit bytes.Buffer
 		for _, flag := range []string{"", "--agents=false", "--agents"} {
 			var out, stderr bytes.Buffer
 			args := []string{"run", "--workspace", root, "--provider", provider, "--show-context"}
@@ -449,18 +449,18 @@ func TestAgents_OptInAndDisabledRequestBytes(t *testing.T) {
 			if code := Main(context.Background(), args, strings.NewReader(""), &out, &stderr); code != 0 {
 				t.Fatalf("preview %d %s", code, stderr.String())
 			}
-			if strings.Contains(out.String(), `"name":"spawn"`) != (flag == "--agents") {
-				t.Fatal("opt-in declaration")
+			if strings.Contains(out.String(), `"name":"spawn"`) != (flag != "--agents=false") {
+				t.Fatalf("agent declaration for %s %q", provider, flag)
 			}
 			if flag == "" {
-				disabled = out
+				enabled = out
 			}
-			if flag == "--agents=false" {
+			if flag == "--agents" {
 				explicit = out
 			}
 		}
-		if !bytes.Equal(disabled.Bytes(), explicit.Bytes()) {
-			t.Fatal("disabled request bytes changed")
+		if !bytes.Equal(enabled.Bytes(), explicit.Bytes()) {
+			t.Fatal("default and explicit agent request bytes differ")
 		}
 	}
 	var out, stderr bytes.Buffer
@@ -1079,6 +1079,40 @@ func TestAgentTools_SpawnDescribesContextCost(t *testing.T) {
 	for _, want := range []string{"resends its context", "omit fork and entries and write a complete brief", "batch later amendments into one send"} {
 		if !strings.Contains(spawn, want) {
 			t.Errorf("spawn description lacks %q", want)
+		}
+	}
+}
+
+func TestAgents_ScriptedReplayStaysOffline(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	script := filepath.Join(t.TempDir(), "responses.json")
+	responses, err := json.Marshal([]ModelResponse{turn(textBlock("offline reply"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, responses, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"run", "chat"} {
+		for _, flag := range []string{"", "--agents=false", "--agents"} {
+			var out, stderr bytes.Buffer
+			args := []string{command, "--workspace", t.TempDir(), "--scripted", script}
+			if flag != "" {
+				args = append(args, flag)
+			}
+			if command == "run" {
+				args = append(args, "task")
+			}
+			code := Main(context.Background(), args, strings.NewReader("task\n/exit\n"), &out, &stderr)
+			if flag == "--agents" {
+				if code != exitUsage || !strings.Contains(stderr.String(), "--agents cannot be combined with --scripted") {
+					t.Fatalf("%s %q: exit %d: %s", command, flag, code, stderr.String())
+				}
+				continue
+			}
+			if code != exitOK || !strings.Contains(out.String(), "offline reply") {
+				t.Fatalf("%s %q: exit %d: %s", command, flag, code, stderr.String())
+			}
 		}
 	}
 }

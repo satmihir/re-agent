@@ -628,7 +628,7 @@ class Session:
             elif context_gc:
                 args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6.1-sol"]
             elif agents:
-                args += ["--agents", "--recap", "--no-project-instructions", "--model", "gpt-6.1-sol"]
+                args += ["--recap", "--no-project-instructions", "--model", "gpt-6.1-sol"]
             elif retry:
                 args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6.1-luna"]
             elif script_path is None:

@@ -563,6 +563,7 @@ works today. Older design documents are kept for history only.
 | `--model`, `--provider` | Model to use. Falls back to `REAGENT_MODEL`, then the provider's default. |
 | `--reasoning-effort` | Effort from the model's own vocabulary; `auto` for the provider's default. |
 | `--auto` | Opt in to Jev routing; off by default. With no explicit target, fallback is Sol/medium. |
+| `--agents` | Concurrent agents are on by default for `run` and `chat`; disable with `--agents=false`. Scripted replay keeps them off and rejects explicit `--agents`. |
 | `--read-only` | Withhold writing and execution. |
 | `--plan` | Start `run` or `chat` in plan mode; the model may only use read tools. |
 | `--no-project-instructions` | Do not load the workspace root's `AGENTS.md`. |
