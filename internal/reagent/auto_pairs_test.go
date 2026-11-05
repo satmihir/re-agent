@@ -257,7 +257,6 @@ func TestAuto_UnsupportedFallbackRefusesEnablement(t *testing.T) {
 		{"gpt-5.6-luna", openaiName, "medium", map[string]string{openaiName: "fake"}},
 		{"gpt-6.1-sol", openaiName, "none", map[string]string{openaiName: "fake"}},
 		{"claude-haiku-5-5", anthropicName, "high", map[string]string{anthropicName: "fake"}},
-		{"claude-haiku-5-5", anthropicName, "", map[string]string{anthropicName: "fake"}},
 		{"gpt-6.1-sol", openaiName, "medium", nil},
 	} {
 		cfg := autoConfig(t, NewEchoTool())
@@ -293,5 +292,19 @@ func TestAuto_MissingHighCandidateKeepsCurrentOnRouterError(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("router failure fallback was not recorded")
+	}
+}
+
+func TestAuto_ConfirmedWindowsAllowProviderDefaultFallback(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-terra", "claude-haiku-5-5"} {
+		t.Run(model, func(t *testing.T) {
+			info, _ := findModel(model)
+			cfg := autoConfig(t, NewEchoTool())
+			cfg.Model, cfg.Provider, cfg.ReasoningEffort = model, info.Provider, ""
+			keys := map[string]string{openaiName: "fake", anthropicName: "fake"}
+			if _, err := newAutoRouting(cfg, "fake", keys, apiProxy{}, NewHTTPClient(), NewTrace(io.Discard)); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
