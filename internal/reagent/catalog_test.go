@@ -7,7 +7,7 @@ import (
 
 func TestModelCatalog_ContextWindows(t *testing.T) {
 	haiku, found := findModel("claude-haiku-5-5")
-	if !found || haiku.Provider != anthropicName || len(haiku.Efforts) != 0 || haiku.Effort != "" || haiku.Verbosity != "" || haiku.Note != "provider defaults; effort and window unverified" {
+	if !found || haiku.Provider != anthropicName || len(haiku.Efforts) != 0 || haiku.Effort != "" || haiku.Verbosity != "" || haiku.Note != "provider defaults; effort unverified" {
 		t.Fatalf("Haiku metadata: %+v (found %t)", haiku, found)
 	}
 	for _, test := range []struct {
@@ -16,8 +16,8 @@ func TestModelCatalog_ContextWindows(t *testing.T) {
 	}{
 		{"gpt-6.1-luna", 1_050_000},
 		{"gpt-6.1-sol", 1_050_000},
-		{"gpt-6.1-terra", 0},
-		{"claude-haiku-5-5", 0},
+		{"gpt-6.1-terra", 1_050_000},
+		{"claude-haiku-5-5", 1_000_000},
 		{"claude-sonnet-5-5", 1_000_000},
 		{"claude-opus-5-5", 1_000_000},
 	} {
@@ -85,7 +85,7 @@ func TestSelectModel_ByPositionOrName(t *testing.T) {
 	}
 	for _, choice := range []string{"2", "gpt-6.1-terra"} {
 		terra, err := selectModel(choice)
-		if err != nil || terra.ID != "gpt-6.1-terra" || terra.Effort != "" || terra.ContextWindow != 0 {
+		if err != nil || terra.ID != "gpt-6.1-terra" || terra.Effort != "" || terra.ContextWindow != 1_050_000 {
 			t.Fatalf("6.1 Terra selection %q got %+v %v", choice, terra, err)
 		}
 	}

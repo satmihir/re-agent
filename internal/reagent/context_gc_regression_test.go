@@ -336,3 +336,29 @@ func TestContextGC_CanonicalAliasesAndRecentProtection(t *testing.T) {
 		t.Fatal("latest read dropped")
 	}
 }
+
+func TestContextGC_ConfirmedCatalogWindowsCollectWithoutOverride(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-terra", "claude-haiku-5-5"} {
+		t.Run(model, func(t *testing.T) {
+			info, _ := findModel(model)
+			s := gcFixture(t, info.Provider)
+			s.cfg.Model = model
+			out, err := okOutcome(strings.Repeat("obsolete", 10_000))
+			if err != nil {
+				t.Fatal(err)
+			}
+			gcAppend(s, "old", "exec", `{"argv":["same"],"cwd":"."}`, out)
+			gcAppend(s, "new", "exec", `{"argv":["same"],"cwd":"."}`, ToolOutcome{OK: true, Effect: EffectNone})
+			gcAge(s, 15)
+			s.lastRequest = Usage{Known: true, InputTokens: 70_000}
+			s.tokensPerByte, s.gcRequests = 1, 32
+			before := string(mustJSON(t, s.history))
+			if !newRun(s, "catalog-gc").collectContext() {
+				t.Fatal("catalog window did not permit GC without an override")
+			}
+			if string(mustJSON(t, s.history)) != before || !strings.Contains(string(mustJSON(t, s.requestHistory())), "recall old") {
+				t.Fatal("GC lost accepted evidence or failed to project the dropped result")
+			}
+		})
+	}
+}

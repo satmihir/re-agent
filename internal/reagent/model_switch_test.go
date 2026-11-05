@@ -18,6 +18,8 @@ func TestModelSwitch_PreservesSourceAndSessionWithoutGeneration(t *testing.T) {
 		{"gpt-6.1-sol", "gpt-6.1-luna"},
 		{"gpt-6.1-luna", "gpt-6.1-sol"},
 		{"gpt-6.1-sol", "claude-sonnet-5-5"},
+		{"gpt-6.1-sol", "gpt-6.1-terra"},
+		{"gpt-6.1-sol", "claude-haiku-5-5"},
 		{"claude-sonnet-5-5", "gpt-6.1-sol"},
 	} {
 		t.Run(pair[0]+"->"+pair[1], func(t *testing.T) {
@@ -108,8 +110,6 @@ func TestModelSwitch_RefusalPreservesUsableState(t *testing.T) {
 			s.cfg.ContextWindowTokens = 200_000
 			s.history[0].User.Text = strings.Repeat("x", 400_000)
 		}},
-		{"unknown window", "gpt-6.1-terra", "unknown", func(*Session) {}},
-		{"Haiku unknown window", "claude-haiku-5-5", "unknown", func(*Session) {}},
 		{"malformed snapshot", "gpt-6.1-luna", "encode historical", func(s *Session) { s.history[0].User.Workspace = json.RawMessage(`{`) }},
 		{"unsupported block", "gpt-6.1-luna", "unsupported block", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{{Kind: "image"}} }},
 		{"pending call", "gpt-6.1-luna", "unresolved tool batch", func(s *Session) { s.history[1].Assistant.Blocks = []OutputBlock{callBlock("pending", "echo", `{}`)} }},

@@ -86,8 +86,8 @@ func TestJev_InvalidArgumentsNeverSend(t *testing.T) {
 		{"unknown window", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[0].Model = "gpt-5.6-luna" }},
 		{"unsupported effort", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[1].Effort = "none" }},
 		{"unset effort", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[1].Effort = "" }},
-		{"Haiku unknown window", func(_ *jevClient, _ *string, routes *[]jevRoute) {
-			(*routes)[0].Model, (*routes)[0].Effort = "claude-haiku-5-5", ""
+		{"Haiku unsupported effort", func(_ *jevClient, _ *string, routes *[]jevRoute) {
+			(*routes)[0].Model, (*routes)[0].Effort = "claude-haiku-5-5", "low"
 		}},
 		{"blank ID", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[0].ID = " " }},
 		{"blank rubric", func(_ *jevClient, _ *string, routes *[]jevRoute) { (*routes)[0].Description = " " }},
@@ -242,5 +242,17 @@ func TestJev_ActiveCancellationStopsRequest(t *testing.T) {
 	_, err := newJevClient("fake", server.URL, server.Client()).decide(ctx, "synthetic task", jevTestRoutes())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("active cancellation: %v", err)
+	}
+}
+
+func TestJev_ConfirmedWindowsAllowProviderDefaultEffort(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-terra", "claude-haiku-5-5"} {
+		t.Run(model, func(t *testing.T) {
+			routes := jevTestRoutes()
+			routes[0].Model, routes[0].Effort = model, ""
+			if _, err := encodeJevRequest("task", routes); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

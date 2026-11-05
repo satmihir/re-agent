@@ -21,8 +21,8 @@ pub fn models() -> Value {
             &[][..],
             "",
             "",
-            "provider defaults; effort and window unverified",
-            0,
+            "provider defaults; effort unverified",
+            1_050_000,
         ),
         (
             "gpt-6.1-sol",
@@ -39,8 +39,8 @@ pub fn models() -> Value {
             &[][..],
             "",
             "",
-            "provider defaults; effort and window unverified",
-            0,
+            "provider defaults; effort unverified",
+            1_000_000,
         ),
         (
             "claude-sonnet-5-5",
@@ -240,15 +240,12 @@ mod tests {
         assert_eq!(haiku["efforts"], json!([]));
         assert_eq!(haiku["effort"], "");
         assert_eq!(haiku["verbosity"], "");
-        assert_eq!(haiku["context_window"], 0);
-        assert_eq!(
-            haiku["note"],
-            "provider defaults; effort and window unverified"
-        );
+        assert_eq!(haiku["context_window"], 1_000_000);
+        assert_eq!(haiku["note"], "provider defaults; effort unverified");
         let terra = select_model("2").unwrap();
         assert_eq!(terra["id"], "gpt-6.1-terra");
         assert_eq!(terra["effort"], "");
-        assert_eq!(terra["context_window"], 0);
+        assert_eq!(terra["context_window"], 1_050_000);
         let sol = select_model("3").unwrap();
         let luna = select_model("1").unwrap();
         assert_eq!(luna["id"], "gpt-6.1-luna");
@@ -294,7 +291,11 @@ mod tests {
             ("gpt-6.1-luna", 500, 500),
             ("unlisted", 500, 500),
             ("gpt-5.6-luna", 0, 0),
-            ("claude-haiku-5-5", 0, 0),
+            ("claude-haiku-5-5", 0, 1_000_000),
+            ("claude-haiku-5-5", 2_000_000, 1_000_000),
+            ("gpt-6.1-terra", 0, 1_050_000),
+            ("gpt-6.1-terra", 2_000_000, 1_050_000),
+            ("gpt-6.1-terra", 500, 500),
             ("claude-haiku-5-5", 500, 500),
         ] {
             assert_eq!(

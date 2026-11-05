@@ -293,10 +293,11 @@ context window.
 Normal run/chat defaults are **`gpt-6.1-sol` at high effort**; explicit model,
 `REAGENT_MODEL` and effort selections still win. Selecting 6.1 Sol in the picker
 also defaults to high. Opt-in Auto keeps its separate fallback described above.
-`gpt-6.1-terra` is available as model **8** or by name. Its effort support and
-context window are unverified: selection leaves effort/verbosity to the provider,
-and Auto is unavailable until its catalog window is verified. GC passes and
-nonempty model handoffs require a known window or a context-window override.
+`gpt-6.1-terra` is available as model **2** or by name with a **1,050,000-token**
+context window. `claude-haiku-5-5` (model **4**) has a **1,000,000-token** window.
+Both leave effort/verbosity to the provider because effort support remains
+unverified. Their known windows allow GC, Auto and nonempty model handoffs
+without a context-window override.
 
 Context GC is **on by default** for new run/chat sessions. Use
 `--context-gc=false` to disable it. Resume preserves the saved setting, including

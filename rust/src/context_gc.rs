@@ -752,8 +752,13 @@ mod tests {
         }
     }
     #[test]
-    fn switched_gc_commits_the_measured_handoff_and_keeps_recall_evidence() {
-        for provider in ["openai", "anthropic"] {
+    fn switched_gc_uses_catalog_windows_and_keeps_recall_evidence() {
+        for (provider, model) in [
+            ("openai", "gpt-6.1-sol"),
+            ("openai", "gpt-6.1-terra"),
+            ("anthropic", "claude-sonnet-5-5"),
+            ("anthropic", "claude-haiku-5-5"),
+        ] {
             for prefix in [1, 3] {
                 let root = tempfile::tempdir().unwrap();
                 let script = root.path().join("script.json");
@@ -762,9 +767,9 @@ mod tests {
                     br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
                 )
                 .unwrap();
-                let mut session = Session::new(json!({"workspace":root.path(),"provider":"scripted","model":"scripted","scripted":script,"context_gc":true,"context_window_tokens":100000,"trace_file":root.path().join("gc.jsonl"),"no_project_instructions":true})).unwrap();
+                let mut session = Session::new(json!({"workspace":root.path(),"provider":"scripted","model":"scripted","scripted":script,"context_gc":true,"trace_file":root.path().join("gc.jsonl"),"no_project_instructions":true})).unwrap();
                 session.config["provider"] = json!(provider);
-                session.config["model"] = json!("test");
+                session.config["model"] = json!(model);
                 session
                     .history
                     .push(json!({"kind":"user","user":{"text":"task","plan":"on"}}));
@@ -815,7 +820,7 @@ mod tests {
                 assert!(!collect(&mut session));
                 assert_eq!(session.state["handoff"], original_handoff);
                 assert!(session.state["gc_state"]["dropped"].is_null());
-                session.state["last_request"] = json!({"known":true,"input_tokens":10000});
+                session.state["last_request"] = json!({"known":true,"input_tokens":70000});
                 session.open_trace("switched-gc");
                 assert!(collect(&mut session), "{provider} prefix={prefix}");
                 assert_eq!(session.history, accepted);

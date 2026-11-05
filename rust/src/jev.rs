@@ -437,7 +437,9 @@ mod tests {
         duplicate["model"] = json!("claude-haiku-5-5");
         assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
         duplicate["reasoning_effort"] = json!("");
-        assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
+        assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_ok());
+        duplicate["model"] = json!("gpt-6.1-terra");
+        assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_ok());
         duplicate["model"] = json!("claude-sonnet-5-5");
         duplicate["reasoning_effort"] = json!("low");
         let request = encode_request("<&>", &[route, duplicate]).unwrap();
