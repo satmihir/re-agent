@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 
-const TOP: &str = "re:agent: a small, readable agent harness\n\nusage:\n  reagent run  [flags] \"prompt\"    one task, then exit\n  reagent chat [flags]             a conversation, one turn per line\n  reagent help [run|chat]          this text, or a command's flags\n  reagent version                  the build's version\n  reagent login                    sign in with ChatGPT\n  reagent logout                   disconnect ChatGPT\n  reagent auth status              account, plan usage, expiry and models\n\nexamples:\n  reagent chat --workspace ./repo\n  reagent run --workspace ./repo \"Set the default timeout to 30s.\"\n  reagent run --workspace . --show-context \"Where is the budget?\" | jq .\n\nenvironment:\n  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run\n  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,\n                                      with no key; the provider must be openai\n  TYPESAFE_API_KEY                    optional router key; read only when Auto is enabled\n  REAGENT_MODEL                       default model\n  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)\n  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)\n  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)\n  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)\n  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)\n  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)\n  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)\n  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)\n  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume\n  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables\n  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false\n                                      experiments are exclusive and require --context-gc\n                                      empty is unset; validated on resume, saved settings win\n  NO_COLOR                            turn off styling\n";
+const TOP: &str = "re:agent: a small, readable agent harness\n\nusage:\n  reagent run  [flags] \"prompt\"    one task, then exit\n  reagent chat [flags]             a conversation, one turn per line\n  reagent help [run|chat|friction-export]  this text, or a command's flags\n  reagent friction-export [flags] export local friction reports to S3\n  reagent version                  the build's version\n  reagent login                    sign in with ChatGPT\n  reagent logout                   disconnect ChatGPT\n  reagent auth status              account, plan usage, expiry and models\n\nexamples:\n  reagent chat --workspace ./repo\n  reagent run --workspace ./repo \"Set the default timeout to 30s.\"\n  reagent run --workspace . --show-context \"Where is the budget?\" | jq .\n\nenvironment:\n  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run\n  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,\n                                      with no key; the provider must be openai\n  TYPESAFE_API_KEY                    optional router key; read only when Auto is enabled\n  REAGENT_MODEL                       default model\n  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)\n  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)\n  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)\n  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)\n  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)\n  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)\n  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)\n  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)\n  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume\n  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables\n  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false\n                                      experiments are exclusive and require --context-gc\n                                      empty is unset; validated on resume, saved settings win\n  NO_COLOR                            turn off styling\n";
 
 fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
     vec![
@@ -324,11 +324,18 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
                 print!("{TOP}");
                 return 0;
             }
+            if args.len() == 2 && args[1] == "friction-export" {
+                print!("{}", crate::friction_export::HELP);
+                return 0;
+            }
             if args.len() == 2 && matches!(args[1].as_str(), "run" | "chat") {
                 print!("{}", help(&args[1]));
                 return 0;
             }
-            return usage("help", "help takes an optional command: run or chat");
+            return usage(
+                "help",
+                "help takes an optional command: run, chat or friction-export",
+            );
         }
         "version" | "--version" => {
             println!(
@@ -338,6 +345,7 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
             );
             return 0;
         }
+        "friction-export" => return crate::friction_export::command(&args[1..]),
         "run" | "chat" => {}
         "login" | "logout" | "auth" => return crate::auth::command(&args),
         _ => {
