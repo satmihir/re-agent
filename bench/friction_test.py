@@ -58,14 +58,115 @@ class FrictionTest(unittest.TestCase):
         self.assertEqual(review["build"], "unknown")
         self.assertEqual(review["reply"], "No other friction.")
 
-    def test_agent_lifetime_traces_do_not_become_operator_reports_or_reviews(self):
-        events = fixture("report") + fixture("review")
+    def test_agent_lifetime_reports_keep_run_metadata_outcomes_and_reviews(self):
+        first, second = fixture("report"), fixture("report")
+        second_review = fixture("review")
+        for event in second:
+            event["run_id"] = "second-report-run"
+            event["time"] = "2026-10-01T10:00:00Z"
+        second[0]["data"].update(configured="child-model", build="child-build", initial_history=[
+            {"kind": "assistant", "assistant": first[3]["data"]},
+            {"kind": "tool", "tool": first[5]["data"]},
+        ])
+        second[1]["data"]["name"] = second[2]["data"]["name"] = "exec"
+        second[2]["data"]["outcome"]["code"] = "permission_denied"
+        args = json.loads(second[3]["data"]["blocks"][0]["call"]["arguments"])
+        args["summary"] = "Second child report"
+        second[3]["data"]["blocks"][0]["call"]["arguments"] = json.dumps(args)
+        second[5]["data"]["outcome"] = {"ok": False, "code": "invalid_arguments",
+                                        "message": "report limit reached; carry on with the task"}
+        for event in second_review:
+            event["run_id"] = "second-review-run"
+            event["time"] = "2026-10-01T11:00:00Z"
+        second_review[-1]["data"]["reply"] = "More friction."
+        events = first + fixture("review") + second + second_review
         for event in events:
             event.update(agent_id="t1", parent_id="root")
-        path = self.write_trace("agent", events)
+        self.write_trace("agent", events)
+        result = self.cli("--json", self.root, self.root / "agent")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(records), 4)
+        report, later, review, later_review = records
+        for record in records:
+            self.assertEqual(record["agent_id"], "t1")
+            self.assertEqual(record["parent_id"], "root")
+        self.assertEqual((report["model"], report["build"]), ("gpt-test", "c140972+dirty"))
+        self.assertTrue(report["recorded"])
+        self.assertEqual(report["related_calls"][0]["tool"], "read_file")
+        self.assertEqual(report["related_calls"][0]["outcome_code"], "not_found")
+        self.assertEqual((later["model"], later["build"]), ("child-model", "child-build"))
+        self.assertEqual(later["run_id"], "second-report-run")
+        self.assertEqual(later["summary"], "Second child report")
+        self.assertFalse(later["recorded"])
+        self.assertEqual(later["related_calls"][0]["tool"], "exec")
+        self.assertEqual(later["related_calls"][0]["outcome_code"], "permission_denied")
+        self.assertEqual((review["reply"], later_review["reply"]), ("No other friction.", "More friction."))
+        self.assertEqual(review["model"], "claude-test")
+        result = self.cli("--since", "2026-10-01", "--json", self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([json.loads(line)["run_id"] for line in result.stdout.splitlines()],
+                         ["second-report-run", "second-review-run"])
+        result = self.cli(self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for text in ("agent t1", "parent root", "Second child report", "More friction.",
+                     "not recorded: invalid_arguments", "report limit reached"):
+            self.assertIn(text, result.stdout)
+
+    def test_agent_runs_do_not_borrow_missing_metadata_outcomes_or_related_calls(self):
+        first, unfinished = fixture("report"), fixture("report")
+        # The second turn is truncated at both ends and reuses the first turn's call ID.
+        unfinished = [unfinished[3]]
+        unfinished[0]["run_id"] = "unfinished-run"
+        for event in first + unfinished:
+            event.update(agent_id="t1", parent_id="root")
+        path = self.write_trace("agent", first + unfinished)
         records, incomplete = friction.read_trace(path)
-        self.assertEqual(records, [])
         self.assertFalse(incomplete)
+        self.assertEqual(len(records), 2)
+        self.assertTrue(records[0]["recorded"])
+        later = records[1]
+        self.assertEqual((later["model"], later["build"]), ("unknown", "unknown"))
+        self.assertIsNone(later["recorded"])
+        self.assertEqual(later["outcome_code"], "unknown")
+        self.assertFalse(later["related_calls"][0]["found"])
+
+    def test_current_calls_do_not_inherit_outcomes_from_reused_history_ids(self):
+        for agent_id in ("", "t1"):
+            with self.subTest(agent_id=agent_id):
+                prior, events = fixture("report"), fixture("report")
+                events[0]["data"]["initial_history"] = [
+                    {"kind": "tool", "tool": prior[2]["data"]},
+                    {"kind": "tool", "tool": prior[5]["data"]},
+                ]
+                # Both current calls lack outcomes, despite completed calls with the same IDs in history.
+                del events[5]
+                del events[2]
+                for event in events:
+                    event.update(agent_id=agent_id, parent_id="root" if agent_id else "")
+                path = self.write_trace(agent_id or "root", events)
+                records, incomplete = friction.read_trace(path)
+                self.assertFalse(incomplete)
+                self.assertEqual(len(records), 1)
+                self.assertIsNone(records[0]["recorded"])
+                self.assertEqual(records[0]["outcome_code"], "unknown")
+                self.assertTrue(records[0]["related_calls"][0]["found"])
+                self.assertEqual(records[0]["related_calls"][0]["outcome_code"], "unknown")
+
+    def test_root_and_nested_agents_with_reused_run_and_call_ids_stay_distinct(self):
+        events = []
+        for agent_id, parent_id in (("", ""), ("t1", "root"), ("t2", "t1")):
+            turn = fixture("report")
+            for event in turn:
+                event.update(agent_id=agent_id, parent_id=parent_id)
+            events.append(turn)
+        # Even interleaved events must be grouped by their own agent and run.
+        path = self.write_trace("mixed", [event for step in zip(*events) for event in step])
+        records, incomplete = friction.read_trace(path)
+        self.assertFalse(incomplete)
+        self.assertEqual([record["agent_id"] for record in records], ["", "t1", "t2"])
+        self.assertEqual([record["parent_id"] for record in records], ["", "root", "t1"])
+        self.assertTrue(all(record["recorded"] for record in records))
 
     def test_initial_history_resolves_calls_without_reemitting_reports(self):
         events = fixture("report")

@@ -12,6 +12,8 @@ pub mod compact;
 pub mod context;
 pub mod context_gc;
 pub mod errors;
+pub(crate) mod friction;
+pub(crate) mod friction_export;
 pub mod jev;
 pub mod openai;
 pub(crate) mod process;

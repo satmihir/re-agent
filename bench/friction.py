@@ -39,9 +39,8 @@ def response_calls(response):
 
 
 def read_trace(path):
-    """Return current-run reports and reviews, and whether any input was unreadable."""
-    started, finished = {}, {}
-    calls, outcomes, reports = {}, {}, {}
+    """Return reports and reviews from every run, and whether any input was unreadable."""
+    runs = {}
     incomplete = False
     try:
         with open(path, encoding="utf-8") as stream:
@@ -50,14 +49,16 @@ def read_trace(path):
                     event = json.loads(line)
                     if not isinstance(event, dict) or event.get("schema_version") != 1:
                         raise ValueError("expected trace schema_version 1")
-                    # Agent lifetime traces can contain several turns; agents have no friction reporter.
-                    if event.get("agent_id"):
-                        continue
                     kind, data = event["type"], event["data"]
                     if not isinstance(data, dict):
                         raise ValueError("event data must be an object")
+                    # Agent lifetime traces contain multiple runs; call IDs can repeat between them.
+                    key = (event.get("session_id", ""), event.get("run_id", ""), event.get("agent_id", ""))
+                    run = runs.setdefault(key, {"started": {}, "finished": {},
+                                               "calls": {}, "outcomes": {}, "reports": {}})
+                    calls, outcomes, reports = run["calls"], run["outcomes"], run["reports"]
                     if kind == "run.started":
-                        started = event
+                        run["started"] = event
                         # Prior turns are embedded so each trace stands on its own.
                         for entry in data.get("initial_history") or []:
                             for call in response_calls(entry.get("assistant") or {}):
@@ -69,10 +70,12 @@ def read_trace(path):
                     elif kind == "model.accepted":
                         for call in response_calls(data):
                             calls[call["call_id"]] = call["name"]
+                            outcomes.pop(call["call_id"], None)
                             if call["name"] == "report_friction":
                                 reports.setdefault(call["call_id"], (event, call))
                     elif kind == "tool.started":
                         calls[data["call_id"]] = data["name"]
+                        outcomes.pop(data["call_id"], None)
                     elif kind == "tool.finished":
                         calls[data["call_id"]] = data["name"]
                         outcome = data["outcome"]
@@ -84,7 +87,7 @@ def read_trace(path):
                             "recorded": outcome.get("ok") is True and recorded,
                         }
                     elif kind == "run.finished":
-                        finished = event
+                        run["finished"] = event
                 except (ValueError, KeyError, TypeError, AttributeError) as error:
                     print(f"warning: {path}:{number}: {error}", file=sys.stderr)
                     incomplete = True
@@ -92,6 +95,16 @@ def read_trace(path):
         print(f"warning: {path}: {error}", file=sys.stderr)
         incomplete = True
 
+    records = []
+    for run in runs.values():
+        records.extend(run_records(path, run))
+    return records, incomplete
+
+
+def run_records(path, run):
+    """Derive records using only this run's events and initial history."""
+    started, finished = run["started"], run["finished"]
+    calls, outcomes, reports = run["calls"], run["outcomes"], run["reports"]
     metadata = started.get("data", {})
     common = {
         "trace": str(path),
@@ -124,6 +137,7 @@ def read_trace(path):
         outcome = outcomes.get(call_id, {})
         records.append({**common, "kind": "report_friction", "time": event.get("time", ""),
                         "session_id": event.get("session_id", ""), "run_id": event.get("run_id", ""),
+                        "agent_id": event.get("agent_id", ""), "parent_id": event.get("parent_id", ""),
                         "step": event.get("step", 0), "call_id": call_id, "category": category,
                         "summary": summary, "details": details if isinstance(details, str) else "",
                         "arguments": raw, "related_calls": related, "recorded": outcome.get("recorded"),
@@ -133,9 +147,10 @@ def read_trace(path):
         result = finished.get("data", {})
         records.append({**common, "kind": "friction_review", "time": started.get("time", ""),
                         "session_id": started.get("session_id", ""), "run_id": started.get("run_id", ""),
+                        "agent_id": started.get("agent_id", ""), "parent_id": started.get("parent_id", ""),
                         "reply": result.get("reply", ""), "status": result.get("status", "unknown"),
                         "reason": result.get("reason", "")})
-    return records, incomplete
+    return records
 
 
 def printable(text):
@@ -151,6 +166,8 @@ def print_text(records):
             print(f"\n{group}")
             previous = group
         print(printable(f"  {record['time']} · {record['run_id']} · {record['model']} · {record['build']}"))
+        if record["agent_id"]:
+            print(printable(f"  agent {record['agent_id']} · parent {record['parent_id']}"))
         if record["kind"] == "friction_review":
             print("  " + printable(record["reply"]).replace("\n", "\n  "))
             if record["status"] != "completed":

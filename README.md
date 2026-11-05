@@ -512,7 +512,8 @@ available in read-only and plan modes, and instructions to report harness rough
 edges briefly while continuing the task. It changes requests: **never enable
 it in benchmark runs**. Without it, ordinary requests are unchanged.
 
-Reports live only in traces, not in a separate log. Ten validated reports are
+Reports are recorded in traces, not in a separate local log; the opt-in exporter
+below can copy derived records to S3. Ten validated reports are
 allowed per process, including across `/reset`, `/model`, and compaction;
 invalid submissions do not consume the cap. A report has a category, a nonblank
 one-line summary of up to 300 Unicode characters, optional details of up to
@@ -527,12 +528,63 @@ still available to the model, including summaries; it does not reload old traces
 The Python reader searches the normal cache plus supplied directories, without
 counting overlapping paths twice. `--since` is inclusive from midnight UTC.
 Text output groups reports by category, oldest first, with review replies in a
-separate group. JSON Lines contain one record per report or review. Related
-calls are resolved only in the same trace, including its initial history;
+separate group. Root and child-agent reports and reviews are included, across
+all turns in agent lifetime traces. Child records show agent and parent IDs;
+JSON Lines include `agent_id` and `parent_id` (empty for root runs). Related
+calls are resolved only in the same run, including its initial history;
 missing IDs say `not in this trace`. Rejected reports and missing outcomes are
 labelled, never treated as successes. Bad input warns and exits nonzero while
 preserving readable records. Reports may contain sensitive task content;
 treat their output like the traces themselves.
+
+### Exporting friction to S3
+
+The Rust binary can run a foreground uploader independently of chat:
+
+```bash
+reagent friction-export --destination s3://my-private-bucket/reagent/friction/
+# Preview pending JSON objects without contacting AWS or changing delivery state:
+reagent friction-export --destination s3://my-private-bucket/reagent/friction/ --once --dry-run
+```
+
+It scans immediately and then waits `--interval 15m` after each pass. Durations
+are positive whole numbers with `ms`, `s`, `m` or `h` units. The normal trace
+cache is always included; repeat `--trace-dir DIR` for additional directories
+or `--trace-file PATH` for exact custom files. `--once` exits after one pass,
+nonzero if scanning or uploading was incomplete. First launch backfills all
+retained reports, including root and nested agents, reviews, rejected attempts,
+and unknown outcomes. Completed outcomes and review replies update the same
+record on later passes. An unfinished trailing JSONL line waits for another pass.
+
+Install the AWS CLI and configure credentials, region and profiles normally
+(for example with `AWS_PROFILE`). Create the private bucket beforehand and allow
+`s3:PutObject` under the destination prefix, plus any permissions required by
+its encryption policy. The exporter neither creates buckets nor lists or deletes
+remote objects. AWS diagnostics, credentials and environment are not printed.
+Each upload has a two-minute deadline and one AWS attempt; failures are revisited
+on the next pass. SIGINT/SIGTERM cancels pending work and exits with status 130.
+
+Objects are deterministic JSON at `<prefix>/v1/records/<record-id>.json`, one
+latest snapshot per report or review. IDs hash a JSON tuple of kind, session,
+agent, run and report call ID (empty for reviews). Fields include
+`schema_version`, `record_id`, `source_revision` (the greatest contributing
+trace sequence), attribution, model/build and derived friction content. Raw
+traces, local paths, report argument JSON and related tool arguments/output are
+excluded. **Summaries, details and review replies can still contain sensitive
+task content.** The default cache can include other checkouts; inspect a dry run
+before sharing. S3 readers paginate the records prefix and fetch its objects;
+there is no shared manifest or incremental change cursor.
+
+Private delivery receipts live in
+`<cache>/reagent/friction-export/<destination-hash>/state.json`, protected by a
+local destination lock and atomically replaced after successful uploads. Unchanged
+content is skipped, and older source revisions cannot replace locally acknowledged
+newer ones. A crash between PUT and receipt publication can repeat the same PUT;
+delivery is not exactly once. Losing receipts may replay older available snapshots.
+Only one authoritative uploader may own each source record: do not upload
+overlapping trace copies from separate machines. There is no durable outbox;
+keep traces until delivery succeeds. The uploader never changes Git, starts an
+agent, or applies fixes. The Go binary does not implement this command.
 
 ## How it works
 
