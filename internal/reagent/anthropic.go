@@ -21,6 +21,7 @@ type messagesRequest struct {
 	Tools        []messagesTool        `json:"tools,omitempty"`
 	ToolChoice   *messagesToolChoice   `json:"tool_choice,omitempty"`
 	OutputConfig *messagesOutputConfig `json:"output_config,omitempty"`
+	Thinking     *messagesThinking     `json:"thinking,omitempty"`
 }
 
 type messagesTextBlock struct {
@@ -67,6 +68,27 @@ type messagesOutputConfig struct {
 	Effort string `json:"effort"`
 }
 
+type messagesThinking struct {
+	BlockBinding messagesThinkingBinding `json:"block_binding"`
+}
+
+type messagesThinkingBinding struct {
+	PrefixMismatchBehavior string `json:"prefix_mismatch_behavior"`
+}
+
+func anthropicNeedsThinkingBinding(req ModelRequest) bool {
+	// Haiku and Sonnet reject binding controls without a thinking mode.
+	if req.Model != "claude-opus-5-5" {
+		return false
+	}
+	for _, entry := range req.History {
+		if entry.Kind == EntryTool && entry.Tool != nil && entry.Tool.Outcome.Code == "context_gc" {
+			return true
+		}
+	}
+	return false
+}
+
 // EncodeAnthropicRequest turns one logical request into the exact bytes sent
 // to the Messages API. The live adapter and --show-context both call it, so
 // the preview is the request itself (v0 §6.1).
@@ -100,6 +122,13 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 		outputConfig = &messagesOutputConfig{Effort: req.ReasoningEffort}
 	}
 
+	// GC changes the prefix signed thinking was bound to. Let the provider drop
+	// mismatched blocks without configuring the model's thinking mode or budget.
+	var thinking *messagesThinking
+	if anthropicNeedsThinkingBinding(req) {
+		thinking = &messagesThinking{BlockBinding: messagesThinkingBinding{PrefixMismatchBehavior: "drop_block"}}
+	}
+
 	// Keep inherited markers byte-identical, within the provider's four-point
 	// limit (one system point and at most three history points).
 	if len(req.CacheEntries) < 3 {
@@ -119,6 +148,7 @@ func EncodeAnthropicRequest(req ModelRequest) ([]byte, error) {
 		Tools:        tools,
 		ToolChoice:   &messagesToolChoice{Type: "auto", DisableParallelToolUse: false},
 		OutputConfig: outputConfig,
+		Thinking:     thinking,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode Anthropic request: invalid JSON data")

@@ -307,3 +307,159 @@ func TestAnthropic_ProviderMessageSurvivesARefusedRequest(t *testing.T) {
 		t.Fatalf("got %s: %s", result.Status, result.Reason)
 	}
 }
+
+func TestAnthropic_GCThinkingBindingFollowsProjectedHistory(t *testing.T) {
+	assistant, err := normalizeAnthropicResponse([]byte(anthropicTwoCallReply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := normalizeAnthropicResponse([]byte(strings.ReplaceAll(anthropicCallReply, "toolu_1", "toolu_3")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []Entry{
+		{Kind: EntryUser, User: &UserTurn{Text: "task mentions context_gc"}},
+		{Kind: EntryAssistant, Assistant: &assistant},
+		{Kind: EntryTool, Tool: &ToolResult{CallID: "toolu_1", Name: "echo", Outcome: ToolOutcome{OK: true, Code: "ok", Message: "old observation"}}},
+		{Kind: EntryTool, Tool: &ToolResult{CallID: "toolu_2", Name: "echo", Outcome: ToolOutcome{OK: true, Code: "ok", Message: "kept observation"}}},
+		{Kind: EntryAssistant, Assistant: &later},
+		{Kind: EntryTool, Tool: &ToolResult{CallID: "toolu_3", Name: "echo", Outcome: ToolOutcome{OK: true, Code: "ok", Message: "latest observation"}}},
+	}
+	accepted, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := gcHistory(history, map[string]contextGCDrop{
+		"toolu_1": {Placeholder: "[old observation dropped; recall toolu_1]"},
+	})
+	projectedBefore, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := newFakeAPI(t, okReply(anthropicTextReply), okReply(anthropicTextReply), okReply(anthropicTextReply), okReply(anthropicTextReply))
+	model := NewAnthropicModel("sk-ant-secret", api.server.URL, NewHTTPClient(), NewTrace(io.Discard))
+	cases := []struct {
+		name    string
+		history []Entry
+		gc      bool
+	}{
+		{"ordinary signed history", history, false},
+		{"projected history", projected, true},
+		{"continued followup", nil, true},
+		{"ordinary after GC", history, false},
+	}
+	for i, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			req := ModelRequest{Model: "claude-opus-5-5", Instructions: "be useful", History: test.history}
+			preview, _ := encodeAnthropic(t, req)
+			response, err := model.Generate(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sent := api.received()
+			if len(sent) != i+1 || string(sent[i]) != string(preview) {
+				t.Fatalf("live request differs from preview: %q", sent)
+			}
+			var got decodedMessages
+			if err := json.Unmarshal(sent[i], &got); err != nil {
+				t.Fatal(err)
+			}
+			beta := api.receivedHeaders()[i].Get("anthropic-beta")
+			if test.gc {
+				if string(got.Thinking) != `{"block_binding":{"prefix_mismatch_behavior":"drop_block"}}` || beta != "thinking-binding-controls-2026-08-01" {
+					t.Fatalf("GC request lacks exact binding control: thinking=%s beta=%q", got.Thinking, beta)
+				}
+			} else if len(got.Thinking) != 0 || beta != "" {
+				t.Fatalf("ordinary request configures thinking: thinking=%s beta=%q", got.Thinking, beta)
+			}
+			// The second signed turn was bound to the now-projected observation.
+			for j, native := range []NativeOutput{assistant.Native, later.Native} {
+				want, err := json.Marshal(native.Items)
+				if err != nil {
+					t.Fatal(err)
+				}
+				message := got.Messages[1+2*j]
+				actual, err := json.Marshal(message.Content)
+				if err != nil || message.Role != "assistant" || string(actual) != string(want) {
+					t.Fatalf("signed thinking or tool_use blocks changed: %s, want %s (%v)", actual, want, err)
+				}
+			}
+			for j, index := range []struct{ message, block int }{{2, 0}, {2, 1}, {4, 0}} {
+				var result messagesToolResult
+				if err := json.Unmarshal(got.Messages[index.message].Content[index.block], &result); err != nil {
+					t.Fatal(err)
+				}
+				want := test.history[[]int{2, 3, 5}[j]].Tool
+				var outcome ToolOutcome
+				if err := json.Unmarshal([]byte(result.Content), &outcome); err != nil || result.Type != "tool_result" || result.ToolUseID != want.CallID || outcome.Code != want.Outcome.Code || outcome.Message != want.Outcome.Message {
+					t.Fatalf("tool result lost its pairing or projected outcome: %+v (%v)", result, err)
+				}
+			}
+			if i == 1 {
+				cases[2].history = append(append([]Entry(nil), projected...),
+					Entry{Kind: EntryAssistant, Assistant: &response},
+					Entry{Kind: EntryUser, User: &UserTurn{Text: "continue"}})
+			}
+		})
+	}
+	if after, err := json.Marshal(history); err != nil || string(after) != string(accepted) {
+		t.Fatalf("accepted history changed: %s (%v)", after, err)
+	}
+	if after, err := json.Marshal(projected); err != nil || string(after) != string(projectedBefore) {
+		t.Fatalf("projected history changed: %s (%v)", after, err)
+	}
+}
+
+func TestAnthropic_GCThinkingBindingIsOpus55Only(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		model   string
+		block   string
+		binding bool
+	}{
+		{"haiku without thinking", DefaultAnthropicModel, `{"type":"text","text":"thinking"}`, false},
+		{"sonnet without thinking", "claude-sonnet-5-5", `{"type":"text","text":"thinking"}`, false},
+		{"haiku signed thinking", DefaultAnthropicModel, `{"type":"thinking","thinking":"","signature":"opaque"}`, false},
+		{"sonnet signed thinking", "claude-sonnet-5-5", `{"type":"thinking","thinking":"","signature":"opaque"}`, false},
+		{"older opus signed thinking", "claude-opus-4-6", `{"type":"thinking","thinking":"","signature":"opaque"}`, false},
+		{"opus redacted thinking", "claude-opus-5-5", `{"type":"redacted_thinking","data":"opaque"}`, true},
+		{"opus without thinking", "claude-opus-5-5", `{"type":"text","text":"working"}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			history := []Entry{
+				{Kind: EntryUser, User: &UserTurn{Text: "task"}},
+				{Kind: EntryAssistant, Assistant: &ModelResponse{Native: NativeOutput{
+					Provider: anthropicProvider,
+					Items: []json.RawMessage{
+						json.RawMessage(test.block),
+						json.RawMessage(`{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}`),
+					},
+				}}},
+				{Kind: EntryTool, Tool: &ToolResult{CallID: "toolu_1", Name: "echo", Outcome: ToolOutcome{OK: true, Code: "ok"}}},
+			}
+			req := ModelRequest{Model: test.model, History: gcHistory(history, map[string]contextGCDrop{
+				"toolu_1": {Placeholder: "[dropped; recall toolu_1]"},
+			})}
+			api := newFakeAPI(t, okReply(anthropicTextReply))
+			model := NewAnthropicModel("sk-ant-secret", api.server.URL, NewHTTPClient(), NewTrace(io.Discard))
+			if _, err := model.Generate(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			var got decodedMessages
+			if err := json.Unmarshal(api.received()[0], &got); err != nil {
+				t.Fatal(err)
+			}
+			beta := api.receivedHeaders()[0].Get("anthropic-beta")
+			if test.binding {
+				if string(got.Thinking) != `{"block_binding":{"prefix_mismatch_behavior":"drop_block"}}` || beta != "thinking-binding-controls-2026-08-01" {
+					t.Fatalf("Opus 5.5 GC request lacks binding control: thinking=%s beta=%q", got.Thinking, beta)
+				}
+			} else if len(got.Thinking) != 0 || beta != "" {
+				t.Fatalf("unsupported model configures thinking: thinking=%s beta=%q", got.Thinking, beta)
+			}
+			if string(got.Messages[1].Content[0]) != test.block {
+				t.Fatalf("native block changed: %s", got.Messages[1].Content[0])
+			}
+		})
+	}
+}

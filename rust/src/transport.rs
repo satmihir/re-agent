@@ -295,6 +295,9 @@ impl Transport {
                     req = req
                         .header("x-api-key", &token)
                         .header("anthropic-version", "2023-06-01");
+                    if body["thinking"]["block_binding"].is_object() {
+                        req = req.header("anthropic-beta", "thinking-binding-controls-2026-08-01");
+                    }
                 } else if !token.is_empty() {
                     req = req.bearer_auth(&token);
                 }
@@ -737,6 +740,70 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn thinking_binding_beta_is_per_request_and_anthropic_only() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        for provider in ["anthropic", "openai"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/model", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                for binding in [false, true, false] {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut headers = Vec::new();
+                    let mut byte = [0; 1];
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        stream.read_exact(&mut byte).unwrap();
+                        headers.push(byte[0]);
+                    }
+                    let headers = String::from_utf8(headers).unwrap().to_lowercase();
+                    assert_eq!(
+                        headers.contains("anthropic-beta:"),
+                        provider == "anthropic" && binding
+                    );
+                    if provider == "anthropic" && binding {
+                        assert!(headers
+                            .contains("anthropic-beta: thinking-binding-controls-2026-08-01\r\n"));
+                    }
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    let mut bytes = vec![0; length];
+                    stream.read_exact(&mut bytes).unwrap();
+                    let body: Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(body.get("thinking").is_some(), binding);
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                    )
+                    .unwrap();
+                }
+            });
+            let mut transport = Transport::new(&json!({"provider":provider}));
+            for binding in [false, true, false] {
+                let mut body = json!({"model":"test"});
+                if binding {
+                    body["thinking"] =
+                        json!({"block_binding":{"prefix_mismatch_behavior":"drop_block"}});
+                }
+                assert_eq!(
+                    transport
+                        .call_endpoint(&json!({}), &body, &endpoint)
+                        .unwrap()
+                        .0,
+                    200
+                );
+            }
+            server.join().unwrap();
+        }
+    }
+
     #[test]
     fn proxy_retry_preserves_request_bytes_and_emits_attempt_events() {
         use std::io::Write;

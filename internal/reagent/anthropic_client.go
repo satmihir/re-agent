@@ -46,7 +46,11 @@ func (m *AnthropicModel) Generate(ctx context.Context, req ModelRequest) (ModelR
 		return ModelResponse{}, &ModelError{Status: StatusProviderError, Message: err.Error()}
 	}
 
-	status, raw, prior, err := m.transport.callModel(ctx, req.Scope.Step, body, nil, nil)
+	var headers map[string]string
+	if anthropicNeedsThinkingBinding(req) {
+		headers = map[string]string{"anthropic-beta": "thinking-binding-controls-2026-08-01"}
+	}
+	status, raw, prior, err := m.transport.callModel(ctx, req.Scope.Step, body, headers, nil)
 	if err != nil {
 		return ModelResponse{}, err
 	}

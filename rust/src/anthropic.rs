@@ -82,6 +82,15 @@ pub fn encode_request(req: &Value) -> Result<Value, String> {
     if !s(req, "reasoning_effort").is_empty() {
         body["output_config"] = json!({"effort":s(req,"reasoning_effort")});
     }
+    // GC invalidates Opus 5.5's conversation-bound thinking signatures. Other
+    // models require a thinking mode with this option; keep their defaults.
+    if s(req, "model") == "claude-opus-5-5"
+        && array(req, "history").iter().any(|entry| {
+            s(entry, "kind") == "tool" && s(&entry["tool"]["outcome"], "code") == "context_gc"
+        })
+    {
+        body["thinking"] = json!({"block_binding":{"prefix_mismatch_behavior":"drop_block"}});
+    }
     crate::openai::check_size(&body)?;
     Ok(body)
 }
@@ -225,6 +234,72 @@ mod tests {
         assert_eq!(content[4]["cache_control"]["type"], "ephemeral");
         assert_eq!(request["history"][0]["user"], user);
     }
+    #[test]
+    fn gc_allows_prefix_bound_thinking_to_be_dropped_without_rewriting_history() {
+        let response = normalize(br#"{"stop_reason":"tool_use","content":[{"type":"thinking","thinking":"private","signature":"bound"},{"type":"redacted_thinking","data":"opaque"},{"type":"tool_use","id":"a","name":"read_file","input":{}},{"type":"tool_use","id":"b","name":"read_file","input":{}}]}"#).unwrap();
+        let later = normalize(br#"{"stop_reason":"end_turn","content":[{"type":"thinking","thinking":"later","signature":"later-bound"},{"type":"text","text":"done"}]}"#).unwrap();
+        let accepted = vec![
+            json!({"kind":"user","user":{"text":"task"}}),
+            json!({"kind":"assistant","assistant":response}),
+            json!({"kind":"tool","tool":{"call_id":"a","name":"read_file","outcome":{"ok":true,"code":"ok","data":{"text":"original"},"effect":"none"}}}),
+            json!({"kind":"tool","tool":{"call_id":"b","name":"read_file","outcome":{"ok":true,"code":"ok","data":{"text":"current"},"effect":"none"}}}),
+            json!({"kind":"assistant","assistant":later}),
+            json!({"kind":"user","user":{"text":"continue"}}),
+        ];
+        let snapshot = accepted.clone();
+        for gc in [false, true] {
+            let dropped = if gc {
+                json!({"a":{"placeholder":"[dropped: recall a]"}})
+            } else {
+                json!({})
+            };
+            let mut request = json!({"model":"claude-opus-5-5","history":crate::context_gc::history(&accepted, &dropped)});
+            for followup in [false, true] {
+                if followup {
+                    request["history"].as_array_mut().unwrap().extend([
+                        json!({"kind":"assistant","assistant":later}),
+                        json!({"kind":"user","user":{"text":"continue"}}),
+                    ]);
+                }
+                let body = encode_request(&request).unwrap();
+                assert_eq!(body.get("thinking").is_some(), gc);
+                if gc {
+                    assert_eq!(
+                        body["thinking"],
+                        json!({"block_binding":{"prefix_mismatch_behavior":"drop_block"}})
+                    );
+                }
+                assert_eq!(body["messages"][1]["content"], response["native"]["items"]);
+                assert_eq!(body["messages"][3]["content"], later["native"]["items"]);
+                for (i, id) in ["a", "b"].iter().enumerate() {
+                    let result = &body["messages"][2]["content"][i];
+                    assert_eq!(result["tool_use_id"], *id);
+                    let outcome: Value = serde_json::from_str(s(result, "content")).unwrap();
+                    assert_eq!(
+                        outcome["code"],
+                        if gc && i == 0 { "context_gc" } else { "ok" }
+                    );
+                }
+            }
+        }
+        assert_eq!(accepted, snapshot);
+    }
+
+    #[test]
+    fn gc_keeps_other_models_thinking_defaults_even_with_native_signatures() {
+        let response = normalize(br#"{"stop_reason":"tool_use","content":[{"type":"thinking","thinking":"","signature":"opaque"},{"type":"tool_use","id":"a","name":"read_file","input":{}}]}"#).unwrap();
+        let mut request = json!({"model":"claude-haiku-5-5","history":[
+            {"kind":"user","user":{"text":"context_gc"}},
+            {"kind":"assistant","assistant":response},
+            {"kind":"tool","tool":{"call_id":"a","name":"read_file","outcome":{"ok":true,"code":"context_gc","message":"recall a","data":null,"effect":"none"}}}
+        ]});
+        for model in ["claude-haiku-5-5", "claude-sonnet-5-5", "unknown"] {
+            request["model"] = json!(model);
+            let body = encode_request(&request).unwrap();
+            assert!(body.get("thinking").is_none());
+        }
+    }
+
     #[test]
     fn invalid_user_bytes_survive_text_block_and_cache_marker() {
         let text = crate::raw::string(b"raw\xff\xc0\x80\xef\xbf\xbd<&>\r");
