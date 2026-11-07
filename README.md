@@ -621,7 +621,7 @@ works today. Older design documents are kept for history only.
 | `--plan` | Start `run` or `chat` in plan mode; the model may only use read tools. |
 | `--no-project-instructions` | Do not load the workspace root's `AGENTS.md`. |
 | `--report-friction` | Opt in to trace-only harness reports on `run` or `chat`; off by default. |
-| `--git-do jev\|recipe` | Experimental: offer `git_do`, which carries out a routine git outcome with a fixed recipe and returns proof. `jev` has Jev pick the recipe from the model's English request and needs `TYPESAFE_API_KEY`; `recipe` has the model name it. Off by default. |
+| `--git-do recipe\|jev\|off` | `git_do` carries out a routine git outcome with a fixed recipe and returns proof. Defaults to `recipe`: the model names the recipe, with no router key needed. `jev` has Jev pick it from English intent and needs `TYPESAFE_API_KEY`; `off` disables the tool. |
 | `--max-steps`, `--max-tool-calls` | Optional budgets per run or chat turn. Both default to `0` (unlimited); positive values set limits. |
 | `--in-run-compact` | Opt in to bounded summaries inside a long run; off by default, including chat. The 40% trigger uses a conservative 1.5× estimate, so it may fire at roughly 27% of measured usage. If skipped, ordinary requests proceed without a new limit. Unknown windows and an overflowing first request cannot be rescued. |
 | `--scripted FILE` | Replay recorded model responses instead of calling a provider. |

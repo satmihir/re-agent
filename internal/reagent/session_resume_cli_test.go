@@ -38,7 +38,7 @@ func TestChat_ResumeRestoresNativeHistoryAndID(t *testing.T) {
 	t.Setenv("API_PROXY_URL", server.URL)
 	root := t.TempDir()
 	var out, errOut bytes.Buffer
-	args := []string{"chat", "--workspace", root}
+	args := []string{"chat", "--workspace", root, "--git-do=off"}
 	if code := Main(context.Background(), args, strings.NewReader("before\n/exit\n"), &out, &errOut); code != exitOK {
 		t.Fatalf("first %d: %s", code, errOut.String())
 	}
@@ -55,6 +55,9 @@ func TestChat_ResumeRestoresNativeHistoryAndID(t *testing.T) {
 		t.Fatalf("requests %d; welcome %q", len(requests), errOut.String())
 	}
 	body := requests[2]
+	if strings.Contains(requests[0], `"name":"git_do"`) || !strings.Contains(body, `"name":"git_do"`) {
+		t.Fatal("resume must use the recipe default, not the previous launch's opt-out")
+	}
 	at := 0
 	for _, item := range []string{"before", "opaque-blob", "call_1", "list_files", "after"} {
 		next := strings.Index(body[at:], item)
@@ -77,7 +80,7 @@ func TestChat_ResumeRejectsConflictsAndMissingCredentials(t *testing.T) {
 		t.Fatalf("create %d: %s", code, errOut.String())
 	}
 	id := regexp.MustCompile(`session ID: ([0-9a-f]{16})`).FindStringSubmatch(errOut.String())[1]
-	for _, flag := range []string{"--model=gpt-6-sol", "--provider=openai", "--auto", "--workspace=" + root, "--plan", "--scripted=x", "--read-only", "--agents"} {
+	for _, flag := range []string{"--model=gpt-6-sol", "--provider=openai", "--auto", "--workspace=" + root, "--plan", "--scripted=x", "--read-only", "--agents", "--git-do=off"} {
 		errOut.Reset()
 		if code := Main(context.Background(), []string{"chat", "--resume", id, flag}, strings.NewReader(""), &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "--resume cannot be combined") {
 			t.Fatalf("%s: %d %s", flag, code, errOut.String())

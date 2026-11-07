@@ -21,6 +21,11 @@ tokens. The pinned agent fixtures still exercise the old named-agent lifecycle
 and budgets. They are not acceptance of these changes; a reference re-pin and
 fixture migration have not been performed.
 
+`git_do` also differs intentionally: current binaries default to `recipe` mode
+and accept `--git-do off`. The pin assumes opt-in activation, so its default-tool,
+wire-request and CLI-help fixtures are historical, not acceptance of this default.
+They have not been migrated or re-pinned.
+
 ## Area 4 — agents and checkpoints
 
 The following comparison-repair results predate this Rust re-pin.

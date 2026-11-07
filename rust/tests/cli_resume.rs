@@ -43,6 +43,7 @@ fn checkpoint(root: &Path) -> PathBuf {
             root.to_str().unwrap(),
             "--model",
             "gpt-6-luna",
+            "--git-do=off",
         ],
         b"/exit\n",
     );
@@ -162,4 +163,44 @@ fn interrupted_resume_recovers_once_and_local_commands_keep_the_terminal_phase()
     assert_eq!(replacements(&mut events), 1);
     let envelope: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(envelope["state"]["phase"], "terminal");
+}
+
+#[test]
+fn resume_uses_the_recipe_default_instead_of_the_launch_opt_out() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = checkpoint(directory.path());
+    let id = path
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let trace = directory.path().join("traces");
+    // The model request is traced before the loopback-only connection fails.
+    chat(
+        directory.path(),
+        &["--resume", id, "--trace-dir", trace.to_str().unwrap()],
+        b"task\n/exit\n",
+    );
+    let events = std::fs::read_dir(trace)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("events.jsonl");
+    let events = std::fs::read_to_string(events).unwrap();
+    let request = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|event| event["type"] == "model.requested")
+        .unwrap();
+    let spec = request["data"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|spec| spec["name"] == "git_do")
+        .unwrap();
+    assert_eq!(spec["input_schema"]["required"], json!(["recipe"]));
 }

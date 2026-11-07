@@ -209,10 +209,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if options.reportFriction {
 		tools = append(tools, NewReportFrictionTool())
 	}
-	// Experimental: --git-do jev lets Jev pick a git recipe from an English
-	// request; --git-do recipe has the model name it.
 	switch options.gitDo {
-	case "":
+	case "", "off":
 	case "jev":
 		key := os.Getenv("TYPESAFE_API_KEY")
 		if strings.TrimSpace(key) == "" {
@@ -222,7 +220,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	case "recipe":
 		tools = append(tools, NewGitDoTool(ws, nil))
 	default:
-		return usage(stderr, command, "--git-do must be jev or recipe")
+		return usage(stderr, command, "--git-do must be recipe, jev or off")
 	}
 	if options.script != "" {
 		// The fake tool rides along with a script so orchestration can be
@@ -511,7 +509,7 @@ func defineFlags(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.noProjectInstructions, "no-project-instructions", false, "do not load the workspace root's AGENTS.md")
 	fs.BoolVar(&o.recap, "recap", false, "show the completed run's operation recap")
 	fs.BoolVar(&o.reportFriction, "report-friction", false, "offer a trace-only harness friction reporter; at most 10 reports per process")
-	fs.StringVar(&o.gitDo, "git-do", "", "experimental: offer git_do, with recipes picked by jev or named by the model (recipe)")
+	fs.StringVar(&o.gitDo, "git-do", "recipe", "git_do mode: recipe (model names it), jev (classifier picks it), or off")
 	fs.StringVar(&o.promptFile, "prompt-file", "", "read the prompt from this file, or - for stdin")
 	fs.StringVar(&o.traceFile, "trace-file", "", "write the trace here instead of the default cache location")
 	fs.StringVar(&o.traceDir, "trace-dir", "", "write each turn's trace under this directory")
@@ -533,7 +531,7 @@ var runFlagGroups = []flagGroup{
 	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "context-gc", "agents"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-file", "report-friction"}},
-	{"Experimental", []string{"git-do"}},
+	{"Tools", []string{"git-do"}},
 	{"Offline", []string{"show-context", "scripted"}},
 }
 
@@ -544,13 +542,13 @@ var chatFlagGroups = []flagGroup{
 	{"Budgets", []string{"max-steps", "max-tool-calls", "model-retry-window", "in-run-compact", "context-gc", "agents"}},
 	{"Output", []string{"recap"}},
 	{"Tracing", []string{"trace-dir", "report-friction"}},
-	{"Experimental", []string{"git-do"}},
+	{"Tools", []string{"git-do"}},
 	{"Resume", []string{"resume"}},
 	{"Offline", []string{"scripted"}},
 }
 
 var flagPlaceholders = map[string]string{
-	"workspace": "DIR", "allow-workspace": "PATH", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL", "openai-auth": "MODE",
+	"workspace": "DIR", "allow-workspace": "PATH", "provider": "NAME", "model": "NAME", "reasoning-effort": "LEVEL", "openai-auth": "MODE", "git-do": "MODE",
 	"scripted": "FILE", "resume": "ID", "prompt-file": "PATH", "trace-file": "PATH", "trace-dir": "DIR",
 	"max-steps": "N", "max-tool-calls": "N", "model-retry-window": "DURATION",
 }
@@ -573,7 +571,7 @@ func writeTopLevelHelp(w io.Writer) {
 	fmt.Fprintln(w, "  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run")
 	fmt.Fprintln(w, "  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,")
 	fmt.Fprintln(w, "                                      with no key; the provider must be openai")
-	fmt.Fprintln(w, "  TYPESAFE_API_KEY                    optional router key; read only when Auto is enabled")
+	fmt.Fprintln(w, "  TYPESAFE_API_KEY                    router key for --auto or --git-do jev")
 	fmt.Fprintln(w, "  REAGENT_MODEL                       default model")
 	fmt.Fprintln(w, "  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)")
 	fmt.Fprintln(w, "  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)")

@@ -621,7 +621,7 @@ func TestMain_ShowContextMatchesTheEncoderByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewGitInspectTool(ws), NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool())
+	registry, err := NewRegistry(Mode{}, NewListFilesTool(ws), NewReadFileTool(ws), NewSearchTextTool(ws), NewGitInspectTool(ws), NewEditFileTool(ws), NewWriteFileTool(ws), NewDeleteFileTool(ws), NewExecTool(ws), NewRequestWorkspaceAccessTool(), NewSwitchWorkspaceTool(), NewGitDoTool(ws, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +708,7 @@ func TestMain_ReadOnlyWithholdsMutatingTools(t *testing.T) {
 		return strings.Join(names, ",") + " | " + strings.SplitN(mode, "\n", 2)[0]
 	}
 
-	if got := declared(); got != "cancel,delete_file,dismiss,edit_file,exec,git_inspect,list_files,read_file,recall,request_workspace_access,reset,search_text,send,spawn,switch_workspace,threads,wait,write_file | Mode: read, write, and execute" {
+	if got := declared(); got != "cancel,delete_file,dismiss,edit_file,exec,git_do,git_inspect,list_files,read_file,recall,request_workspace_access,reset,search_text,send,spawn,switch_workspace,threads,wait,write_file | Mode: read, write, and execute" {
 		t.Fatalf("default run declared %q", got)
 	}
 	if got := declared("--read-only"); got != "cancel,dismiss,git_inspect,list_files,read_file,recall,request_workspace_access,reset,search_text,send,spawn,switch_workspace,threads,wait | Mode: read only" {
