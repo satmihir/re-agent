@@ -29,7 +29,7 @@ With no instance ids, every task in bench/tasks.txt runs. --ref builds re:agent
 from that commit instead of the working tree, which is how two versions are
 compared with the same tasks and harness. Results go to bench/out/NAME/, or
 bench/out/NAME-r1 through NAME-rN with --repeat. Needs Docker and a Python with
-the swebench package.
+the swebench package, plus rustup: the build is a static musl binary.
 """
 
 import argparse
@@ -38,8 +38,10 @@ import glob
 import importlib.util
 import json
 import os
+import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -95,18 +97,34 @@ def docker_arch():
     return {"aarch64": "arm64", "arm64": "arm64"}.get(arch, "amd64")
 
 
+def cargo_static(source, binary):
+    """Builds a static musl re:agent from source/rust and copies it to binary.
+    ring compiles C, so a non-Linux or cross-arch host must set
+    CC_<target> (for example CC_aarch64_unknown_linux_musl) to a musl cross compiler."""
+    arch = {"arm64": "aarch64", "amd64": "x86_64"}[docker_arch()]
+    target = arch + "-unknown-linux-musl"
+    env = {**os.environ, "CARGO_TARGET_DIR": os.path.join(ROOT, "rust", "target")}
+    if sys.platform == "linux" and platform.machine() == arch:
+        env.setdefault("CC_" + target.replace("-", "_"), "cc")  # Native C is fine for ring's few objects.
+    toolchain = "+" + os.environ.get("RUST_TOOLCHAIN", "1.99.1")
+    sh("rustup", toolchain, "target", "add", target)
+    sh("cargo", toolchain, "build", "--release", "--locked", "--target", target,
+       cwd=os.path.join(source, "rust"), env=env)
+    shutil.copyfile(os.path.join(env["CARGO_TARGET_DIR"], target, "release", "reagent"), binary)
+    os.chmod(binary, 0o755)
+
+
 def build(ref, binary):
     """Builds re:agent for the containers, from a commit or the working tree."""
-    env = {**os.environ, "GOOS": "linux", "GOARCH": docker_arch(), "CGO_ENABLED": "0"}
     if ref is None:
-        sh("go", "build", "-o", binary, "./cmd/reagent", cwd=ROOT, env=env)
+        cargo_static(ROOT, binary)
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
                               capture_output=True, text=True).stdout.strip() + "+worktree"
     source = binary + "-source"
     subprocess.run(["git", "worktree", "remove", "--force", source], cwd=ROOT, capture_output=True)
     sh("git", "worktree", "add", "--detach", "-q", source, ref, cwd=ROOT)
     try:
-        sh("go", "build", "-o", binary, "./cmd/reagent", cwd=source, env=env)
+        cargo_static(source, binary)
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=source,
                               capture_output=True, text=True).stdout.strip()
     finally:

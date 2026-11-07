@@ -9,7 +9,6 @@
 
 <p align="center">
   <a href="https://github.com/satmihir/re-agent/actions/workflows/ci.yml"><img src="https://github.com/satmihir/re-agent/actions/workflows/ci.yml/badge.svg" alt="Build and tests"></a>
-  <a href="https://github.com/satmihir/re-agent/actions/workflows/ci.yml"><img src="https://satmihir.github.io/re-agent/coverage.svg" alt="Coverage"></a>
 </p>
 
 re:agent is a coding agent harness in Go. It builds each model request, reads
@@ -634,18 +633,14 @@ bad invocation.
 ## Development
 
 ```bash
-make check    # gofmt, vet, go test, cargo fmt --check and cargo test, offline, with no keys
-make live     # two real API round trips with the Go implementation; reads .env (or main checkout's .env from a worktree); spends tokens
+make check    # cargo fmt --check and cargo test, offline, with no keys
+make live     # two real API round trips, one per provider; reads .env (or main checkout's .env from a worktree); spends tokens
 make tty-check  # build ./reagent and drive the chat in a pseudo-terminal; offline, needs python3
 ```
 
-GitHub Actions builds, vets, runs Go tests with coverage, runs the offline
-Python bench tests, and formats, builds and tests the Rust port on Linux and
-macOS, on pushes to `main` and on pull requests. Go coverage appears
-in the run summary. On pushes to `main`, the workflow publishes the coverage
-badge to GitHub Pages; enable
-Pages with **GitHub Actions** as its build and deployment source for the badge
-to appear.
+GitHub Actions runs the offline Python bench tests, and formats, builds and
+tests the Rust implementation on Linux and macOS, on pushes to `main` and on
+pull requests.
 
 A test that reaches the internet is a bug. For evaluated repository changes,
 use the optional [discovery and offline comparison procedure](docs/reagent-requirement-discovery.md)

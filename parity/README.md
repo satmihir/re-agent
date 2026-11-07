@@ -236,20 +236,21 @@ The plain candidate is built independently from a separate archive.
 
 Regeneration requires the exact Rust/Python identities above and the existing
 `~/.cargo` registry cache: Cargo uses `--offline`, never a provider API.
-A verified cache can be compared without rebuilding Rust. Go mutation testing and
-Go instrumented coverage are explicitly disabled for this Rust reference;
-their implementations and historical reports remain for a Rust-port follow-up. **For #141, the exact
+A verified cache can be compared without rebuilding Rust. Go instrumented coverage
+is explicitly disabled for this Rust reference. Mutation testing (`parity.mutate`,
+`mutations.json`, `mutation-results.json`) is retired; earlier reports below that
+cite it are historical. **For #141, the exact
 Python 3.11.5 interpreter is a hard host prerequisite**, not just its version:
 Linux fixtures deliberately retain `sys.executable` in tool argv and display.
 The Linux identity's `python_executable` records the resolved path
 `/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin/python3.11`.
-Capture, comparison (including a warm cache), and mutation execution fail closed
+Capture and comparison (including a warm cache) fail closed
 when `sys.executable` resolves elsewhere. A symlink to the same interpreter is
 accepted; another installation reporting 3.11.5 is not. This guards the Python
 harness, **not the candidate**: a Rust `BIN` in #141 remains supported. Do not
 change the identity or mask interpreter paths during translation.
 
-Use this environment for **every** parity command, including mutations and tests:
+Use this environment for **every** parity command, including tests:
 
 ```sh
 export PATH=/home/mihir/src/parity-toolchains/python/cpython-3.11.5-linux-x86_64-gnu/bin:/usr/local/bin:/usr/bin:/bin
@@ -283,7 +284,7 @@ python3 -m parity.run --list
 python3 -m unittest discover -s parity -p '*test.py'
 ```
 
-**Speed.** Comparisons and mutations default `JOBS` to the core count minus two, at
+**Speed.** Comparisons default `JOBS` to the core count minus two, at
 most twelve (six on an eight-core Mac); reference captures keep at most six because
 they publish protected locks. Raw replay and lock derivation run no binaries, so
 they use every core but two. Slow leaves start first within each phase; reports
@@ -315,11 +316,6 @@ runs that must replay the whole cache. The stamp trusts local file metadata: it
 detects ordinary edits, replacement and removal, not deliberate tampering that
 restores every timestamp and inode.
 
-`python3 -m parity.mutate` runs each mutant's cases with `--jobs` (default as above)
-and stops at the first leaf that fails with the intended assertion; the remaining
-catcher leaves run only if the first survives. Pass `--all-catchers` to record every
-catcher, as the historical area-1 acceptance did; area 2 uses the defaults.
-
 Candidate runs cannot update the committed oracle or regenerate its cache under
 their shared comparison lock. Reference cache preparation is a separate exclusive
 operation from the pinned reference, never from the candidate. Bad invocation exits 2;
@@ -341,7 +337,7 @@ Failures and `report.json` are always retained outside the checkout. Use
 `--keep-artifacts` (or `make parity KEEP_ARTIFACTS=1`) to keep passing evidence too;
 `--probe` also retains evidence because it performs no comparison. The summary
 prints total retained file bytes, including the report. An external `GOCOVERDIR`
-is not deleted. Reference-cache and mutation runs retain their full evidence.
+is not deleted. Reference-cache runs retain their full evidence.
 
 `--probe` runs assertions and normalization but explicitly does **not** compare
 expected outputs or claim a passing gate. `make parity-golden` builds from
