@@ -277,7 +277,7 @@ const gitDoEvalSplitRule = "SHA-256(call_id) first byte odd = held_out; even = t
 
 func gitDoLoadRealCases(t *testing.T) []gitDoEvalCase {
 	t.Helper()
-	file, err := os.Open("git_do_real_cases.jsonl")
+	file, err := os.Open("../../rust/testdata/git_do_real_cases.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}

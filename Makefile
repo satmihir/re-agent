@@ -3,7 +3,7 @@
 #   make          build ./reagent from the Rust port in rust/
 #   make build-go build ./reagent-go from the Go implementation, kept while it is retired
 #   make check    format, vet, and the offline suites of both; needs no credentials
-#   make live     Go conformance runs against both providers; reads ./.env or main checkout .env in a worktree
+#   make live     conformance runs against both providers; reads ./.env or main checkout .env in a worktree
 #   make tty-check  drive the Rust chat in a pseudo-terminal and check the screen; offline
 #   make parity BIN=/absolute/reagent  offline executable parity against locked cached outputs
 #   make parity-golden  rebuild the pinned reference and verify regenerated outputs
@@ -48,7 +48,7 @@ live:
 		echo "no OPENAI_API_KEY or ANTHROPIC_API_KEY set; copy .env.example to .env and fill it in"; \
 		exit 1; \
 	fi; \
-	REAGENT_LIVE_TESTS=1 go test ./internal/reagent/ -run Live -v -count=1
+	cd rust && REAGENT_LIVE_TESTS=1 $(CARGO) test --locked --test live -- --nocapture --test-threads=1
 
 # Drives ./reagent through bench/tty's scenarios, which exercise the real
 # terminal path that unit tests cannot: a pty, its buffer and flags, and the
@@ -62,8 +62,8 @@ tty-check: build
 git-do-eval:
 	@$(load_env); \
 	if [ "$(MODE)" = jev ] && [ -z "$$TYPESAFE_API_KEY" ]; then echo "no TYPESAFE_API_KEY set; add it to .env"; exit 1; fi; \
-	REAGENT_GIT_DO_EVAL=1 REAGENT_GIT_DO_EVAL_MODE=$(MODE) REAGENT_GIT_DO_EVAL_REPEATS=$(N) REAGENT_GIT_DO_EVAL_SET=$(SET) \
-	go test ./internal/reagent/ -run '^TestGitDoEval$$' -v -count=1
+	cd rust && REAGENT_GIT_DO_EVAL=1 REAGENT_GIT_DO_EVAL_MODE=$(MODE) REAGENT_GIT_DO_EVAL_REPEATS=$(N) REAGENT_GIT_DO_EVAL_SET=$(SET) \
+	$(CARGO) test --locked --lib -- --exact tool_git::recipes::eval::git_do_eval --nocapture
 
 MODE ?= jev
 N ?= 5
