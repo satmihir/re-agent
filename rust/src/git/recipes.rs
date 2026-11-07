@@ -26,6 +26,16 @@ fn s<'a>(v: &'a Value, k: &str) -> &'a str {
 fn named(n: &str) -> bool {
     MENU.iter().any(|(name, _)| *name == n)
 }
+/// Jev's confidence needed for a recipe when the model named none.
+fn base_threshold(recipe: &str) -> f64 {
+    if ["status", "explain_branch", "pr_status"].contains(&recipe) {
+        0.7
+    } else if ["rebase_push", "revert_pr"].contains(&recipe) {
+        0.9
+    } else {
+        0.85
+    }
+}
 pub(super) fn spec(config: &Value) -> Value {
     let jev = s(config, "git_do") == "jev";
     let prefix = if jev {
@@ -701,6 +711,10 @@ impl Run<'_> {
                 return Err(decline(format!("Jev could not decide: {e}")));
             }
         };
+        self.judge(&answers, allowed, &prefix)
+    }
+    /// Applies the scope and confidence rules to Jev's answers.
+    fn judge(&mut self, answers: &Value, allowed: &[&str], prefix: &str) -> Result<String, Error> {
         let outcome = s(&answers["outcome"], "choice").to_string();
         self.result["decision"]["jev_outcome"] = json!(outcome);
         let choice = if answers["scope"]["choice"] == "more" {
@@ -720,7 +734,7 @@ impl Run<'_> {
         self.result["recipe"] = json!(choice);
         self.result["confidence"] = json!(confidence);
         let named = if s(&self.args, "recipe").is_empty() {
-            prefix.clone()
+            prefix.to_string()
         } else {
             s(&self.args, "recipe").into()
         };
@@ -744,13 +758,7 @@ impl Run<'_> {
             self.result["decision"]["declined_by"] = json!("none");
             return Err(decline("No listed recipe fits this request and repository state; use exec for a different git operation."));
         }
-        let threshold = if ["status", "explain_branch", "pr_status"].contains(&choice.as_str()) {
-            0.7
-        } else if ["rebase_push", "revert_pr"].contains(&choice.as_str()) {
-            0.9
-        } else {
-            0.85
-        };
+        let threshold = base_threshold(&choice);
         let more = answers["scope"]["probabilities"]["more"]
             .as_f64()
             .unwrap_or(0.0);
@@ -1582,6 +1590,9 @@ fn walk_embedded(root: &Path, dir: &Path, result: &mut Vec<String>) -> std::io::
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "recipes_eval.rs"]
+mod eval;
 #[cfg(test)]
 mod encoding_tests {
     use super::*;
