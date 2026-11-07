@@ -16,10 +16,9 @@ import (
 	"time"
 )
 
-// git_do is an experiment: the model states a git outcome, and handwritten
-// recipes carry it out and return proof. With --git-do jev the model writes
-// the request in English and Jev picks the recipe. With --git-do recipe the
-// model names the recipe itself, as the control. Either way, software prunes
+// git_do carries out a git outcome with handwritten recipes and returns proof.
+// By default the model names the recipe. With --git-do jev the model writes
+// the request in English and Jev picks the recipe. Either way, software prunes
 // the recipes the repository state does not allow, runs one recipe that stops
 // at its first failed command, and then checks the result (v0 §10.9).
 
@@ -73,7 +72,7 @@ type gitDoTool struct {
 	jev *jevClient // nil when the model names the recipe
 }
 
-// NewGitDoTool returns the experimental git_do tool. A non-nil jev means the
+// NewGitDoTool returns the git_do tool. A non-nil jev means the
 // model sends an English request and Jev picks the recipe.
 func NewGitDoTool(ws *Workspace, jev *jevClient) Tool { return gitDoTool{ws: ws, jev: jev} }
 
