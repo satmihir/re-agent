@@ -1,6 +1,6 @@
 # re:agent
 #
-#   make          build ./reagent from the Rust port in rust/
+#   make          build ./reagent from rust/
 #   make check    format check and the offline suite; needs no credentials
 #   make live     conformance runs against both providers; reads ./.env or main checkout .env in a worktree
 #   make tty-check  drive the Rust chat in a pseudo-terminal and check the screen; offline

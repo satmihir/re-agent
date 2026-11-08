@@ -11,10 +11,11 @@
   <a href="https://github.com/satmihir/re-agent/actions/workflows/ci.yml"><img src="https://github.com/satmihir/re-agent/actions/workflows/ci.yml/badge.svg" alt="Build and tests"></a>
 </p>
 
-re:agent is a coding agent harness in Go. It builds each model request, reads
+re:agent is a coding agent harness in Rust. It builds each model request, reads
 what the model asks for, runs only the tools you granted, feeds the results
-back, and repeats. The whole agent is one package of about 13,000 lines, plus
-16,000 lines of tests, with one dependency (`golang.org/x/term`). Every request
+back, and repeats. The whole agent is one crate in [`rust/`](rust/), talking to
+providers over plain HTTP with no SDKs. It began as a Go program; the Rust
+implementation replaced it after an executable parity campaign. Every request
 it sends and every reply it gets is recorded on disk, so you can see exactly
 what happened and why.
 
@@ -66,10 +67,8 @@ scripts instead of `edit_file`.
 
 ## Quick start
 
-`make build` builds the Rust port in `rust/` and needs `rustup` (it uses
-toolchain 1.99.1, as CI does: `rustup toolchain install 1.99.1`). The Go
-implementation is still in the tree while it is retired; `make build-go` builds
-it as `./reagent-go`.
+`make build` builds `./reagent` from `rust/` and needs `rustup` (it uses
+toolchain 1.99.1, as CI does: `rustup toolchain install 1.99.1`).
 
 ```bash
 make build
@@ -269,8 +268,8 @@ routing calls. With provider credentials and `TYPESAFE_API_KEY` exported in your
 shell (the CLI does not automatically load `.env`):
 
 ```sh
-go run ./cmd/reagent chat --auto
-go run ./cmd/reagent run --auto --workspace ./repo "Fix the bug and run the tests."
+./reagent chat --auto
+./reagent run --auto --workspace ./repo "Fix the bug and run the tests."
 ```
 
 Without an explicit provider/model or `REAGENT_MODEL`, `--auto` starts with
@@ -363,18 +362,10 @@ costs stay unknown. Preview and scripted replay reject `--auto` before any live
 request. Net latency, cost and semantic quality need an end-to-end comparison;
 the earlier six synthetic Jev requests established only API conformance.
 
-With separate approval for API spending and `TYPESAFE_API_KEY` exported locally,
-run the six-request Jev-only qualification with:
-
-```sh
-REAGENT_JEV_LIVE_TESTS=1 go test ./internal/reagent -run '^TestLive_JevRoutesSyntheticSegments$' -v -count=1
-```
-
-This test never calls OpenAI or Anthropic. It skips by default even when a key
-exists, stops on its first failure, and makes no retries. `.env` is not loaded
-by ordinary CLI startup or this test; supply the key through the environment
-without pasting it into a prompt or command argument. Reported routing latency
-and token usage do not establish downstream quality or end-to-end speedup.
+`.env` is not loaded by ordinary CLI startup; supply `TYPESAFE_API_KEY` through
+the environment without pasting it into a prompt or command argument. Reported
+routing latency and token usage do not establish downstream quality or
+end-to-end speedup.
 
 Writing `/plan` in a chat sentence also starts plan mode and keeps `/plan` in
 the sent message. Like other chat messages, surrounding whitespace is trimmed.
@@ -584,11 +575,11 @@ delivery is not exactly once. Losing receipts may replay older available snapsho
 Only one authoritative uploader may own each source record: do not upload
 overlapping trace copies from separate machines. There is no durable outbox;
 keep traces until delivery succeeds. The uploader never changes Git, starts an
-agent, or applies fixes. The Go binary does not implement this command.
+agent, or applies fixes.
 
 ## How it works
 
-Start at `Execute` in [`internal/reagent/loop.go`](internal/reagent/loop.go).
+Start at `Session::execute_submission` in [`rust/src/run_loop.rs`](rust/src/run_loop.rs).
 It is the whole agent loop in one function: build the request, get one
 response, validate it, run the tools it asked for, append the results, repeat.
 A few rules shape the rest:

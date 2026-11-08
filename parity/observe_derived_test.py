@@ -188,8 +188,8 @@ class DerivedSourceTests(unittest.TestCase):
             routing_source(logical(history), metadata)
 
     def test_pinned_jev_rubric_matches_source_contract(self):
-        source = (Path(__file__).parents[1]/'internal/reagent/jev.go').read_text()
-        self.assertEqual(JEV_INSTRUCTIONS, re.search(r'const jevInstructions = `([^`]+)`', source)[1])
+        source = (Path(__file__).parents[1]/'rust/src/jev.rs').read_text()
+        self.assertEqual(JEV_INSTRUCTIONS, re.search(r'const INSTRUCTIONS: &str = "([^"]+)";', source)[1])
 
     def test_missing_unsent_packet_source_does_not_ignore_hash(self):
         with self.assertRaises(AssertionError):
