@@ -2542,65 +2542,69 @@ mod tests {
 
     #[test]
     fn withheld_names_are_refused_by_every_file_tool_and_omitted_from_listings() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join(".git")).unwrap();
-        for name in [
-            ".git/config",
-            ".GiT",
-            ".ENV",
-            ".env.local",
-            ".EnV.SECRET",
-            ".environment",
-        ] {
-            fs::write(root.path().join(name), "needle\n").unwrap();
-        }
-        let config = json!({"workspace":root.path()});
-        let mut state = ToolState::new(&config).unwrap();
-        for path in [
-            ".git",
-            ".git/config",
-            ".GiT",
-            ".ENV",
-            ".env.local",
-            ".EnV.SECRET",
-        ] {
-            for (name, arguments) in [
-                ("read_file", json!({"path":path})),
-                ("list_files", json!({"path":path})),
-                ("search_text", json!({"path":path,"query":"needle"})),
-                ("write_file", json!({"path":path,"content":"x"})),
-                (
-                    "edit_file",
-                    json!({"path":path,"old_text":"needle","new_text":"x"}),
-                ),
-                ("delete_file", json!({"path":path,"recursive":true})),
+        // Separate roots keep .git and .GiT from colliding on case-insensitive filesystems.
+        for git_path in [".git/config", ".GiT"] {
+            let root = tempfile::tempdir().unwrap();
+            for name in [
+                git_path,
+                ".ENV",
+                ".env.local",
+                ".EnV.SECRET",
+                ".environment",
             ] {
-                let result = execute(&mut state, &config, name, &arguments.to_string()).unwrap();
-                assert_eq!(result["code"], "invalid_path", "{name} {path}: {result}");
-                assert_eq!(result["effect"], "none");
+                let path = root.path().join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, "needle\n").unwrap();
             }
-        }
-        // .environment only shares a prefix with .env, so it stays visible.
-        let listing = execute(&mut state, &config, "list_files", r#"{"path":"."}"#).unwrap();
-        assert_eq!(listing["data"]["entries"][0]["name"], ".environment");
-        assert_eq!(listing["data"]["entries"].as_array().unwrap().len(), 1);
-        let search = execute(
-            &mut state,
-            &config,
-            "search_text",
-            r#"{"path":".","query":"needle"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            search["data"]["matches"],
-            json!([{"path":".environment","line":1,"text":"needle","preview_truncated":false}])
-        );
-        for name in [".git/config", ".GiT", ".ENV", ".env.local", ".EnV.SECRET"] {
+            let config = json!({"workspace":root.path()});
+            let mut state = ToolState::new(&config).unwrap();
+            for path in [
+                ".git",
+                ".git/config",
+                ".GiT",
+                ".ENV",
+                ".env.local",
+                ".EnV.SECRET",
+            ] {
+                for (name, arguments) in [
+                    ("read_file", json!({"path":path})),
+                    ("list_files", json!({"path":path})),
+                    ("search_text", json!({"path":path,"query":"needle"})),
+                    ("write_file", json!({"path":path,"content":"x"})),
+                    (
+                        "edit_file",
+                        json!({"path":path,"old_text":"needle","new_text":"x"}),
+                    ),
+                    ("delete_file", json!({"path":path,"recursive":true})),
+                ] {
+                    let result =
+                        execute(&mut state, &config, name, &arguments.to_string()).unwrap();
+                    assert_eq!(result["code"], "invalid_path", "{name} {path}: {result}");
+                    assert_eq!(result["effect"], "none");
+                }
+            }
+            // .environment only shares a prefix with .env, so it stays visible.
+            let listing = execute(&mut state, &config, "list_files", r#"{"path":"."}"#).unwrap();
+            assert_eq!(listing["data"]["entries"][0]["name"], ".environment");
+            assert_eq!(listing["data"]["entries"].as_array().unwrap().len(), 1);
+            let search = execute(
+                &mut state,
+                &config,
+                "search_text",
+                r#"{"path":".","query":"needle"}"#,
+            )
+            .unwrap();
             assert_eq!(
-                fs::read(root.path().join(name)).unwrap(),
-                b"needle\n",
-                "{name}"
+                search["data"]["matches"],
+                json!([{"path":".environment","line":1,"text":"needle","preview_truncated":false}])
             );
+            for name in [git_path, ".ENV", ".env.local", ".EnV.SECRET"] {
+                assert_eq!(
+                    fs::read(root.path().join(name)).unwrap(),
+                    b"needle\n",
+                    "{name}"
+                );
+            }
         }
     }
 
