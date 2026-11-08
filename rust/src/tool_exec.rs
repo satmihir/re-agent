@@ -939,6 +939,30 @@ mod tests {
         .unwrap();
         assert_eq!(v["data"]["stdout"], "$HOME;*\n");
     }
+
+    #[test]
+    fn exec_validation_refuses_the_whole_chain_before_any_process_starts() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("not-directory"), "file").unwrap();
+        let mut w = Workspace::open(d.path().to_str().unwrap()).unwrap();
+        let tripwire = json!(["/bin/sh", "-c", "touch tripwire"]);
+        for args in [
+            json!({"argv":tripwire,"then":[[]],"cwd":"."}),
+            json!({"argv":tripwire,"then":[tripwire,["/bin/sh","bad\u{0}argument"]],"cwd":"."}),
+            json!({"argv":tripwire,"then":vec![tripwire.clone(); 8],"cwd":"."}),
+            json!({"argv":tripwire,"cwd":"missing"}),
+            json!({"argv":tripwire,"cwd":"not-directory"}),
+            json!({"argv":tripwire,"cwd":"../escape"}),
+            json!({"argv":tripwire,"cwd":".git"}),
+            json!({"argv":tripwire,"cwd":".","timeout_ms":-1}),
+        ] {
+            let value = execute(&mut w, &json!({}), &args).unwrap();
+            assert_eq!(value["ok"], false, "{args}: {value}");
+            assert_eq!(value["effect"], "none", "{args}: {value}");
+            assert!(value["data"].is_null(), "{args}: {value}");
+            assert!(!d.path().join("tripwire").exists(), "{args}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1366,6 +1390,88 @@ mod overlap_tests {
                 "failed registration remained active"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+
+    const ALLOWED: [&str; 9] = [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "GOROOT",
+        "GOPATH",
+        "GOCACHE",
+        "GOMODCACHE",
+    ];
+
+    // The child test owns its whole environment, so no other test sees the secrets it sets.
+    #[test]
+    fn exec_child_sees_only_allowlisted_environment_in_requested_cwd() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tool_exec::environment_tests::environment_child",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("REAGENT_EXEC_ENV_TEST", "1")
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", "/reagent-home")
+            .env("LANG", "C")
+            .env("GOPATH", "/reagent-gopath")
+            .env("OPENAI_API_KEY", "must-not-pass")
+            .env("ANTHROPIC_API_KEY", "must-not-pass")
+            .env("REAGENT_HIDDEN", "must-not-pass")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
+    #[test]
+    fn environment_child() {
+        if std::env::var_os("REAGENT_EXEC_ENV_TEST").is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let out = execute(
+            &mut workspace,
+            &json!({}),
+            &json!({"argv":["env"],"then":[["pwd"]],"cwd":"sub"}),
+        )
+        .unwrap();
+        assert_eq!(out["ok"], true, "{out}");
+        let steps = &out["data"]["steps"];
+        assert_eq!(steps[0]["resolved_executable"], "/usr/bin/env");
+        let mut seen: Vec<String> = steps[0]["stdout"]
+            .as_str()
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        seen.sort();
+        let mut expected: Vec<String> = std::env::vars()
+            .filter(|(key, _)| ALLOWED.contains(&key.as_str()))
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        expected.sort();
+        assert_eq!(seen, expected);
+        assert_eq!(
+            steps[1]["stdout"],
+            format!("{}\n", workspace.root.join("sub").display())
+        );
     }
 }
 

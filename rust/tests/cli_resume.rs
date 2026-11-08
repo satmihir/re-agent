@@ -10,6 +10,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 fn chat(root: &Path, arguments: &[&str], input: &[u8]) -> Output {
+    let output = launch(root, "http://127.0.0.1:1", arguments, input);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+fn launch(root: &Path, base: &str, arguments: &[&str], input: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_reagent"))
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -17,7 +27,7 @@ fn chat(root: &Path, arguments: &[&str], input: &[u8]) -> Output {
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("NO_COLOR", "1")
         .env("OPENAI_API_KEY", "offline-key")
-        .env("REAGENT_OPENAI_BASE_URL", "http://127.0.0.1:1")
+        .env("REAGENT_OPENAI_BASE_URL", base)
         .args(["chat"])
         .args(arguments)
         .stdin(Stdio::piped())
@@ -26,13 +36,7 @@ fn chat(root: &Path, arguments: &[&str], input: &[u8]) -> Output {
         .spawn()
         .unwrap();
     child.stdin.take().unwrap().write_all(input).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
+    child.wait_with_output().unwrap()
 }
 
 fn checkpoint(root: &Path) -> PathBuf {
@@ -203,4 +207,50 @@ fn resume_uses_the_recipe_default_instead_of_the_launch_opt_out() {
         .find(|spec| spec["name"] == "git_do")
         .unwrap();
     assert_eq!(spec["input_schema"]["required"], json!(["recipe"]));
+}
+
+#[test]
+fn corrupt_checksum_resume_fails_without_replay_or_rewrite() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = checkpoint(directory.path());
+    // A valid interrupted checkpoint would be recovered and rewritten on resume.
+    set_phase(&path, "model");
+    let id = path
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let valid = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    let corrupt = valid.replacen("\"phase\": \"model\"", "\"phase\": \"idle\"", 1);
+    assert_ne!(corrupt, valid);
+    std::fs::write(&path, &corrupt).unwrap();
+    let inode = std::fs::metadata(&path).unwrap().ino();
+    let mut events = watch(path.parent().unwrap());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let output = launch(
+        directory.path(),
+        &base,
+        &["--resume", id],
+        b"next task\n/exit\n",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "corrupt session {id}: checkpoint checksum mismatch"
+        )),
+        "{stderr}"
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "a corrupt checkpoint must not reach the provider"
+    );
+    assert_eq!(replacements(&mut events), 0);
+    assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+    assert_eq!(std::fs::read(&path).unwrap(), corrupt.as_bytes());
 }

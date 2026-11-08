@@ -4,15 +4,13 @@
 #   make check    format check and the offline suite; needs no credentials
 #   make live     conformance runs against both providers; reads ./.env or main checkout .env in a worktree
 #   make tty-check  drive the Rust chat in a pseudo-terminal and check the screen; offline
-#   make parity BIN=/absolute/reagent  offline executable parity against locked cached outputs
-#   make parity-golden  rebuild the pinned reference and verify regenerated outputs
 #   make git-do-eval  repeated git_do decisions; MODE=jev|recipe N=5 SET=all|tuning|held_out; Jev reads .env
 
-.PHONY: all build check live tty-check git-do-eval parity parity-golden
+.PHONY: all build check live tty-check git-do-eval
 
 all: build
 
-# The toolchain CI and the parity reference use.
+# The toolchain CI uses.
 RUST_TOOLCHAIN ?= 1.99.1
 CARGO = cargo +$(RUST_TOOLCHAIN)
 
@@ -61,12 +59,3 @@ MODE ?= jev
 N ?= 5
 SET ?= all
 
-# Never loads .env or builds the candidate; the executable is the boundary.
-# Unset JOBS uses the Python defaults: comparisons leave two cores free, at most twelve
-# parallel cases; reference captures stay at six. UNIT=0 skips the unit preflight (never a gate).
-parity-golden:
-	python3 -m parity.golden $(if $(JOBS),--jobs "$(JOBS)") $(if $(filter 1,$(UPDATE)),--update)
-
-parity:
-	$(if $(filter 0,$(UNIT)),,python3 -m unittest discover -s parity -p '*test.py')
-	python3 -m parity.run --bin "$(BIN)" $(if $(JOBS),--jobs "$(JOBS)") $(if $(AREA),--area "$(AREA)") $(if $(CASE),--case "$(CASE)") $(if $(filter 1,$(KEEP_ARTIFACTS)),--keep-artifacts) $(if $(filter 0,$(SLOW)),--skip-slow) $(if $(filter 1,$(VERIFY)),--verify-cache)

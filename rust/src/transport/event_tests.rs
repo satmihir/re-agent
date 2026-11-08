@@ -348,3 +348,231 @@ fn retries_and_sequential_calls_reuse_one_connection_with_fresh_request_limits()
         .collect();
     assert_eq!(statuses, [503, 200, 200, 200]);
 }
+
+/// Serves each response on a fresh connection; an extra attempt finds the port closed.
+fn serve(responses: Vec<String>) -> (String, std::thread::JoinHandle<usize>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let total = responses.len();
+        for (served, response) in responses.into_iter().enumerate() {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                if let Ok((stream, _)) = listener.accept() {
+                    break stream;
+                }
+                if Instant::now() >= deadline {
+                    return served;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            http::tests::request(&mut stream);
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+        total
+    });
+    (endpoint, server)
+}
+
+fn reply(status: u16, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn count(transport: &Transport, name: &str) -> usize {
+    transport
+        .events
+        .iter()
+        .filter(|event| event["event"] == name)
+        .count()
+}
+
+#[test]
+fn only_http_200_succeeds_and_default_policy_retries_transient_statuses_once() {
+    const BUSY: &str = r#"{"error":{"message":"still busy"}}"#;
+    for (status, attempts) in [
+        (201, 1),
+        (204, 1),
+        (301, 1),
+        (400, 1),
+        (401, 1),
+        (408, 1),
+        (429, 2),
+        (529, 2),
+    ] {
+        let body = if status == 204 { "" } else { BUSY };
+        let (endpoint, server) = serve(vec![reply(status, body); attempts]);
+        let mut transport = Transport::new(&json!({"provider":"openai"}));
+        let started = Instant::now();
+        let (got, raw) = transport
+            .call_endpoint(&json!({}), &json!({"model":"m"}), &endpoint)
+            .unwrap();
+        assert_eq!(server.join().unwrap(), attempts, "{status}");
+        assert_eq!(got, status);
+        assert_eq!(
+            count(&transport, "api.attempt.started"),
+            attempts,
+            "{status}"
+        );
+        assert_eq!(count(&transport, "api.retry.scheduled"), 0);
+        if attempts == 2 {
+            assert!(started.elapsed() >= Duration::from_millis(500), "{status}");
+            assert_eq!(
+                transport.events[0]["data"]["request_body"],
+                transport.events[2]["data"]["request_body"]
+            );
+        }
+        // Provider::generate hands every non-200 status to provider_error.
+        let error = provider_error(got, &raw);
+        assert_eq!(error.status, "provider_error");
+        let detail = if status == 204 { "" } else { "still busy" };
+        assert_eq!(
+            error.message,
+            format!("provider returned HTTP {status}: {detail}")
+        );
+    }
+}
+
+#[test]
+fn window_clips_the_final_wait_and_exhausts_once_with_unreported_attempts() {
+    let busy = reply(429, r#"{"error":{"message":"still busy"}}"#);
+    let (endpoint, server) = serve(vec![busy.clone(), busy]);
+    // The first backoff is 0.8-1.2s, so the second must be clipped to what remains of 1.5s.
+    let mut transport =
+        Transport::new(&json!({"provider":"anthropic","model_retry_window":1_500_000_000u64}));
+    let started = Instant::now();
+    let error = transport
+        .call_endpoint(&json!({}), &json!({"model":"m"}), &endpoint)
+        .unwrap_err();
+    assert!(started.elapsed() >= Duration::from_millis(1500));
+    assert_eq!(server.join().unwrap(), 2);
+    assert_eq!(error.status, "provider_error");
+    assert_eq!(
+        error.message,
+        "model retry window exhausted after 2 attempts: provider returned HTTP 429: still busy"
+    );
+    let mut usage = usage_zero(true);
+    usage["unreported_attempts"] = json!(2);
+    assert_eq!(error.usage, usage);
+    let delays: Vec<u64> = transport
+        .events
+        .iter()
+        .filter(|event| event["event"] == "api.retry.scheduled")
+        .map(|event| event["data"]["delay_ms"].as_u64().unwrap())
+        .collect();
+    assert_eq!(delays.len(), 2);
+    assert!((800..=1200).contains(&delays[0]), "{delays:?}");
+    assert!(delays[0] + delays[1] <= 1500, "{delays:?}");
+    let exhausted: Vec<_> = transport
+        .events
+        .iter()
+        .filter(|event| event["event"] == "api.retry.exhausted")
+        .collect();
+    assert_eq!(exhausted.len(), 1);
+    assert_eq!(exhausted[0]["data"], json!({"attempt":2,"http_status":429}));
+}
+
+#[test]
+fn transient_stream_error_is_retried_only_inside_a_window() {
+    let overload = reply(
+        200,
+        "data: {\"type\":\"error\",\"error\":{\"code\":\"rate_limit_error\",\"message\":\"slow down\"}}\n\n",
+    );
+    let completed = reply(
+        200,
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n",
+    );
+    for window in [0u64, 2_000_000_000] {
+        let responses = if window == 0 {
+            vec![overload.clone()]
+        } else {
+            vec![overload.clone(), completed.clone()]
+        };
+        let (endpoint, server) = serve(responses);
+        let mut transport = Transport::new(
+            &json!({"provider":"openai","proxied":true,"model_retry_window":window}),
+        );
+        let (status, raw) = transport
+            .call_endpoint(&json!({}), &json!({"model":"m"}), &endpoint)
+            .unwrap();
+        assert_eq!(status, 200);
+        if window == 0 {
+            assert_eq!(server.join().unwrap(), 1);
+            assert_eq!(count(&transport, "api.attempt.started"), 1);
+            let error = crate::openai::assemble(&raw).unwrap_err();
+            assert_eq!(error.status, "provider_error");
+            assert_eq!(
+                error.message,
+                "provider reported a stream error (rate_limit_error): slow down"
+            );
+            continue;
+        }
+        assert_eq!(server.join().unwrap(), 2);
+        assert_eq!(count(&transport, "api.attempt.started"), 2);
+        let scheduled = transport
+            .events
+            .iter()
+            .find(|event| event["event"] == "api.retry.scheduled")
+            .unwrap();
+        assert_eq!(scheduled["data"]["reason"], "provider stream overload");
+        assert!(crate::openai::assemble(&raw).is_ok());
+        assert_eq!(transport.retry_usage["unreported_attempts"], 1);
+    }
+}
+
+#[test]
+fn http_400_overflow_uses_owned_wording_and_other_failures_stay_provider_errors() {
+    const OVERFLOW: &str = "the conversation no longer fits the model's context window";
+    for (body, status, expected_status, message) in [
+        (
+            r#"{"error":{"code":"context_length_exceeded","message":"too long"}}"#,
+            400,
+            "limit_exceeded",
+            format!("{OVERFLOW} (too long)"),
+        ),
+        (
+            r#"{"error":{"type":"context_length_exceeded","message":" \n too long \t"}}"#,
+            400,
+            "limit_exceeded",
+            format!("{OVERFLOW} (too long)"),
+        ),
+        // Anthropic's overflow wording, matched case-insensitively.
+        (
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Prompt is too long: 210000 tokens > 200000 maximum"}}"#,
+            400,
+            "limit_exceeded",
+            format!("{OVERFLOW} (Prompt is too long: 210000 tokens > 200000 maximum)"),
+        ),
+        (
+            r#"{"error":{"code":"context_length_exceeded"}}"#,
+            400,
+            "limit_exceeded",
+            OVERFLOW.to_owned(),
+        ),
+        (
+            r#"{"error":{"code":"context_length_exceeded","message":"too long"}}"#,
+            401,
+            "provider_error",
+            "provider returned HTTP 401: too long".to_owned(),
+        ),
+        (
+            r#"{"error":{"code":"CONTEXT_LENGTH_EXCEEDED","message":"too long"}}"#,
+            400,
+            "provider_error",
+            "provider returned HTTP 400: too long".to_owned(),
+        ),
+        (
+            r#"{"detail":"WRONG","error":{"message":"message wins"}}"#,
+            400,
+            "provider_error",
+            "provider returned HTTP 400: message wins".to_owned(),
+        ),
+    ] {
+        let error = provider_error(status, body.as_bytes());
+        assert_eq!(error.status, expected_status, "{body}");
+        assert_eq!(error.message, message, "{body}");
+    }
+}
