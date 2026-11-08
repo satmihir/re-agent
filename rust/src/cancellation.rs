@@ -9,15 +9,20 @@ use std::{
 };
 
 // Entries remain allocated because a signal handler may still hold an earlier pointer.
-static TOKENS: OnceLock<Mutex<HashMap<(String, String), Arc<AtomicBool>>>> = OnceLock::new();
+static TOKENS: OnceLock<Mutex<HashMap<(String, String, String), Arc<AtomicBool>>>> =
+    OnceLock::new();
 static ACTIVE: AtomicPtr<AtomicBool> = AtomicPtr::new(ptr::null_mut());
 static SIGNAL_OWNER: Mutex<()> = Mutex::new(());
 
-/// token returns the cancellation flag shared by one session and agent.
+/// token returns the cancellation flag for a Session, agent, and optional API Run scope.
 pub(crate) fn token(config: &Value) -> Arc<AtomicBool> {
     let key = (
         config["session_id"].as_str().unwrap_or("").to_owned(),
         config["agent_id"].as_str().unwrap_or("root").to_owned(),
+        config["cancellation_scope"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
     );
     TOKENS
         .get_or_init(|| Mutex::new(HashMap::new()))

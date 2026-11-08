@@ -1,8 +1,45 @@
-# Session API — proposed interfaces
+# Session API — design and implementation status
 
-Status: design for discussion, not implemented. This defines an in-process
-boundary for the CLI and a possible later gRPC adapter. It does not add a server,
-change the CLI, or make the current `runtime::Session` a supported public API.
+Status: **milestone 1 implemented**, with the remaining target interface below.
+This defines an in-process boundary for the CLI and a possible later gRPC adapter;
+it does not make `runtime::Session` itself a supported public API.
+
+## Implemented first milestone
+
+`rust/src/session_api.rs` and its owned records implement `open_session`,
+`resume_session`, `get_snapshot`, `send_message`, `get_run`, `get_command`,
+`wait_run`, `cancel_run`, and idle-only `close`. One worker owns the Session;
+cloneable handles share only published metadata, receipts, the queue, and exact
+Run cancellation flags. The model loop remains in `run_loop.rs`.
+
+- Launch settings use the typed `SessionOptions` subset; credentials remain host
+  environment bindings. The CLI's private adapter retains its existing flags.
+- Messages are literal bytes. `PlanMode` applies an explicit planning change at
+  turn start; the CLI translates inline `/plan` rather than letting the API parse it.
+- `live_runs` contains every queued/running conversation Run, without requiring
+  admission receipts or events to discover identities. There are no BTW Runs yet.
+  Terminal results remain readable after inventory removal and close.
+- At most 16 live Runs and 256 retained message receipts are admitted. Individual
+  messages fit 10 MiB; total retained message bytes fit 32 MiB. Exhaustion refuses
+  admission, not cancellation/close, and never evicts deduplication records.
+- Request-ID retries deduplicate within this opening, not across restarts.
+  A failed Run discards queued follow-ups rather than starting them automatically.
+- Resume preserves checkpoint recovery and never restarts pending work. Shared
+  checkpoint reservations atomically reject competing API/legacy resume, release
+  failed-open leases, and give each successful opening a fresh instance identity.
+  Startup failure also retires restored agent state before a later opening.
+- Close requires all admitted Runs to be terminal and awaits descendant cleanup
+  and lease release. Dropping the last handle requests asynchronous cancellation
+  and cleanup; explicit close is how the host waits for shutdown.
+- `reagent run` now uses this boundary; existing progress/reply rendering remains
+  in place. Chat still uses its existing Session path.
+
+This milestone is **trusted-local only**: handles are not capability-filtered and
+must not be given to untrusted clients. Chat/control migration, human consent,
+entry/agent/event projections, transport authorization, BTW and steering are not
+implemented. The detailed records and operations below describe the full target,
+not a claim that every field or method already exists. `wait_run` and `close` are
+local conveniences while that broader observation/control boundary is extracted.
 
 ## Boundary
 
@@ -25,9 +62,10 @@ loop stays a loop. An observation feed is not an event bus for control flow.
 Signal handling, terminal input, Markdown, pickers, and stdout/stderr selection
 belong to the CLI adapter, not the API.
 
-### What exists today
+### Pre-extraction baseline
 
-These are observations about the current code, not features of this proposal:
+These observations and source line references describe the design baseline at
+commit `a22488c`, before the first implementation milestone:
 
 | Existing boundary | Evidence |
 | --- | --- |
@@ -71,12 +109,22 @@ Public projections:
 
 | Record | Contents |
 | --- | --- |
-| `SessionSnapshot` | `session`, `revision`, `observed_at`, `event_cursor`, lifecycle, active RunRef/control request ID, pending request IDs, model/provider/effort/auth-mode labels, Auto settings, read-only/plan restrictions, launch/active workspace and approved roots, context information, usage, child summary, pending workspace requests, persistence health, last result/trace reference |
+| `SessionSnapshot` | `session`, `revision`, `observed_at`, `event_cursor`, lifecycle, `active_conversation_run`, active control request ID, complete `live_runs` inventory, pending request IDs, model/provider/effort/auth-mode labels, Auto settings, read-only/plan restrictions, launch/active workspace and approved roots, context information, usage, child summary, pending workspace requests, persistence health, last result/trace reference |
 | `RunInfo` | `run`, `kind` (`conversation` or `btw`), originating request ID, state (`queued`, `running`, `terminal`), `cancel_requested`, Step and tool-call counts, current activity, usage, optional terminal RunResult; BTW also carries its source snapshot reference |
 | `ContextInfo` | effective window and any override, last reported input usage, measured request-byte breakdown and its revision, whether measurement is available; bytes are not token counts |
 | `EntryView` | generation/position, kind, visible user text or summary, assistant Blocks, ToolCall/ToolOutcome, or human shell result; source/trust labels and original workspace attribution retained |
 | `AgentSummary` | live count, lifetime count/cost, `accounting_complete`; a separately paged roster exposes IDs, parent IDs, kind, state, authority, task summary, and effects uncertainty |
 | `CommandInfo` | request ID, caller attribution, state (`pending`, `running`, `applied`, `not_applied`, `interrupted`), admission revision, optional application revision/Step, durability (`disabled`, `checkpointed`, `uncertain`), RunRef or replacement SessionRef, and terminal reason/result |
+
+`live_runs` contains `{ run: RunRef, kind, state, cancel_requested }` for every
+queued or running conversation and BTW Run owned by the handle, including work
+admitted by another caller. Publish the complete inventory atomically with the
+snapshot's revision and event cursor. `active_conversation_run` is a convenience
+for rendering, not an inventory; it may be absent while BTW work is running.
+Bound admission so the combined inventory fits the snapshot byte budget; never
+truncate it or discard existing live records to admit more work. Remove a Run
+only when its terminal RunInfo is available through `get_run`, retained for that
+instance, so completion racing with discovery does not make the target disappear.
 
 Session lifecycle is `idle`, `running`, `blocked`, `closing`, or `closed`.
 `blocked` includes the blocking Run status and recovery advice. Persistence
@@ -187,7 +235,9 @@ handle retains its recorded costs. Old handles remain inspectable and can return
 existing receipts for retries, but cannot accept new mutations. Close stops and
 retires children, releases live-opening grants and the
 checkpoint lock, and keeps the checkpoint. Disconnecting an observer is not
-close. Cancel busy work and await its terminal state before reset or close.
+close. Before reset or close, enumerate `live_runs`, cancel each busy Run, and
+await its terminal state through `get_run`. Re-read the snapshot before attempting
+the idle-only change; concurrent admission may require another cancellation pass.
 
 ### Message, BTW, and steer are different
 
@@ -233,8 +283,9 @@ what the main agent is doing.” Proposed first contract:
   fails the BTW Run without execution. This is narrower than a read-only child.
 - The question and answer never enter the main transcript or arrive as a child
   delivery. BTW failure cannot block the main Session. Keep separate usage and
-  trace attribution; retained results are available through the owning handle,
-  but BTW Sessions are not independently resumable.
+  trace attribution; Runs are discoverable in the owning handle's `live_runs`
+  inventory, with retained results available through `get_run`, but BTW Sessions
+  are not independently resumable.
 - Cancelling the main Run does not cancel a BTW Run, or vice versa. Reset/close
   require both to have stopped. Admission is bounded and can return busy.
 
@@ -292,8 +343,11 @@ Start with `get_snapshot`, then read strictly after its `event_cursor`: changes
 between the calls cannot disappear silently. Events are observations, not an
 authoritative replay log. Retention and page sizes are bounded; a slow observer
 never stalls model/tool execution. An expired cursor returns `cursor_expired`,
-so the client resnapshots and retrieves entries/results. History-rewrite cursors
-likewise fail explicitly. Pages contain `next_cursor`, `has_more`, and explicit
+so the client resnapshots and retrieves entries/results. The snapshot's complete
+`live_runs` inventory recovers queued/running work even when its start event or
+admission response was lost; discovery must not require a previously known RunRef
+or request ID. History-rewrite cursors likewise fail explicitly. Pages contain
+`next_cursor`, `has_more`, and explicit
 omission/truncation metadata for an individually oversized item. Loss of an
 observer does not cancel work, answer consent, or change execution ordering.
 
@@ -330,6 +384,12 @@ file contents, task summaries, raw tool arguments, or sensitive paths. Restricte
 snapshots/roster pages omit those fields explicitly rather than fabricating them.
 BTW inference requires conversation-content permission: an answer may quote any
 captured context, regardless of whether the question appears to ask only metadata.
+An authorized lifecycle/cancellation caller can enumerate every blocking Run's
+identity, kind, state, and cancellation status in `live_runs`, including work
+started by another caller. Do not hide those targets solely because the caller
+lacks conversation-content access; `get_run` still omits content without that
+permission. Discovering a Run grants neither content access nor cancellation
+authority by itself.
 
 Workspace requests carry a one-use `approval_id`, exact validated destination,
 missing-destination flag, existing authority/plan restrictions, duration, and Run
@@ -353,7 +413,9 @@ the shared Session owner so RPC turns cannot bypass it.
 A future `reagent.v1.SessionService` can map `GetSession`, `GetRun`, `GetCommand`,
 `ReadEntries`, `ReadAgents`, `SendMessage`, `Ask`, `Steer`, and `CancelRun` directly
 to these operations. `WatchSession` is a server stream over `read_events` with
-the same cursor/gap semantics. Define protobuf records/oneofs then; do not tunnel
+the same cursor/gap semantics; `GetSession` returns the complete `live_runs`
+inventory without requiring a prior `WatchSession` subscription. Define protobuf
+records/oneofs then; do not tunnel
 JSON configuration, slash commands, or raw traces through protobuf strings.
 Initially leave host setup, session changes, shell, and human consent local.
 Authentication, caller identity, per-Session authorization, endpoint discovery,
@@ -371,6 +433,12 @@ Session ID or access to localhost is not an authorization mechanism.
   tools, or consent; a stale RunRef cannot affect the next Run.
 - BTW during an executing tool uses the identified earlier prefix, has no tools,
   changes no main history/digests/agents, and reports its own usage/failure.
+- Lose a BTW admission response/start event, expire the observer's event cursor,
+  and keep its provider blocked. A newly attached lifecycle/cancellation caller
+  without conversation-content access discovers both queued/running conversation
+  and BTW RunRefs via `get_snapshot`, cancels them, awaits terminal RunInfo, and
+  closes. Cover a Run completing between snapshot and cancellation, and admission
+  bounds that preserve a complete inventory without relying on event retention.
 - Test uncertain effects, context admission, queue overflow, failed checkpoints,
   interrupted resume, compaction cursor invalidation, and event-retention gaps.
 - Metadata-only readers cannot retrieve content via events, roster, RunInfo,
@@ -379,6 +447,6 @@ Session ID or access to localhost is not an authorization mechanism.
   plan implementation choices, `!`, workspace consent, reset, and resume. Run
   `make check` and `make tty-check` with real pty scenarios then.
 
-No source refactor, protobuf generation, dependency, transport, or daemon is
-part of this change. The overview remains a description of current behavior;
-this proposal does not change that behavior.
+The implementation status above is the current scope. No protobuf generation,
+new dependency, transport, or daemon is included. The overview describes only
+implemented behavior; the remaining design is not an implementation guarantee.

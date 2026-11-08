@@ -24,6 +24,8 @@ pub(crate) mod routing_packet;
 pub mod run_loop;
 pub mod runtime;
 pub mod schemas;
+/// Trusted-local ownership and concurrent control of root Sessions.
+pub mod session_api;
 pub mod terminal;
 pub mod tool_exec;
 pub mod tool_files;

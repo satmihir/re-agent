@@ -64,6 +64,29 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "run-api-completion": {
+        "run_prompt": "Exercise the Session API owner.",
+        "script": [tool("Reading through the owner.", "read", "list_files", {"path": "."}),
+                   reply("API run reply.")],
+        "size": (24, 100),
+        "steps": [
+            ("exit", 0, "API run reply.", 5),
+            ("show", "Session API run publishes its reply and exits cleanly"),
+        ],
+    },
+    "run-api-cancellation": {
+        "run_prompt": "Exercise targeted run cancellation.",
+        "script": [tool("Waiting for cancellation.", "sleep", "exec",
+                        {"argv": ["sleep", "30"], "cwd": "."}), reply("unused")],
+        "size": (24, 100),
+        "steps": [
+            ("wait", "Waiting for cancellation.", 5),
+            ("idle", 0.1),
+            ("key", "ctrl-c"),
+            ("exit", 1, "cancelled", 5),
+            ("show", "Ctrl-C reaches the API-owned Run and preserves cancellation status"),
+        ],
+    },
     "chatgpt-login-cancel": {
         "login": True,
         "size": (24, 110),
@@ -641,7 +664,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -654,7 +677,7 @@ class Session:
             env.update(extra_env or {})
             env.update(HOME=workspace, XDG_CACHE_HOME=os.path.join(workspace, ".cache"),
                        XDG_CONFIG_HOME=os.path.join(workspace, ".config"))
-            args = [binary, "chat", "--workspace", workspace]
+            args = [binary, "run" if run_prompt is not None else "chat", "--workspace", workspace]
             if login:
                 args = [binary, "login"]
             elif chatgpt:
@@ -673,6 +696,8 @@ class Session:
                 args += ["--auto", "--no-project-instructions"]
             else:
                 args += ["--scripted", script_path, "--reasoning-effort", "low"]
+            if run_prompt is not None:
+                args.append(run_prompt)
             os.execve(binary, args, env)
         self.alive = True
 
@@ -1059,7 +1084,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]
@@ -1088,12 +1113,12 @@ def run(binary, name, scenario, workspace):
             elif kind == "exit":
                 s.pump(args[2])
                 if s.alive:
-                    failures.append("reagent did not exit after login cancellation")
+                    failures.append("reagent did not exit when expected")
                 else:
                     pid, status = os.waitpid(s.pid, 0)
                     code = os.waitstatus_to_exitcode(status)
                     if code != args[0] or args[1] not in s.raw.decode("utf-8", "replace"):
-                        failures.append(f"login cancellation exit {code}, expected {args[0]} with {args[1]!r}")
+                        failures.append(f"exit {code}, expected {args[0]} with {args[1]!r}")
             elif kind == "idle":
                 s.pump(args[0])
             elif kind == "resize":
@@ -1104,7 +1129,7 @@ def run(binary, name, scenario, workspace):
                 error = CHECKS[args[0]](s, *args[1:])
                 if error:
                     failures.append(error)
-            if not s.alive and not scenario.get("login"):
+            if not s.alive and not scenario.get("login") and scenario.get("run_prompt") is None:
                 failures.append("reagent exited during %r" % (step,))
                 break
     finally:
