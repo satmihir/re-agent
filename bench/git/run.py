@@ -375,16 +375,26 @@ TASKS = {
 
 # --- Running -------------------------------------------------------------------
 
+def cargo_build(source, binary):
+    """Builds re:agent from source/rust, sharing the checkout's target directory."""
+    target_dir = os.path.join(ROOT, "rust", "target")
+    toolchain = "+" + os.environ.get("RUST_TOOLCHAIN", "1.99.1")
+    subprocess.run(["cargo", toolchain, "build", "--release", "--locked"], cwd=os.path.join(source, "rust"),
+                   env={**os.environ, "CARGO_TARGET_DIR": target_dir}, check=True)
+    shutil.copyfile(os.path.join(target_dir, "release", "reagent"), binary)
+    os.chmod(binary, 0o755)
+
+
 def build(ref, binary):
     """Builds re:agent from a commit, or from the working tree."""
     if ref is None:
-        subprocess.run(["go", "build", "-o", binary, "./cmd/reagent"], cwd=ROOT, check=True)
+        cargo_build(ROOT, binary)
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
                               capture_output=True, text=True).stdout.strip() + "+worktree"
     source = binary + "-source"
     subprocess.run(["git", "worktree", "add", "--detach", "-q", source, ref], cwd=ROOT, check=True)
     try:
-        subprocess.run(["go", "build", "-o", binary, "./cmd/reagent"], cwd=source, check=True)
+        cargo_build(source, binary)
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=source,
                               capture_output=True, text=True).stdout.strip()
     finally:
