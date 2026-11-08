@@ -2539,4 +2539,174 @@ mod tests {
         );
         assert!(root.path().join("tree/.ENV").exists());
     }
+
+    #[test]
+    fn withheld_names_are_refused_by_every_file_tool_and_omitted_from_listings() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".git")).unwrap();
+        for name in [
+            ".git/config",
+            ".GiT",
+            ".ENV",
+            ".env.local",
+            ".EnV.SECRET",
+            ".environment",
+        ] {
+            fs::write(root.path().join(name), "needle\n").unwrap();
+        }
+        let config = json!({"workspace":root.path()});
+        let mut state = ToolState::new(&config).unwrap();
+        for path in [
+            ".git",
+            ".git/config",
+            ".GiT",
+            ".ENV",
+            ".env.local",
+            ".EnV.SECRET",
+        ] {
+            for (name, arguments) in [
+                ("read_file", json!({"path":path})),
+                ("list_files", json!({"path":path})),
+                ("search_text", json!({"path":path,"query":"needle"})),
+                ("write_file", json!({"path":path,"content":"x"})),
+                (
+                    "edit_file",
+                    json!({"path":path,"old_text":"needle","new_text":"x"}),
+                ),
+                ("delete_file", json!({"path":path,"recursive":true})),
+            ] {
+                let result = execute(&mut state, &config, name, &arguments.to_string()).unwrap();
+                assert_eq!(result["code"], "invalid_path", "{name} {path}: {result}");
+                assert_eq!(result["effect"], "none");
+            }
+        }
+        // .environment only shares a prefix with .env, so it stays visible.
+        let listing = execute(&mut state, &config, "list_files", r#"{"path":"."}"#).unwrap();
+        assert_eq!(listing["data"]["entries"][0]["name"], ".environment");
+        assert_eq!(listing["data"]["entries"].as_array().unwrap().len(), 1);
+        let search = execute(
+            &mut state,
+            &config,
+            "search_text",
+            r#"{"path":".","query":"needle"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            search["data"]["matches"],
+            json!([{"path":".environment","line":1,"text":"needle","preview_truncated":false}])
+        );
+        for name in [".git/config", ".GiT", ".ENV", ".env.local", ".EnV.SECRET"] {
+            assert_eq!(
+                fs::read(root.path().join(name)).unwrap(),
+                b"needle\n",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn edits_publish_nothing_unless_every_match_is_unique_and_disjoint() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("a");
+        fs::write(&file, "one two one\n").unwrap();
+        let config = json!({"workspace":root.path()});
+        let mut state = ToolState::new(&config).unwrap();
+        assert_eq!(
+            execute(&mut state, &config, "read_file", r#"{"path":"a"}"#).unwrap()["ok"],
+            true
+        );
+        for (arguments, code) in [
+            (
+                json!({"path":"a","old_text":"one","new_text":"1"}),
+                "ambiguous_edit",
+            ),
+            (
+                json!({"path":"a","old_text":"three","new_text":"3"}),
+                "edit_not_found",
+            ),
+            // A later failing edit must also stop the earlier valid one.
+            (
+                json!({"path":"a","edits":[{"old_text":"two","new_text":"2"},{"old_text":"three","new_text":"3"}]}),
+                "edit_not_found",
+            ),
+            (
+                json!({"path":"a","edits":[{"old_text":"one two","new_text":"x"},{"old_text":"two one","new_text":"y"}]}),
+                "invalid_arguments",
+            ),
+        ] {
+            let result = execute(&mut state, &config, "edit_file", &arguments.to_string()).unwrap();
+            assert_eq!(result["code"], code, "{arguments}: {result}");
+            assert_eq!(result["effect"], "none");
+            assert_eq!(fs::read(&file).unwrap(), b"one two one\n");
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        }
+        let all = r#"{"path":"a","edits":[{"old_text":"one","new_text":"1","replace_all":true}]}"#;
+        let result = execute(&mut state, &config, "edit_file", all).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(fs::read(&file).unwrap(), b"1 two 1\n");
+        // Files exec creates were never observed, so they need a read first.
+        let made = execute(
+            &mut state,
+            &config,
+            "exec",
+            r#"{"argv":["/bin/sh","-c","printf made > made"],"cwd":"."}"#,
+        )
+        .unwrap();
+        assert_eq!(made["ok"], true, "{made}");
+        let result = execute(
+            &mut state,
+            &config,
+            "write_file",
+            r#"{"path":"made","content":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!(result["code"], "invalid_arguments", "{result}");
+        assert_eq!(fs::read(root.path().join("made")).unwrap(), b"made");
+    }
+
+    #[test]
+    fn denied_write_tools_never_start_and_leave_guarded_bytes_unchanged() {
+        for (read_only, plan) in [(true, false), (false, true)] {
+            let root = tempfile::tempdir().unwrap();
+            let guarded = root.path().join("guarded");
+            fs::write(&guarded, "unchanged\n").unwrap();
+            let config = json!({"workspace":root.path(),"read_only":read_only,"plan":plan,"git_do":"recipe"});
+            let mut state = ToolState::new(&config).unwrap();
+            assert_eq!(
+                execute(&mut state, &config, "read_file", r#"{"path":"guarded"}"#).unwrap()["ok"],
+                true
+            );
+            let denied = if read_only {
+                "permission_denied"
+            } else {
+                "plan_mode"
+            };
+            for (name, arguments, code) in [
+                (
+                    "write_file",
+                    json!({"path":"guarded","content":"changed\n"}),
+                    denied,
+                ),
+                (
+                    "edit_file",
+                    json!({"path":"guarded","old_text":"unchanged","new_text":"changed"}),
+                    denied,
+                ),
+                ("delete_file", json!({"path":"guarded"}), denied),
+                (
+                    "exec",
+                    json!({"argv":["/bin/sh","-c","echo changed > guarded; touch tripwire"],"cwd":"."}),
+                    denied,
+                ),
+                ("git_do", json!({}), denied),
+                ("unknown_tool", json!({}), "tool_unavailable"),
+            ] {
+                let result = execute(&mut state, &config, name, &arguments.to_string()).unwrap();
+                assert_eq!(result["code"], code, "{name}: {result}");
+                assert_eq!(result["effect"], "none");
+                assert_eq!(fs::read(&guarded).unwrap(), b"unchanged\n", "{name}");
+                assert!(!root.path().join("tripwire").exists(), "{name}");
+            }
+        }
+    }
 }

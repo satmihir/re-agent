@@ -1492,6 +1492,50 @@ mod tests {
     }
 
     #[test]
+    fn original_go_v1_schema_without_later_fields_imports_and_migrates() {
+        // The first Go v1 gob type predates the context window and GC tuning fields.
+        let original = include_bytes!("../testdata/legacy_checkpoint_original.json");
+        let cp = parse("0123456789abcdef", original).unwrap();
+        assert_eq!(cp["version"], 1);
+        assert_eq!(cp["provider"], "openai");
+        assert_eq!(cp["model"], "gpt-6-sol");
+        assert_eq!(cp["launch"], "/fixture/workspace");
+        assert_eq!(cp["phase"], "idle");
+        assert_eq!(cp["context_window_tokens"], 0);
+        assert_eq!(cp["context_gc_age_steps"], 0);
+        assert_eq!(cp["context_gc_consolidate"], false);
+        assert_eq!(cp["history"][0]["user"]["text"], "legacy <&> 界");
+        assert_eq!(
+            crate::raw::bytes(&cp["history"][0]["user"]["workspace"]).unwrap(),
+            br#" { "date" : "2026-10-14" } "#
+        );
+        assert_eq!(
+            cp["history"][1]["assistant"]["blocks"][0]["text"],
+            "recorded reply"
+        );
+        let native = " { \"type\" : \"reasoning\", \"data\" : \"<&> 界\" } ";
+        assert_eq!(
+            crate::raw::bytes(&cp["history"][1]["assistant"]["native"]["items"][0]).unwrap(),
+            native.as_bytes()
+        );
+        let mut next = cp.clone();
+        next["version"] = json!(2);
+        let migrated = parse("0123456789abcdef", &envelope(&next).unwrap()).unwrap();
+        assert_eq!(migrated["version"], 2);
+        // v2 omits a zero unreported_attempts that v1 import fills in, so compare
+        // what must survive rather than the whole history value.
+        assert_eq!(migrated["history"][0]["user"], cp["history"][0]["user"]);
+        assert_eq!(
+            migrated["history"][1]["assistant"]["native"],
+            cp["history"][1]["assistant"]["native"]
+        );
+        assert_eq!(
+            restored("0123456789abcdef", migrated)["config"]["model"],
+            "gpt-6-sol"
+        );
+    }
+
+    #[test]
     fn legacy_numeric_byte_arrays_match_base64_and_reject_malformed_payloads() {
         let mut fixture: Value = serde_json::from_slice(LEGACY).unwrap();
         let payload = STANDARD.decode(fixture["state"].as_str().unwrap()).unwrap();

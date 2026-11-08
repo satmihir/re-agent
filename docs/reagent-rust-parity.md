@@ -4,7 +4,11 @@ Design for [#138](https://github.com/satmihir/re-agent/issues/138), step 1 of
 [#143](https://github.com/satmihir/re-agent/issues/143). Implementation and its
 approval belong to [#139](https://github.com/satmihir/re-agent/issues/139).
 
-**Current status:** all four executable areas use the Rust reference at
+**Retired:** the `parity/` suite was deleted once Rust became the only
+implementation; the paths below exist only in git history. The checkpoint v2
+format specified here is still current.
+
+**Final status:** all four executable areas use the Rust reference at
 `e6c9571396af1656c48a089e06b293165828e0c0` (#211/#212); Go is frozen.
 The live inventory is 4,121 leaves: 4,111 runnable and ten pending. Linux timing,
 verification, dependency dispositions and the separate Mac capture hand-off are
