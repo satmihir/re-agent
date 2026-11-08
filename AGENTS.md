@@ -5,7 +5,7 @@ Codex (as `AGENTS.md`). Edit only `AGENTS.md`. Both vendors work in this repo.
 
 ## What this project is
 
-re:agent is an AI agent harness written from first principles in Go. The goal is
+re:agent is an AI agent harness written from first principles in Rust. The goal is
 to learn how a harness works by building one whose every decision can be read.
 A human will read all of the code. Legibility beats features, and code economy
 beats completeness. When in doubt, write less.
@@ -36,26 +36,25 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
   their head at once. Never split to make something look smaller.
 - If a milestone makes the codebase feel noticeably bigger than the feature
   warrants, stop and say so before continuing.
-- One package `internal/reagent` plus `cmd/reagent`. No new package without a
-  second real consumer, named in the PR or report.
-- Standard library, with one exception: `golang.org/x/term`, for line editing
-  at the chat prompt. Nothing else without asking first.
-- Interfaces only where they earn their place: model I/O, tool execution,
-  trace recording. No interface with a single implementation elsewhere.
-- No generics, reflection, functional options, middleware, event buses, or
-  channels for control flow. The agent loop is a `for` loop in one function.
+- One crate, `rust/` (library plus the `reagent` binary). No new crate or
+  workspace member without a second real consumer, named in the PR or report.
+- Dependencies are the ones in `rust/Cargo.toml`. Nothing new without asking
+  first.
+- No trait with a single implementation. No builder patterns, middleware,
+  event buses, or channels for control flow. The agent loop is a loop in one
+  function (`run_loop.rs`).
 - No config structs for hypothetical flags, no TODO scaffolding for deferred
   work, no commented-out code. Delete what is unused.
-- Errors: return them, wrap with `%w` and context, use the typed errors the
-  code already has. No error hierarchy beyond that.
-- `gofmt` everything. Go 1.23 is what is installed here; `go.mod` says
-  `go 1.23`.
+- Errors: return `Result`, add context to the message, use the typed errors
+  the code already has (`errors.rs`). No error hierarchy beyond that.
+- `cargo fmt` everything. The toolchain is pinned to Rust 1.99.1 (`make` uses
+  `cargo +1.99.1`).
 
 ## Comments
 
 - Comment why, not what. If code needs a paragraph to explain what it does,
   rewrite the code.
-- Every exported identifier gets a one-sentence doc comment. Longer only when
+- Every `pub` item gets a one-sentence doc comment. Longer only when
   the concept is genuinely non-obvious.
 - Keep comments short. If an explanation is growing into an essay, it belongs
   in `docs/` or the PR description.
@@ -68,20 +67,24 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
   ToolCall, ToolResult, ToolOutcome, Exhibit. Do not invent synonyms.
 - Flat over nested. Early returns. No `else` after a `return`.
 - Plain structs and functions over methods that only forward.
-- JSON tags are the wire contract: `snake_case`, defined once, on the type.
-- File names say what they hold: `loop.go`, `context.go`, `openai.go`,
-  `trace.go`, `tool_read_file.go`. No `utils.go`, `helpers.go`, `common.go`.
+- JSON field names are the wire contract: `snake_case`, defined once.
+- Some comments explain behavior kept byte-compatible with the retired Go
+  implementation (traces, checkpoints, cache keys). Keep that compatibility
+  unless the change says otherwise.
+- File names say what they hold: `run_loop.rs`, `context.rs`, `openai.rs`,
+  `trace.rs`, `tool_files.rs`. No `utils.rs`, `helpers.rs`, `common.rs`.
 
 ## Tests
 
-- `go test ./...` runs offline with no API key. A test that reaches the public
-  internet is a bug.
+- `cargo test --locked` (in `rust/`) runs offline with no API key. A test that
+  reaches the public internet is a bug. Live provider and Jev checks are opt-in
+  (`make live`, `make git-do-eval`).
 - Test behavior at boundaries: the loop, each tool, the encoder. Not private
   helpers.
-- Table tests for tool argument cases. `httptest.Server` for the adapter.
-  `t.TempDir()` for files. No mocking libraries.
+- Table tests for tool argument cases. A local listener on `127.0.0.1:0` for
+  HTTP. `tempfile::tempdir()` for files. No mocking libraries.
 - Name tests after the scenario or invariant they check, for example
-  `TestLoop_I08_ResponseAppendedBeforeResults`.
+  `accepted_tool_observation_precedes_the_next_model_request`.
 - Tests are code too. The same rules apply.
 
 ## Working style
@@ -91,11 +94,11 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
 - Before writing a milestone, list the files you will touch and what each
   will own. If that list is surprising, say so first.
 - Before reporting done, run and paste real output from:
-  `make check`, which runs gofmt, `go vet ./...`, `go test ./...`,
-  `cargo fmt --check` and `cargo test --locked` in `rust/`.
+  `make check`, which runs `cargo fmt --check` and `cargo test --locked` in
+  `rust/`.
 - A change to terminal input or display (the chat prompt, region, pickers,
   activity, reply rendering) also runs `make tty-check`, which drives the real
-  binary (`make build`, the Rust port) in a pseudo-terminal, and pastes its
+  binary (`make build`) in a pseudo-terminal, and pastes its
   screens and verdict. Add a scenario to `bench/tty/check.py` for new terminal
   behavior. Tests with an in-process fake terminal do not exercise file
   descriptors, the pty buffer, or real concurrency, so they are not enough on
@@ -108,8 +111,8 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
 
 ## Never
 
-- Codex SDK, OpenAI SDK, Anthropic SDK, or any agent framework. Direct
-  `net/http` only.
+- Codex SDK, OpenAI SDK, Anthropic SDK, or any agent framework. Direct HTTP
+  through the existing `reqwest`/`hyper` transport only.
 - Executing a tool from inside the model adapter.
 - Retrying a tool call automatically.
 - Logging the API key or the child process environment.

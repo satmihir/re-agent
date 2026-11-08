@@ -354,7 +354,7 @@ class CheckpointArtifactsTest(unittest.TestCase):
     def test_root_independent_v1_has_exact_expected_gob_state(self):
         from pathlib import Path
         root = Path(__file__).resolve().parents[1]
-        original = root.joinpath('internal/reagent/testdata/checkpoint-v1.json').read_bytes()
+        original = root.joinpath('parity/fixtures/agents-checkpoints-v1-original.json').read_bytes()
         frozen = root.joinpath('parity/fixtures/agents-checkpoints-v1-root-independent.json').read_bytes()
         self.assertEqual(hashlib.sha256(original).hexdigest(), '892b6d80dfbf31818b9c94d80f05db8816d5fd60001501ac3716ad62db57d394')
         self.assertEqual(hashlib.sha256(frozen).hexdigest(), 'c259b6393f7b8bb82e25d82781dfe7211d4cdad4ac62bb18662c40a5f37b07b6')

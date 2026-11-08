@@ -1,8 +1,8 @@
 # Terminal scenario reconciliation
 
 Reference: Rust `e6c9571396af1656c48a089e06b293165828e0c0`.
-`bench/tty/check.py` currently declares **30** scenarios.
-This is the complete name crosswalk; pending cases are declared, never silently
+Every scenario `bench/tty/check.py` declares has a row below
+(`parity/cli_pty_test.py` checks this). This is the complete name crosswalk; pending cases are declared, never silently
 omitted. CLI/PTy collection is `parity.cases.cli_pty.collect()`.
 
 | Existing scenario | Disposition |
@@ -10,6 +10,8 @@ omitted. CLI/PTy collection is `parity.cases.cli_pty.collect()`.
 | chatgpt-login-cancel | Deliberately out of scope: OAuth browser/callback login is not one of the prescribed C01–C44 families; wire/auth assertions do not claim this screen |
 | chatgpt-login-invalid-paste-cancel | Deliberately out of scope: interactive OAuth callback parsing, for the same reason; retained in bench, not silently claimed by this suite |
 | chatgpt-plan | Deliberately out of scope: ChatGPT subscription-auth status screen is an added bench scenario outside the prescribed terminal families; W02 covers wire authentication, not this screen |
+| default-model | Deliberately out of scope: added bench scenario for the ChatGPT-auth startup default model and effort; no claim of this screenshot |
+| model-picker | Deliberately out of scope as an added bench scenario on the ChatGPT default model: parity's own picker case in `parity/cases/cli_dependencies.py` covers opening `/model` and selecting without a model request, under an explicit `--model`; no claim of this screenshot |
 | context-window-override | Deliberately out of scope as an added bench status variant: C06 covers control validation/resolution, while capped-window runtime/GC behavior belongs to area 4; no claim of this terminal screenshot |
 | context-status | Deliberately out of scope as an added bench context-calibration scenario: intermediate context accounting/GC fixtures belong to area 4; no claim of the 12%/42% screenshots |
 | context-gc | C21: bench-equivalent 16-tool retention fixture, real GC dim notice, restored status and successful next turn; deeper retention/recall semantics remain area 4 A29–A32 |
@@ -17,6 +19,7 @@ omitted. CLI/PTy collection is `parity.cases.cli_pty.collect()`.
 | agents-live-wait | C23 explicitly pending controlled nested agent admission, step barriers, elapsed-slot binding and private-result accounting in area 4 |
 | agents-write-recap | C24 explicitly pending writing-agent applied-effect/root-recap correlation in area 4 |
 | agents-tree-cost | C25 explicitly pending area 4 A24 parallel usage and named-agent reuse fixture |
+| agents-task-retirement | Deliberately out of scope: added bench scenario for named-task retirement after delivery; agent lifecycle fixtures belong to area 4; no claim of this screenshot |
 | exec-timeout-continues | C26: real 10s minimum timeout, no generic blocked banner, subsequent turn |
 | model-retry | C27: real Retry-After floor, intermediate retry notice/status, recovered prompt and unreported attempt count |
 | auto-startup | C28: no routing request and no premature key/fallback banner |

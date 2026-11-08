@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::sync::LazyLock;
 
-// Preserve the literal bytes from internal/reagent/tool_*.go: cache keys hash
+// Preserve the original Go tool schemas' literal bytes: cache keys hash
 // InputSchema before JSON serialization removes its insignificant whitespace.
 const RAW_SCHEMAS: &[(&str, &str)] = &[
     ("echo", include_str!("schemas/echo.json")),
