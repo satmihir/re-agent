@@ -55,6 +55,7 @@ impl Session {
             provider,
             trace: crate::trace::Trace::disabled(),
             region: None,
+            api: None,
             state: json!({"session_id":session_id,"launch":launch,"launch_instructions":launch_instructions,"seen_calls":{},"plan":plan,"gc_state":{"last_pass":0},
                 "gc_requests":0,"last_request":types::usage_zero(false),"tokens_per_byte":0.0,
                 "usage":types::usage_zero(true),"blocked":"","compacted_plan":""}),
@@ -99,10 +100,14 @@ impl Session {
             };
             return json!({"status":"session_blocked","reason":format!("the last run ended with {status}; inspect {location} and use {advice}"),"steps":0,"tool_calls":0,"usage":types::usage_zero(true)});
         }
-        if plan_requested(&String::from_utf8_lossy(text)) {
+        if self.api.is_none() && plan_requested(&String::from_utf8_lossy(text)) {
             self.state["plan"] = json!(true);
         }
-        let run_id = types::new_id();
+        let run_id = self
+            .api
+            .as_ref()
+            .map(|observer| observer.run_id.clone())
+            .unwrap_or_else(types::new_id);
         self.state["run_id"] = json!(run_id);
         self.state["current_run"] = json!(true);
         self.state["steps"] = json!(0);
@@ -193,6 +198,7 @@ impl Session {
         if let Err(error) = self.save_run("model", "") {
             return self.finish("persistence_error", &error, "");
         }
+        crate::session_api::publish(self, "model", true);
         loop {
             if crate::agents::cancelled(self) || crate::cancellation::cancelled(&self.config) {
                 self.state["resumable"] = json!(true);
@@ -257,6 +263,7 @@ impl Session {
                 );
             }
             self.refresh_status();
+            crate::session_api::publish(self, "model", false);
             self.state["last_request"] = types::usage_zero(false);
             let response = self.generate(&req);
             if flag(&self.config["context_gc"]) {
@@ -317,6 +324,7 @@ impl Session {
             if calls.is_empty() {
                 let running = crate::agents::running(self);
                 if !running.is_empty() {
+                    crate::session_api::publish(self, "waiting_for_agents", false);
                     self.history.push(json!({"kind":"user","user":{"text":format!("{} still running; wait for their results before finishing.",running.join(", ")),"source":"agent"}}));
                     let _ = crate::agents::execute(
                         self,
@@ -448,6 +456,7 @@ impl Session {
                 if flag(&self.config["_display"]) {
                     crate::render::tool_started(self.region.as_ref(), call);
                 }
+                crate::session_api::publish(self, "tool", false);
                 let outcome = if name == "recall" {
                     Ok(crate::context_gc::recall(self, string(&call["arguments"])))
                 } else if let Some(result) =

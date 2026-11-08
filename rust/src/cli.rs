@@ -573,27 +573,38 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
     if command == "chat" {
         return crate::chat::run(cfg);
     }
-    let mut session = match crate::runtime::Session::new(cfg) {
-        Ok(s) => s,
-        Err(e) => return startup(&e),
+    let api = match crate::session_api::open_resolved(cfg.clone()) {
+        Ok(api) => api,
+        Err(error) => return startup(&error.to_string()),
     };
-    crate::render::header(&session.config, false);
+    cfg["session_id"] = json!(api.get_snapshot().unwrap().session.session_id);
+    crate::render::header(&cfg, false);
     let started = std::time::Instant::now();
-    crate::render::begin_turn(&mut session.state);
-    crate::cancellation::begin(&session.config);
-    let guard = match crate::cancellation::install(&session.config) {
+    let plan_mode = if crate::run_loop::plan_requested(&String::from_utf8_lossy(&prompt)) {
+        crate::session_api::PlanMode::On
+    } else {
+        crate::session_api::PlanMode::Keep
+    };
+    let guard = match crate::cancellation::install(&api.signal_config("run")) {
         Ok(guard) => guard,
         Err(error) => return startup(&error),
     };
-    let result = session.submit_bytes(&prompt);
+    let command = match api.send_message("run", &prompt, plan_mode) {
+        Ok(command) => command,
+        Err(error) => return startup(&error.to_string()),
+    };
+    if let Err(error) = api.wait_run(&command.run) {
+        return startup(&error.to_string());
+    }
     drop(guard);
-    crate::render::result(
-        &result,
-        started.elapsed(),
-        &session.config,
-        &session.state,
-        false,
-    );
+    let (result, display) = match api.cli_result(&command.run) {
+        Ok(result) => result,
+        Err(error) => return startup(&error.to_string()),
+    };
+    crate::render::result(&result, started.elapsed(), &cfg, &display, false);
+    if let Err(error) = api.close() {
+        return startup(&error.to_string());
+    }
     if text(&result, "status") == "completed" {
         0
     } else {

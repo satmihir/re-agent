@@ -12,7 +12,20 @@ use std::sync::{Mutex, OnceLock};
 
 mod legacy;
 
-static LOCKS: OnceLock<Mutex<HashMap<String, File>>> = OnceLock::new();
+#[derive(Default)]
+struct Leases {
+    files: HashMap<String, File>,
+    api_owners: HashSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum Opening {
+    Save,
+    Resume,
+    ApiResume,
+}
+
+static LOCKS: OnceLock<Mutex<Leases>> = OnceLock::new();
 
 #[cfg(test)]
 thread_local! {
@@ -57,13 +70,22 @@ fn private(path: &std::path::Path, create: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn open(id: &str, create: bool) -> Result<PathBuf, String> {
+fn open(id: &str, create: bool, opening: Opening) -> Result<PathBuf, String> {
     let dir = directory(id)?;
     let mut locks = LOCKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
+        .get_or_init(|| Mutex::new(Leases::default()))
         .lock()
         .unwrap();
-    if locks.contains_key(id) {
+    match opening {
+        Opening::Resume if locks.api_owners.contains(id) => {
+            return Err(format!("session {id} already has a live API owner"));
+        }
+        Opening::ApiResume if !locks.api_owners.contains(id) => {
+            return Err(format!("session {id} has no API ownership reservation"));
+        }
+        _ => {}
+    }
+    if locks.files.contains_key(id) {
         return Ok(dir);
     }
     private(dir.parent().unwrap(), create).map_err(|e| format!("open session store: {e}"))?;
@@ -85,14 +107,38 @@ fn open(id: &str, create: bool) -> Result<PathBuf, String> {
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(format!("session {id} is already open or cannot be locked"));
     }
-    locks.insert(id.into(), lock);
+    locks.files.insert(id.into(), lock);
     Ok(dir)
 }
 
-/// Close releases the process's lease on a session checkpoint.
+/// Claim_api reserves exclusive API ownership atomically against legacy resume and API openings.
+pub(crate) fn claim_api(id: &str) -> Result<(), String> {
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(Leases::default()))
+        .lock()
+        .unwrap();
+    if locks.files.contains_key(id) || locks.api_owners.contains(id) {
+        return Err(format!("session {id} already has a live owner"));
+    }
+    locks.api_owners.insert(id.into());
+    Ok(())
+}
+
+/// Release_api releases only an API owner's reservation and checkpoint lease.
+pub(crate) fn release_api(id: &str) {
+    let mut locks = LOCKS.get().unwrap().lock().unwrap();
+    if locks.api_owners.remove(id) {
+        locks.files.remove(id);
+    }
+}
+
+/// Close releases a legacy checkpoint lease without disturbing an API owner.
 pub fn close(id: &str) {
     if let Some(locks) = LOCKS.get() {
-        locks.lock().unwrap().remove(id);
+        let mut locks = locks.lock().unwrap();
+        if !locks.api_owners.contains(id) {
+            locks.files.remove(id);
+        }
     }
 }
 
@@ -511,7 +557,7 @@ pub fn save(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> 
     }
     let cp = state(session, phase, in_flight);
     let id = cp["id"].as_str().ok_or("session ID is missing")?;
-    let dir = open(id, !directory(id)?.exists())?;
+    let dir = open(id, !directory(id)?.exists(), Opening::Save)?;
     let body = envelope(&cp)?;
     let staged = dir.join(format!(".checkpoint-{}", crate::types::new_id()));
     let result = (|| {
@@ -806,7 +852,16 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
 
 /// Load validates a v2 JSON or legacy v1 gob checkpoint and returns normalized runtime state.
 pub fn load(id: &str) -> Result<Value, String> {
-    let dir = open(id, false)?;
+    load_with(id, Opening::Resume)
+}
+
+/// Load_api validates saved state under an already-claimed API reservation.
+pub(crate) fn load_api(id: &str) -> Result<Value, String> {
+    load_with(id, Opening::ApiResume)
+}
+
+fn load_with(id: &str, opening: Opening) -> Result<Value, String> {
+    let dir = open(id, false, opening)?;
     let path = dir.join("checkpoint.json");
     let info = fs::symlink_metadata(&path)
         .map_err(|e| format!("session {id} checkpoint: {}", crate::errors::stable_io(&e)))?;

@@ -9,4 +9,6 @@ pub struct Session {
     pub trace: crate::trace::Trace,
     pub region: Option<crate::terminal::RegionHandle>,
     pub state: Value,
+    /// api publishes observations without sharing the mutable Session with callers.
+    pub(crate) api: Option<crate::session_api::RunObserver>,
 }
