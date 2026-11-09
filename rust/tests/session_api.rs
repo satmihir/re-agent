@@ -86,12 +86,14 @@ fn snapshots_and_targeted_cancellation_do_not_wait_for_an_executing_tool() {
     let active = api
         .send_message("active", b"task", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     started(root.path(), "blocking");
     let queued = api
         .send_message("queued", b"not automatically started", PlanMode::On)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     let reader = api.clone();
     let snapshot = bounded(move || reader.get_snapshot()).unwrap();
     assert_eq!(snapshot.active_conversation_run, Some(active.clone()));
@@ -158,7 +160,7 @@ fn concurrent_identical_requests_execute_once_and_conflicting_retries_fail() {
         "conflict"
     );
     release(root.path(), "one");
-    completed(&api, &a.run, "finished");
+    completed(&api, a.run.as_ref().unwrap(), "finished");
     assert_eq!(std::fs::read(root.path().join("executions")).unwrap(), b"x");
     assert_eq!(
         api.send_message("same", b"once", PlanMode::Keep)
@@ -187,20 +189,24 @@ fn messages_start_fifo_and_queued_cancellation_changes_neither_active_work_nor_p
     let first = api
         .send_message("first", b"first", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     started(root.path(), "one");
     let discarded = api
         .send_message("discard", b"discard", PlanMode::On)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     let second = api
         .send_message("second", b"second", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     let third = api
         .send_message("third", b"third", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     assert_ne!(first, second);
     assert_ne!(second, third);
     assert_eq!(
@@ -268,12 +274,14 @@ fn completed_and_foreign_references_cannot_cancel_the_next_run() {
     let first = api
         .send_message("one", b"first", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     completed(&api, &first, "first");
     let second = api
         .send_message("two", b"second", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     started(root.path(), "second");
     assert_eq!(api.cancel_run(&first).unwrap().state, RunState::Terminal);
     for field in ["session", "instance", "run"] {
@@ -302,12 +310,14 @@ fn protocol_failure_discards_followups_and_blocks_admission() {
     let first = api
         .send_message("one", b"task", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     started(root.path(), "one");
     let queued = api
         .send_message("two", b"queued", PlanMode::On)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     release(root.path(), "one");
     let reader = api.clone();
     assert_eq!(
@@ -353,7 +363,7 @@ fn literal_messages_preserve_mode_but_explicit_plan_changes_apply_at_start() {
         ("c", b"plan".as_slice(), PlanMode::On, true, "c"),
         ("d", b"implement".as_slice(), PlanMode::Off, false, "d"),
     ] {
-        let run = api.send_message(id, text, mode).unwrap().run;
+        let run = api.send_message(id, text, mode).unwrap().run.unwrap();
         completed(&api, &run, answer);
         assert_eq!(api.get_snapshot().unwrap().plan, expected);
     }
@@ -368,7 +378,8 @@ fn closing_requires_settled_work_and_retains_results_without_closing_other_clone
     let run = remaining
         .send_message("one", b"task", PlanMode::Keep)
         .unwrap()
-        .run;
+        .run
+        .unwrap();
     started(root.path(), "one");
     assert_eq!(remaining.close().unwrap_err().code, "busy");
     assert!(!remaining.get_run(&run).unwrap().cancel_requested);
@@ -510,7 +521,8 @@ fn resume_reopens_only_once_with_a_fresh_instance_and_never_replays_work() {
         let run = api
             .send_message("fail", b"must not reach provider", PlanMode::Keep)
             .unwrap()
-            .run;
+            .run
+            .unwrap();
         assert_eq!(
             api.wait_run(&run).unwrap().result.unwrap().status,
             "persistence_error"
@@ -595,7 +607,8 @@ fn full_inventory_and_receipt_limits_never_prevent_cancellation_or_close() {
         let run = api
             .send_message(&index.to_string(), b"work", PlanMode::Keep)
             .unwrap()
-            .run;
+            .run
+            .unwrap();
         assert_eq!(
             api.wait_run(&run).unwrap().result.unwrap().status,
             "completed"

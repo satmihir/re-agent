@@ -71,6 +71,24 @@ fn inventory(session: &Session, fallback: &Value) -> Vec<Value> {
 
 /// initialize reconstructs Auto routing from its saved fallback and session settings.
 pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
+    let mut unused_usage = types::usage_zero(false);
+    if session.state["auto_usage"]["unreported_attempts"] == 0 {
+        unused_usage["unreported_attempts"] = json!(0);
+    }
+    // Checkpoints encode absent accounting as unknown zero, even before Auto existed.
+    if !enabled(&session.state, "auto")
+        && !enabled(&session.state, "auto_enabled")
+        && text(&session.state, "auto_fallback_model").is_empty()
+        && text(&session.state, "auto_fallback_effort").is_empty()
+        && (session.state["auto_routes"].is_null()
+            || session.state["auto_routes"]
+                .as_array()
+                .is_some_and(Vec::is_empty))
+        && (session.state["auto_attempts"].is_null() || session.state["auto_attempts"] == 0)
+        && session.state["auto_usage"] == unused_usage
+    {
+        session.state["auto_usage"] = types::usage_zero(true);
+    }
     if session.config["agent_id"]
         .as_str()
         .is_some_and(|id| id != "root")
@@ -100,14 +118,22 @@ pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
             })
         };
     }
-    let model = session.state["auto_fallback_model"]
+    let saved_model = session.state["auto_fallback_model"]
         .as_str()
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty());
+    let model = saved_model
         .unwrap_or(text(&session.config, "model"))
         .to_owned();
+    // A saved fallback omits its effort only when that effort is provider-default.
     let effort = session.state["auto_fallback_effort"]
         .as_str()
-        .unwrap_or(text(&session.config, "reasoning_effort"))
+        .unwrap_or_else(|| {
+            if saved_model.is_some() {
+                ""
+            } else {
+                text(&session.config, "reasoning_effort")
+            }
+        })
         .to_owned();
     let info = catalog::model_info(&model);
     let efforts = info["efforts"].as_array();
@@ -144,12 +170,15 @@ pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
     Ok(())
 }
 
+/// DATA_SHARING_NOTICE describes the third-party content disclosure for enabled Auto.
+pub(crate) const DATA_SHARING_NOTICE: &str = "auto on: https://api.typesafe.ai/v1/systemone; TypeSafe receives summaries, user requests (earlier ones may be shortened or omitted), root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header";
+
 /// disclosure prints the data-sharing and fallback contract for enabled Auto.
 pub(crate) fn disclosure(session: &Session) {
     if !enabled(&session.state, "auto_enabled") {
         return;
     }
-    output(session, "auto on: https://api.typesafe.ai/v1/systemone; TypeSafe receives summaries, user requests (earlier ones may be shortened or omitted), root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header");
+    output(session, DATA_SHARING_NOTICE);
     output(session, &format!("auto fallback: {} / {}; {} allowed route(s); /auto off or manual model/effort selection pins the current route",text(&session.state,"auto_fallback_model"),text(&session.state,"auto_fallback_effort"),session.state["auto_routes"].as_array().map_or(0,Vec::len)));
     output(session, "auto scope: joint model/effort at user-turn start; current-model effort only within a run; router failure keeps the current pair mid-run");
     if std::env::var("TYPESAFE_API_KEY")
@@ -169,6 +198,27 @@ pub(crate) fn pin(session: &mut Session) {
     session.state["auto_enabled"] = json!(false);
 }
 
+/// set_enabled changes Auto silently, rebasing enabled routing to the current model and effort.
+pub(crate) fn set_enabled(session: &mut Session, enabled: bool) -> Result<(), String> {
+    if text(&session.config, "provider") == "scripted" {
+        return Err("Auto is unavailable in a scripted chat".into());
+    }
+    if !enabled {
+        pin(session);
+        return Ok(());
+    }
+    let previous = session.state.clone();
+    session.state["auto_fallback_model"] = session.config["model"].clone();
+    session.state["auto_fallback_effort"] = session.config["reasoning_effort"].clone();
+    session.state["auto_enabled"] = json!(true);
+    session.state["auto"] = json!(true);
+    if let Err(error) = initialize(session) {
+        session.state = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// command implements the explicit chat Auto status and enable/disable commands.
 pub(crate) fn command(session: &mut Session, argument: &str) {
     if text(&session.config, "provider") == "scripted" {
@@ -184,23 +234,11 @@ pub(crate) fn command(session: &mut Session, argument: &str) {
                 "auto off; /auto on enables TypeSafe routing"
             },
         ),
-        "off" => {
-            pin(session);
-            output(session, "auto off; current model and effort pinned");
-        }
-        "on" => {
-            let previous = session.state.clone();
-            session.state["auto_fallback_model"] = session.config["model"].clone();
-            session.state["auto_fallback_effort"] = session.config["reasoning_effort"].clone();
-            session.state["auto_enabled"] = json!(true);
-            session.state["auto"] = json!(true);
-            if let Err(error) = initialize(session) {
-                session.state = previous;
-                output(session, &format!("auto unchanged: {error}"));
-            } else {
-                disclosure(session);
-            }
-        }
+        "on" | "off" => match set_enabled(session, argument == "on") {
+            Err(error) => output(session, &format!("auto unchanged: {error}")),
+            Ok(()) if argument == "on" => disclosure(session),
+            Ok(()) => output(session, "auto off; current model and effort pinned"),
+        },
         _ => output(session, "usage: /auto [on|off]"),
     }
 }
@@ -677,6 +715,64 @@ mod tests {
 #[cfg(test)]
 mod initialization_tests {
     use super::*;
+
+    #[test]
+    fn never_used_native_and_legacy_auto_usage_becomes_known_zero() {
+        let workspace = tempfile::tempdir().unwrap();
+        for explicit_zero in [false, true] {
+            let mut session = Session::new(
+                json!({"workspace":workspace.path(),"provider":"openai","model":"unlisted-model"}),
+            )
+            .unwrap();
+            session.state["auto_usage"] = types::usage_zero(false);
+            if explicit_zero {
+                session.state["auto_usage"]["unreported_attempts"] = json!(0);
+            }
+            session.state["auto_attempts"] = json!(0);
+            initialize(&mut session).unwrap();
+            assert_eq!(session.state["auto_usage"], types::usage_zero(true));
+            assert!(!enabled(&session.state, "auto"));
+            assert!(session.state["auto_routes"].is_null());
+        }
+    }
+
+    #[test]
+    fn legacy_zero_counter_never_hides_initialized_or_nonzero_auto_usage() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut legacy_usage = types::usage_zero(false);
+        legacy_usage["unreported_attempts"] = json!(0);
+        let mut cases = vec![
+            json!({"auto":true}),
+            json!({"auto_enabled":true}),
+            json!({"auto_fallback_model":"gpt-6.1-terra"}),
+            json!({"auto_fallback_effort":"medium"}),
+            json!({"auto_routes":[{}]}),
+            json!({"auto_attempts":1}),
+            json!({"auto_attempts":-1}),
+        ];
+        for field in [
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "unreported_attempts",
+        ] {
+            let mut usage = legacy_usage.clone();
+            usage[field] = json!(1);
+            cases.push(json!({"auto_usage":usage}));
+        }
+        for patch in cases {
+            let mut session = Session::new(json!({"workspace":workspace.path(),"provider":"openai","model":"unlisted-model","auth_mode":"key"})).unwrap();
+            session.state["auto_usage"] = legacy_usage.clone();
+            for (field, value) in patch.as_object().unwrap() {
+                session.state[field] = value.clone();
+            }
+            let before = session.state["auto_usage"].clone();
+            let result = initialize(&mut session);
+            assert_eq!(result.is_err(), patch["auto"] == true, "{patch}");
+            assert_eq!(session.state["auto_usage"], before, "{patch}");
+        }
+    }
 
     #[test]
     fn child_configuration_does_not_enable_automatic_routing() {
