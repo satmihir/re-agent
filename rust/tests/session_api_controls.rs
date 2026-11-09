@@ -618,6 +618,8 @@ fn router_reply(request: &Value, usage: Option<(u64, u64)>) -> Value {
 }
 
 fn read_request(stream: &mut TcpStream) -> Value {
+    // macOS can inherit the listener's nonblocking flag on accepted sockets.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -1166,4 +1168,44 @@ fn unreported_router_usage_stays_unknown_across_pin_enable_and_resume() {
     assert_eq!(enabled.auto.attempts, 1);
     assert_eq!(enabled.auto.usage, attempted.auto.usage);
     reopened.close().unwrap();
+}
+
+#[test]
+fn local_http_fixture_reads_a_nonblocking_stream_before_the_client_sends() {
+    use std::os::fd::AsRawFd;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let (mut server, _) = listener.accept().unwrap();
+    server.set_nonblocking(true).unwrap();
+    let fd = server.as_raw_fd();
+    let request = json!({"message":"split request"});
+    let body = request.to_string();
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| read_request(&mut server));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // Hold back the bytes until the fixture resets inherited socket flags.
+        loop {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            assert!(flags >= 0);
+            if flags & libc::O_NONBLOCK == 0 || reader.is_finished() || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        write!(
+            client,
+            "POST /v1/responses HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        client.write_all(body.as_bytes()).unwrap();
+        assert_eq!(
+            reader.join().expect("fixture must wait for request bytes"),
+            request
+        );
+    });
 }
