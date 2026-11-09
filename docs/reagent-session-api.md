@@ -1,6 +1,7 @@
 # Session API — design and implementation status
 
-Status: **milestone 1 implemented**, with the remaining target interface below.
+Status: **milestone 1 and typed idle controls implemented**, with the remaining
+target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
 
@@ -19,7 +20,8 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
 - `live_runs` contains every queued/running conversation Run, without requiring
   admission receipts or events to discover identities. There are no BTW Runs yet.
   Terminal results remain readable after inventory removal and close.
-- At most 16 live Runs and 256 retained message receipts are admitted. Individual
+- At most 16 live Runs and 256 retained command receipts are admitted; messages
+  and controls share the receipt limit. Individual
   messages fit 10 MiB; total retained message bytes fit 32 MiB. Exhaustion refuses
   admission, not cancellation/close, and never evicts deduplication records.
 - Request-ID retries deduplicate within this opening, not across restarts.
@@ -35,11 +37,63 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   in place. Chat still uses its existing Session path.
 
 This milestone is **trusted-local only**: handles are not capability-filtered and
-must not be given to untrusted clients. Chat/control migration, human consent,
-entry/agent/event projections, transport authorization, BTW and steering are not
-implemented. The detailed records and operations below describe the full target,
+must not be given to untrusted clients. Chat and the remaining control migration,
+human consent, entry/agent/event projections, transport authorization, BTW and
+steering are not implemented. The detailed records and operations below describe the full target,
 not a claim that every field or method already exists. `wait_run` and `close` are
 local conveniences while that broader observation/control boundary is extracted.
+
+## Implemented typed idle controls
+
+`change_session(request_id, expected_revision, SessionChange)` now supports only
+`SetPlan { enabled }`, `SetEffort { effort }`, and `SetAuto { enabled }`. Model
+switching, compaction, reset, and shell controls remain design targets. Settings
+are changed by the same exclusive owner as messages, without a model/router
+request, transcript Entry, Run, or additional usage merely to apply a setting.
+
+- A new control requires no queued/running Run or unfinished control, a current
+  snapshot revision, and an unblocked/open instance. Admission reserves the
+  exclusive control slot atomically. New messages and close return `busy` until
+  it is released. Snapshot `active_control_request_id` identifies this work;
+  `live_runs` still contains only Runs.
+- Receipts share the message request-ID namespace. Control retry identity includes
+  the change **and expected revision**; an exact retry returns its original latest
+  receipt before current revision/lifecycle/capacity checks. Reusing the ID for a
+  message, different change, or different expected revision is a conflict.
+- `CommandInfo.run` is now `Option<RunRef>`: message receipts contain `Some`,
+  control receipts `None`. In-process callers must handle the optional field;
+  the CLI and existing tests have been adapted. `RunInfo.run` remains mandatory.
+- `wait_command` waits until a receipt leaves `Pending`, not until a message Run
+  completes. Structural errors reject admission; owner-dependent invalid settings
+  produce retained `NotApplied` receipts without changing settings. Successful
+  changes, including effective no-ops, pass the existing save barrier before
+  metadata and `Applied` are published together.
+- A save failure restores prior in-memory settings, records `persistence_error`,
+  and blocks further mutation/inference; inspection and close remain available.
+  Failure after checkpoint replacement may already have changed disk state, so
+  memory restoration is not proof of disk rollback. There is no automatic retry;
+  resume inspects persisted settings without replaying control commands.
+
+`ReasoningEffort::ProviderDefault` clears the explicit effort for a known catalog
+model. `Named(value)` accepts exact catalog names, not picker numbers, case
+aliases, or an automatic-selection keyword. Effort and Auto controls reject
+scripted Sessions; effort also rejects unknown catalog models. A valid manual
+effort change pins Auto even when selecting the current effort; an invalid one
+does not. Plan controls preserve launch/read-only authority, change only the
+current planning state, and never pin Auto. Pinned launch instructions stay as
+they were; the next provider request uses the updated effort.
+
+Auto can be enabled lazily. Enable rebases the fallback to the current model and
+effort even when already enabled, validates it, and preserves accumulated router
+accounting. Disable pins the current pair without discarding fallback/routes or
+accounting. Fallback provider-default effort survives resume independently of the
+currently selected route. Provider-default effort is not silently replaced with a
+catalog default when an Auto fallback requires an explicit effort. Failed enable
+restores the previous settings. Snapshot `auto` publishes enabled state, fallback,
+allowed routes, usage, attempts, and the existing TypeSafe data-sharing notice;
+provably never-used accounting remains known zero after resume without clearing
+genuine unknown usage. Reads do not probe credential availability or perform HTTP. Enabling is an explicit
+trusted-local host choice under that disclosure, not a new remote consent path.
 
 ## Boundary
 

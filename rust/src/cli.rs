@@ -593,11 +593,12 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         Ok(command) => command,
         Err(error) => return startup(&error.to_string()),
     };
-    if let Err(error) = api.wait_run(&command.run) {
+    let run = command.run.expect("send_message reserves a Run");
+    if let Err(error) = api.wait_run(&run) {
         return startup(&error.to_string());
     }
     drop(guard);
-    let (result, display) = match api.cli_result(&command.run) {
+    let (result, display) = match api.cli_result(&run) {
         Ok(result) => result,
         Err(error) => return startup(&error.to_string()),
     };

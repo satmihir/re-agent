@@ -91,13 +91,44 @@ pub enum PlanMode {
     Off,
 }
 
+/// ReasoningEffort selects an exact catalog effort or omits the provider parameter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    /// ProviderDefault omits an explicit reasoning effort.
+    ProviderDefault,
+    /// Named retains the exact catalog effort label.
+    Named(String),
+}
+
+/// SessionChange selects one trusted-local setting to apply while the Session is idle.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionChange {
+    /// SetPlan changes the effective planning restriction without expanding launch authority.
+    SetPlan {
+        /// enabled selects the effective planning restriction.
+        enabled: bool,
+    },
+    /// SetEffort selects reasoning effort and pins the current Auto route.
+    SetEffort {
+        /// effort is an exact catalog label or the provider default.
+        effort: ReasoningEffort,
+    },
+    /// SetAuto enables routing from the current pair or pins it without routing.
+    SetAuto {
+        /// enabled selects whether future model work may use Auto routing.
+        enabled: bool,
+    },
+}
+
 /// SessionLifecycle describes the owner's current availability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionLifecycle {
-    /// Idle permits a new message or close.
+    /// Idle permits a new message, idle change, or close.
     Idle,
-    /// Running includes queued and executing conversation work.
+    /// Running includes queued Runs and reserved idle controls.
     Running,
     /// Blocked requires recovery before further model work.
     Blocked,
@@ -119,15 +150,15 @@ pub enum RunState {
     Terminal,
 }
 
-/// CommandState distinguishes admission from application to the conversation.
+/// CommandState distinguishes admission from application to the Session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandState {
     /// Pending is waiting for the owner or its initial persistence barrier.
     Pending,
-    /// Applied has appended its Entry and passed the required save barrier.
+    /// Applied has changed the Session and passed the required save barrier.
     Applied,
-    /// NotApplied ended before its Entry passed the required save barrier.
+    /// NotApplied ended without passing the required application barrier.
     NotApplied,
 }
 
@@ -279,17 +310,43 @@ pub struct RunInfo {
     pub result: Option<RunResult>,
 }
 
-/// CommandInfo is a retained admission/application receipt for one message.
+/// CommandInfo is a retained admission/application receipt for one command.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommandInfo {
     /// request_id is the caller's stable idempotency key.
     pub request_id: String,
-    /// run is the reserved execution identity.
-    pub run: RunRef,
-    /// state records whether the message entered the accepted conversation.
+    /// run is the reserved execution identity for messages and absent for idle controls.
+    pub run: Option<RunRef>,
+    /// state records whether the command passed its application barrier.
     pub state: CommandState,
-    /// reason explains why a pending message was not applied.
+    /// reason explains why an admitted command was not applied.
     pub reason: Option<String>,
+}
+
+/// AutoRoute identifies one published model and reasoning-effort pair.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoRoute {
+    /// model is the catalog model label.
+    pub model: String,
+    /// effort is the exact effort label or provider default.
+    pub effort: ReasoningEffort,
+}
+
+/// AutoInfo retains published routing settings and separate router accounting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoInfo {
+    /// enabled permits routing during subsequent model work.
+    pub enabled: bool,
+    /// fallback is absent until a compatible fallback has been initialized.
+    pub fallback: Option<AutoRoute>,
+    /// allowed_routes retains the initialized inventory even while pinned.
+    pub allowed_routes: Vec<AutoRoute>,
+    /// usage is accumulated router consumption, known zero before initialization.
+    pub usage: Usage,
+    /// attempts counts routing attempts independently of model requests.
+    pub attempts: u64,
+    /// data_sharing_notice describes the third-party routing disclosure.
+    pub data_sharing_notice: String,
 }
 
 /// SessionSnapshot contains explicit metadata and the complete admitted live inventory.
@@ -303,9 +360,11 @@ pub struct SessionSnapshot {
     pub lifecycle: SessionLifecycle,
     /// active_conversation_run is a rendering convenience, not an inventory.
     pub active_conversation_run: Option<RunRef>,
+    /// active_control_request_id identifies the reserved idle control until publication.
+    pub active_control_request_id: Option<String>,
     /// live_runs contains every queued or running Run without truncation.
     pub live_runs: Vec<RunInfo>,
-    /// pending_request_ids identifies messages not yet applied.
+    /// pending_request_ids identifies admitted commands still awaiting application.
     pub pending_request_ids: Vec<String>,
     /// model is the last published effective model label.
     pub model: String,
@@ -319,6 +378,8 @@ pub struct SessionSnapshot {
     pub read_only: bool,
     /// plan is the last published effective planning restriction.
     pub plan: bool,
+    /// auto retains published routing settings without probing credentials or providers.
+    pub auto: AutoInfo,
     /// workspace is the last published active canonical directory.
     pub workspace: PathBuf,
     /// usage counts completed and currently executing root model requests.

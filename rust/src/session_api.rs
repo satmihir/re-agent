@@ -53,6 +53,34 @@ impl Drop for Owner {
 
 struct Command {
     info: CommandInfo,
+    work: CommandWork,
+}
+
+enum CommandWork {
+    Message(MessageCommand),
+    Change {
+        expected_revision: u64,
+        change: SessionChange,
+    },
+}
+
+impl CommandWork {
+    fn message(&self) -> Option<&MessageCommand> {
+        match self {
+            Self::Message(message) => Some(message),
+            Self::Change { .. } => None,
+        }
+    }
+
+    fn message_mut(&mut self) -> Option<&mut MessageCommand> {
+        match self {
+            Self::Message(message) => Some(message),
+            Self::Change { .. } => None,
+        }
+    }
+}
+
+struct MessageCommand {
     run: RunInfo,
     message: Vec<u8>,
     plan_mode: PlanMode,
@@ -65,6 +93,7 @@ struct State {
     snapshot: SessionSnapshot,
     commands: Vec<Command>,
     pending: VecDeque<usize>,
+    control: Option<usize>,
     retained_input_bytes: usize,
     closing: bool,
     closed: bool,
@@ -83,9 +112,9 @@ impl Drop for Client {
     fn drop(&mut self) {
         let mut state = self.shared.state.lock().unwrap();
         state.closing = true;
-        for command in &state.commands {
-            if command.run.state != RunState::Terminal {
-                command.cancellation.store(true, Ordering::Release);
+        for message in state.commands.iter().filter_map(|c| c.work.message()) {
+            if message.run.state != RunState::Terminal {
+                message.cancellation.store(true, Ordering::Release);
             }
         }
         self.shared.changed.notify_all();
@@ -178,6 +207,7 @@ fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
         revision: 0,
         lifecycle: SessionLifecycle::Idle,
         active_conversation_run: None,
+        active_control_request_id: None,
         live_runs: Vec::new(),
         pending_request_ids: Vec::new(),
         model: String::new(),
@@ -186,6 +216,7 @@ fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
         auth_mode: String::new(),
         read_only: session.config["read_only"].as_bool().unwrap_or(false),
         plan: false,
+        auto: auto_info(session),
         workspace: Default::default(),
         usage: Usage::from_value(&crate::types::usage_zero(true)),
         last_request: Usage::from_value(&session.state["last_request"]),
@@ -202,6 +233,7 @@ fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
             snapshot,
             commands: Vec::new(),
             pending: VecDeque::new(),
+            control: None,
             retained_input_bytes: 0,
             closing: false,
             closed: false,
@@ -234,9 +266,13 @@ impl State {
         snapshot.live_runs = self
             .commands
             .iter()
-            .filter(|c| c.run.state != RunState::Terminal)
-            .map(|c| c.run.clone())
+            .filter_map(|c| c.work.message())
+            .filter(|m| m.run.state != RunState::Terminal)
+            .map(|m| m.run.clone())
             .collect();
+        snapshot.active_control_request_id = self
+            .control
+            .map(|i| self.commands[i].info.request_id.clone());
         snapshot.pending_request_ids = self
             .commands
             .iter()
@@ -249,7 +285,7 @@ impl State {
             SessionLifecycle::Closing
         } else if snapshot.blocked.is_some() || snapshot.persistence_error.is_some() {
             SessionLifecycle::Blocked
-        } else if !snapshot.live_runs.is_empty() {
+        } else if !snapshot.live_runs.is_empty() || self.control.is_some() {
             SessionLifecycle::Running
         } else {
             SessionLifecycle::Idle
@@ -263,7 +299,7 @@ impl State {
         }
         self.commands
             .iter()
-            .position(|c| c.run.run == *run)
+            .position(|c| c.work.message().is_some_and(|m| m.run.run == *run))
             .ok_or_else(|| error("not_found", "Run is not retained by this handle"))
     }
 }
@@ -297,7 +333,11 @@ impl SessionApi {
             .iter()
             .find(|c| c.info.request_id == request_id)
         {
-            if command.message != message || command.plan_mode != plan_mode {
+            if !command
+                .work
+                .message()
+                .is_some_and(|m| m.message == message && m.plan_mode == plan_mode)
+            {
                 return Err(error(
                     "conflict",
                     "request_id was already used with another payload",
@@ -314,11 +354,15 @@ impl SessionApi {
                 "Session requires recovery before another submission",
             ));
         }
+        if state.control.is_some() {
+            return Err(error("busy", "Session has an unfinished idle control"));
+        }
         if state.commands.len() >= MAX_COMMANDS
             || state
                 .commands
                 .iter()
-                .filter(|c| c.run.state != RunState::Terminal)
+                .filter_map(|c| c.work.message())
+                .filter(|m| m.run.state != RunState::Terminal)
                 .count()
                 >= MAX_LIVE_RUNS
             || state.retained_input_bytes + message.len() > MAX_RETAINED_INPUT_BYTES
@@ -338,28 +382,30 @@ impl SessionApi {
         }));
         let info = CommandInfo {
             request_id: request_id.into(),
-            run: run.clone(),
+            run: Some(run.clone()),
             state: CommandState::Pending,
             reason: None,
         };
         let command = Command {
             info: info.clone(),
-            run: RunInfo {
-                run,
-                request_id: request_id.into(),
-                state: RunState::Queued,
-                cancel_requested: false,
-                steps: 0,
-                tool_calls: 0,
-                activity: "queued".into(),
-                usage: Usage::from_value(&crate::types::usage_zero(true)),
-                result: None,
-            },
-            message: message.into(),
-            plan_mode,
-            cancellation,
-            wire_result: None,
-            display: Value::Null,
+            work: CommandWork::Message(MessageCommand {
+                run: RunInfo {
+                    run,
+                    request_id: request_id.into(),
+                    state: RunState::Queued,
+                    cancel_requested: false,
+                    steps: 0,
+                    tool_calls: 0,
+                    activity: "queued".into(),
+                    usage: Usage::from_value(&crate::types::usage_zero(true)),
+                    result: None,
+                },
+                message: message.into(),
+                plan_mode,
+                cancellation,
+                wire_result: None,
+                display: Value::Null,
+            }),
         };
         let index = state.commands.len();
         state.commands.push(command);
@@ -370,10 +416,106 @@ impl SessionApi {
         Ok(info)
     }
 
+    /// Change_session reserves one revision-checked idle change without starting a Run.
+    pub fn change_session(
+        &self,
+        request_id: &str,
+        expected_revision: u64,
+        change: SessionChange,
+    ) -> Result<CommandInfo, ApiError> {
+        if request_id.trim().is_empty() || request_id.len() > 128 {
+            return Err(error(
+                "invalid_argument",
+                "request_id must be nonblank and at most 128 bytes",
+            ));
+        }
+        if let SessionChange::SetEffort {
+            effort: ReasoningEffort::Named(name),
+        } = &change
+        {
+            if name.trim().is_empty() || name.len() > 128 {
+                return Err(error(
+                    "invalid_argument",
+                    "named effort must be nonblank and at most 128 bytes",
+                ));
+            }
+        }
+        let shared = &self.client.shared;
+        let mut state = shared.state.lock().unwrap();
+        if let Some(command) = state
+            .commands
+            .iter()
+            .find(|c| c.info.request_id == request_id)
+        {
+            if !matches!(&command.work, CommandWork::Change { expected_revision: revision, change: previous } if *revision == expected_revision && previous == &change)
+            {
+                return Err(error(
+                    "conflict",
+                    "request_id was already used with another payload",
+                ));
+            }
+            return Ok(command.info.clone());
+        }
+        if state.closing || state.closed {
+            return Err(error("unavailable", "Session is closing or closed"));
+        }
+        if state.snapshot.blocked.is_some() || state.snapshot.persistence_error.is_some() {
+            return Err(error(
+                "blocked",
+                "Session requires recovery before another change",
+            ));
+        }
+        if state.control.is_some()
+            || state
+                .commands
+                .iter()
+                .filter_map(|c| c.work.message())
+                .any(|m| m.run.state != RunState::Terminal)
+        {
+            return Err(error(
+                "busy",
+                "Session has live Runs or an unfinished idle control",
+            ));
+        }
+        if expected_revision != state.snapshot.revision {
+            return Err(error("conflict", "Session revision has changed"));
+        }
+        if state.commands.len() >= MAX_COMMANDS {
+            return Err(error(
+                "resource_exhausted",
+                "Session admission storage is full; close remains available",
+            ));
+        }
+        let info = CommandInfo {
+            request_id: request_id.into(),
+            run: None,
+            state: CommandState::Pending,
+            reason: None,
+        };
+        let index = state.commands.len();
+        state.commands.push(Command {
+            info: info.clone(),
+            work: CommandWork::Change {
+                expected_revision,
+                change,
+            },
+        });
+        state.pending.push_back(index);
+        state.control = Some(index);
+        state.changed();
+        shared.changed.notify_all();
+        Ok(info)
+    }
+
     /// Get_run reads an exact Run, including retained results after close.
     pub fn get_run(&self, run: &RunRef) -> Result<RunInfo, ApiError> {
         let state = self.client.shared.state.lock().unwrap();
-        Ok(state.commands[state.find_run(run)?].run.clone())
+        Ok(state.commands[state.find_run(run)?]
+            .work
+            .message()
+            .expect("find_run identifies a message")
+            .run
+            .clone())
     }
 
     /// Get_command retrieves the latest receipt without admitting more work.
@@ -390,15 +532,42 @@ impl SessionApi {
             .ok_or_else(|| error("not_found", "request_id is not retained by this handle"))
     }
 
+    /// Wait_command waits for application or rejection, not for an associated Run to finish.
+    pub fn wait_command(&self, request_id: &str) -> Result<CommandInfo, ApiError> {
+        let shared = &self.client.shared;
+        let mut state = shared.state.lock().unwrap();
+        let index = state
+            .commands
+            .iter()
+            .position(|c| c.info.request_id == request_id)
+            .ok_or_else(|| error("not_found", "request_id is not retained by this handle"))?;
+        while state.commands[index].info.state == CommandState::Pending {
+            state = shared.changed.wait(state).unwrap();
+        }
+        Ok(state.commands[index].info.clone())
+    }
+
     /// Wait_run waits for a retained terminal result without locking the executing Session.
     pub fn wait_run(&self, run: &RunRef) -> Result<RunInfo, ApiError> {
         let shared = &self.client.shared;
         let mut state = shared.state.lock().unwrap();
         let index = state.find_run(run)?;
-        while state.commands[index].run.state != RunState::Terminal {
+        while state.commands[index]
+            .work
+            .message()
+            .expect("find_run identifies a message")
+            .run
+            .state
+            != RunState::Terminal
+        {
             state = shared.changed.wait(state).unwrap();
         }
-        Ok(state.commands[index].run.clone())
+        Ok(state.commands[index]
+            .work
+            .message()
+            .expect("find_run identifies a message")
+            .run
+            .clone())
     }
 
     /// Cancel_run cancels only the exact queued or running target, never a later Run.
@@ -406,34 +575,43 @@ impl SessionApi {
         let shared = &self.client.shared;
         let mut state = shared.state.lock().unwrap();
         let index = state.find_run(run)?;
-        if state.commands[index].run.state == RunState::Terminal {
-            return Ok(state.commands[index].run.clone());
+        let message = state.commands[index]
+            .work
+            .message_mut()
+            .expect("find_run identifies a message");
+        if message.run.state == RunState::Terminal {
+            return Ok(message.run.clone());
         }
-        state.commands[index]
-            .cancellation
-            .store(true, Ordering::Release);
-        state.commands[index].run.cancel_requested = true;
-        if state.commands[index].run.state == RunState::Queued {
+        message.cancellation.store(true, Ordering::Release);
+        message.run.cancel_requested = true;
+        if message.run.state == RunState::Queued {
             state.pending.retain(|i| *i != index);
             not_applied(&mut state.commands[index], "queued Run cancelled");
         }
         state.changed();
         shared.changed.notify_all();
-        Ok(state.commands[index].run.clone())
+        Ok(state.commands[index]
+            .work
+            .message()
+            .expect("find_run identifies a message")
+            .run
+            .clone())
     }
 
-    /// Close releases the owner and checkpoint lease only when no admitted Run is live.
+    /// Close releases the owner and checkpoint lease only when no Run or idle control is live.
     pub fn close(&self) -> Result<SessionSnapshot, ApiError> {
         let shared = &self.client.shared;
         let mut state = shared.state.lock().unwrap();
-        if state
-            .commands
-            .iter()
-            .any(|c| c.run.state != RunState::Terminal)
+        if state.control.is_some()
+            || state
+                .commands
+                .iter()
+                .filter_map(|c| c.work.message())
+                .any(|m| m.run.state != RunState::Terminal)
         {
             return Err(error(
                 "busy",
-                "cancel and await all live_runs before closing",
+                "await the idle control or cancel and await all live_runs before closing",
             ));
         }
         if !state.closing {
@@ -457,13 +635,16 @@ impl SessionApi {
     /// Cli_result retains legacy rendering until the observation-based CLI migration.
     pub(crate) fn cli_result(&self, run: &RunRef) -> Result<(Value, Value), ApiError> {
         let state = self.client.shared.state.lock().unwrap();
-        let command = &state.commands[state.find_run(run)?];
+        let message = state.commands[state.find_run(run)?]
+            .work
+            .message()
+            .expect("find_run identifies a message");
         Ok((
-            command
+            message
                 .wire_result
                 .clone()
                 .ok_or_else(|| error("busy", "Run has no terminal result"))?,
-            json!({"_display":command.display}),
+            json!({"_display":message.display}),
         ))
     }
 }
@@ -476,6 +657,42 @@ pub(crate) struct RunObserver {
     pub(crate) run_id: String,
 }
 
+fn auto_info(session: &Session) -> AutoInfo {
+    let route = |model: &Value, effort: &Value| AutoRoute {
+        model: model.as_str().unwrap_or("").into(),
+        effort: match effort.as_str().unwrap_or("") {
+            "" => ReasoningEffort::ProviderDefault,
+            name => ReasoningEffort::Named(name.into()),
+        },
+    };
+    AutoInfo {
+        enabled: session.state["auto_enabled"].as_bool().unwrap_or(false),
+        fallback: session.state["auto_fallback_model"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|_| {
+                route(
+                    &session.state["auto_fallback_model"],
+                    &session.state["auto_fallback_effort"],
+                )
+            }),
+        allowed_routes: session.state["auto_routes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| route(&r["model"], &r["reasoning_effort"]))
+            .collect(),
+        usage: Usage::from_value(
+            session
+                .state
+                .get("auto_usage")
+                .unwrap_or(&crate::types::usage_zero(true)),
+        ),
+        attempts: session.state["auto_attempts"].as_u64().unwrap_or(0),
+        data_sharing_notice: crate::auto::DATA_SHARING_NOTICE.into(),
+    }
+}
+
 fn update_metadata(session: &Session, snapshot: &mut SessionSnapshot) {
     let text = |value: &Value| value.as_str().unwrap_or("").to_owned();
     snapshot.model = text(&session.config["model"]);
@@ -483,6 +700,7 @@ fn update_metadata(session: &Session, snapshot: &mut SessionSnapshot) {
     snapshot.reasoning_effort = text(&session.config["reasoning_effort"]);
     snapshot.auth_mode = text(&session.config["auth_mode"]);
     snapshot.plan = session.state["plan"].as_bool().unwrap_or(false);
+    snapshot.auto = auto_info(session);
     snapshot.workspace = text(&session.config["workspace"]).into();
     let mut usage = session.state["usage"].clone();
     if session.state["current_run"] == true {
@@ -514,10 +732,14 @@ pub(crate) fn publish(session: &Session, activity: &str, applied: bool) {
     let mut state = observer.shared.state.lock().unwrap();
     update_metadata(session, &mut state.snapshot);
     let command = &mut state.commands[observer.index];
-    command.run.activity = activity.into();
-    command.run.steps = session.state["steps"].as_u64().unwrap_or(0);
-    command.run.tool_calls = session.state["tool_calls"].as_u64().unwrap_or(0);
-    command.run.usage = Usage::from_value(&session.state["run_usage"]);
+    let message = command
+        .work
+        .message_mut()
+        .expect("Run observer identifies a message");
+    message.run.activity = activity.into();
+    message.run.steps = session.state["steps"].as_u64().unwrap_or(0);
+    message.run.tool_calls = session.state["tool_calls"].as_u64().unwrap_or(0);
+    message.run.usage = Usage::from_value(&session.state["run_usage"]);
     if applied {
         command.info.state = CommandState::Applied;
     }
@@ -528,15 +750,87 @@ pub(crate) fn publish(session: &Session, activity: &str, applied: bool) {
 fn not_applied(command: &mut Command, reason: &str) {
     command.info.state = CommandState::NotApplied;
     command.info.reason = Some(reason.into());
-    let result = json!({"status":"cancelled","reason":reason,"steps":0,"tool_calls":0,"usage":crate::types::usage_zero(true)});
-    command.run.state = RunState::Terminal;
-    command.run.activity = "terminal".into();
-    command.run.result = Some(RunResult::from_value(&result));
-    command.wire_result = Some(result);
+    if let Some(message) = command.work.message_mut() {
+        let result = json!({"status":"cancelled","reason":reason,"steps":0,"tool_calls":0,"usage":crate::types::usage_zero(true)});
+        message.run.state = RunState::Terminal;
+        message.run.activity = "terminal".into();
+        message.run.result = Some(RunResult::from_value(&result));
+        message.wire_result = Some(result);
+    }
 }
 
 fn cancellation_scope(session: &SessionRef, request_id: &str) -> String {
     format!("{}:{request_id}", session.instance_id)
+}
+
+fn change_settings(session: &mut Session, change: SessionChange) -> Result<(), String> {
+    match change {
+        SessionChange::SetPlan { enabled } => session.state["plan"] = json!(enabled),
+        SessionChange::SetEffort { effort } => {
+            if session.config["provider"] == "scripted" {
+                return Err("reasoning effort is unavailable for scripted Sessions".into());
+            }
+            let model = session.config["model"].as_str().unwrap_or("");
+            let info = crate::catalog::model_info(model);
+            if info.is_null() {
+                return Err(format!(
+                    "{model} is not in the catalog; supported reasoning efforts are unknown"
+                ));
+            }
+            let name = match effort {
+                ReasoningEffort::ProviderDefault => String::new(),
+                ReasoningEffort::Named(name) => {
+                    if !info["efforts"]
+                        .as_array()
+                        .is_some_and(|efforts| efforts.iter().any(|e| e == &name))
+                    {
+                        return Err(format!(
+                            "reasoning effort {name:?} is not supported by {model}"
+                        ));
+                    }
+                    name
+                }
+            };
+            session.config["reasoning_effort"] = json!(name);
+            crate::auto::pin(session);
+        }
+        SessionChange::SetAuto { enabled } => crate::auto::set_enabled(session, enabled)?,
+    }
+    Ok(())
+}
+
+fn apply_change(session: &mut Session, shared: &Shared, index: usize, change: SessionChange) {
+    let config = session.config.clone();
+    let previous = session.state.clone();
+    let reason = match change_settings(session, change) {
+        Err(reason) => {
+            session.config = config;
+            session.state = previous;
+            Some(reason)
+        }
+        Ok(()) => match crate::checkpoint::save(session, "idle", "") {
+            Ok(()) => None,
+            Err(error) => {
+                session.config = config;
+                session.state = previous;
+                let reason = format!("persist idle Session change: {error}; in-memory settings restored, checkpoint state may have changed");
+                session.state["persistence_error"] = json!(reason);
+                Some(reason)
+            }
+        },
+    };
+    let mut state = shared.state.lock().unwrap();
+    update_metadata(session, &mut state.snapshot);
+    let command = &mut state.commands[index];
+    command.info.state = if reason.is_some() {
+        CommandState::NotApplied
+    } else {
+        CommandState::Applied
+    };
+    command.info.reason = reason;
+    state.control = None;
+    state.changed();
+    shared.changed.notify_all();
 }
 
 fn own(mut owner: Owner, shared: Arc<Shared>) {
@@ -551,22 +845,33 @@ fn own(mut owner: Owner, shared: Arc<Shared>) {
                 while let Some(index) = state.pending.pop_front() {
                     not_applied(
                         &mut state.commands[index],
-                        "Session owner stopped before this Run started",
+                        "Session owner stopped before this command started",
                     );
                 }
+                state.control = None;
                 break;
             }
             let index = state.pending.pop_front().unwrap();
             let command = &mut state.commands[index];
-            command.run.state = RunState::Running;
-            command.run.activity = "starting".into();
+            if let CommandWork::Change { change, .. } = &command.work {
+                let change = change.clone();
+                drop(state);
+                apply_change(session, &shared, index, change);
+                continue;
+            }
+            let message = command
+                .work
+                .message_mut()
+                .expect("remaining work is a message");
+            message.run.state = RunState::Running;
+            message.run.activity = "starting".into();
             let data = (
                 index,
-                command.message.clone(),
-                command.run.run.clone(),
-                command.cancellation.clone(),
-                command.plan_mode,
-                cancellation_scope(&command.run.run.session, &command.info.request_id),
+                message.message.clone(),
+                message.run.run.clone(),
+                message.cancellation.clone(),
+                message.plan_mode,
+                cancellation_scope(&message.run.run.session, &command.info.request_id),
             );
             state.snapshot.active_conversation_run = Some(data.2.clone());
             state.changed();
@@ -608,15 +913,19 @@ fn own(mut owner: Owner, shared: Arc<Shared>) {
                     .into(),
             );
         }
-        command.run.state = RunState::Terminal;
-        command.run.cancel_requested |= command.cancellation.load(Ordering::Acquire);
-        command.run.activity = "terminal".into();
-        command.run.steps = result["steps"].as_u64().unwrap_or(0);
-        command.run.tool_calls = result["tool_calls"].as_u64().unwrap_or(0);
-        command.run.usage = Usage::from_value(&result["usage"]);
-        command.run.result = Some(RunResult::from_value(&result));
-        command.wire_result = Some(result.clone());
-        command.display = session.state["_display"].clone();
+        let message = command
+            .work
+            .message_mut()
+            .expect("executing Run identifies a message");
+        message.run.state = RunState::Terminal;
+        message.run.cancel_requested |= message.cancellation.load(Ordering::Acquire);
+        message.run.activity = "terminal".into();
+        message.run.steps = result["steps"].as_u64().unwrap_or(0);
+        message.run.tool_calls = result["tool_calls"].as_u64().unwrap_or(0);
+        message.run.usage = Usage::from_value(&result["usage"]);
+        message.run.result = Some(RunResult::from_value(&result));
+        message.wire_result = Some(result.clone());
+        message.display = session.state["_display"].clone();
         state.snapshot.active_conversation_run = None;
         if result["status"] != "completed" && result["status"] != "refused" {
             while let Some(index) = state.pending.pop_front() {
@@ -681,7 +990,8 @@ mod tests {
         let run = api
             .send_message("early", b"task", PlanMode::Keep)
             .unwrap()
-            .run;
+            .run
+            .unwrap();
         let result = api.wait_run(&run).unwrap();
         assert!(result.cancel_requested);
         assert_eq!(result.result.unwrap().status, "cancelled");
@@ -689,7 +999,8 @@ mod tests {
         let next = api
             .send_message("next", b"continue explicitly", PlanMode::Keep)
             .unwrap()
-            .run;
+            .run
+            .unwrap();
         let result = api.wait_run(&next).unwrap();
         assert!(!result.cancel_requested);
         assert_eq!(result.result.unwrap().reply, b"next turn");
