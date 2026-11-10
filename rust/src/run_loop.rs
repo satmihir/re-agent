@@ -204,6 +204,9 @@ impl Session {
         if !marker.is_empty() {
             user["plan"] = json!(marker);
         }
+        if let Some(attribution) = crate::session_api::steering::message_attribution(self) {
+            user["attribution"] = json!(attribution);
+        }
         self.state["task"] = user.clone();
         self.history.push(json!({"kind":"user","user":user}));
         self.state["pending_submission"] = Value::Null;
@@ -217,6 +220,13 @@ impl Session {
                 return self.finish("cancelled", "cancelled before the next model request", "");
             }
             self.deliver_agents();
+            if let Err(reason) = crate::session_api::steering::boundary(self, false) {
+                return self.finish("persistence_error", &reason, "");
+            }
+            if self.cancelled() {
+                self.state["resumable"] = json!(true);
+                return self.finish("cancelled", "cancelled at a settled boundary", "");
+            }
             if crate::auto::route_next(self).is_err()
                 || crate::agents::cancelled(self)
                 || self.cancelled()
@@ -352,6 +362,11 @@ impl Session {
                 }
                 if self.deliver_agents() {
                     continue;
+                }
+                match crate::session_api::steering::boundary(self, true) {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(reason) => return self.finish("persistence_error", &reason, ""),
                 }
                 let refusal = block_text(&resp, "refusal");
                 if !refusal.is_empty() {
@@ -830,6 +845,8 @@ impl Session {
             );
         }
         if string(&self.state["persistence_error"]).is_empty() {
+            #[cfg(test)]
+            crate::session_api::steering::outcome_persistence_hook(self);
             if let Err(error) = self.save_run("accepted", "") {
                 self.state["persistence_error"] = json!(error);
             }
@@ -845,6 +862,7 @@ impl Session {
         }
     }
     pub(crate) fn finish(&mut self, status: &str, reason: &str, reply: &str) -> Value {
+        crate::session_api::steering::finish(self, reason);
         if flag(&self.config["agents"]) && !matches!(status, "completed" | "refused") {
             crate::agents::stop(self, false);
             self.deliver_agents();
@@ -1222,7 +1240,8 @@ pub(crate) fn plan_requested(text: &str) -> bool {
     }
     false
 }
-fn plan_marker(history: &[Value], on: bool, compacted: &str) -> String {
+/// Plan_marker retains the effective plan transition on each trusted user instruction.
+pub(crate) fn plan_marker(history: &[Value], on: bool, compacted: &str) -> String {
     if on {
         return "on".into();
     }

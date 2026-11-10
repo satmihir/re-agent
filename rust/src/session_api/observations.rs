@@ -112,6 +112,9 @@ fn entry(
             EntryContent::User {
                 text: content(&user["text"], &mut remaining),
                 source: content(&user["source"], &mut remaining),
+                attribution: user
+                    .get("attribution")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
                 plan: content(&user["plan"], &mut remaining),
                 workspace: user
                     .get("workspace")

@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell, bounded structured observations, typed workspace consent, interactive chat migration and isolated tool-free BTW questions implemented**, with the remaining
+Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell, bounded structured observations, typed workspace consent, interactive chat migration, isolated tool-free BTW questions and active-Run steering implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -8,7 +8,7 @@ it does not make `runtime::Session` itself a supported public API.
 ## Implemented first milestone
 
 `rust/src/session_api.rs` and its owned records implement `open_session`,
-`resume_session`, `get_snapshot`, `send_message`, `ask`, `get_run`, `get_command`,
+`resume_session`, `get_snapshot`, `send_message`, `ask`, `steer`, `get_run`, `get_command`,
 `wait_run`, `cancel_run`, `cancel_command`, and idle-only `close`. One worker owns the Session;
 cloneable handles share only owned published observations, receipts, the queue, and exact
 Run cancellation flags. The model loop remains in `run_loop.rs`.
@@ -22,8 +22,8 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   owned and discovered through the parent handle.
   Terminal results remain readable after inventory removal and close.
 - At most 16 live Runs and 256 retained command receipts are admitted; messages,
-  BTW questions, controls and live human-consent resolutions share the receipt limit. Individual
-  messages/questions fit 10 MiB; retained message/question plus long-control input bytes fit 32 MiB. Exhaustion refuses
+  BTW questions, steers, controls and live human-consent resolutions share the receipt limit. Individual
+  messages/questions/steers fit 10 MiB; their retained bytes plus long-control input bytes fit 32 MiB. Exhaustion refuses
   admission, not cancellation/close, and never evicts deduplication records.
 - Request-ID retries deduplicate within this opening, not across restarts.
   A failed Run discards queued follow-ups rather than starting them automatically.
@@ -38,8 +38,7 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   remains local. Chat never owns or mutates the runtime Session.
 
 This milestone is **trusted-local only**: handles are not capability-filtered and
-must not be given to untrusted clients. Transport authorization and steering
-are not implemented; interactive chat uses the typed human-consent guard. The detailed records and operations below describe the full target,
+must not be given to untrusted clients. Transport authorization is not implemented; interactive chat uses the typed human-consent guard. The detailed records and operations below describe the full target,
 not a claim that every field or method already exists. `wait_run` and `close` are
 local conveniences while that broader observation/control boundary is extracted.
 
@@ -108,6 +107,65 @@ long controls, reset and close require every Run idle; last owning-handle loss
 cancels questions without workers retaining a Client. Retired handles keep their
 own records; replacement/resumed handles cannot inspect or cancel old question refs.
 There is no CLI question input/display binding yet.
+
+## Implemented active-Run steering
+
+`steer(request_id, target: &RunRef, text: &[u8])` queues trusted user guidance only
+for the exact active conversation Run before its completion gate. Queued, terminal,
+BTW, stale and foreign targets are rejected. Empty/all-ASCII-whitespace text is
+invalid; other bytes are literal, including invalid UTF-8 and command-shaped text.
+No commands are parsed, no Run is created, and no accepted work is preempted or
+retracted. Settings, authority, file evidence, counters and trace continuity remain
+owned by the existing Run; normal Auto policy continues unchanged.
+
+The receipt's `run` identifies the **existing target**, not new execution. Steering
+shares the 256-command namespace, 10 MiB per-input and 32 MiB retained-input limits;
+exact method/target/byte retries return before lifecycle/capacity checks. A rejected
+new admission reserves nothing. `wait_command` observes application, not Run finish.
+`cancel_command` still applies only to long controls; use exact `cancel_run` to stop
+the target, independently of BTW work.
+
+Only the Session owner drains FIFO guidance after all accepted ToolCalls have
+recorded outcomes, including failed/not-executed outcomes, and before a follow-up
+model request. Each reserved batch is staged outside the State lock, saved with
+the current Run's accepted-phase barrier, then published with Applied receipts and
+Entry availability. Newly admitted guidance during that save is drained in another
+FIFO batch before sealing that boundary for the next request. Admissions after that
+cut await the next settled boundary. Receipt capacity bounds this drain; there is
+no hidden unbounded queue. A missing follow-up Step budget settles pending guidance
+NotApplied without saving it.
+
+Text/refusal completion checks the same boundary after any agent delivery/wait
+continuation. An empty final completion gate seals steering under the admission
+mutex: a winning steer causes a follow-up in the same Run; a winning completion
+makes later admission conflict, never redirect to the next Run. Cancellation remains
+cooperative: it rejects queued guidance, but cannot retract accepted text/actions
+or an application barrier already in progress. Applied Entries remain historical
+context even if cancellation/failure prevents the follow-up inference.
+
+Applied means the save barrier succeeded. When checkpointing is disabled (including
+scripted Sessions), `reason` explicitly says application is in memory. An existing
+checkpoint error stops continuation before reserving guidance and settles it
+NotApplied with the original error. A steering save failure restores only its
+uncommitted memory suffix, preserves accepted
+responses/outcomes and costs, poisons the opening, stops continuation and reports
+NotApplied with disk uncertainty: replacement may already contain the Entries.
+Resume does not reconstruct receipts/queues or replay guidance. Last-handle loss
+settles queued guidance and requests cancellation without workers retaining a Client.
+
+Applied user Entries, and original API conversation Entries, carry optional
+`attribution` (`request_id`, `target`, `kind`, and steering `boundary_step`). This is
+historical identity, not authority. Steers leave `user.source` empty and retain plan
+transition markers; agent deliveries keep their existing untrusted labels. Public
+Entry projections retain attribution after resume. Ordinary encoders ignore this
+metadata, while handoff/BTW labelled history retains it as data. New API-attributed
+invalid-UTF-8 text has a checkpoint-only base64 `text_bytes` sidecar so restore keeps
+literal bytes; runtime/provider history has no sidecar and provider JSON uses its
+normal UTF-8 repair. Old records without attribution retain their existing v2
+ordering/encoding, and legacy imports require no new fields. Steers do not increment
+`ordinary_user_turns`. Normal GC/compaction policy remains in force: attribution
+belongs to retained Entries, not a separate durable instruction ledger. There is
+no CLI steering command/display binding yet.
 
 ## Implemented typed idle controls
 

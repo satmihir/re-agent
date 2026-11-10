@@ -38,12 +38,19 @@ fn open(responses: Value, checkpoint: bool, agents: bool) -> (tempfile::TempDir,
 }
 
 fn bounded<T: Send + 'static>(operation: impl FnOnce() -> T + Send + 'static) -> T {
+    bounded_for(Duration::from_secs(8), operation)
+}
+
+fn bounded_for<T: Send + 'static>(
+    timeout: Duration,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(operation());
     });
-    rx.recv_timeout(Duration::from_secs(8))
-        .expect("Session observation blocked behind owner work")
+    rx.recv_timeout(timeout)
+        .expect("Session operation exceeded its fixture deadline")
 }
 
 fn run(api: &SessionApi, id: &str, message: &[u8]) -> RunInfo {
@@ -53,7 +60,8 @@ fn run(api: &SessionApi, id: &str, message: &[u8]) -> RunInfo {
         .run
         .unwrap();
     let reader = api.clone();
-    bounded(move || reader.wait_run(&target)).unwrap()
+    // Run completion includes large-prefix staging; it is not an observation-latency check.
+    bounded_for(Duration::from_secs(60), move || reader.wait_run(&target)).unwrap()
 }
 
 fn change(api: &SessionApi, id: &str, change: SessionChange) -> CommandInfo {

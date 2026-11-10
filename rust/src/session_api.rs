@@ -5,6 +5,8 @@ mod btw_capture;
 mod consent;
 mod consent_types;
 mod controls;
+/// Trusted user guidance applied by the conversation owner at settled boundaries.
+pub(crate) mod steering;
 /// Live trusted-local human workspace-consent ownership.
 pub use consent::WorkspaceConsentApi;
 /// Typed human requests, decisions and bounded approval references.
@@ -90,6 +92,10 @@ struct Command {
 
 enum CommandWork {
     Message(MessageCommand),
+    Steer {
+        target: RunRef,
+        text: Arc<[u8]>,
+    },
     Consent {
         owner_id: String,
         approval: WorkspaceApprovalRef,
@@ -107,14 +113,14 @@ impl CommandWork {
     fn message(&self) -> Option<&MessageCommand> {
         match self {
             Self::Message(message) => Some(message),
-            Self::Change { .. } | Self::Consent { .. } => None,
+            Self::Change { .. } | Self::Consent { .. } | Self::Steer { .. } => None,
         }
     }
 
     fn message_mut(&mut self) -> Option<&mut MessageCommand> {
         match self {
             Self::Message(message) => Some(message),
-            Self::Change { .. } | Self::Consent { .. } => None,
+            Self::Change { .. } | Self::Consent { .. } | Self::Steer { .. } => None,
         }
     }
 }
@@ -144,6 +150,14 @@ struct State {
     replacement: Option<Replacement>,
     commands: Vec<Command>,
     pending: VecDeque<usize>,
+    pending_steers: VecDeque<usize>,
+    accepting_steers: bool,
+    #[cfg(test)]
+    completion_hook: Option<(bool, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+    #[cfg(test)]
+    steering_persist_hook: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+    #[cfg(test)]
+    steering_sync_error: bool,
     control: Option<usize>,
     retained_input_bytes: usize,
     closing: bool,
@@ -182,6 +196,11 @@ impl Drop for Client {
                 }
             }
         }
+        steering::reject_queued(
+            &mut state,
+            None,
+            "last owning handle dropped before steering application",
+        );
         let replacement = state.replacement.take();
         self.shared.changed.notify_all();
         drop(state);
@@ -360,6 +379,14 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
             replacement: None,
             commands: Vec::new(),
             pending: VecDeque::new(),
+            pending_steers: VecDeque::new(),
+            accepting_steers: false,
+            #[cfg(test)]
+            completion_hook: None,
+            #[cfg(test)]
+            steering_persist_hook: None,
+            #[cfg(test)]
+            steering_sync_error: false,
             control: None,
             retained_input_bytes: 0,
             closing: false,
@@ -917,6 +944,14 @@ impl SessionApi {
         let queued = message.run.state == RunState::Queued;
         state.commands[index].info.cancel_requested = true;
         consent::invalidate_run(&mut state, run);
+        if state.snapshot.active_conversation_run.as_ref() == Some(run) {
+            state.accepting_steers = false;
+        }
+        steering::reject_queued(
+            &mut state,
+            Some(run),
+            "target Run cancellation requested before steering application",
+        );
         if queued {
             state.pending.retain(|i| *i != index);
             not_applied(&mut state.commands[index], "queued Run cancelled");
@@ -1053,7 +1088,11 @@ fn update_metadata(session: &Session, snapshot: &mut SessionSnapshot) {
     snapshot.ordinary_user_turns = session
         .history
         .iter()
-        .filter(|e| e["kind"] == "user" && e["user"]["source"].as_str().unwrap_or("").is_empty())
+        .filter(|e| {
+            e["kind"] == "user"
+                && e["user"]["source"].as_str().unwrap_or("").is_empty()
+                && e["user"]["attribution"]["kind"] != "steer"
+        })
         .count() as u64;
     snapshot.last_trace = session.state["last_trace"]
         .as_str()
@@ -1531,6 +1570,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
                 cancellation_scope(&message.run.run.session, &command.info.request_id),
             );
             state.snapshot.active_conversation_run = Some(data.2.clone());
+            state.accepting_steers = true;
             state.run_changed(index);
             shared.changed.notify_all();
             data
@@ -1557,6 +1597,12 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         crate::render::begin_turn(&mut session.state);
         let result = controls::before_message(session, &shared, &run, &cancellation)
             .unwrap_or_else(|| session.submit_bytes(&message));
+        steering::finish(
+            session,
+            result["reason"]
+                .as_str()
+                .unwrap_or("Run ended before steering application"),
+        );
         session.api = None;
         crate::types::usage_add(&mut session.state["usage"], &result["usage"]);
         if result["status"] == "persistence_error" {

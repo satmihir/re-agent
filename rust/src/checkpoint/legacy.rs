@@ -408,6 +408,7 @@ fn default_field(
         ]
         .contains(&key),
         "entry" => key != "kind",
+        "user" => ["attribution", "text_bytes"].contains(&key),
         "block" => key == "call",
         "shell" => ["exit_code", "signal"].contains(&key),
         "prompt" => key == "project",
