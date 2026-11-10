@@ -101,10 +101,12 @@ pub enum ReasoningEffort {
     Named(String),
 }
 
-/// SessionChange selects one trusted-local setting to apply while the Session is idle.
+/// SessionChange selects one trusted-local idle setting change or context replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionChange {
+    /// Reset replaces this opening with fresh context and accounting while preserving its live bindings.
+    Reset,
     /// SetPlan changes the effective planning restriction without expanding launch authority.
     SetPlan {
         /// enabled selects the effective planning restriction.
@@ -317,6 +319,8 @@ pub struct CommandInfo {
     pub request_id: String,
     /// run is the reserved execution identity for messages and absent for idle controls.
     pub run: Option<RunRef>,
+    /// replacement_session identifies the immediate successor only after a successful reset.
+    pub replacement_session: Option<SessionRef>,
     /// state records whether the command passed its application barrier.
     pub state: CommandState,
     /// reason explains why an admitted command was not applied.
@@ -354,6 +358,8 @@ pub struct AutoInfo {
 pub struct SessionSnapshot {
     /// session identifies this live opening, including after close.
     pub session: SessionRef,
+    /// replacement_session identifies this retired opening's immediate successor without claiming it.
+    pub replacement_session: Option<SessionRef>,
     /// revision increases on each publication or admission.
     pub revision: u64,
     /// lifecycle describes current admission and shutdown state.

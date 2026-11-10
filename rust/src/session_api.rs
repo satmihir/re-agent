@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Condvar, Mutex,
+    Arc, Condvar, Mutex, Weak,
 };
 
 const MAX_LIVE_RUNS: usize = 16;
@@ -89,8 +89,14 @@ struct MessageCommand {
     display: Value,
 }
 
+enum Replacement {
+    Unclaimed(SessionApi),
+    Claimed(Weak<Client>),
+}
+
 struct State {
     snapshot: SessionSnapshot,
+    replacement: Option<Replacement>,
     commands: Vec<Command>,
     pending: VecDeque<usize>,
     control: Option<usize>,
@@ -117,7 +123,10 @@ impl Drop for Client {
                 message.cancellation.store(true, Ordering::Release);
             }
         }
+        let replacement = state.replacement.take();
         self.shared.changed.notify_all();
+        drop(state);
+        drop(replacement);
     }
 }
 
@@ -197,13 +206,13 @@ pub(crate) fn open_resolved(mut config: Value) -> Result<SessionApi, ApiError> {
     start(owner, None)
 }
 
-fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
-    let session = &owner.session;
+fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
     let snapshot = SessionSnapshot {
         session: SessionRef {
-            session_id: owner.lease.0.clone(),
+            session_id: session.config["session_id"].as_str().unwrap().into(),
             instance_id: crate::types::new_id(),
         },
+        replacement_session: None,
         revision: 0,
         lifecycle: SessionLifecycle::Idle,
         active_conversation_run: None,
@@ -231,6 +240,7 @@ fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             snapshot,
+            replacement: None,
             commands: Vec::new(),
             pending: VecDeque::new(),
             control: None,
@@ -240,7 +250,12 @@ fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
         }),
         changed: Condvar::new(),
     });
-    update_metadata(&session, &mut shared.state.lock().unwrap().snapshot);
+    update_metadata(session, &mut shared.state.lock().unwrap().snapshot);
+    shared
+}
+
+fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
+    let shared = new_shared(&owner.session, notice);
     let worker = shared.clone();
     std::thread::Builder::new()
         .name("reagent-session".into())
@@ -283,9 +298,11 @@ impl State {
             SessionLifecycle::Closed
         } else if self.closing {
             SessionLifecycle::Closing
+        } else if self.control.is_some() {
+            SessionLifecycle::Running
         } else if snapshot.blocked.is_some() || snapshot.persistence_error.is_some() {
             SessionLifecycle::Blocked
-        } else if !snapshot.live_runs.is_empty() || self.control.is_some() {
+        } else if !snapshot.live_runs.is_empty() {
             SessionLifecycle::Running
         } else {
             SessionLifecycle::Idle
@@ -308,6 +325,52 @@ impl SessionApi {
     /// Get_snapshot returns owned metadata and every admitted nonterminal Run.
     pub fn get_snapshot(&self) -> Result<SessionSnapshot, ApiError> {
         Ok(self.client.shared.state.lock().unwrap().snapshot())
+    }
+
+    /// Get_replacement claims only this opening's immediate successor after a successful reset.
+    ///
+    /// The first call transfers its retained ownership; later calls clone a still-live successor.
+    /// Before that transfer, dropping every old handle shuts the unclaimed successor down;
+    /// closing the retired handle is a no-op and does not discard its unclaimed successor.
+    /// Old inspectors retain only a weak reference after that transfer, so dropping every claimed
+    /// successor handle shuts it down; later retrieval then returns unavailable, never a new opening.
+    /// A pending reset returns busy, and an opening without a successful reset returns not_found.
+    /// This method never follows a successor's own replacement.
+    pub fn get_replacement(&self) -> Result<SessionApi, ApiError> {
+        let mut state = self.client.shared.state.lock().unwrap();
+        let replacement = match state.replacement.take() {
+            Some(Replacement::Unclaimed(api)) => api,
+            Some(Replacement::Claimed(client)) => {
+                let replacement = client.upgrade();
+                state.replacement = Some(Replacement::Claimed(client));
+                return replacement
+                    .map(|client| SessionApi { client })
+                    .ok_or_else(|| {
+                        error(
+                            "unavailable",
+                            "all claimed replacement handles were dropped",
+                        )
+                    });
+            }
+            None => {
+                let pending = state.control.is_some_and(|index| {
+                    matches!(
+                        &state.commands[index].work,
+                        CommandWork::Change {
+                            change: SessionChange::Reset,
+                            ..
+                        }
+                    )
+                });
+                return Err(if pending {
+                    error("busy", "Session reset has not been published")
+                } else {
+                    error("not_found", "Session has no successful reset replacement")
+                });
+            }
+        };
+        state.replacement = Some(Replacement::Claimed(Arc::downgrade(&replacement.client)));
+        Ok(replacement)
     }
 
     /// Send_message admits a literal message once and reserves its execution identity.
@@ -383,6 +446,7 @@ impl SessionApi {
         let info = CommandInfo {
             request_id: request_id.into(),
             run: Some(run.clone()),
+            replacement_session: None,
             state: CommandState::Pending,
             reason: None,
         };
@@ -459,7 +523,9 @@ impl SessionApi {
         if state.closing || state.closed {
             return Err(error("unavailable", "Session is closing or closed"));
         }
-        if state.snapshot.blocked.is_some() || state.snapshot.persistence_error.is_some() {
+        if state.snapshot.persistence_error.is_some()
+            || state.snapshot.blocked.is_some() && change != SessionChange::Reset
+        {
             return Err(error(
                 "blocked",
                 "Session requires recovery before another change",
@@ -489,6 +555,7 @@ impl SessionApi {
         let info = CommandInfo {
             request_id: request_id.into(),
             run: None,
+            replacement_session: None,
             state: CommandState::Pending,
             reason: None,
         };
@@ -602,6 +669,9 @@ impl SessionApi {
     pub fn close(&self) -> Result<SessionSnapshot, ApiError> {
         let shared = &self.client.shared;
         let mut state = shared.state.lock().unwrap();
+        if state.closed {
+            return Ok(state.snapshot());
+        }
         if state.control.is_some()
             || state
                 .commands
@@ -765,6 +835,7 @@ fn cancellation_scope(session: &SessionRef, request_id: &str) -> String {
 
 fn change_settings(session: &mut Session, change: SessionChange) -> Result<(), String> {
     match change {
+        SessionChange::Reset => unreachable!("resets replace the owner binding separately"),
         SessionChange::SetPlan { enabled } => session.state["plan"] = json!(enabled),
         SessionChange::SetEffort { effort } => {
             if session.config["provider"] == "scripted" {
@@ -819,6 +890,10 @@ fn apply_change(session: &mut Session, shared: &Shared, index: usize, change: Se
             }
         },
     };
+    finish_change(session, shared, index, reason);
+}
+
+fn finish_change(session: &Session, shared: &Shared, index: usize, reason: Option<String>) {
     let mut state = shared.state.lock().unwrap();
     update_metadata(session, &mut state.snapshot);
     let command = &mut state.commands[index];
@@ -833,8 +908,73 @@ fn apply_change(session: &mut Session, shared: &Shared, index: usize, change: Se
     shared.changed.notify_all();
 }
 
-fn own(mut owner: Owner, shared: Arc<Shared>) {
+fn reset_owner(owner: &mut Owner, shared: &Shared, index: usize) -> Option<Arc<Shared>> {
+    let (config, state) =
+        crate::compact::reset_context(&owner.session.config, &owner.session.state);
+    let id = config["session_id"].as_str().unwrap().to_owned();
+    let lease = match Lease::claim(&id) {
+        Ok(lease) => lease,
+        Err(error) => {
+            let reason = format!("claim reset Session {id}: {error}");
+            owner.session.state["persistence_error"] = json!(reason);
+            finish_change(&owner.session, shared, index, Some(reason));
+            return None;
+        }
+    };
     let session = &mut owner.session;
+    let mut previous_config = std::mem::replace(&mut session.config, config);
+    let mut previous_state = std::mem::replace(&mut session.state, state);
+    let mut previous_history = std::mem::take(&mut session.history);
+    if let Err(error) = crate::checkpoint::save(session, "idle", "") {
+        crate::agents::retire(session);
+        session.config = previous_config;
+        session.state = previous_state;
+        session.history = previous_history;
+        let reason = format!("persist reset Session {id}: {error}; in-memory context restored; original checkpoint remains the recovery target; candidate private cache artifacts may remain");
+        session.state["persistence_error"] = json!(reason);
+        drop(lease);
+        finish_change(session, shared, index, Some(reason));
+        return None;
+    }
+    // The old tree and file authorization remain intact until the new checkpoint is durable.
+    std::mem::swap(&mut session.config, &mut previous_config);
+    std::mem::swap(&mut session.state, &mut previous_state);
+    std::mem::swap(&mut session.history, &mut previous_history);
+    crate::agents::stop(session, true);
+    crate::agents::retire(session);
+    std::mem::swap(&mut session.config, &mut previous_config);
+    std::mem::swap(&mut session.state, &mut previous_state);
+    std::mem::swap(&mut session.history, &mut previous_history);
+    session.tools.forget_seen();
+    session.tools.state = json!({});
+    session.trace = crate::trace::Trace::disabled();
+    session
+        .provider
+        .set_cancellation(crate::cancellation::token(&session.config));
+    drop(std::mem::replace(&mut owner.lease, lease));
+    let replacement = new_shared(session, None);
+    let mut state = shared.state.lock().unwrap();
+    let mut successor = replacement.state.lock().unwrap();
+    successor.snapshot.read_only = state.snapshot.read_only;
+    let identity = successor.snapshot.session.clone();
+    drop(successor);
+    state.commands[index].info.state = CommandState::Applied;
+    state.commands[index].info.replacement_session = Some(identity.clone());
+    state.snapshot.replacement_session = Some(identity);
+    state.replacement = Some(Replacement::Unclaimed(SessionApi {
+        client: Arc::new(Client {
+            shared: replacement.clone(),
+        }),
+    }));
+    state.control = None;
+    state.closing = true;
+    state.closed = true;
+    state.changed();
+    shared.changed.notify_all();
+    Some(replacement)
+}
+
+fn own(mut owner: Owner, mut shared: Arc<Shared>) {
     loop {
         let (index, message, run, cancellation, plan_mode, scope) = {
             let mut state = shared.state.lock().unwrap();
@@ -856,7 +996,13 @@ fn own(mut owner: Owner, shared: Arc<Shared>) {
             if let CommandWork::Change { change, .. } = &command.work {
                 let change = change.clone();
                 drop(state);
-                apply_change(session, &shared, index, change);
+                if change == SessionChange::Reset {
+                    if let Some(replacement) = reset_owner(&mut owner, &shared, index) {
+                        shared = replacement;
+                    }
+                } else {
+                    apply_change(&mut owner.session, &shared, index, change);
+                }
                 continue;
             }
             let message = command
@@ -878,6 +1024,7 @@ fn own(mut owner: Owner, shared: Arc<Shared>) {
             shared.changed.notify_all();
             data
         };
+        let session = &mut owner.session;
         session.config["cancellation_scope"] = json!(scope);
         session.provider.set_cancellation(cancellation);
         match plan_mode {
@@ -969,6 +1116,160 @@ mod tests {
             assert_eq!(subtree["threads"][0]["id"], child);
             drop(owner);
         }
+    }
+
+    #[test]
+    fn reset_reserves_exclusive_handoff_and_retires_only_the_old_agent_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        std::fs::write(
+            &script,
+            br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+        )
+        .unwrap();
+        let id = crate::types::new_id();
+        let mut owner = Owner {
+            session: Session::new(json!({"session_id":id,"workspace":root.path(),"provider":"scripted","scripted":script,"agents":true})).unwrap(),
+            lease: Lease::claim(&id).unwrap(),
+        };
+        owner.session.state["agent_subtree"] = json!({"accounting_complete":true,"threads":[{"id":"t1","parent_id":"root","kind":"teammate","state":"idle","depth":1,"cost":crate::types::usage_zero(true)}]});
+        crate::agents::restore(&owner.session);
+        let previous_config = owner.session.config.clone();
+        let previous_state = owner.session.state.clone();
+        assert_eq!(crate::agents::snapshot(&owner.session).1["total_agents"], 1);
+        let shared = new_shared(&owner.session, None);
+        let api = SessionApi {
+            client: Arc::new(Client {
+                shared: shared.clone(),
+            }),
+        };
+        api.change_session("reset", 0, SessionChange::Reset)
+            .unwrap();
+        assert_eq!(api.get_replacement().err().unwrap().code, "busy");
+        assert_eq!(api.close().unwrap_err().code, "busy");
+        assert_eq!(
+            api.send_message("no", b"no", PlanMode::Keep)
+                .unwrap_err()
+                .code,
+            "busy"
+        );
+        assert_eq!(
+            api.change_session("other", 1, SessionChange::Reset)
+                .unwrap_err()
+                .code,
+            "busy"
+        );
+        assert_eq!(
+            api.get_snapshot()
+                .unwrap()
+                .active_control_request_id
+                .as_deref(),
+            Some("reset")
+        );
+        let replacement = reset_owner(&mut owner, &shared, 0).unwrap();
+        assert_eq!(crate::agents::snapshot(&owner.session).1["total_agents"], 0);
+        let candidate_config = std::mem::replace(&mut owner.session.config, previous_config);
+        let candidate_state = std::mem::replace(&mut owner.session.state, previous_state);
+        assert_eq!(crate::agents::snapshot(&owner.session).1["total_agents"], 0);
+        crate::agents::retire(&owner.session);
+        owner.session.config = candidate_config;
+        owner.session.state = candidate_state;
+        let successor = api.get_replacement().unwrap();
+        assert_eq!(
+            successor.get_snapshot().unwrap().session,
+            replacement.state.lock().unwrap().snapshot.session
+        );
+        assert_eq!(
+            api.get_command("reset").unwrap().state,
+            CommandState::Applied
+        );
+        drop(successor);
+        drop(owner);
+    }
+
+    #[test]
+    fn reset_preserves_all_workspace_grants_and_forgets_each_workspaces_write_evidence() {
+        let roots = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+        for root in &roots {
+            std::fs::write(root.path().join("existing"), "original").unwrap();
+        }
+        let script = roots[0].path().join("script.json");
+        let call = |id: &str, name: &str, args: Value| json!({"blocks":[{"kind":"tool_call","call":{"call_id":id,"name":name,"arguments":args.to_string()}}]});
+        let done = json!({"blocks":[{"kind":"text","text":"done"}]});
+        let responses = json!([
+            call("read-launch", "read_file", json!({"path":"existing"})),
+            call(
+                "switch",
+                "switch_workspace",
+                json!({"path":roots[1].path()})
+            ),
+            call("read-target", "read_file", json!({"path":"existing"})),
+            done,
+            call(
+                "target-stale",
+                "write_file",
+                json!({"path":"existing","content":"bad"})
+            ),
+            call("back", "switch_workspace", json!({"path":roots[0].path()})),
+            call(
+                "launch-stale",
+                "write_file",
+                json!({"path":"existing","content":"bad"})
+            ),
+            call(
+                "launch-new",
+                "write_file",
+                json!({"path":"fresh","content":"new"})
+            ),
+            call("again", "switch_workspace", json!({"path":roots[1].path()})),
+            call(
+                "target-new",
+                "write_file",
+                json!({"path":"fresh","content":"new"})
+            ),
+            done
+        ]);
+        std::fs::write(&script, responses.to_string()).unwrap();
+        let api = open_resolved(json!({"workspace":roots[0].path(),"allow_workspaces":[roots[1].path()],"provider":"scripted","model":"scripted","scripted":script,"no_project_instructions":true,"read_only":false})).unwrap();
+        let first = api
+            .send_message("before", b"before", PlanMode::Keep)
+            .unwrap()
+            .run
+            .unwrap();
+        assert_eq!(
+            api.wait_run(&first).unwrap().result.unwrap().status,
+            "completed"
+        );
+        let snapshot = api.get_snapshot().unwrap();
+        assert_eq!(snapshot.workspace, roots[1].path().canonicalize().unwrap());
+        api.change_session("reset", snapshot.revision, SessionChange::Reset)
+            .unwrap();
+        assert_eq!(
+            api.wait_command("reset").unwrap().state,
+            CommandState::Applied
+        );
+        let next = api.get_replacement().unwrap();
+        assert!(!next.get_snapshot().unwrap().read_only);
+        let run = next
+            .send_message("after", b"after", PlanMode::Keep)
+            .unwrap()
+            .run
+            .unwrap();
+        assert_eq!(
+            next.wait_run(&run).unwrap().result.unwrap().status,
+            "completed"
+        );
+        for root in &roots {
+            assert_eq!(
+                std::fs::read_to_string(root.path().join("existing")).unwrap(),
+                "original"
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.path().join("fresh")).unwrap(),
+                "new"
+            );
+        }
+        next.close().unwrap();
     }
 
     #[test]
