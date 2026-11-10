@@ -1,7 +1,11 @@
 //! Trusted-local Session ownership, queued submissions, and concurrent observations.
 
 mod controls;
+mod observation_types;
+mod observations;
 mod types;
+/// Bounded owned records for structured Session observations.
+pub use observation_types::*;
 /// Owned records used by the in-process Session interface.
 pub use types::*;
 
@@ -117,6 +121,9 @@ enum Replacement {
 
 struct State {
     snapshot: SessionSnapshot,
+    observations: observations::Cache,
+    events: VecDeque<ObservationEvent>,
+    events_exhausted: bool,
     replacement: Option<Replacement>,
     commands: Vec<Command>,
     pending: VecDeque<usize>,
@@ -241,10 +248,23 @@ pub(crate) fn open_resolved(mut config: Value) -> Result<SessionApi, ApiError> {
 }
 
 fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
+    let identity = SessionRef {
+        session_id: session.config["session_id"].as_str().unwrap().into(),
+        instance_id: crate::types::new_id(),
+    };
     let snapshot = SessionSnapshot {
-        session: SessionRef {
-            session_id: session.config["session_id"].as_str().unwrap().into(),
-            instance_id: crate::types::new_id(),
+        session: identity.clone(),
+        event_cursor: EventCursor {
+            session: identity.clone(),
+            sequence: 0,
+        },
+        observed_at_ms: 0,
+        context: ContextSummary {
+            history_generation: 0,
+            entry_count: 0,
+            settled: true,
+            effects_unknown: false,
+            components: vec![],
         },
         replacement_session: None,
         revision: 0,
@@ -274,6 +294,9 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             snapshot,
+            observations: observations::Cache::new(&identity),
+            events: VecDeque::new(),
+            events_exhausted: false,
             replacement: None,
             commands: Vec::new(),
             pending: VecDeque::new(),
@@ -284,7 +307,8 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         }),
         changed: Condvar::new(),
     });
-    update_metadata(session, &mut shared.state.lock().unwrap().snapshot);
+    let prepared = observations::prepare_current(session, &shared);
+    observations::initialize(&mut shared.state.lock().unwrap(), prepared);
     shared
 }
 
@@ -306,8 +330,38 @@ fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
 }
 
 impl State {
-    fn changed(&mut self) {
-        self.snapshot.revision += 1;
+    fn changed(&mut self, change: EventKind) {
+        observations::changed(self, change);
+    }
+
+    fn command_changed(&mut self, index: usize) {
+        self.changed(EventKind::CommandChanged {
+            request_id: self.commands[index].info.request_id.clone(),
+        });
+    }
+
+    fn run_changed(&mut self, index: usize) {
+        let run = &self.commands[index]
+            .work
+            .message()
+            .expect("message Run")
+            .run;
+        self.changed(EventKind::RunChanged {
+            run: run.run.clone(),
+            state: run.state,
+            activity: run.activity.clone(),
+        });
+    }
+
+    fn reject_pending(&mut self, reason: &str) {
+        while let Some(index) = self.pending.pop_front() {
+            not_applied(&mut self.commands[index], reason);
+            if self.commands[index].work.message().is_some() {
+                self.run_changed(index);
+            } else {
+                self.command_changed(index);
+            }
+        }
     }
 
     fn snapshot(&self) -> SessionSnapshot {
@@ -505,7 +559,7 @@ impl SessionApi {
         state.commands.push(command);
         state.pending.push_back(index);
         state.retained_input_bytes += message.len();
-        state.changed();
+        state.run_changed(index);
         shared.changed.notify_all();
         Ok(info)
     }
@@ -634,7 +688,7 @@ impl SessionApi {
         });
         state.pending.push_back(index);
         state.control = Some(index);
-        state.changed();
+        state.command_changed(index);
         shared.changed.notify_all();
         Ok(info)
     }
@@ -710,7 +764,7 @@ impl SessionApi {
             state.pending.retain(|i| *i != index);
             state.control = None;
         }
-        state.changed();
+        state.command_changed(index);
         shared.changed.notify_all();
         Ok(state.commands[index].info.clone())
     }
@@ -758,7 +812,7 @@ impl SessionApi {
             state.pending.retain(|i| *i != index);
             not_applied(&mut state.commands[index], "queued Run cancelled");
         }
-        state.changed();
+        state.run_changed(index);
         shared.changed.notify_all();
         Ok(state.commands[index]
             .work
@@ -789,7 +843,7 @@ impl SessionApi {
         }
         if !state.closing {
             state.closing = true;
-            state.changed();
+            state.changed(EventKind::Closing);
             shared.changed.notify_all();
         }
         while !state.closed {
@@ -897,13 +951,23 @@ fn update_metadata(session: &Session, snapshot: &mut SessionSnapshot) {
         .map(str::to_owned);
 }
 
-/// Publish copies only explicit metadata while leaving the executing Session with its owner.
+/// Publish captures bounded observations while leaving the executing Session with its owner.
 pub(crate) fn publish(session: &Session, activity: &str, applied: bool) {
+    publish_observations(session, activity, applied, None);
+}
+
+/// Publish_request measures an already assembled request without copying source history again.
+pub(crate) fn publish_request(session: &Session, request: &Value) {
+    publish_observations(session, "model", false, Some(request));
+}
+
+fn publish_observations(session: &Session, activity: &str, applied: bool, request: Option<&Value>) {
     let Some(observer) = &session.api else {
         return;
     };
+    let prepared = observations::prepare(session, &observer.shared, request);
     let mut state = observer.shared.state.lock().unwrap();
-    update_metadata(session, &mut state.snapshot);
+    observations::install(&mut state, prepared);
     let command = &mut state.commands[observer.index];
     let message = command
         .work
@@ -916,7 +980,7 @@ pub(crate) fn publish(session: &Session, activity: &str, applied: bool) {
     if applied {
         command.info.state = CommandState::Applied;
     }
-    state.changed();
+    state.run_changed(observer.index);
     observer.shared.changed.notify_all();
 }
 
@@ -1002,8 +1066,9 @@ fn apply_change(session: &mut Session, shared: &Shared, index: usize, change: Se
 }
 
 fn finish_change(session: &Session, shared: &Shared, index: usize, reason: Option<String>) {
+    let prepared = observations::prepare_current(session, shared);
     let mut state = shared.state.lock().unwrap();
-    update_metadata(session, &mut state.snapshot);
+    observations::install(&mut state, prepared);
     if reason.is_none()
         && matches!(
             &state.commands[index].work,
@@ -1026,7 +1091,7 @@ fn finish_change(session: &Session, shared: &Shared, index: usize, reason: Optio
     };
     command.info.reason = reason;
     state.control = None;
-    state.changed();
+    state.command_changed(index);
     shared.changed.notify_all();
 }
 
@@ -1149,6 +1214,7 @@ fn replace_owner(
     std::mem::swap(&mut session.state, &mut previous_state);
     std::mem::swap(&mut session.history, &mut previous_history);
     crate::agents::stop(session, true);
+    let retired = observations::prepare_current(session, shared);
     crate::agents::retire(session);
     std::mem::swap(&mut session.config, &mut previous_config);
     std::mem::swap(&mut session.state, &mut previous_state);
@@ -1162,13 +1228,14 @@ fn replace_owner(
     drop(std::mem::replace(&mut owner.lease, lease));
     let replacement = new_shared(session, None);
     let mut state = shared.state.lock().unwrap();
+    observations::install(&mut state, retired);
     let mut successor = replacement.state.lock().unwrap();
     successor.snapshot.read_only = state.snapshot.read_only;
     let identity = successor.snapshot.session.clone();
     drop(successor);
     state.commands[index].info.state = CommandState::Applied;
     state.commands[index].info.replacement_session = Some(identity.clone());
-    state.snapshot.replacement_session = Some(identity);
+    state.snapshot.replacement_session = Some(identity.clone());
     state.replacement = Some(Replacement::Unclaimed(SessionApi {
         client: Arc::new(Client {
             shared: replacement.clone(),
@@ -1177,7 +1244,7 @@ fn replace_owner(
     state.control = None;
     state.closing = true;
     state.closed = true;
-    state.changed();
+    state.changed(EventKind::ReplacementPublished { session: identity });
     shared.changed.notify_all();
     Some(replacement)
 }
@@ -1190,12 +1257,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
                 state = shared.changed.wait(state).unwrap();
             }
             if state.closing {
-                while let Some(index) = state.pending.pop_front() {
-                    not_applied(
-                        &mut state.commands[index],
-                        "Session owner stopped before this command started",
-                    );
-                }
+                state.reject_pending("Session owner stopped before this command started");
                 state.control = None;
                 break;
             }
@@ -1252,7 +1314,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
                 cancellation_scope(&message.run.run.session, &command.info.request_id),
             );
             state.snapshot.active_conversation_run = Some(data.2.clone());
-            state.changed();
+            state.run_changed(index);
             shared.changed.notify_all();
             data
         };
@@ -1280,8 +1342,9 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         if result["status"] == "persistence_error" {
             session.state["persistence_error"] = result["reason"].clone();
         }
+        let prepared = observations::prepare_current(session, &shared);
         let mut state = shared.state.lock().unwrap();
-        update_metadata(&session, &mut state.snapshot);
+        observations::install(&mut state, prepared);
         let command = &mut state.commands[index];
         if command.info.state == CommandState::Pending {
             command.info.state = CommandState::NotApplied;
@@ -1307,22 +1370,20 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         message.wire_result = Some(result.clone());
         message.display = session.state["_display"].clone();
         state.snapshot.active_conversation_run = None;
+        state.run_changed(index);
         if result["status"] != "completed" && result["status"] != "refused" {
-            while let Some(index) = state.pending.pop_front() {
-                not_applied(
-                    &mut state.commands[index],
-                    "previous Run stopped; inspect its result before resubmitting",
-                );
-            }
+            state.reject_pending("previous Run stopped; inspect its result before resubmitting");
         }
-        state.changed();
         shared.changed.notify_all();
     }
+    crate::agents::stop(&owner.session, true);
+    let prepared = observations::prepare_current(&owner.session, &shared);
     drop(owner);
     let mut state = shared.state.lock().unwrap();
+    observations::install(&mut state, prepared);
     state.snapshot.active_conversation_run = None;
     state.closed = true;
-    state.changed();
+    state.changed(EventKind::Closed);
     shared.changed.notify_all();
 }
 

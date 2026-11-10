@@ -263,7 +263,7 @@ impl Session {
                 );
             }
             self.refresh_status();
-            crate::session_api::publish(self, "model", false);
+            crate::session_api::publish_request(self, &req);
             self.state["last_request"] = types::usage_zero(false);
             let response = self.generate(&req);
             if flag(&self.config["context_gc"]) {
@@ -315,6 +315,7 @@ impl Session {
             let calls = tool_calls(&resp);
             self.history
                 .push(json!({"kind":"assistant","assistant":resp}));
+            crate::session_api::publish(self, "accepted", false);
             for call in &calls {
                 self.state["seen_calls"][string(&call["call_id"])] = json!(true);
             }
@@ -820,6 +821,7 @@ impl Session {
                 self.state["persistence_error"] = json!(error);
             }
         }
+        crate::session_api::publish(self, "accepted", false);
     }
     fn not_executed(&mut self, calls: &[Value], reason: &str) {
         for call in calls {
