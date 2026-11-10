@@ -649,8 +649,12 @@ mod settlement_tests {
                     }
                     Err(error) => panic!("accept fixture request: {error}"),
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
                 let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
                 let mut length = 0;
