@@ -802,7 +802,7 @@ fn reply_text(reply: &str, show_plan: bool, styled: bool, columns: usize) -> Str
 /// Blocked advice identifies the local command needed before another turn.
 pub fn blocked_advice(status: &str) -> &'static str {
     if status == "limit_exceeded" {
-        "/reset to continue; /compact works before the window fills (watch the 60% warning)"
+        "/reset to continue; /compact works before the window fills (watch the context percentage)"
     } else {
         "/compact or /reset to continue"
     }

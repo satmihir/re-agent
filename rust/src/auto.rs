@@ -175,26 +175,6 @@ pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
 /// DATA_SHARING_NOTICE describes the third-party content disclosure for enabled Auto.
 pub(crate) const DATA_SHARING_NOTICE: &str = "auto on: https://api.typesafe.ai/v1/systemone; TypeSafe receives summaries, user requests (earlier ones may be shortened or omitted), root project instructions and latest plan, plus selected assistant/tool/shell evidence including file contents and command output (up to 512-byte previews); content may contain secrets and is not secret-filtered; native reasoning omitted; routing credentials stay in the HTTP header";
 
-/// disclosure prints the data-sharing and fallback contract for enabled Auto.
-pub(crate) fn disclosure(session: &Session) {
-    if !enabled(&session.state, "auto_enabled") {
-        return;
-    }
-    output(session, DATA_SHARING_NOTICE);
-    output(session, &format!("auto fallback: {} / {}; {} allowed route(s); /auto off or manual model/effort selection pins the current route",text(&session.state,"auto_fallback_model"),text(&session.state,"auto_fallback_effort"),session.state["auto_routes"].as_array().map_or(0,Vec::len)));
-    output(session, "auto scope: joint model/effort at user-turn start; current-model effort only within a run; router failure keeps the current pair mid-run");
-    if std::env::var("TYPESAFE_API_KEY")
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        output(
-            session,
-            "TYPESAFE_API_KEY is not set; Auto uses compatible fallback without routing calls",
-        );
-    }
-}
-
 /// pin disables routing without discarding accumulated router accounting.
 pub(crate) fn pin(session: &mut Session) {
     session.state["auto_enabled"] = json!(false);
@@ -219,30 +199,6 @@ pub(crate) fn set_enabled(session: &mut Session, enabled: bool) -> Result<(), St
         return Err(error);
     }
     Ok(())
-}
-
-/// command implements the explicit chat Auto status and enable/disable commands.
-pub(crate) fn command(session: &mut Session, argument: &str) {
-    if text(&session.config, "provider") == "scripted" {
-        output(session, "Auto is unavailable in a scripted chat");
-        return;
-    }
-    match argument {
-        "" => output(
-            session,
-            if enabled(&session.state, "auto_enabled") {
-                "auto on; /auto off pins the current route"
-            } else {
-                "auto off; /auto on enables TypeSafe routing"
-            },
-        ),
-        "on" | "off" => match set_enabled(session, argument == "on") {
-            Err(error) => output(session, &format!("auto unchanged: {error}")),
-            Ok(()) if argument == "on" => disclosure(session),
-            Ok(()) => output(session, "auto off; current model and effort pinned"),
-        },
-        _ => output(session, "usage: /auto [on|off]"),
-    }
 }
 
 /// begin_run clears only the per-Run routing boundary and switching counters.

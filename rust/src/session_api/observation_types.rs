@@ -206,9 +206,9 @@ pub struct EntryView {
     pub index: u64,
     /// observed is the publication that first captured this source Entry.
     pub observed: ObservationStamp,
-    /// run identifies the accepting Run when known, absent for recovered and control Entries.
+    /// run identifies the associated Run when known, including an intended pre-turn Run; recovered and control Entries omit it.
     pub run: Option<RunRef>,
-    /// step is the accepting Step when known.
+    /// step is the accepting Step when known, absent for summaries created before the intended Run enters its ordinary Steps.
     pub step: Option<u64>,
     /// original_bytes counts the source Entry's internal JSON representation.
     pub original_bytes: u64,
@@ -271,6 +271,17 @@ pub enum MeasurementUnavailable {
     ControlInProgress,
 }
 
+/// RequestPart attributes encoded request bytes, including explicitly marked overlapping subsets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestPart {
+    /// label names a bounded measured component without including its content.
+    pub label: String,
+    /// bytes counts encoded bytes, with a signed residual for structure accounting.
+    pub bytes: i64,
+    /// subset marks bytes already counted by another component.
+    pub subset: bool,
+}
+
 /// ContextView contains numeric composition and settings, never prompts or native context.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContextView {
@@ -294,6 +305,8 @@ pub struct ContextView {
     pub instruction_bytes: Option<u64>,
     /// tool_definition_bytes counts locally encoded tool-definition JSON, not tokens.
     pub tool_definition_bytes: Option<u64>,
+    /// request_parts contains at most 65 attributed byte components without their content.
+    pub request_parts: Vec<RequestPart>,
     /// encoded_request_bytes is exact only for a locally encoded current request.
     pub encoded_request_bytes: Option<u64>,
     /// measurement_unavailable explains missing exact measurement without private adapter errors.
@@ -348,10 +361,34 @@ pub struct AgentPage {
     pub accounting_complete: bool,
 }
 
-/// EventKind is a bounded discovery hint; payloads never copy transcripts or Run results.
+/// EventKind carries bounded discovery hints and explicitly typed sensitive shell-output chunks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
+    /// ShellOutput contains sensitive trusted-local process bytes, not a stdout control protocol.
+    ShellOutput {
+        /// request_id identifies the exact human shell control.
+        request_id: String,
+        /// offset counts merged process bytes preceding this chunk.
+        offset: u64,
+        /// bytes retains at most 1024 original output bytes; event eviction may leave gaps.
+        bytes: Vec<u8>,
+    },
+    /// PreTurnCompaction reports owner-side automatic summary progress without summary content.
+    PreTurnCompaction {
+        /// run identifies the intended message, not a separate summary Run.
+        run: RunRef,
+        /// status is starting, completed, cancelled, or a summary failure status.
+        status: String,
+        /// reason explains a failure without supplying summary or provider-native content.
+        reason: Option<String>,
+        /// context_percent is the rounded known-usage percentage that triggered this summary.
+        context_percent: u64,
+        /// summary_bytes counts successful summary bytes without disclosing them.
+        summary_bytes: u64,
+        /// replaced_entries counts history Entries removed on successful application.
+        replaced_entries: u64,
+    },
     /// WorkspaceConsentOwnerChanged records live human registration without exposing its identity or path.
     WorkspaceConsentOwnerChanged {
         /// registered distinguishes registration from final human-owner loss.

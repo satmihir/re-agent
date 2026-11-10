@@ -1,10 +1,12 @@
 use crate::render::{columns, display, sanitize, styled, truncate, width};
+#[cfg(test)]
+use serde_json::Value;
 use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::AsRawFd;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Condvar, Mutex,
+    Arc, Mutex,
 };
 use std::time::{Duration, Instant};
 mod editor;
@@ -12,19 +14,11 @@ mod editor;
 mod panic_tests;
 mod readiness;
 mod region;
-use crate::tools::{WorkspaceConsent, WorkspaceConsentError, WorkspaceDestination};
+use crate::session_api::{SessionApi, WorkspaceConsentApi, WorkspaceDecision};
 use editor::{Decoder, Editor as IdleEditor, Key, TurnInput};
 pub(crate) use readiness::poll_read;
 pub(crate) use region::output;
 pub use region::{Region, RegionHandle};
-use serde_json::Value;
-
-#[derive(Default)]
-struct Consent {
-    running: bool,
-    request: Option<(Value, WorkspaceDestination)>,
-    answer: Option<Result<bool, WorkspaceConsentError>>,
-}
 
 static PANIC_TERMINAL: Mutex<Option<(i32, libc::termios)>> = Mutex::new(None);
 
@@ -98,7 +92,9 @@ pub struct Input {
     region: Option<RegionHandle>,
     decoder: Decoder,
     next: TurnInput,
-    consent: Arc<(Mutex<Consent>, Condvar)>,
+    consent: Option<(WorkspaceConsentApi, bool)>,
+    /// consent_capacity_exhausted suppresses misleading continuation hints after an unrecordable human answer.
+    pub(crate) consent_capacity_exhausted: bool,
 }
 /// Submission distinguishes text, interruption, and end of input.
 pub enum Submission {
@@ -133,62 +129,61 @@ impl Input {
             region,
             decoder: Decoder::default(),
             next: TurnInput::default(),
-            consent: Arc::new((Mutex::new(Consent::default()), Condvar::new())),
+            consent: None,
+            consent_capacity_exhausted: false,
         }
     }
-    /// Workspace consent delegates a tool's prompt to the sole turn-input reader.
-    pub(crate) fn workspace_consent(&self) -> Box<WorkspaceConsent> {
-        let interactive = self.terminal;
-        let shared = self.consent.clone();
-        shared.0.lock().unwrap().running = interactive;
-        Box::new(move |config, destination| {
-            if !interactive {
-                return Err(WorkspaceConsentError::NotInteractive);
-            }
-            let (lock, ready) = &*shared;
-            let mut state = lock.lock().unwrap();
-            if !state.running {
-                return Err(WorkspaceConsentError::Unavailable);
-            }
-            state.answer = None;
-            state.request = Some((config.clone(), destination.clone()));
-            ready.notify_all();
-            loop {
-                if let Some(answer) = state.answer.take() {
-                    return answer;
-                }
-                if !state.running || crate::cancellation::cancelled(config) {
-                    state.request = None;
-                    return Err(WorkspaceConsentError::Unavailable);
-                }
-                state = ready
-                    .wait_timeout(state, Duration::from_millis(50))
-                    .unwrap()
-                    .0;
-            }
-        })
+    /// Bind workspace consent explicitly registers this human reader for the current opening only.
+    pub(crate) fn bind_workspace_consent(
+        &mut self,
+        api: &SessionApi,
+    ) -> Result<(), crate::session_api::ApiError> {
+        self.consent = None;
+        self.consent_capacity_exhausted = false;
+        if self.terminal {
+            let checkpoint_enabled = api.get_snapshot()?.checkpoint_enabled;
+            self.consent = Some((api.register_workspace_consent(300_000)?, checkpoint_enabled));
+        }
+        Ok(())
     }
     fn service_consent(
         &mut self,
         next: &mut TurnInput,
         cancelled: &AtomicBool,
     ) -> io::Result<bool> {
-        let request = self.consent.0.lock().unwrap().request.take();
-        let Some((config, destination)) = request else {
+        let Some((guard, checkpoint_enabled)) = self.consent.clone() else {
             return Ok(false);
+        };
+        let Some(request) = guard.get_pending_workspace_access().ok().flatten() else {
+            return Ok(false);
+        };
+        let withdrawn = || {
+            cancelled.load(Ordering::Acquire)
+                || guard
+                    .get_pending_workspace_access()
+                    .ok()
+                    .flatten()
+                    .is_none_or(|pending| pending.approval != request.approval)
         };
         *next = TurnInput::default();
         let result = (|| {
             self.discard_input()?;
             let mut disclosure = format!(
                 "Allow this location as a workspace?\nLocation: {}\n",
-                crate::errors::quote(&destination.path.to_string_lossy())
+                crate::errors::quote(&String::from_utf8_lossy(&request.path))
             );
-            if destination.missing {
+            if request.missing {
                 disclosure.push_str("Destination does not exist; only this exact location will be approved, not its parent.\n");
             }
-            disclosure.push_str(&format!("Authority: {}\n", crate::render::mode(&config)));
-            if config["plan"].as_bool().unwrap_or(false) {
+            disclosure.push_str(&format!(
+                "Authority: {}\n",
+                if request.read_only {
+                    "read only"
+                } else {
+                    "read, write, and execute"
+                }
+            ));
+            if request.plan {
                 disclosure.push_str("Plan mode remains on; edits and commands are refused.\n");
             }
             disclosure.push_str("Duration: until this chat exits, including /reset, /model, and compaction.\nFiles read here may be sent to the provider and recorded in traces.\n");
@@ -214,17 +209,38 @@ impl Input {
                 false,
                 "deny",
                 true,
-                Some(cancelled),
+                Some(&withdrawn),
             )
         })();
-        let answer = match result {
-            Ok(Selection::Chosen(index)) => Ok(index == 0 && !cancelled.load(Ordering::Acquire)),
-            Ok(Selection::NotInteractive) => Err(WorkspaceConsentError::NotInteractive),
-            _ => Err(WorkspaceConsentError::Unavailable),
-        };
-        let (lock, ready) = &*self.consent;
-        lock.lock().unwrap().answer = Some(answer);
-        ready.notify_all();
+        if !withdrawn() {
+            let decision = if matches!(result, Ok(Selection::Chosen(0))) {
+                WorkspaceDecision::Allow
+            } else {
+                WorkspaceDecision::Deny
+            };
+            if let Err(error) =
+                guard.resolve_workspace_access(&crate::types::new_id(), &request.approval, decision)
+            {
+                output(
+                    self.region.as_ref(),
+                    2,
+                    &format!("workspace consent not applied: {error}\n"),
+                );
+                cancelled.store(true, Ordering::Release);
+                if error.code == "resource_exhausted" {
+                    self.consent_capacity_exhausted = true;
+                    let guidance = if checkpoint_enabled {
+                        format!(
+                            "stop and resume with reagent chat --resume {}",
+                            request.approval.run.session.session_id
+                        )
+                    } else {
+                        "stop this chat. Checkpoints are disabled, so it cannot be resumed".into()
+                    };
+                    output(self.region.as_ref(), 2, &format!("workspace consent receipt/input capacity exhausted; cancelling this Run\n{guidance}\n"));
+                }
+            }
+        }
         if self.region.is_some() {
             self.redraw(&next.editor, &next.prefix)?;
         }
@@ -238,7 +254,7 @@ impl Input {
         shortcuts: bool,
         cancel_label: &str,
         fresh: bool,
-        cancelled: Option<&AtomicBool>,
+        cancelled: Option<&dyn Fn() -> bool>,
     ) -> io::Result<Selection> {
         let (width, height) = self.size()?;
         if width < 2
@@ -304,7 +320,7 @@ impl Input {
             self.discard_input()?;
         }
         let result = (|| loop {
-            if cancelled.is_some_and(|token| token.load(Ordering::Acquire)) {
+            if cancelled.is_some_and(|withdrawn| withdrawn()) {
                 return Ok(Selection::Cancelled);
             }
             let key = if let Some(key) = self.decoder.next() {
@@ -491,7 +507,7 @@ impl Input {
         shortcuts: bool,
         cancel_label: &str,
         fresh: bool,
-        cancelled: Option<&AtomicBool>,
+        cancelled: Option<&dyn Fn() -> bool>,
     ) -> io::Result<Selection> {
         if fresh {
             self.discard_input()?;
@@ -582,7 +598,7 @@ impl Input {
                 }
                 io::stderr().flush()?;
                 redraw = true;
-                let key = read_key(&mut self.reader, &mut self.decoder)?;
+                let key = read_key(&mut self.reader, &mut self.decoder, cancelled)?;
                 match key.as_str() {
                     "up" | "text:k" if shortcuts || key == "up" => {
                         if let Some(next) = (0..cursor).rev().find(|i| !options[*i].disabled) {
@@ -670,7 +686,7 @@ impl Input {
         eprint!("{prompt}");
         io::stderr().flush()?;
         loop {
-            let key = read_key(&mut self.reader, &mut self.decoder)?;
+            let key = read_key(&mut self.reader, &mut self.decoder, None)?;
             match key.as_str() {
                 "eof" => {
                     if editor.buffer.is_empty() {
@@ -830,21 +846,42 @@ impl Input {
         let result = if self.region.is_some() {
             self.read_turn(&mut next, stop, cancelled)
         } else {
-            while self.terminal
-                && !stop.load(Ordering::Acquire)
-                && !cancelled.load(Ordering::Acquire)
-            {
-                if let Err(error) = self.service_consent(&mut next, cancelled) {
-                    self.consent.0.lock().unwrap().running = false;
-                    self.consent.1.notify_all();
-                    return Err(error);
+            (|| {
+                while self.terminal
+                    && !stop.load(Ordering::Acquire)
+                    && !cancelled.load(Ordering::Acquire)
+                {
+                    let mut fd = libc::pollfd {
+                        fd: 0,
+                        events: 0,
+                        revents: 0,
+                    };
+                    if unsafe { libc::poll(&mut fd, 1, 0) } < 0 {
+                        let error = io::Error::last_os_error();
+                        if error.kind() == io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                    if fd.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+                        return Err(io::Error::from_raw_os_error(libc::EIO));
+                    }
+                    if fd.revents & libc::POLLHUP != 0 {
+                        next.exit = true;
+                        break;
+                    }
+                    self.service_consent(&mut next, cancelled)?;
+                    std::thread::sleep(Duration::from_millis(20));
                 }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Ok(())
+                Ok(())
+            })()
         };
-        self.consent.0.lock().unwrap().running = false;
-        self.consent.1.notify_all();
+        if result.is_err() || next.exit {
+            self.consent = None;
+        }
+        if result.is_err() {
+            cancelled.store(true, Ordering::Release);
+        }
         if self.region.is_none() {
             return result;
         }
@@ -909,7 +946,7 @@ impl Input {
                 region.queued = next.queued.is_some();
                 changed = true;
             }
-            if ended {
+            if ended || next.exit {
                 break;
             }
             if changed || columns != region.width || height != region.height {
@@ -1096,8 +1133,15 @@ fn draw(prompt: &str, editor: &Editor) -> io::Result<()> {
     }
     io::stderr().flush()
 }
-fn read_key(reader: &mut io::BufReader<io::Stdin>, decoder: &mut Decoder) -> io::Result<String> {
+fn read_key(
+    reader: &mut io::BufReader<io::Stdin>,
+    decoder: &mut Decoder,
+    withdrawn: Option<&dyn Fn() -> bool>,
+) -> io::Result<String> {
     loop {
+        if withdrawn.is_some_and(|withdrawn| withdrawn()) {
+            return Ok("escape".into());
+        }
         if let Some(key) = decoder.next() {
             return Ok(match key {
                 Key::Name(name) => name.into(),
@@ -1290,4 +1334,192 @@ pub enum Selection {
     Chosen(usize),
     Cancelled,
     NotInteractive,
+}
+
+#[cfg(test)]
+mod reader_failure_tests {
+    use super::*;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn actual_regional_read_error_withdraws_the_human_owner_and_cancels_the_operation() {
+        const CHILD: &str = "REAGENT_READER_FAILURE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+            let destination = tempfile::tempdir().unwrap();
+            let script = root.join("script.json");
+            let arguments = serde_json::json!({"path":destination.path()}).to_string();
+            std::fs::write(&script, serde_json::to_vec(&serde_json::json!([
+                {"blocks":[{"kind":"tool_call","call":{"call_id":"later-consent","name":"request_workspace_access","arguments":arguments}}]},
+                {"blocks":[{"kind":"text","text":"settled after reader failure"}]},
+                {"blocks":[{"kind":"tool_call","call":{"call_id":"after-eof","name":"request_workspace_access","arguments":arguments}}]},
+                {"blocks":[{"kind":"text","text":"settled after EOF"}]}
+            ])).unwrap()).unwrap();
+            let api = crate::session_api::open_session(crate::session_api::SessionOptions {
+                workspace: root.clone(),
+                scripted: Some(script),
+                ..Default::default()
+            })
+            .unwrap();
+            let mut input = Input::new();
+            assert!(input.terminal && input.region.is_some());
+            input.bind_workspace_consent(&api).unwrap();
+            let fault = std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/tty")
+                .unwrap();
+            assert!(
+                unsafe { libc::dup2(fault.as_raw_fd(), input.tty.as_ref().unwrap().as_raw_fd()) }
+                    >= 0
+            );
+            std::fs::write(root.join("ready"), "").unwrap();
+            let stop = AtomicBool::new(false);
+            let cancelled = AtomicBool::new(false);
+            let error = input.poll_turn(&stop, &cancelled).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(libc::EBADF));
+            assert!(cancelled.load(Ordering::Acquire));
+            assert!(input.consent.is_none());
+            let run = api
+                .send_message(
+                    "after-error",
+                    b"request a workspace after the reader failed",
+                    crate::session_api::PlanMode::Keep,
+                )
+                .unwrap()
+                .run
+                .unwrap();
+            assert_eq!(
+                api.wait_run(&run).unwrap().result.unwrap().reply,
+                b"settled after reader failure"
+            );
+            let entries = api.read_entries(None, 100).unwrap();
+            assert!(entries.entries.iter().any(|entry| matches!(&entry.content,
+                crate::session_api::EntryContent::Tool { outcome, .. } if !outcome.ok && outcome.code.bytes == b"permission_required"
+            )));
+            drop(input);
+            let mut input = Input::new();
+            input.bind_workspace_consent(&api).unwrap();
+            input.redraw(&TurnInput::default().editor, "").unwrap();
+            input.decoder = Decoder::default();
+            input.decoder.feed(b"\x04");
+            let eof_cancelled = AtomicBool::new(false);
+            input.poll_turn(&stop, &eof_cancelled).unwrap();
+            assert!(input.next.exit && input.consent.is_none());
+            assert!(
+                !eof_cancelled.load(Ordering::Acquire),
+                "ordinary EOF withdraws the human role without cancelling work"
+            );
+            let run = api
+                .send_message(
+                    "after-eof",
+                    b"later permission request after EOF",
+                    crate::session_api::PlanMode::Keep,
+                )
+                .unwrap()
+                .run
+                .unwrap();
+            let completed = api.wait_run(&run).unwrap();
+            assert_eq!(completed.result.unwrap().reply, b"settled after EOF");
+            assert!(!completed.cancel_requested);
+            api.close().unwrap();
+            drop(input);
+            std::fs::write(
+                root.join("finished"),
+                "reader failed; EOF withdrew owner; later permission tools settled promptly",
+            )
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !root.join("release").exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "parent did not inspect restored tty"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let (mut master, mut slave) = (-1, -1);
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let mut master = unsafe { std::fs::File::from_raw_fd(master) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+        let mut original: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut original) },
+            0
+        );
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "terminal::reader_failure_tests::actual_regional_read_error_withdraws_the_human_owner_and_cancels_the_operation", "--nocapture"])
+            .env_clear().env("PATH", "/usr/bin:/bin").env("HOME", root.path())
+            .env("XDG_CACHE_HOME", root.path().join("cache")).env("TERM", "xterm").env(CHILD, "1")
+            .stdin(slave.try_clone().unwrap()).stdout(Stdio::null()).stderr(slave.try_clone().unwrap());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut output = Vec::new();
+        let mut sent = false;
+        let mut restoration = None;
+        let status = loop {
+            if !sent && root.path().join("ready").exists() {
+                master.write_all(b"x\r").unwrap();
+                sent = true;
+            }
+            if restoration.is_none() && root.path().join("finished").exists() {
+                // Darwin can revoke the slave once its controlling Session leader exits.
+                let mut restored: libc::termios = unsafe { std::mem::zeroed() };
+                let result = unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut restored) };
+                restoration = Some(if result == 0 {
+                    Ok(restored)
+                } else {
+                    Err(io::Error::last_os_error())
+                });
+                std::fs::write(root.path().join("release"), "").unwrap();
+            }
+            if poll_read(master.as_raw_fd(), 10).unwrap() != 0 {
+                let mut bytes = [0; 4096];
+                let read = master.read(&mut bytes).unwrap();
+                output.extend_from_slice(&bytes[..read]);
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!(
+                    "reader failure left a live human owner or stalled the operation: {}",
+                    String::from_utf8_lossy(&output)
+                );
+            }
+        };
+        assert!(status.success(), "{}", String::from_utf8_lossy(&output));
+        assert!(root.path().join("finished").exists());
+        let restored = restoration
+            .expect("tty restoration was inspected before the child exited")
+            .expect("read restored tty attributes while its controlling Session is alive");
+        assert_eq!(
+            restored.c_lflag & (libc::ICANON | libc::ECHO),
+            original.c_lflag & (libc::ICANON | libc::ECHO)
+        );
+    }
 }

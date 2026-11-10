@@ -547,7 +547,7 @@ impl Region {
 
     fn write_text(&mut self, text: &str) -> io::Result<()> {
         if !self.active {
-            return emit(text);
+            return emit(&text.replace("\r\n", "\n").replace('\n', "\r\n"));
         }
         self.pending.push_str(text);
         while let Some(end) = self.pending.find('\n') {

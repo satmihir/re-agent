@@ -70,10 +70,25 @@ pub(crate) fn install(config: &Value) -> Result<Guard, String> {
     if config["agent_id"].as_str().unwrap_or("root") != "root" {
         return Err("only root submissions own SIGINT".into());
     }
+    install_flag(token(config))
+}
+
+/// install_local anchors a locally owned flag only when it actually becomes a signal-handler target.
+pub(crate) fn install_local(flag: Arc<AtomicBool>) -> Result<Guard, String> {
+    static SIGNAL_FLAGS: OnceLock<Mutex<Vec<Arc<AtomicBool>>>> = OnceLock::new();
+    let guard = install_flag(flag.clone())?;
+    SIGNAL_FLAGS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+        .push(flag);
+    Ok(guard)
+}
+
+fn install_flag(flag: Arc<AtomicBool>) -> Result<Guard, String> {
     let owner = SIGNAL_OWNER
         .lock()
         .map_err(|_| "install SIGINT cancellation: signal ownership is unavailable".to_owned())?;
-    let flag = token(config);
     let active = Arc::as_ptr(&flag).cast_mut();
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = interrupt as *const () as libc::sighandler_t;

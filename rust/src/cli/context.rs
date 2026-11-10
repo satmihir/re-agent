@@ -227,8 +227,8 @@ fn breakdown(config: &Value, history: &[Value]) -> Result<Breakdown, String> {
         over_limit,
     })
 }
-/// Measure formats the encoded next request by attributed byte size.
-pub(crate) fn measure(session: &Session) -> Result<String, String> {
+/// Measure projects bounded numeric attribution from the owner's settled request view.
+pub(crate) fn measure(session: &Session) -> Result<Vec<crate::session_api::RequestPart>, String> {
     let mut b = breakdown(&session.config, &session.request_history())?;
     if session.state["handoff"].is_object() {
         let n = size(&session.state["handoff"]["text"]);
@@ -237,10 +237,24 @@ pub(crate) fn measure(session: &Session) -> Result<String, String> {
         }
         b.parts.push(("historical transcript".into(), n, false));
     }
-    Ok(b.render(
-        &session.state["last_request"],
-        crate::catalog::effective_context_window(&session.config),
-    ))
+    let mut parts: Vec<_> = b
+        .parts
+        .iter()
+        .take(64)
+        .map(|(label, bytes, subset)| crate::session_api::RequestPart {
+            label: label.chars().take(128).collect(),
+            bytes: *bytes,
+            subset: *subset,
+        })
+        .collect();
+    if b.parts.len() > 64 {
+        parts.push(crate::session_api::RequestPart {
+            label: "other components".into(),
+            bytes: b.parts[64..].iter().filter(|p| !p.2).map(|p| p.1).sum(),
+            subset: false,
+        });
+    }
+    Ok(parts)
 }
 #[cfg(test)]
 mod tests {
@@ -453,4 +467,27 @@ mod tests {
             .render(&Value::Null, 0)
             .starts_with("next request  over the 10.0 MiB limit; /reset to continue\n"));
     }
+}
+
+/// format renders the published request composition without inspecting or borrowing a Session.
+pub(crate) fn format(context: &crate::session_api::ContextView) -> String {
+    if context.request_parts.is_empty() {
+        return format!(
+            "next request measurement unavailable: {:?}",
+            context.measurement_unavailable
+        );
+    }
+    let breakdown = Breakdown {
+        parts: context
+            .request_parts
+            .iter()
+            .map(|p| (p.label.clone(), p.bytes, p.subset))
+            .collect(),
+        total: context.encoded_request_bytes.unwrap_or(0) as i64,
+        over_limit: context.encoded_request_bytes.is_none(),
+    };
+    breakdown.render(
+        &serde_json::to_value(&context.last_request).unwrap(),
+        context.context_window_tokens.unwrap_or(0) as i64,
+    )
 }

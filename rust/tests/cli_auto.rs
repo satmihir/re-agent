@@ -100,7 +100,14 @@ fn manual_valid_controls_pin_but_rejected_controls_leave_auto_enabled() {
             }),
             "{command}: {stderr}"
         );
-        assert!(!stderr.contains("auto on: https://api.typesafe.ai/v1/systemone;"));
+        assert_eq!(
+            stderr
+                .matches("auto on: https://api.typesafe.ai/v1/systemone;")
+                .count(),
+            1,
+            "enabled launch must disclose once even when the first command pins it: {stderr}"
+        );
+        assert!(stderr.contains("content may contain secrets and is not secret-filtered"));
     }
 }
 
