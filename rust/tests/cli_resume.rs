@@ -140,7 +140,7 @@ fn replacements(events: &mut std::fs::File) -> usize {
 }
 
 #[test]
-fn resume_preserves_idle_and_terminal_checkpoints_until_a_local_command() {
+fn resume_and_observation_commands_preserve_checkpoints_until_a_typed_control() {
     for phase in ["idle", "terminal"] {
         let directory = tempfile::tempdir().unwrap();
         let path = checkpoint(directory.path());
@@ -164,17 +164,31 @@ fn resume_preserves_idle_and_terminal_checkpoints_until_a_local_command() {
         assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
         assert_eq!(std::fs::read(&path).unwrap(), before);
 
-        chat(directory.path(), &["--resume", id], b"/status\n/exit\n");
+        chat(
+            directory.path(),
+            &["--resume", id],
+            b"/status\n/context\n/trace\n/exit\n",
+        );
+        assert_eq!(
+            replacements(&mut events),
+            0,
+            "{phase} observations must not save"
+        );
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(after, before);
+        let envelope: Value = serde_json::from_slice(&after).unwrap();
+        assert_eq!(envelope["state"]["phase"], phase);
+        assert_eq!(envelope["state"]["history"], json!([]));
+        chat(directory.path(), &["--resume", id], b"/plan\n/exit\n");
         assert_eq!(
             replacements(&mut events),
             1,
-            "{phase} status must replace exactly once"
+            "typed plan control must save exactly once"
         );
         assert_ne!(std::fs::metadata(&path).unwrap().ino(), inode);
-        let after = std::fs::read(&path).unwrap();
-        assert_ne!(after, before);
-        let envelope: Value = serde_json::from_slice(&after).unwrap();
-        assert_eq!(envelope["state"]["phase"], phase);
+        let envelope: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(envelope["state"]["plan"], true);
         assert_eq!(envelope["state"]["history"], json!([]));
     }
 }
@@ -197,8 +211,14 @@ fn interrupted_resume_recovers_once_and_local_commands_keep_the_terminal_phase()
     assert_eq!(replacements(&mut events), 1);
     let envelope: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(envelope["state"]["phase"], "terminal");
-    chat(directory.path(), &["--resume", id], b"/status\n/exit\n");
-    assert_eq!(replacements(&mut events), 1);
+    let recovered = std::fs::read(&path).unwrap();
+    chat(
+        directory.path(),
+        &["--resume", id],
+        b"/status\n/context\n/trace\n/exit\n",
+    );
+    assert_eq!(replacements(&mut events), 0);
+    assert_eq!(std::fs::read(&path).unwrap(), recovered);
     let envelope: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(envelope["state"]["phase"], "terminal");
 }

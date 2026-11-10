@@ -64,6 +64,203 @@ LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "chat-api-reset-next-turn": {
+        "script": [reply("Source opening reply."), reply("Successor opening reply.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "source question"), ("key", "enter"),
+            ("wait", "Source opening reply.", 5),
+            ("type", "/reset"), ("key", "enter"),
+            ("wait", "fresh session; the conversation so far is no longer sent", 5),
+            ("type", "successor question"), ("key", "enter"),
+            ("wait", "Successor opening reply.", 5),
+            ("type", "/status"), ("key", "enter"),
+            ("wait", "session    1 turn", 5),
+            ("show", "API Reset replaces the opening, preserves the script cursor and accepts the next turn"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-workspace-deny-reset-allow": {
+        "workspace_consent": "deny",
+        "script": [tool("First human request.", "first", "request_workspace_access", {"path": "__CONSENT__"}),
+                   reply("Human denial returned to the model."),
+                   tool("Successor human request.", "second", "request_workspace_access", {"path": "__CONSENT__"}),
+                   reply("Successor human approval returned to the model.")],
+        "size": (28, 100),
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "request consent"), ("key", "enter"),
+            ("wait", "Workspace consent", 5),
+            ("expect", "screen_has", "❯ 2  Deny"),
+            ("show", "Typed consent starts at Deny and discloses the exact human destination"),
+            ("key", "enter"), ("wait", "Human denial returned to the model.", 5),
+            ("type", "/reset"), ("key", "enter"),
+            ("wait", "fresh session; the conversation so far is no longer sent", 5),
+            ("type", "request successor consent"), ("key", "enter"),
+            ("wait", "Successor human request.", 5),
+            ("wait", "Workspace consent", 5),
+            ("expect", "screen_has", "❯ 2  Deny"),
+            ("key", "up"), ("key", "enter"),
+            ("wait", "Successor human approval returned to the model.", 5),
+            ("show", "Reset explicitly registers the successor human reader; the second request can be allowed"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-workspace-capacity": {
+        "workspace_consent": "capacity",
+        "script": [tool("Human request at receipt capacity.", "capacity", "request_workspace_access", {"path": "__CONSENT__"}),
+                   reply("Must not silently continue.")],
+        "size": (28, 110),
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "/plan\r" * 255 + "ask at capacity\r"),
+            ("wait", "Workspace consent", 8), ("key", "enter"),
+            ("wait", "workspace consent receipt/input capacity exhausted", 5),
+            ("wait", "cancelled", 5), ("idle", 0.2),
+            ("expect", "all_lines", ["Checkpoints are disabled, so it cannot be resumed", "cancelled"]),
+            ("expect", "screen_lacks", "Must not silently continue."),
+            ("expect", "screen_lacks", "your next message continues"),
+            ("show", "Full consent receipt capacity cancels the Run and explains checkpointless stop, rather than reopening a stuck picker"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-workspace-withdrawal": {
+        "workspace_consent": "withdraw",
+        "script": [tool("Waiting for the first human.", "first", "request_workspace_access", {"path": "__CONSENT__"}),
+                   tool("Waiting for the successor human.", "second", "request_workspace_access", {"path": "__CONSENT__"}),
+                   reply("Approval after withdrawal works.")],
+        "size": (28, 100),
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "first human request"), ("key", "enter"),
+            ("wait", "Workspace consent", 5),
+            ("signal", signal.SIGINT),
+            ("wait", "cancelled", 5), ("idle", 0.2),
+            ("show", "Backend Run cancellation withdraws the picker without a keyboard answer"),
+            ("expect", "region_after_output"),
+            ("type", "/reset"), ("key", "enter"),
+            ("wait", "fresh session; the conversation so far is no longer sent", 5),
+            ("type", "successor human request"), ("key", "enter"),
+            ("wait", "Waiting for the successor human.", 5), ("idle", 0.2),
+            ("key", "up"), ("key", "enter"),
+            ("wait", "Approval after withdrawal works.", 5),
+            ("show", "A withdrawn old approval cannot answer the successor request"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-automatic-compaction": {
+        "api_compact": "automatic",
+        "size": (28, 110),
+        "steps": [
+            ("wait_status", "gpt-6.1-sol / medium", 5),
+            ("type", "source task"), ("key", "enter"),
+            ("wait", "API source reply.", 5),
+            ("type", "next literal task"), ("key", "enter"),
+            ("wait", "API ordinary reply.", 5),
+            ("expect", "all_lines", ["context 80% of the window; compacting before this turn", "compacted:", "API ordinary reply."]),
+            ("type", "/status"), ("key", "enter"),
+            ("wait", "session    1 turn", 5),
+            ("show", "The Session owner summarizes at 80%, then applies the intended literal message"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-manual-compaction-cancel": {
+        "api_compact": "manual",
+        "size": (28, 110),
+        "steps": [
+            ("wait_status", "gpt-6.1-sol / medium", 5),
+            ("type", "source task"), ("key", "enter"),
+            ("wait", "API source reply.", 5),
+            ("type", "/compact"), ("key", "enter"),
+            ("wait", "compacting context", 5), ("idle", 0.3),
+            ("type", "discard summary typeahead"), ("key", "enter"),
+            ("idle", 0.1), ("key", "ctrl-c"),
+            ("wait", "control not applied:", 5), ("idle", 0.2),
+            ("type", "new explicit task"), ("key", "enter"),
+            ("wait", "API ordinary reply.", 5),
+            ("show", "Ctrl-C cancels the exact summary control, discards typeahead and leaves the next Run usable"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-plan-keep": {
+        "script": [reply("<plan>\nCheck the workspace, then implement.\n</plan>"), reply("Implementation with carried history.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "/plan plan the task"), ("key", "enter"),
+            ("wait", "Plan ready", 5), ("idle", 0.2), ("key", "up"), ("key", "up"), ("key", "enter"),
+            ("wait", "Implementation with carried history.", 5),
+            ("show", "Plan chooser translates Keep into SetPlan(false) and one literal implementation message"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-plan-fresh": {
+        "script": [reply("<plan>\nCheck the workspace, then implement.\n</plan>"), reply("Implementation in the replacement opening.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "/plan plan the task"), ("key", "enter"),
+            ("wait", "Plan ready", 5), ("idle", 0.2), ("key", "up"), ("key", "enter"),
+            ("wait", "Implementation in the replacement opening.", 5),
+            ("expect", "all_lines", ["fresh session; implementing plan", "Implementation in the replacement opening."]),
+            ("wait_regex", "^fresh session; implementing plan$", 2),
+            ("show", "Plan chooser Fresh uses an API replacement before the literal plan implementation message"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-shell-long-partial-line": {
+        "script": [reply("Ordinary turn after bounded shell display.")],
+        "size": (24, 96),
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "!printf '%04096d' 0; sleep 2; printf '%s%s\\n' LONG- DONE"), ("key", "enter"),
+            ("wait", "⟪shell line continues⟫", 1.5),
+            ("expect", "screen_lacks", "LONG-DONE"),
+            ("show", "Newline-free shell output is visibly wrapped before completion, without growing the region's pending line"),
+            ("wait", "LONG-DONE", 5), ("wait", "added to the conversation", 5),
+            ("type", "ordinary after long output"), ("key", "enter"),
+            ("wait", "Ordinary turn after bounded shell display.", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-manual-compaction-audit": {
+        "api_compact": "audit",
+        "size": (28, 110),
+        "steps": [
+            ("wait_status", "gpt-6.1-sol / medium", 5),
+            ("type", "source for audit"), ("key", "enter"),
+            ("wait", "API source reply.", 5),
+            ("type", "/compact -v"), ("key", "enter"),
+            ("wait", "compacted:", 5), ("wait", "API retained summary.", 5),
+            ("type", "/trace"), ("key", "enter"),
+            ("wait", "events.jsonl", 5),
+            ("show", "Manual compaction publishes its own completed operation trace before the next ordinary turn"),
+            ("type", "ordinary after audited summary"), ("key", "enter"),
+            ("wait", "API ordinary reply.", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-shell-utf8-split": {
+        "script": [reply("Ordinary turn after split shell bytes.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "!printf '\\303'; sleep 0.1; printf '\\251\\033tail'"), ("key", "enter"),
+            ("wait", "added to the conversation", 5),
+            ("expect", "screen_has", "é\\x1btail"),
+            ("show", "Live shell events join split UTF-8 and sanitize controls without changing retained capture"),
+            ("type", "ordinary task"), ("key", "enter"),
+            ("wait", "Ordinary turn after split shell bytes.", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "run-auto-sharing-disclosure": {
+        "run_prompt": "Acknowledge sharing before the first inference.",
+        "api_compact": "audit",
+        "size": (24, 110),
+        "steps": [
+            ("exit", 0, "API source reply.", 5),
+            ("expect", "all_lines", ["auto on:", "TypeSafe receives", "API source reply."]),
+            ("show", "The one-shot Auto header caller discloses sharing before its only inference"),
+        ],
+    },
     "run-api-completion": {
         "run_prompt": "Exercise the Session API owner.",
         "script": [tool("Reading through the owner.", "read", "list_files", {"path": "."}),
@@ -363,9 +560,9 @@ SCENARIOS = {
         "auto": True,
         "steps": [
             ("idle", 1.0),
-            ("show", "Auto startup without routing banner"),
+            ("show", "Enabled Auto startup discloses TypeSafe sharing before requests"),
             ("expect", "screen_has", "re:agent"),
-            ("expect", "all_lack", ["auto on:", "auto fallback:", "auto scope:", "TYPESAFE_API_KEY is not set"]),
+            ("expect", "all_lines", ["auto on:", "auto fallback:", "auto scope:", "TYPESAFE_API_KEY is not set"]),
             ("expect", "status_row_last"),
         ],
     },
@@ -561,7 +758,7 @@ SCENARIOS = {
         "steps": [
             ("wait_status", "scripted / low", 5),
             ("type", "!printf merged; printf '%s' '-stderr' >&2; exit 7"), ("key", "enter"),
-            ("wait", "exit 7", 5),
+            ("wait", "exit 7 ·", 5),
             ("wait_status", "scripted / low", 5),
             ("show", "shared runner preserves merged unterminated output and nonzero footer"),
             ("expect", "screen_has", "merged-stderr"),
@@ -576,7 +773,7 @@ SCENARIOS = {
         ],
     },
     "interrupt-shell-command": {
-        "script": [reply("unused")],
+        "script": [reply("Ordinary turn after explicit shell recovery.")],
         "steps": [
             ("idle", 1.0),
             ("type", "!sleep 5"),
@@ -587,7 +784,15 @@ SCENARIOS = {
             # depending on whether it or re:agent sees Ctrl-C first.
             ("wait", "interrupt", 5),
             ("wait_status", "scripted / low", 5),
-            ("show", "Ctrl-C during a ! command"),
+            ("show", "Ctrl-C during a human shell blocks the API opening because effects are unknown"),
+            ("expect", "screen_has", "effects unknown"),
+            ("type", "must not continue"), ("key", "enter"),
+            ("wait", "error: the last run ended with effect_unknown", 5),
+            ("type", "/reset"), ("key", "enter"),
+            ("wait", "fresh session; the conversation so far is no longer sent", 5),
+            ("type", "explicit recovery"), ("key", "enter"),
+            ("wait", "Ordinary turn after explicit shell recovery.", 5),
+            ("show", "Explicit Reset replaces the blocked shell opening and accepts the next ordinary turn"),
             ("expect", "status_row_last"),
         ],
     },
@@ -644,6 +849,12 @@ SCENARIOS = {
             ("show", "after Ctrl-C with queued input"),
             ("expect", "screen_lacks", "❯ stale typed input"),
             ("expect", "screen_lacks", "fresh reply"),
+            ("expect", "screen_has", "(blocked) ❯"),
+            ("type", "must not continue"), ("key", "enter"),
+            ("wait", "error: the last run ended with effect_unknown", 5),
+            ("expect", "screen_lacks", "fresh reply"),
+            ("type", "/reset"), ("key", "enter"),
+            ("wait", "fresh session; the conversation so far is no longer sent", 5),
             ("type", "fresh question"),
             ("key", "enter"),
             ("wait", "fresh reply", 5),
@@ -884,13 +1095,46 @@ def show(s, label):
 def run(binary, name, scenario, workspace):
     failures = []
     script_path = None
+    consent_root = tempfile.TemporaryDirectory(prefix="reagent-tty-consent-") if scenario.get("workspace_consent") else None
     if "script" in scenario:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-            json.dump(scenario["script"], f)
+            f.write(json.dumps(scenario["script"]).replace("__CONSENT__", consent_root.name) if consent_root else json.dumps(scenario["script"]))
             script_path = f.name
     extra_env = {"REAGENT_OPENAI_AUTH": "auto"}
     server = None
     gates = {name: threading.Event() for name in ("advance", "finish")}
+    if scenario.get("api_compact"):
+        class CompactHandler(http.server.BaseHTTPRequestHandler):
+            requests = 0
+
+            def do_POST(self):
+                request = self.rfile.read(int(self.headers["Content-Length"]))
+                CompactHandler.requests += 1
+                first = CompactHandler.requests == 1
+                summary = b"Write a handoff summary" in request
+                if summary and scenario["api_compact"] == "manual":
+                    gates["advance"].wait(15)
+                text = "API source reply." if first else "API retained summary." if summary else "API ordinary reply."
+                response = {"id": "api-fixture", "object": "response", "status": "completed", "model": "gpt-6.1-sol",
+                            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}],
+                            "usage": {"input_tokens": 840000 if first and scenario["api_compact"] == "automatic" else 11, "output_tokens": 3}}
+                body = json.dumps(response).encode()
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), CompactHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_env.update(API_PROXY_URL="", API_PROXY_PROVIDER="", OPENAI_API_KEY="offline-fixture", TYPESAFE_API_KEY="", REAGENT_MODEL="",
+                         REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}")
     if scenario.get("login"):
         class AuthHandler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
@@ -1111,6 +1355,8 @@ def run(binary, name, scenario, workspace):
                 s.send(args[0])
             elif kind == "key":
                 s.send(KEYS[args[0]])
+            elif kind == "signal":
+                os.kill(s.pid, args[0])
             elif kind == "paste":
                 s.send("\x1b[200~" + args[0] + "\x1b[201~")
             elif kind == "wait":
@@ -1156,10 +1402,27 @@ def run(binary, name, scenario, workspace):
             gate.set()
         s.close()
         if script_path is not None: os.unlink(script_path)
+        if consent_root is not None: consent_root.cleanup()
         if editor_path is not None: os.unlink(editor_path)
         if server is not None:
             server.shutdown()
             server.server_close()
+    if scenario.get("workspace_consent") == "deny":
+        outcomes = {"first": [], "second": []}
+        cache = os.path.join(workspace, "Library", "Caches") if sys.platform == "darwin" else os.path.join(workspace, ".cache")
+        for directory, _, files in os.walk(os.path.join(cache, "reagent", "runs")):
+            if "events.jsonl" not in files:
+                continue
+            with open(os.path.join(directory, "events.jsonl")) as trace:
+                for line in trace:
+                    record = json.loads(line)
+                    data = record.get("data", {})
+                    call_id = data.get("call_id")
+                    if record.get("type") == "tool.finished" and data.get("name") == "request_workspace_access" and call_id in outcomes:
+                        outcome = data["outcome"]
+                        outcomes[call_id].append((outcome["ok"], outcome["code"]))
+        if outcomes != {"first": [(False, "permission_denied")], "second": [(True, "ok")]}:
+            failures.append("actual workspace ToolOutcomes did not prove first denial and successor approval: %r" % outcomes)
     try:
         bytes(s.raw).decode("utf-8")
     except UnicodeDecodeError as e:

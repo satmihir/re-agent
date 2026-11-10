@@ -22,6 +22,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Condvar, Mutex, Weak,
 };
+use std::time::Instant;
 
 const MAX_LIVE_RUNS: usize = 16;
 const MAX_COMMANDS: usize = 256;
@@ -222,7 +223,7 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
         json!(crate::workspace::project_instructions(workspace)
             .map_err(|e| error("unavailable", e))?);
     crate::provider::configure(&mut config).map_err(|e| error("unavailable", e))?;
-    open_resolved(config)
+    open_resolved(config, None)
 }
 
 /// Resume_session opens saved context under a new instance without restarting pending work.
@@ -247,18 +248,51 @@ pub fn resume_session(session_id: &str) -> Result<SessionApi, ApiError> {
 }
 
 /// Open_resolved retains the CLI's already validated launch choices without exposing JSON configuration publicly.
-pub(crate) fn open_resolved(mut config: Value) -> Result<SessionApi, ApiError> {
+pub(crate) fn open_resolved(
+    mut config: Value,
+    region: Option<crate::terminal::RegionHandle>,
+) -> Result<SessionApi, ApiError> {
+    let saved = config.as_object_mut().and_then(|c| c.remove("restore"));
     if config["session_id"].as_str().unwrap_or("").is_empty() {
         config["session_id"] = json!(crate::types::new_id());
     }
-    let lease = Lease::claim(config["session_id"].as_str().unwrap())?;
-    let owner = Owner {
+    let id = config["session_id"].as_str().unwrap();
+    let lease = if saved.is_some() {
+        crate::checkpoint::claim_loaded_api(id).map_err(|e| error("busy", e))?;
+        Lease(id.into())
+    } else {
+        Lease::claim(id)?
+    };
+    let mut owner = Owner {
         session: Session::new(config).map_err(|e| error("unavailable", e))?,
         lease,
     };
-    crate::checkpoint::save(&owner.session, "idle", "")
-        .map_err(|e| error("persistence_failure", e))?;
-    start(owner, None)
+    owner.session.region = region;
+    let notice = if let Some(saved) = saved {
+        let active = saved["state"]["active"].as_str().unwrap_or("");
+        let launch = saved["state"]["launch"].as_str().unwrap_or("");
+        let workspace_notice = (!active.is_empty() && active != launch).then(|| format!(
+            "last active workspace was {}; resumed at launch workspace {}; reauthorize other workspaces before use",
+            crate::render::sanitize(active), crate::render::sanitize(launch)));
+        owner.session.history = saved["history"].as_array().cloned().unwrap_or_default();
+        owner.session.state = saved["state"].clone();
+        owner.session.state["session_id"] = owner.session.config["session_id"].clone();
+        owner.session.state["gc"] = owner.session.state["gc_state"].clone();
+        let recovered =
+            crate::checkpoint::recover(&mut owner.session).map_err(|e| error("unavailable", e))?;
+        crate::auto::initialize(&mut owner.session).map_err(|e| error("unavailable", e))?;
+        let notice = [workspace_notice.unwrap_or_default(), recovered]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!notice.is_empty()).then_some(notice)
+    } else {
+        crate::checkpoint::save(&owner.session, "idle", "")
+            .map_err(|e| error("persistence_failure", e))?;
+        None
+    };
+    start(owner, notice)
 }
 
 fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
@@ -296,8 +330,13 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         plan: false,
         auto: auto_info(session),
         workspace: Default::default(),
+        ordinary_user_turns: 0,
+        last_trace: None,
         usage: Usage::from_value(&crate::types::usage_zero(true)),
         last_request: Usage::from_value(&session.state["last_request"]),
+        context_window_override: None,
+        max_steps: 0,
+        max_tool_calls: 0,
         context_window_tokens: None,
         blocked: None,
         persistence_error: None,
@@ -590,6 +629,28 @@ impl SessionApi {
         expected_revision: u64,
         change: SessionChange,
     ) -> Result<CommandInfo, ApiError> {
+        self.change_with_signal(request_id, expected_revision, change, None)
+            .map(|(info, _)| info)
+    }
+
+    /// change_session_cli binds one actual signal consumer before publishing its long control to the owner.
+    pub(crate) fn change_session_cli(
+        &self,
+        request_id: &str,
+        expected_revision: u64,
+        change: SessionChange,
+        cancellation: Arc<AtomicBool>,
+    ) -> Result<(CommandInfo, Option<crate::cancellation::Guard>), ApiError> {
+        self.change_with_signal(request_id, expected_revision, change, Some(cancellation))
+    }
+
+    fn change_with_signal(
+        &self,
+        request_id: &str,
+        expected_revision: u64,
+        change: SessionChange,
+        signal: Option<Arc<AtomicBool>>,
+    ) -> Result<(CommandInfo, Option<crate::cancellation::Guard>), ApiError> {
         if request_id.trim().is_empty() || request_id.len() > 128 {
             return Err(error(
                 "invalid_argument",
@@ -647,7 +708,7 @@ impl SessionApi {
                     "request_id was already used with another payload",
                 ));
             }
-            return Ok(command.info.clone());
+            return Ok((command.info.clone(), None));
         }
         if state.closing || state.closed {
             return Err(error("unavailable", "Session is closing or closed"));
@@ -684,16 +745,27 @@ impl SessionApi {
                 "Session admission storage is full; close remains available",
             ));
         }
+        let cancellation = is_long_control(&change).then(|| {
+            signal
+                .clone()
+                .unwrap_or_else(|| Arc::new(AtomicBool::new(false)))
+        });
+        let guard = if let Some(flag) = signal.filter(|_| is_long_control(&change)) {
+            Some(crate::cancellation::install_local(flag).map_err(|e| error("unavailable", e))?)
+        } else {
+            None
+        };
         let info = CommandInfo {
             request_id: request_id.into(),
             run: None,
             replacement_session: None,
-            cancel_requested: false,
+            cancel_requested: cancellation
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Acquire)),
             result: None,
             state: CommandState::Pending,
             reason: None,
         };
-        let cancellation = is_long_control(&change).then(|| Arc::new(AtomicBool::new(false)));
         let index = state.commands.len();
         state.retained_input_bytes += input_bytes;
         state.commands.push(Command {
@@ -709,7 +781,7 @@ impl SessionApi {
         state.control = Some(index);
         state.command_changed(index);
         shared.changed.notify_all();
-        Ok(info)
+        Ok((info, guard))
     }
 
     /// Get_run reads an exact Run, including retained results after close.
@@ -950,6 +1022,15 @@ fn update_metadata(session: &Session, snapshot: &mut SessionSnapshot) {
     snapshot.plan = session.state["plan"].as_bool().unwrap_or(false);
     snapshot.auto = auto_info(session);
     snapshot.workspace = text(&session.config["workspace"]).into();
+    snapshot.ordinary_user_turns = session
+        .history
+        .iter()
+        .filter(|e| e["kind"] == "user" && e["user"]["source"].as_str().unwrap_or("").is_empty())
+        .count() as u64;
+    snapshot.last_trace = session.state["last_trace"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(Into::into);
     let mut usage = session.state["usage"].clone();
     if session.state["current_run"] == true {
         crate::types::usage_add(&mut usage, &session.state["run_usage"]);
@@ -958,6 +1039,11 @@ fn update_metadata(session: &Session, snapshot: &mut SessionSnapshot) {
     if session.state["last_request"]["known"] == true {
         snapshot.last_request = Usage::from_value(&session.state["last_request"]);
     }
+    snapshot.context_window_override = session.config["context_window_tokens"]
+        .as_u64()
+        .filter(|n| *n > 0);
+    snapshot.max_steps = session.config["max_steps"].as_u64().unwrap_or(0);
+    snapshot.max_tool_calls = session.config["max_tool_calls"].as_u64().unwrap_or(0);
     snapshot.context_window_tokens =
         u64::try_from(crate::catalog::effective_context_window(&session.config))
             .ok()
@@ -1124,7 +1210,7 @@ fn switch_model(
     history: HistoryMode,
 ) -> Option<Arc<Shared>> {
     let session = &mut owner.session;
-    let staged = (|| {
+    let destination = (|| {
         if session.config["provider"] == "scripted" {
             return Err("model switching is unavailable for scripted Sessions".into());
         }
@@ -1132,13 +1218,47 @@ fn switch_model(
         if info.is_null() {
             return Err(format!("{model:?} is not an exact catalog model ID"));
         }
-        let config = crate::chat::model_switch::destination(&session.config, &info)?;
-        let (handoff, _) = crate::chat::model_switch::stage_session(
+        crate::chat::model_switch::destination(&session.config, &info)
+    })();
+    let config = match destination {
+        Ok(config) => config,
+        Err(reason) => {
+            finish_change(session, shared, index, Some(reason));
+            return None;
+        }
+    };
+    let operation = crate::types::new_id();
+    let path = crate::trace::operation_path(&session.config, &operation).unwrap_or_default();
+    let mut trace = crate::trace::Trace::new(
+        Some(&path),
+        session.state["session_id"].as_str().unwrap_or(""),
+        &operation,
+    );
+    let started = std::time::Instant::now();
+    let mut metadata = json!({"source_model":session.config["model"],"source_provider":session.config["provider"],"source_effort":session.config["reasoning_effort"],"destination_model":config["model"],"destination_provider":config["provider"],"destination_effort":config["reasoning_effort"],"fresh":history == HistoryMode::Fresh});
+    trace.write("model.switch.requested", 0, metadata.clone());
+    session.state["last_trace"] = json!(trace.path());
+    let staged = (|| {
+        let (handoff, size) = match crate::chat::model_switch::stage_session(
             session,
             &config,
             history == HistoryMode::Fresh,
-        )
-        .map_err(|(_, reason)| reason)?;
+        ) {
+            Ok(staged) => staged,
+            Err((size, reason)) => {
+                metadata["request_bytes"] = json!(size);
+                return Err(reason);
+            }
+        };
+        metadata["request_bytes"] = json!(size);
+        if !handoff.is_null() {
+            use sha2::{Digest, Sha256};
+            let bytes = handoff["text"].as_str().unwrap_or("").as_bytes();
+            metadata["handoff_entries"] = handoff["entries"].clone();
+            metadata["handoff_bytes"] = json!(bytes.len());
+            metadata["omitted_native_items"] = handoff["native_items"].clone();
+            metadata["handoff_sha256"] = json!(format!("{:x}", Sha256::digest(bytes)));
+        }
         let (config, mut state) = if history == HistoryMode::Fresh {
             crate::compact::reset_context(&config, &session.state)
         } else {
@@ -1148,6 +1268,7 @@ fn switch_model(
             state["tokens_per_byte"] = json!(0.0);
             (config, state)
         };
+        state["last_trace"] = json!(trace.path());
         state["auto_enabled"] = json!(false);
         state["auto_compact_off"] = json!(false);
         let provider = crate::provider::Provider::new(&config)?;
@@ -1156,40 +1277,76 @@ fn switch_model(
     let (config, state, provider) = match staged {
         Ok(staged) => staged,
         Err(reason) => {
+            finish_switch_trace(Some((&mut trace, metadata, started)), Some(&reason));
+            session.state["last_trace"] = json!(trace.path());
             finish_change(session, shared, index, Some(reason));
             return None;
         }
     };
     if history == HistoryMode::Fresh {
-        return replace_owner(owner, shared, index, config, state, Some(provider));
+        metadata["replacement_session_id"] = config["session_id"].clone();
+        return replace_owner(
+            owner,
+            shared,
+            index,
+            config,
+            state,
+            Some(provider),
+            Some((&mut trace, metadata, started)),
+        );
     }
-    let previous_config = std::mem::replace(&mut session.config, config);
-    let previous_state = std::mem::replace(&mut session.state, state);
-    let previous_provider = std::mem::replace(&mut session.provider, provider);
-    let reason = match crate::checkpoint::save(session, "idle", "") {
-        Ok(()) => {
-            session
-                .provider
-                .set_cancellation(crate::cancellation::token(&session.config));
-            None
-        }
-        Err(error) => {
-            session.config = previous_config;
-            session.state = previous_state;
-            session.provider = previous_provider;
-            let reason = format!("persist model switch: {error}; in-memory bindings restored, checkpoint state may have changed");
-            session.state["persistence_error"] = json!(reason);
-            Some(reason)
-        }
-    };
-    finish_change(session, shared, index, reason);
+    {
+        let previous_config = std::mem::replace(&mut session.config, config);
+        let previous_state = std::mem::replace(&mut session.state, state);
+        let previous_provider = std::mem::replace(&mut session.provider, provider);
+        let reason = match crate::checkpoint::save(session, "idle", "") {
+            Ok(()) => {
+                session
+                    .provider
+                    .set_cancellation(crate::cancellation::token(&session.config));
+                None
+            }
+            Err(error) => {
+                session.config = previous_config;
+                session.state = previous_state;
+                session.provider = previous_provider;
+                let reason = format!("persist model switch: {error}; in-memory bindings restored, checkpoint state may have changed");
+                session.state["persistence_error"] = json!(reason);
+                Some(reason)
+            }
+        };
+        finish_switch_trace(Some((&mut trace, metadata, started)), reason.as_deref());
+        finish_change(session, shared, index, reason);
+    }
     None
+}
+
+fn finish_switch_trace(
+    audit: Option<(&mut crate::trace::Trace, Value, Instant)>,
+    reason: Option<&str>,
+) {
+    if let Some((trace, mut metadata, started)) = audit {
+        metadata["latency_ms"] = json!(started.elapsed().as_millis() as u64);
+        if let Some(reason) = reason {
+            metadata["reason"] = json!(reason);
+        }
+        trace.write(
+            if reason.is_some() {
+                "model.switch.failed"
+            } else {
+                "model.switch.finished"
+            },
+            0,
+            metadata,
+        );
+        trace.close();
+    }
 }
 
 fn reset_owner(owner: &mut Owner, shared: &Shared, index: usize) -> Option<Arc<Shared>> {
     let (config, state) =
         crate::compact::reset_context(&owner.session.config, &owner.session.state);
-    replace_owner(owner, shared, index, config, state, None)
+    replace_owner(owner, shared, index, config, state, None, None)
 }
 
 fn replace_owner(
@@ -1199,6 +1356,7 @@ fn replace_owner(
     config: Value,
     state: Value,
     provider: Option<crate::provider::Provider>,
+    audit: Option<(&mut crate::trace::Trace, Value, Instant)>,
 ) -> Option<Arc<Shared>> {
     let id = config["session_id"].as_str().unwrap().to_owned();
     let lease = match Lease::claim(&id) {
@@ -1206,6 +1364,7 @@ fn replace_owner(
         Err(error) => {
             let reason = format!("claim reset Session {id}: {error}");
             owner.session.state["persistence_error"] = json!(reason);
+            finish_switch_trace(audit, Some(&reason));
             finish_change(&owner.session, shared, index, Some(reason));
             return None;
         }
@@ -1227,6 +1386,7 @@ fn replace_owner(
         let reason = format!("persist reset Session {id}: {error}; in-memory context restored; original checkpoint remains the recovery target; candidate private cache artifacts may remain");
         session.state["persistence_error"] = json!(reason);
         drop(lease);
+        finish_switch_trace(audit, Some(&reason));
         finish_change(session, shared, index, Some(reason));
         return None;
     }
@@ -1247,6 +1407,7 @@ fn replace_owner(
         .provider
         .set_cancellation(crate::cancellation::token(&session.config));
     drop(std::mem::replace(&mut owner.lease, lease));
+    finish_switch_trace(audit, None);
     let replacement = new_shared(session, None);
     consent::bind(session, &replacement);
     let mut state = shared.state.lock().unwrap();
@@ -1342,7 +1503,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         };
         let session = &mut owner.session;
         session.config["cancellation_scope"] = json!(scope);
-        session.provider.set_cancellation(cancellation);
+        session.provider.set_cancellation(cancellation.clone());
         match plan_mode {
             PlanMode::Keep => {}
             PlanMode::On => {
@@ -1358,7 +1519,8 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
             run_id: run.run_id.clone(),
         });
         crate::render::begin_turn(&mut session.state);
-        let result = session.submit_bytes(&message);
+        let result = controls::before_message(session, &shared, &run, &cancellation)
+            .unwrap_or_else(|| session.submit_bytes(&message));
         session.api = None;
         crate::types::usage_add(&mut session.state["usage"], &result["usage"]);
         if result["status"] == "persistence_error" {
@@ -1738,7 +1900,7 @@ mod tests {
             done
         ]);
         std::fs::write(&script, responses.to_string()).unwrap();
-        let api = open_resolved(json!({"workspace":roots[0].path(),"allow_workspaces":[roots[1].path()],"provider":"scripted","model":"scripted","scripted":script,"no_project_instructions":true,"read_only":false})).unwrap();
+        let api = open_resolved(json!({"workspace":roots[0].path(),"allow_workspaces":[roots[1].path()],"provider":"scripted","model":"scripted","scripted":script,"no_project_instructions":true,"read_only":false}), None).unwrap();
         let first = api
             .send_message("before", b"before", PlanMode::Keep)
             .unwrap()
@@ -1813,6 +1975,103 @@ mod tests {
         let result = api.wait_run(&next).unwrap();
         assert!(!result.cancel_requested);
         assert_eq!(result.result.unwrap().reply, b"next turn");
+        api.close().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod cli_signal_tests {
+    use super::*;
+
+    #[test]
+    fn provided_pre_cancelled_flags_bind_before_owner_admission_without_starting_controls() {
+        const CHILD: &str = "REAGENT_CLI_CONTROL_SIGNAL_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "session_api::cli_signal_tests::provided_pre_cancelled_flags_bind_before_owner_admission_without_starting_controls", "--nocapture"])
+                .env_clear().env("PATH", "/usr/bin:/bin").env("HOME", root.path())
+                .env("XDG_CACHE_HOME", root.path().join("cache")).env(CHILD, "1")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        std::fs::write(&script, br#"[{"blocks":[{"kind":"text","text":"source"}]},{"blocks":[{"kind":"text","text":"later"}]}]"#).unwrap();
+        let api = open_session(SessionOptions {
+            workspace: root.path().into(),
+            scripted: Some(script),
+            ..SessionOptions::default()
+        })
+        .unwrap();
+        let source = api
+            .send_message("source", b"source", PlanMode::Keep)
+            .unwrap()
+            .run
+            .unwrap();
+        api.wait_run(&source).unwrap();
+        for (id, change) in [
+            (
+                "pre-shell",
+                SessionChange::RunUserShell {
+                    command: b"printf wrongly-started > marker".to_vec(),
+                },
+            ),
+            ("pre-compact", SessionChange::Compact { focus: vec![] }),
+        ] {
+            let flag = Arc::new(AtomicBool::new(true));
+            let revision = api.get_snapshot().unwrap().revision;
+            let (receipt, guard) = api
+                .change_session_cli(id, revision, change, flag.clone())
+                .unwrap();
+            assert!(receipt.cancel_requested);
+            assert!(guard.is_some());
+            let outcome = api.wait_command(id).unwrap();
+            assert_eq!(outcome.state, CommandState::NotApplied);
+            match outcome.result.unwrap() {
+                ControlResult::Shell(result) => assert_eq!(result.effect, "none"),
+                ControlResult::Compact(result) => {
+                    assert_eq!(result.status, "cancelled");
+                    assert_eq!(result.requests, 0);
+                }
+            }
+            assert!(flag.load(Ordering::Acquire));
+            assert!(!root.path().join("marker").exists());
+            assert_eq!(api.get_snapshot().unwrap().context.entry_count, 2);
+            for index in 0..100 {
+                let unused = Arc::new(AtomicBool::new(false));
+                let error = api
+                    .change_session_cli(
+                        &format!("rejected-{id}-{index}"),
+                        revision + 1000,
+                        SessionChange::RunUserShell {
+                            command: b"printf never".to_vec(),
+                        },
+                        unused.clone(),
+                    )
+                    .err()
+                    .unwrap();
+                assert_eq!(error.code, "conflict");
+                assert_eq!(
+                    Arc::strong_count(&unused),
+                    1,
+                    "rejected controls must not install or anchor unused signal flags"
+                );
+            }
+            drop(guard);
+        }
+        let next = api
+            .send_message("next", b"explicit next turn", PlanMode::Keep)
+            .unwrap()
+            .run
+            .unwrap();
+        assert_eq!(api.wait_run(&next).unwrap().result.unwrap().reply, b"later");
         api.close().unwrap();
     }
 }

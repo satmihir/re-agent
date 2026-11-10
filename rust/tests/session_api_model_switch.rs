@@ -688,6 +688,15 @@ fn carry_uses_collected_history_and_refuses_unknown_effects_or_destination_windo
         .unwrap()
         .contains("exceeds the estimated destination window"));
     assert_eq!(api.get_snapshot().unwrap().model, before.model);
+    assert_eq!(api.get_snapshot().unwrap().usage, before.usage);
+    assert_ne!(api.get_snapshot().unwrap().last_trace, before.last_trace);
+    let audit = switch_trace(&api, "model.switch.failed");
+    assert!(audit[1]["data"]["request_bytes"].as_u64().unwrap() > 0);
+    assert!(audit[1]["data"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("destination window"));
+    assert_eq!(audit[1]["data"]["destination_model"], "gpt-6.1-luna");
     assert_eq!(
         checkpoint(&api).2["state"]["history"],
         saved["state"]["history"]
@@ -1211,4 +1220,99 @@ fn carry_publishes_invalidated_last_request_until_a_destination_response_reports
         "ordinary inference still retains the latest reported usage"
     );
     api.close().unwrap();
+}
+
+fn switch_trace(api: &SessionApi, outcome: &str) -> Vec<Value> {
+    let path = api.get_snapshot().unwrap().last_trace.unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(
+        !text.contains("private-source-text"),
+        "switch audit records a handoff digest, not its contents"
+    );
+    let records: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["type"], "model.switch.requested");
+    assert_eq!(records[1]["type"], outcome);
+    assert!(records.iter().all(|record| record["step"] == 0));
+    assert!(records[1]["data"]["latency_ms"].as_u64().is_some());
+    records
+}
+
+#[test]
+fn carry_and_fresh_operation_traces_record_measured_binding_digest_and_saved_successor_path() {
+    let Some(root) = isolated(
+        "carry_and_fresh_operation_traces_record_measured_binding_digest_and_saved_successor_path",
+        vec![(200, openai_text()), (200, openai_text())],
+    ) else {
+        return;
+    };
+    let api = live(&root, true, true);
+    let source = run(&api, "private-source-text");
+    let before = api.get_snapshot().unwrap();
+    applied(&api, "carry", switch("gpt-6.1-luna", HistoryMode::Carry));
+    let after = api.get_snapshot().unwrap();
+    let audit = switch_trace(&api, "model.switch.finished");
+    assert_eq!(audit[0]["session_id"], before.session.session_id);
+    assert_ne!(audit[0]["run_id"], source.run.run_id);
+    assert_eq!(audit[1]["data"]["source_model"], before.model);
+    assert_eq!(audit[1]["data"]["destination_model"], after.model);
+    assert_eq!(
+        audit[1]["data"]["destination_effort"],
+        after.reasoning_effort
+    );
+    assert_eq!(
+        audit[1]["data"]["request_bytes"].as_u64(),
+        api.get_context().unwrap().encoded_request_bytes
+    );
+    let (_, _, saved) = checkpoint(&api);
+    let handoff = saved["state"]["handoff"]["text"]
+        .as_str()
+        .unwrap()
+        .as_bytes();
+    assert_eq!(
+        audit[1]["data"]["handoff_sha256"],
+        format!("{:x}", Sha256::digest(handoff))
+    );
+    assert_eq!(audit[1]["data"]["handoff_bytes"], handoff.len());
+    assert_eq!(
+        audit[1]["data"]["handoff_entries"],
+        before.context.entry_count
+    );
+    assert_eq!(after.usage, before.usage);
+    assert!(after.plan && after.read_only);
+    applied(&api, "fresh", switch("gpt-6.1-sol", HistoryMode::Fresh));
+    let successor = api.get_replacement().unwrap();
+    drop(api);
+    let snapshot = successor.get_snapshot().unwrap();
+    let audit = switch_trace(&successor, "model.switch.finished");
+    assert_eq!(
+        audit[1]["data"]["replacement_session_id"],
+        snapshot.session.session_id
+    );
+    assert_eq!(
+        audit[1]["data"]["request_bytes"].as_u64(),
+        successor.get_context().unwrap().encoded_request_bytes
+    );
+    assert!(snapshot.plan && snapshot.read_only);
+    assert_eq!(snapshot.usage.input_tokens, 0);
+    assert_eq!(snapshot.context.entry_count, 0);
+    let (_, _, saved) = checkpoint(&successor);
+    assert_eq!(
+        saved["state"]["last_trace"].as_str(),
+        snapshot.last_trace.as_ref().unwrap().to_str()
+    );
+    successor.close().unwrap();
+    let restored = resume_session(&snapshot.session.session_id).unwrap();
+    assert_eq!(
+        restored.get_snapshot().unwrap().last_trace,
+        snapshot.last_trace
+    );
+    assert_eq!(
+        run(&restored, "after fresh trace").result.unwrap().status,
+        "completed"
+    );
+    restored.close().unwrap();
 }

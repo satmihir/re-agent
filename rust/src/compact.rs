@@ -72,7 +72,11 @@ fn text(resp: &Value) -> Result<String, String> {
 }
 
 /// idle_request stages bounded manual compaction without allocating a Run or changing history.
-pub(crate) fn idle_request(session: &Session, focus: &[u8]) -> Result<Value, String> {
+pub(crate) fn idle_request(
+    session: &Session,
+    focus: &[u8],
+    automatic: bool,
+) -> Result<Value, String> {
     if session.history.is_empty() {
         return Err("nothing to compact; send a message first".into());
     }
@@ -89,7 +93,12 @@ pub(crate) fn idle_request(session: &Session, focus: &[u8]) -> Result<Value, Str
     if session.provider.name() != "scripted" {
         let size = admission_bytes(&session.config, &req)?;
         let win = window(&session.config);
-        if win > 0 && (size as f64 * admission_rate(session)).ceil() + 16000.0 > win as f64 {
+        // The known-usage 80% trigger must still be able to summarize; its legacy admission
+        // used the encoded hard limit, not the ordinary request's 1.5× safety margin.
+        if !automatic
+            && win > 0
+            && (size as f64 * admission_rate(session)).ceil() + 16000.0 > win as f64
+        {
             return Err("summary request cannot fit with 16000 tokens reserved for output".into());
         }
     }

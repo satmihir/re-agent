@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell, bounded structured observations and typed workspace consent implemented**, with the remaining
+Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell, bounded structured observations, typed workspace consent and interactive chat migration implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -33,12 +33,12 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
 - Close requires all admitted Runs and controls to be terminal and awaits descendant cleanup
   and lease release. Dropping the last handle requests asynchronous cancellation
   and cleanup; explicit close is how the host waits for shutdown.
-- `reagent run` now uses this boundary; existing progress/reply rendering remains
-  in place. Chat still uses its existing Session path.
+- `reagent run` and `reagent chat` use this boundary; existing progress/reply rendering
+  remains local. Chat never owns or mutates the runtime Session.
 
 This milestone is **trusted-local only**: handles are not capability-filtered and
-must not be given to untrusted clients. Chat and the remaining control migration,
-transport authorization, BTW and steering are not implemented; chat still uses its legacy consent callback. The detailed records and operations below describe the full target,
+must not be given to untrusted clients. Transport authorization, BTW and steering
+are not implemented; interactive chat uses the typed human-consent guard. The detailed records and operations below describe the full target,
 not a claim that every field or method already exists. `wait_run` and `close` are
 local conveniences while that broader observation/control boundary is extracted.
 
@@ -179,6 +179,16 @@ unpublished private candidate checkpoint; the original checkpoint remains the
 recovery target. Resume opens persisted identities without replaying the switch.
 Chat continues to use its legacy command path, sharing only local staging logic.
 
+Configured catalog model attempts also create source-opening operation traces:
+`model.switch.requested`, then `model.switch.finished` or `model.switch.failed`, at
+trace Step 0 with measured destination request bytes, latency, binding scalars and
+handoff count/bytes/SHA-256 (not copied handoff/native contents). Fresh saves that
+trace path in the replacement before publishing it; it remains usable after the old
+handle is dropped. A staging refusal leaves settings, history, authority and usage
+unchanged but deliberately updates the live diagnostic `last_trace`; that diagnostic
+change does not rewrite the source checkpoint. Trace finalization precedes terminal
+control publication and uses the existing best-effort I/O policy.
+
 ## Implemented long-running controls
 
 `SessionChange::Compact { focus: Vec<u8> }` and
@@ -199,9 +209,16 @@ active cancellation is cooperative, not an undo. Repeated or terminal cancellati
 returns retained info and cannot affect the next message/control. Dropping the
 last handle cancels long work as well. No shared mutex is held during model or
 process work; messages, other controls and close stay busy until it settles. Long
-controls own local cancellation flags, not permanent SIGINT-registry entries;
-a later chat integration must call `cancel_command` explicitly. Existing Run and
-CLI signal handling is unchanged.
+controls own local cancellation flags, not permanent SIGINT-registry entries.
+The private CLI admission binds its installed signal/UI Arc to the actual long-control
+slot while the admission mutex is held, before publication; a pre-existing interrupt
+cannot race ahead of a different fresh false flag and start a shell. Public API
+controls still allocate their own local flags. Validation/deduplication/revision and
+capacity rejection happen before CLI signal installation, so rejected attempts do
+not accumulate signal anchors. Only actual SIGINT consumers retain permanent
+pointer-safety anchors; that deliberate safety retention has no new process-lifetime
+resource-bound claim. Installing a handler never resets an admitted target or
+retargets a stale token. Chat still forwards exact `cancel_command`/`cancel_run` metadata.
 
 `CommandInfo.cancel_requested` reports the request independently of application;
 `result: Option<ControlResult>` retains typed `CompactResult`/`ShellResult` for
@@ -242,6 +259,44 @@ costs in memory, restore staged history/configuration, poison the instance, and
 make no disk-rollback claim. No compaction or shell control is allowed after a
 persistence error; inspection, targeted cancellation and close remain available.
 
+Manual and automatic summaries have independent operation traces with
+`compaction.requested`, real `api.attempt.started`/`finished` HTTP records and
+`compaction.finished`/`failed` status, usage and summary metadata. Operation IDs are
+not public conversation Runs, and trace Step is 0: summaries add no ordinary Step
+or extra counters. The same explicit `--trace-dir`/file/cache policy as ordinary
+Runs applies. `/trace` and snapshots point to the latest attempted operation;
+failed or cancelled summaries no longer leave the previous Run's path in place.
+Trace I/O remains best effort: a warning disables the recorder rather than rolling
+back work, and crashes or I/O failure can leave partial files, including a persisted
+path to an incomplete attempt.
+
+### Automatic pre-turn compaction
+
+Before applying an ordinary API message, the exclusive owner checks the legacy
+80%-of-known-window threshold. Scripted providers, unknown window/usage, empty or
+blocked history, and persisted `auto_compact_off` skip it. The same staged summary,
+accounting and save barriers as manual `Compact` apply, without another Run, Auto
+request, ordinary Step or receipt. Automatic summaries retain legacy encoded-body
+hard-limit admission rather than manual compaction's conservative 1.5× window
+estimate, which would refuse the 80% trigger itself. Neither path bypasses the
+provider's encoded request-size limit.
+
+A failed non-cancelled summary leaves history intact and persists suppression in
+the same required settlement checkpoint as the attempt's accounting, with no second
+save window; it then applies the intended message. A preflight refusal saves only
+suppression without charging a request, while success/cancellation/save-failure keep
+their respective existing policies. Successful manual compaction, Reset or model change
+reenables the threshold. Cancellation stops the intended message unapplied, with
+`message not sent` in its RunResult; the frontend does not resubmit it. Failed saves
+poison the opening and prohibit further inference. The existing admission and FIFO
+limits remain; this is not a durable cross-restart work queue. Bounded metadata-only
+`PreTurnCompaction` events identify its intended Run, percentage and settled status.
+A pre-turn Summary Entry is attributed to that intended Run with `step: null`, not
+a Step left over from the previous Run. Explicit `PlanMode` still takes effect when
+the queued Run starts: cancelling its pre-turn summary can durably change planning
+while the body is `NotApplied`. This is not a zero-effect claim, never lifts launch
+read-only, and neither applies nor replays the unsent body.
+
 ### Human shell
 
 The owner runs exact Unix command bytes using `/bin/sh -c` in the selected
@@ -279,6 +334,21 @@ UTF-8 character crossing the internal head/tail split is not an encoding error.
 Cancellation, capture I/O errors and inherited-pipe timeouts
 never claim complete output or known no effects. A normal nonzero exit is still
 recorded, with no model/router request or model usage added merely for execution.
+
+Sensitive `ShellOutput { request_id, offset, bytes }` events retain at most 1024
+raw bytes per chunk in the existing bounded event ring. Offsets count merged process
+bytes; readers never stall the owner. Eviction is an explicit cursor gap, not a
+lossless promise. The CLI repairs split UTF-8 and sanitizes terminal controls, prints
+the final footer without duplicating a fully streamed capture, and on loss explicitly
+labels the final bounded capture as potentially repeated recovery output. On a
+terminal, newline-free fragments are forcibly displayed after at most 4096 raw bytes
+(with a `⟪shell line continues⟫` marker) instead of accumulating an unbounded invisible
+region line; a split UTF-8 boundary can shorten a fragment. The final `ShellResult`
+and legacy history projection do not contain this display wrapping. A never-started
+shell reports that no Entry was added; post-action save failure reports in-memory
+retention rather than claiming durable recording.
+Chat intentionally adopts the API's blocked-after-unknown-shell-effects contract;
+it does not silently continue after an interrupted shell.
 
 Cleanup is cooperative, not process containment or a hard shutdown bound. An
 unkillable, privileged, or D-state child can prevent cancellation/close from
@@ -446,6 +516,20 @@ active exclusive control report `incomplete_tool_batch`, `effects_unknown`,
 `encoding_unavailable` or `control_in_progress`. Scripted generation has no
 provider wire request, so its exact encoded size is always absent with
 `encoding_unavailable` at safe boundaries, never a hypothetical OpenAI-shaped body.
+The owned `request_parts` projection supplies at most 65 numeric byte attributions
+with bounded labels and explicit overlapping-subset markers for `/context`.
+Snapshots additionally publish ordinary retained user-turn count, last trace path,
+explicit window override and Run limits; approved workspace paths remain a private
+CLI display projection, not serialized public metadata.
+
+Snapshot/context `last_request` intentionally retains the last reported sample within
+the live opening, not proof of the latest attempt or total billing certainty. An
+ordinary unknown response leaves that display/calibration sample intact but keeps
+total usage unknown; the owner's current stored attempt is unknown and does not
+trigger automatic compaction. Resume preserves the admission calibration rate and
+unknown total, without inventing an earlier known observation. Existing Carry and
+attempted-compaction invalidations still apply.
+
 Missing exact measurements are
 absent, never a stale safe-prefix measurement or a fabricated known usage value.
 No prompts, native items, adapter errors, configuration/environment or credentials
@@ -504,7 +588,9 @@ poll and does not consume completion notices or count child costs again.
 
 A bounded 256-record `VecDeque` contains typed command/Run changes, content/context/
 roster availability and rewrite hints, replacement, closing and closed boundaries.
-Events contain discovery hints, not transcripts or unbounded terminal results.
+Most events contain discovery hints, not transcripts or unbounded terminal results;
+`ShellOutput` is an explicitly typed sensitive content-bearing exception with bounded
+byte chunks. Future capability-filtered readers must filter that content too.
 Each queued Run made terminal by failure, cancellation or owner cleanup gets its
 own exact-target terminal event before final close; queue draining and its complete
 inventory changes remain under one State lock, with one revision per event.
@@ -526,6 +612,51 @@ still need draining), and a caught-up terminal read returns immediately. Foreign
 future and evicted event cursors return `conflict`, `invalid_argument` and
 `cursor_expired` respectively. Sequence exhaustion fails explicitly as an expired
 event stream instead of wrapping identities.
+
+## Implemented interactive chat frontend
+
+`chat.rs` keeps command parsing, aliases/positions, pickers, editor, help, review/
+friction composition and rendering local. It opens/resumes through the trusted host
+adapter, which transfers the CLI loader's checkpoint lease atomically, and closes
+only after work settles. Ordinary messages are literal bytes with explicit `PlanMode`;
+settings, Carry/Fresh, Auto, compaction, human shell and Reset use fresh request IDs
+and typed controls. No slash-command transport or stdout parsing drives the API.
+Enabled `--auto` and enabled resume print the existing full data-sharing notice
+before any first model/router request; disabled/pinned openings do not, and explicit
+`/auto on` continues to disclose. The one-shot `run --auto` header caller also
+prints the typed notice before message admission. The notice does not claim packet
+secret filtering.
+
+`/status`, `/context` and `/trace` read projections without a save or model request.
+Model/effort picker cancellation changes nothing; selecting even the current model
+uses the API's default effort and pins Auto, and current-effort selection pins Auto.
+Scripted chat retains its previous unavailable model/effort/Auto/manual-compaction
+policy. Plan choice Keep/Fresh uses explicit controls plus a literal implementation
+message; Fresh claims a saved replacement, and plan-off never lifts launch read-only.
+
+Only interactive human input registers `WorkspaceConsentApi`. The sole terminal
+reader polls its typed pending request, renders exact destination disclosure and
+resolves its exact approval with a fresh ID; it checks withdrawal/deadline/Run
+cancellation without requiring a keypress. Reset/Fresh explicitly drop the old guard
+and register the successor; this role never transfers implicitly. An unrecordable
+answer at receipt capacity cancels the exact Run, explains checkpoint-aware stop/
+resume, and does not reopen an unanswered picker or promise immediate continuation.
+Regional/fallback reader errors withdraw the human guard and request exact-operation
+cancellation before returning, so a later permission tool cannot wait on a dead
+reader. EOF withdraws the unavailable human role without treating otherwise ongoing
+work as an error; an ordinary successful reader stop keeps registration for the next
+turn. Piped input uses no human adapter and keeps prompt fail-fast/`--allow-workspace` behavior.
+
+Receipt/input exhaustion remains a real stop boundary: chat explains how to stop
+and resume a checkpointed Session, or explicitly says a checkpointless/scripted
+opening cannot resume. It never silently evicts receipts, raises limits, creates a
+successor or retries rejected/busy/save-failed controls. Poisoned instances remain
+inspectable but are stopped rather than mutated.
+
+The API remains public-TTY-free. A private optional terminal region is bound on the
+owned Session before the worker starts; legacy provider/tool progress rendering can
+still call that local binding. This migration is not full provider-stream-rendering
+decoupling. No transport, listener, authorization layer, BTW or steering was added.
 
 ## Boundary
 

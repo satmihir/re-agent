@@ -120,8 +120,6 @@ pub(crate) struct Outcome {
     pub incomplete: bool,
     /// reason describes post-spawn capture or cleanup failure without discarding possible effects.
     pub reason: Option<String>,
-    /// open requests a display-only newline after unterminated output.
-    pub open: bool,
 }
 
 /// pending stages conservative recovery evidence before a command might start.
@@ -223,7 +221,6 @@ fn run_with_termination(
     let mut status = None;
     let mut can_terminate = true;
     let mut exited = None;
-    let mut last_newline = true;
     let mut cancelled = false;
     let mut incomplete = failure.is_some();
     loop {
@@ -239,7 +236,6 @@ fn run_with_termination(
                 }
                 Ok(n) => {
                     capture.push(&buffer[..n]);
-                    last_newline = buffer[n - 1] == b'\n';
                     let _ = live.write_all(&buffer[..n]);
                     let _ = live.flush();
                 }
@@ -326,7 +322,6 @@ fn run_with_termination(
         omitted: capture.omitted,
         incomplete,
         reason: failure,
-        open: !last_newline,
     })
 }
 
@@ -402,7 +397,7 @@ mod tests {
         .unwrap();
         assert_eq!(live, b"ab\xff");
         assert_eq!(outcome.output, live);
-        assert!(outcome.open);
+        assert!(!outcome.output.ends_with(b"\n"));
         assert_eq!(outcome.record["exit_code"], 7);
         assert_eq!(outcome.record["output_bytes_seen"], 3);
         assert_eq!(outcome.record["encoding_replaced"], true);

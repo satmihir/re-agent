@@ -488,11 +488,21 @@ pub struct SessionSnapshot {
     pub auto: AutoInfo,
     /// workspace is the last published active canonical directory.
     pub workspace: PathBuf,
+    /// ordinary_user_turns counts ordinary user Entries in the currently retained history.
+    pub ordinary_user_turns: u64,
+    /// last_trace names the latest attempted Run or control trace; I/O failures or crashes can leave partial files.
+    pub last_trace: Option<PathBuf>,
     /// usage counts completed and currently executing root model requests.
     pub usage: Usage,
-    /// last_request retains reported inference usage until successful Carry or attempted compaction
+    /// last_request retains this opening's reported inference sample until successful Carry or attempted compaction
     /// publishes replacement calibration, including unknown failed-summary usage.
     pub last_request: Usage,
+    /// context_window_override records an explicit configured testing cap, separately from the effective window.
+    pub context_window_override: Option<u64>,
+    /// max_steps is the configured per-Run request cap, with zero meaning unlimited.
+    pub max_steps: u64,
+    /// max_tool_calls is the configured per-Run tool cap, with zero meaning unlimited.
+    pub max_tool_calls: u64,
     /// context_window_tokens is absent when the model window is unknown.
     pub context_window_tokens: Option<u64>,
     /// blocked names a non-resumable terminal status when present.

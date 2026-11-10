@@ -631,6 +631,8 @@ fn chat_compacts_before_the_next_turn_at_eighty_percent() {
             format!("http://{}", listener.local_addr().unwrap()),
         )
         .env("REAGENT_CONTEXT_WINDOW_TOKENS", "100000")
+        .arg("--trace-dir")
+        .arg(directory.path().join("automatic-audit"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -675,6 +677,21 @@ fn chat_compacts_before_the_next_turn_at_eighty_percent() {
     );
     assert!(stderr.contains("compacted: "), "{stderr}");
     assert_eq!(output.stdout, b"first reply\nsecond turn works\n");
+    let audit = cli_trace_records(&directory.path().join("automatic-audit"));
+    let finished = audit
+        .iter()
+        .find(|record| record["type"] == "compaction.finished")
+        .unwrap();
+    assert_eq!(finished["data"]["summary"], "retained summary");
+    assert_eq!(finished["data"]["usage"]["input_tokens"], 13);
+    assert_eq!(finished["data"]["automatic"], true);
+    let operation = &finished["run_id"];
+    assert!(audit
+        .iter()
+        .any(|record| record["run_id"] == *operation && record["type"] == "api.attempt.started"));
+    assert!(audit
+        .iter()
+        .any(|record| record["run_id"] == *operation && record["type"] == "api.attempt.finished"));
 }
 
 #[test]
@@ -878,13 +895,15 @@ fn pty_model_selection_dims_picker_rules_and_reprobes_after_switching() {
 
 #[test]
 fn pty_plan_choices_require_consent_and_scope_implementation_history() {
-    for (keys, choice) in [
-        (b"\r".as_slice(), "keep"),
-        (b"1".as_slice(), "keep"),
-        (b"typed feedback".as_slice(), "keep"),
-        (b"\x1b".as_slice(), "keep"),
-        (b"\x1b[A\x1b[A\r".as_slice(), "here"),
-        (b"\x1b[A\r".as_slice(), "fresh"),
+    for (keys, choice, read_only) in [
+        (b"\r".as_slice(), "keep", false),
+        (b"1".as_slice(), "keep", false),
+        (b"typed feedback".as_slice(), "keep", false),
+        (b"\x1b".as_slice(), "keep", false),
+        (b"\x1b[A\x1b[A\r".as_slice(), "here", false),
+        (b"\x1b[A\r".as_slice(), "fresh", false),
+        (b"\x1b[A\x1b[A\r".as_slice(), "here", true),
+        (b"\x1b[A\r".as_slice(), "fresh", true),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -897,6 +916,9 @@ fn pty_plan_choices_require_consent_and_scope_implementation_history() {
                 format!("http://{}", listener.local_addr().unwrap()),
             )
             .arg("--plan");
+        if read_only {
+            command.arg("--read-only");
+        }
         let mut pty = Pty::start(&mut command);
         pty.wait("❯ ".as_bytes());
         pty.send(b"original planning request\r");
@@ -930,6 +952,16 @@ fn pty_plan_choices_require_consent_and_scope_implementation_history() {
         let (mut stream, body) = pty.request(&listener);
         let encoded = body.to_string();
         assert!(!encoded.contains("stale queued input"), "{choice}: {body}");
+        if read_only {
+            assert!(
+                !body["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == "write_file" || tool["name"] == "exec"),
+                "SetPlan(false) must not lift launch read-only: {body}"
+            );
+        }
         if choice == "fresh" {
             assert!(!encoded.contains("original planning request"), "{body}");
             assert!(
@@ -1011,25 +1043,53 @@ fn pty_shell_streams_above_the_draft_and_interrupt_discards_typeahead() {
             pty.wait(b"\x1b[?2004h");
             assert!(listener.accept().is_err());
             pty.send(b"new question\r");
+            pty.wait(b"error: the last run ended with effect_unknown");
+            assert!(listener.accept().is_err());
+            let sessions = directory.path().join(if cfg!(target_os = "macos") {
+                "Library/Caches/reagent/sessions"
+            } else {
+                "cache/reagent/sessions"
+            });
+            let checkpoint = std::fs::read_dir(sessions)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path()
+                .join("checkpoint.json");
+            let saved: Value = serde_json::from_slice(&std::fs::read(checkpoint).unwrap()).unwrap();
+            assert_eq!(saved["state"]["blocked"], "effect_unknown");
+            assert_eq!(saved["state"]["history"][0]["kind"], "shell");
+            assert_eq!(saved["state"]["history"][0]["shell"]["interrupted"], true);
+            assert!(saved["state"]["history"][0]["shell"]["output"]
+                .as_str()
+                .unwrap()
+                .contains("shell helper ready"));
+            pty.wait(b"\x1b[?2004h");
+            pty.send(b"/reset\r");
+            pty.wait(b"fresh session; the conversation so far is no longer sent");
+            pty.wait(b"\x1b[?2004h");
+            pty.send(b"after explicit recovery\r");
         } else {
             std::fs::write(directory.path().join("release"), "").unwrap();
             pty.wait(b"last line");
             pty.wait(b"\x1b[?2004h");
             assert!(pty
                 .raw
-                .windows(b"raw \xff line".len())
-                .any(|line| line == b"raw \xff line"));
+                .windows("raw \u{fffd} line".len())
+                .any(|line| line == "raw \u{fffd} line".as_bytes()));
             pty.send(b"\r");
         }
         let (mut stream, body) = pty.request(&listener);
         let encoded = body.to_string();
-        assert!(encoded.contains("user_shell_command"), "{body}");
-        assert!(encoded.contains("shell helper ready"), "{body}");
         if interrupt {
             assert!(!encoded.contains("draft while shell runs"), "{body}");
-            assert!(encoded.contains("new question"), "{body}");
-            assert!(encoded.contains("\\\"interrupted\\\":true"), "{body}");
+            assert!(!encoded.contains("new question"), "{body}");
+            assert!(!encoded.contains("user_shell_command"), "{body}");
+            assert!(encoded.contains("after explicit recovery"), "{body}");
         } else {
+            assert!(encoded.contains("user_shell_command"), "{body}");
+            assert!(encoded.contains("shell helper ready"), "{body}");
             assert!(encoded.contains("draft while shell runs"), "{body}");
             assert!(encoded.contains("last line"), "{body}");
         }
@@ -1382,4 +1442,324 @@ fn pty_dumb_paste_normalizes_split_crlf_and_accepts_the_following_turn() {
     respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
     pty.wait(b"> ");
     pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_backend_cancellation_withdraws_workspace_picker_without_input_and_reset_registers_successor()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command.env("OPENAI_API_KEY", "offline-key").env(
+        "REAGENT_OPENAI_BASE_URL",
+        format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"first consent\r");
+    let (mut stream, _) = pty.request(&listener);
+    let consent = |stream: &mut TcpStream, id: &str| {
+        let response = json!({"id":id,"object":"response","status":"completed","model":"gpt-6.1-sol","output":[{"type":"function_call","call_id":id,"name":"request_workspace_access","arguments":json!({"path":destination.path()}).to_string()}],"usage":{"input_tokens":13,"output_tokens":3}}).to_string();
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+        stream.flush().unwrap();
+    };
+    consent(&mut stream, "cancelled-consent");
+    pty.wait(b"Workspace consent");
+    assert_eq!(
+        unsafe { libc::kill(pty.child.id() as i32, libc::SIGINT) },
+        0
+    );
+    pty.wait(b"cancelled");
+    pty.wait(b"\x1b[?2004h");
+    assert!(
+        listener.accept().is_err(),
+        "withdrawn consent must not start another model request"
+    );
+    pty.send(b"/reset\r");
+    pty.wait(b"fresh session; the conversation so far is no longer sent");
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"successor consent\r");
+    let (mut stream, _) = pty.request(&listener);
+    consent(&mut stream, "successor-consent");
+    pty.wait(b"Workspace consent");
+    pty.send(b"\x1b[A\r");
+    let (mut stream, body) = pty.request(&listener);
+    assert!(
+        !body.to_string().contains("permission_required"),
+        "successor needs its own human registration: {body}"
+    );
+    assert!(!body.to_string().contains("permission_denied"), "{body}");
+    assert!(body.to_string().contains("approved"), "{body}");
+    assert!(!body.to_string().contains("first consent"), "{body}");
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_ctrl_c_cancels_manual_compaction_and_discards_typeahead_without_cancelling_next_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command.env("OPENAI_API_KEY", "offline-key").env(
+        "REAGENT_OPENAI_BASE_URL",
+        format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"original task\r");
+    let (mut stream, _) = pty.request(&listener);
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/compact -v focus\r");
+    let (_summary, body) = pty.request(&listener);
+    assert!(
+        body.to_string().contains("Write a handoff summary"),
+        "{body}"
+    );
+    assert!(body.to_string().contains("focus"), "{body}");
+    pty.send(b"discard compact typeahead\r");
+    pty.wait(b"  queued");
+    pty.send(b"\x03");
+    pty.wait(b"control not applied:");
+    pty.wait(b"\x1b[?2004h");
+    let trace_root = directory.path().join(if cfg!(target_os = "macos") {
+        "Library/Caches/reagent/runs"
+    } else {
+        "cache/reagent/runs"
+    });
+    let records = cli_trace_records(&trace_root);
+    let failed = records
+        .iter()
+        .find(|record| record["type"] == "compaction.failed")
+        .unwrap();
+    assert_eq!(failed["data"]["status"], "cancelled");
+    let operation = failed["run_id"].as_str().unwrap();
+    assert!(records
+        .iter()
+        .any(|record| record["run_id"] == operation && record["type"] == "api.attempt.started"));
+    assert!(records
+        .iter()
+        .any(|record| record["run_id"] == operation && record["type"] == "api.attempt.finished"));
+    pty.send(b"/trace\r");
+    pty.wait(operation.as_bytes());
+    pty.wait(b"\x1b[?2004h");
+    assert!(listener.accept().is_err());
+    pty.send(b"new explicit turn\r");
+    let (mut stream, body) = pty.request(&listener);
+    assert!(body.to_string().contains("original task"), "{body}");
+    assert!(body.to_string().contains("new explicit turn"), "{body}");
+    assert!(
+        !body.to_string().contains("discard compact typeahead"),
+        "{body}"
+    );
+    assert!(
+        !body.to_string().contains("Write a handoff summary"),
+        "{body}"
+    );
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_full_consent_receipt_ledger_cancels_the_run_instead_of_reopening_the_picker() {
+    for checkpoint_enabled in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let arguments = json!({"path":destination.path()}).to_string();
+        let mut command = command(&directory, "chat");
+        command.env("TERM", "dumb");
+        if checkpoint_enabled {
+            command.env("OPENAI_API_KEY", "offline-key").env(
+                "REAGENT_OPENAI_BASE_URL",
+                format!("http://{}", listener.local_addr().unwrap()),
+            );
+        } else {
+            let script = directory.path().join("script.json");
+            std::fs::write(&script, serde_json::to_vec(&json!([
+                {"blocks":[{"kind":"tool_call","call":{"call_id":"capacity","name":"request_workspace_access","arguments":arguments}}]},
+                {"blocks":[{"kind":"text","text":"must not silently continue"}]}
+            ])).unwrap()).unwrap();
+            command.arg("--scripted").arg(script);
+        }
+        let mut pty = Pty::start(&mut command);
+        pty.wait(b"> ");
+        let mut input = b"/plan\r".repeat(255);
+        input.extend_from_slice(b"ask at capacity\r");
+        pty.send(&input);
+        if checkpoint_enabled {
+            let (mut stream, _) = pty.request(&listener);
+            let response = json!({"id":"capacity","object":"response","status":"completed","model":"gpt-6.1-sol","output":[{"type":"function_call","call_id":"capacity","name":"request_workspace_access","arguments":arguments}],"usage":{"input_tokens":13,"output_tokens":3}}).to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+            stream.flush().unwrap();
+        }
+        pty.wait(b"Workspace consent");
+        pty.send(b"\r");
+        pty.wait(b"workspace consent receipt/input capacity exhausted; cancelling this Run");
+        if checkpoint_enabled {
+            pty.wait(b"stop and resume with reagent chat --resume");
+        } else {
+            pty.wait(b"Checkpoints are disabled, so it cannot be resumed");
+        }
+        pty.wait(b"cancelled");
+        pty.wait(b"\x1b[?2004h");
+        assert!(listener.accept().is_err());
+        assert!(!String::from_utf8_lossy(&pty.raw).contains("must not silently continue"));
+        assert!(!String::from_utf8_lossy(&pty.raw).contains("your next message continues"));
+        pty.send(b"/exit\r");
+    }
+}
+
+#[test]
+fn pty_sigint_reaches_the_admitted_shell_flag_and_reset_does_not_retarget_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("script.json");
+    std::fs::write(
+        &script,
+        br#"[{"blocks":[{"kind":"text","text":"after actual SIGINT"}]}]"#,
+    )
+    .unwrap();
+    let mut command = command(&directory, "chat");
+    command.arg("--scripted").arg(script);
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"!printf '%s%s\\n' signal- ready; sleep 30\r");
+    pty.wait(b"signal-ready");
+    assert_eq!(
+        unsafe { libc::kill(pty.child.id() as i32, libc::SIGINT) },
+        0
+    );
+    pty.wait(b"interrupted after");
+    pty.wait(b"\x1b[?2004h");
+    assert!(String::from_utf8_lossy(&pty.raw).contains("(blocked)"));
+    pty.send(b"/reset\r");
+    pty.wait(b"fresh session; the conversation so far is no longer sent");
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"new explicit turn\r");
+    pty.wait(b"after actual SIGINT");
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_newline_free_shell_output_progresses_before_release_and_keeps_raw_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command.env("OPENAI_API_KEY", "offline-key").env(
+        "REAGENT_OPENAI_BASE_URL",
+        format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let mut pty = Pty::start(&mut command);
+    pty.wait("❯ ".as_bytes());
+    pty.send(b"!printf '%04096d' 0; while [ ! -e release ]; do sleep 0.01; done; printf '%s%s\\n' LONG- DONE\r");
+    pty.wait("⟪shell line continues⟫".as_bytes());
+    assert!(!directory.path().join("release").exists());
+    assert!(!String::from_utf8_lossy(&pty.raw).contains("added to the conversation"));
+    assert!(!String::from_utf8_lossy(&pty.raw).contains("LONG-DONE"));
+    std::fs::write(directory.path().join("release"), "").unwrap();
+    pty.wait(b"LONG-DONE");
+    pty.wait(b"added to the conversation");
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"ordinary after long line\r");
+    let (mut stream, body) = pty.request(&listener);
+    let encoded = body.to_string();
+    assert!(
+        encoded.contains(&format!("{}LONG-DONE", "0".repeat(4096))),
+        "retained shell history must not contain display wrapping: {body}"
+    );
+    assert!(!encoded.contains("shell line continues"), "{body}");
+    assert!(encoded.contains("ordinary after long line"), "{body}");
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+#[test]
+fn pty_auto_startup_discloses_sharing_before_the_first_local_provider_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut command = command(&directory, "chat");
+    command
+        .arg("--auto")
+        .env("OPENAI_API_KEY", "offline-key")
+        .env(
+            "REAGENT_OPENAI_BASE_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+    let mut pty = Pty::start(&mut command);
+    pty.wait(b"auto on: https://api.typesafe.ai/v1/systemone;");
+    pty.wait("❯ ".as_bytes());
+    assert!(
+        listener.accept().is_err(),
+        "startup disclosure precedes any inference"
+    );
+    pty.send(b"first explicit task\r");
+    let (mut stream, body) = pty.request(&listener);
+    assert!(body.to_string().contains("first explicit task"), "{body}");
+    respond(&mut stream, false);
+    pty.wait(b"\x1b[?2004h");
+    pty.send(b"/exit\r");
+}
+
+fn cli_trace_records(directory: &std::path::Path) -> Vec<Value> {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .flat_map(|entry| {
+            std::fs::read_to_string(entry.unwrap().path().join("events.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn one_shot_auto_discloses_sharing_before_its_only_local_provider_request_completes() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut child = command(&directory, "run")
+        .args(["--auto", "--recap", "explicit one-shot task"])
+        .env("OPENAI_API_KEY", "offline-key")
+        .env(
+            "REAGENT_OPENAI_BASE_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (mut stream, body) = request(&listener, &mut child);
+    assert!(
+        body.to_string().contains("explicit one-shot task"),
+        "{body}"
+    );
+    respond(&mut stream, false);
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(output.stdout, b"second turn works\n");
+    assert!(
+        stderr.contains("content may contain secrets and is not secret-filtered"),
+        "{stderr}"
+    );
+    let disclosure = stderr
+        .find("auto on: https://api.typesafe.ai/v1/systemone;")
+        .unwrap();
+    assert!(disclosure < stderr.find("✓ completed").unwrap(), "{stderr}");
+    assert!(
+        listener.accept().is_err(),
+        "disclosure adds no inference or routing request"
+    );
 }

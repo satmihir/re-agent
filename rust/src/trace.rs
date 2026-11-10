@@ -5,7 +5,7 @@ use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Trace is a best-effort JSONL recorder, disabled after its first I/O failure.
 pub struct Trace {
@@ -172,6 +172,24 @@ fn timestamp() -> String {
     let without_z = value.trim_end_matches('Z');
     let trimmed = without_z.trim_end_matches('0').trim_end_matches('.');
     format!("{trimmed}Z")
+}
+
+/// operation_path applies the same explicit-file, trace-directory and cache policy to Runs and owner operations.
+pub(crate) fn operation_path(config: &Value, id: &str) -> Option<String> {
+    if let Some(path) = config["trace_file"].as_str().filter(|s| !s.is_empty()) {
+        return Some(path.into());
+    }
+    let directory = match config["trace_dir"].as_str().filter(|s| !s.is_empty()) {
+        Some(directory) => PathBuf::from(directory),
+        None => crate::cache::directory()?.join("reagent/runs"),
+    };
+    Some(
+        directory
+            .join(id)
+            .join("events.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// default_trace_path locates the per-run JSONL file below the user's cache directory.

@@ -654,6 +654,22 @@ fn compaction_is_durable_keeps_plan_and_accounting_and_resume_never_replays_summ
     );
     assert_eq!(after.auto, before.auto);
     assert!(!after.last_request.known);
+    assert_ne!(after.last_trace, before.last_trace);
+    let audit = summary_trace(&api, "completed");
+    assert_eq!(
+        audit.last().unwrap()["data"]["usage"]["input_tokens"],
+        summary.usage.input_tokens
+    );
+    assert_eq!(
+        audit.last().unwrap()["data"]["summary"],
+        "Keep plan and constraints; work remains."
+    );
+    assert!(audit
+        .iter()
+        .any(|record| record["type"] == "api.attempt.finished"
+            && record["data"]["response_body"]
+                .as_str()
+                .is_some_and(|body| body.contains("Keep plan and constraints"))));
     let (_, saved) = checkpoint(&api);
     assert_eq!(saved["state"]["history"].as_array().unwrap().len(), 1);
     assert_eq!(saved["state"]["history"][0]["kind"], "summary");
@@ -736,6 +752,11 @@ fn active_compaction_cancellation_settles_before_close_and_never_cancels_the_nex
     assert!(!outcome.usage.known);
     assert_eq!(outcome.usage.input_tokens, 0);
     assert_eq!(outcome.usage.unreported_attempts, 1);
+    let audit = summary_trace(&api, "cancelled");
+    assert_eq!(
+        audit.last().unwrap()["data"]["usage"]["unreported_attempts"],
+        1
+    );
     assert_eq!(
         checkpoint(&api).1["state"]["history"],
         original["state"]["history"]
@@ -819,6 +840,14 @@ fn provider_failure_retains_unknown_summary_usage_and_does_not_change_history_or
     assert_eq!(outcome.requests, 1);
     assert!(!outcome.usage.known);
     assert!(outcome.durable);
+    let audit = summary_trace(&api, "provider_error");
+    assert!(audit
+        .iter()
+        .any(|record| record["type"] == "api.attempt.finished"
+            && record["data"]["http_status"] == 400
+            && record["data"]["response_body"]
+                .as_str()
+                .is_some_and(|body| body.contains("fixture summary failure"))));
     assert_eq!(
         checkpoint(&api).1["state"]["history"],
         original["state"]["history"]
@@ -1504,4 +1533,519 @@ fn legacy_cli_does_not_kill_successful_background_work_when_output_capture_retur
         String::from_utf8_lossy(&output.stderr)
     );
     started(root.path(), "cli-background.finished");
+}
+
+fn measured(text: &str, input: i64) -> Value {
+    let mut response = provider_text(text);
+    response["usage"]["input_tokens"] = json!(input);
+    response
+}
+
+#[test]
+fn api_next_message_compacts_at_eighty_percent_without_an_extra_run_and_resumes_the_actual_summary()
+{
+    let Some(root) = isolated("api_next_message_compacts_at_eighty_percent_without_an_extra_run_and_resumes_the_actual_summary", vec![
+        (200, provider(json!([{"type":"function_call","call_id":"source-list","name":"list_files","arguments":"{\"path\":\".\"}"}])), None),
+        (200, measured("source answer", 840_000), None),
+        (200, provider_text("retained automatic summary"), None),
+        (200, provider_text("ordinary answer"), None),
+        (200, provider_text("resumed answer"), None),
+    ]) else { return };
+    let api = live(&root, true, true);
+    assert_eq!(
+        api.get_snapshot().unwrap().context_window_tokens,
+        Some(1_050_000)
+    );
+    let source = run(&api, "first literal");
+    assert_eq!(source.result.as_ref().unwrap().reply, b"source answer");
+    assert_eq!(source.result.as_ref().unwrap().steps, 2);
+    let before = api.get_snapshot().unwrap();
+    assert!(before.last_request.known);
+    assert_eq!(before.last_request.input_tokens, 840_000);
+    let second = run(&api, "second literal");
+    assert_eq!(second.result.as_ref().unwrap().reply, b"ordinary answer");
+    assert_eq!(second.result.as_ref().unwrap().steps, 1);
+    assert_eq!(second.result.as_ref().unwrap().usage.input_tokens, 11);
+    let summary_request = request(&root, 2).to_string();
+    assert!(summary_request.contains("Write a handoff summary"));
+    assert!(!summary_request.contains("second literal"));
+    let next = request(&root, 3).to_string();
+    assert!(next.contains("retained automatic summary"));
+    assert!(next.contains("second literal"));
+    assert!(!next.contains("source answer"));
+    assert!(next.contains("plan mode is on for this message"));
+    assert!(!request(&root, 3)["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["name"] == "write_file"));
+    let snapshot = api.get_snapshot().unwrap();
+    assert!(snapshot.plan && snapshot.read_only);
+    assert_eq!(snapshot.context.entry_count, 3);
+    assert_eq!(snapshot.ordinary_user_turns, 1);
+    assert_eq!(snapshot.usage.input_tokens, 840_033);
+    assert_eq!(snapshot.usage.output_tokens, 12);
+    let entries = api.read_entries(None, 100).unwrap();
+    assert_eq!(entries.entries[0].run.as_ref(), Some(&second.run));
+    assert_eq!(
+        entries.entries[0].step, None,
+        "pre-turn summary has no Step in the intended Run, not step 2 from the previous Run"
+    );
+    let trace_path = std::fs::read_dir(
+        snapshot
+            .last_trace
+            .as_ref()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap(),
+    )
+    .unwrap()
+    .filter_map(|directory| {
+        let path = directory.ok()?.path().join("events.jsonl");
+        let text = std::fs::read_to_string(&path).ok()?;
+        text.contains("compaction.requested").then_some(path)
+    })
+    .next()
+    .unwrap();
+    let audit = read_trace(&trace_path);
+    assert_summary_trace(&audit, "completed");
+    assert_ne!(audit[0]["run_id"], source.run.run_id);
+    assert_ne!(audit[0]["run_id"], second.run.run_id);
+    assert_eq!(audit.last().unwrap()["data"]["automatic"], true);
+    assert_eq!(
+        audit.last().unwrap()["data"]["summary"],
+        "retained automatic summary"
+    );
+    let events = api.read_events(before.event_cursor, 100, 0, None).unwrap();
+    let summaries: Vec<_> = events
+        .events
+        .iter()
+        .filter_map(|event| {
+            if let reagent::session_api::EventKind::PreTurnCompaction { run, status, .. } =
+                &event.change
+            {
+                Some((run, status))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(summaries.len(), 2);
+    assert!(summaries.iter().all(|(target, _)| **target == second.run));
+    assert_eq!(summaries[0].1, "starting");
+    assert_eq!(summaries[1].1, "completed");
+    assert!(api.get_command("second literal").unwrap().state == CommandState::Applied);
+    let (_, saved) = checkpoint(&api);
+    assert_eq!(
+        saved["state"]["history"][0]["summary"]["text"],
+        "retained automatic summary"
+    );
+    let id = snapshot.session.session_id;
+    api.close().unwrap();
+    let resumed = resume_session(&id).unwrap();
+    let restored = resumed.get_snapshot().unwrap();
+    assert!(restored.plan && restored.read_only);
+    assert_eq!(restored.usage, snapshot.usage);
+    assert_eq!(restored.context.entry_count, 3);
+    assert_eq!(
+        run(&resumed, "after resume").result.unwrap().reply,
+        b"resumed answer"
+    );
+    assert!(request(&root, 4)
+        .to_string()
+        .contains("retained automatic summary"));
+    assert_eq!(resumed.get_snapshot().unwrap().usage.input_tokens, 840_044);
+    resumed.close().unwrap();
+}
+
+#[test]
+fn api_below_threshold_skips_pre_turn_compaction() {
+    let Some(root) = isolated(
+        "api_below_threshold_skips_pre_turn_compaction",
+        vec![
+            (200, measured("source", 839_999), None),
+            (200, provider_text("ordinary"), None),
+        ],
+    ) else {
+        return;
+    };
+    let api = live(&root, false, false);
+    run(&api, "first");
+    let cursor = api.get_snapshot().unwrap().event_cursor;
+    assert_eq!(run(&api, "second").result.unwrap().reply, b"ordinary");
+    assert!(!request(&root, 1)
+        .to_string()
+        .contains("Write a handoff summary"));
+    assert!(api
+        .read_events(cursor, 100, 0, None)
+        .unwrap()
+        .events
+        .iter()
+        .all(|event| !matches!(
+            event.change,
+            reagent::session_api::EventKind::PreTurnCompaction { .. }
+        )));
+    assert_eq!(api.get_snapshot().unwrap().context.entry_count, 4);
+    api.close().unwrap();
+}
+
+#[test]
+fn api_failed_automatic_summary_suppresses_the_next_threshold_until_manual_success() {
+    let refusal = provider(
+        json!([{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"cannot summarize"}]}]),
+    );
+    let Some(root) = isolated(
+        "api_failed_automatic_summary_suppresses_the_next_threshold_until_manual_success",
+        vec![
+            (200, measured("source", 840_000), None),
+            (200, refusal, None),
+            (200, measured("second answer", 840_000), None),
+            (200, provider_text("third answer"), None),
+            (200, provider_text("manual recovery summary"), None),
+            (200, measured("fourth answer", 840_000), None),
+            (200, provider_text("automatic works again"), None),
+            (200, provider_text("fifth answer"), None),
+        ],
+    ) else {
+        return;
+    };
+    let api = live(&root, false, false);
+    run(&api, "first");
+    assert_eq!(run(&api, "second").result.unwrap().reply, b"second answer");
+    assert!(request(&root, 1)
+        .to_string()
+        .contains("Write a handoff summary"));
+    assert!(request(&root, 2).to_string().contains("source"));
+    let (_, failed) = checkpoint(&api);
+    assert_eq!(failed["state"]["auto_compact_off"], true);
+    let suppressed = api.get_snapshot().unwrap();
+    api.close().unwrap();
+    let api = resume_session(&suppressed.session.session_id).unwrap();
+    assert_eq!(api.get_snapshot().unwrap().usage, suppressed.usage);
+    assert_eq!(checkpoint(&api).1["state"]["auto_compact_off"], true);
+    assert_eq!(run(&api, "third").result.unwrap().reply, b"third answer");
+    assert!(!request(&root, 3)
+        .to_string()
+        .contains("Write a handoff summary"));
+    assert_eq!(
+        control(&api, "manual", compact(b"recover")).state,
+        CommandState::Applied
+    );
+    let (_, recovered) = checkpoint(&api);
+    assert_eq!(recovered["state"]["auto_compact_off"], false);
+    assert_eq!(run(&api, "fourth").result.unwrap().reply, b"fourth answer");
+    assert_eq!(run(&api, "fifth").result.unwrap().reply, b"fifth answer");
+    assert!(request(&root, 6)
+        .to_string()
+        .contains("Write a handoff summary"));
+    assert!(request(&root, 7)
+        .to_string()
+        .contains("automatic works again"));
+    assert_eq!(api.get_snapshot().unwrap().usage.input_tokens, 2_520_055);
+    assert_eq!(api.get_snapshot().unwrap().usage.output_tokens, 24);
+    api.close().unwrap();
+}
+
+#[test]
+fn cancelling_automatic_compaction_does_not_apply_or_replay_the_intended_message() {
+    let Some(root) = isolated(
+        "cancelling_automatic_compaction_does_not_apply_or_replay_the_intended_message",
+        vec![
+            (200, measured("source", 840_000), None),
+            (200, provider_text("cancelled summary"), Some("automatic")),
+            (200, provider_text("fresh answer"), None),
+        ],
+    ) else {
+        return;
+    };
+    let api = live(&root, true, false);
+    run(&api, "first");
+    let admitted = api
+        .send_message("cancelled", b"must not be applied", PlanMode::On)
+        .unwrap();
+    let target = admitted.run.unwrap();
+    started(&root, "automatic.started");
+    assert!(api.cancel_run(&target).unwrap().cancel_requested);
+    let reader = api.clone();
+    let result = bounded(move || reader.wait_run(&target))
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(result.status, "cancelled");
+    assert!(result.reason.contains("message not sent"));
+    assert_eq!(
+        api.get_command("cancelled").unwrap().state,
+        CommandState::NotApplied
+    );
+    assert_eq!(api.get_snapshot().unwrap().context.entry_count, 2);
+    assert_eq!(api.get_snapshot().unwrap().ordinary_user_turns, 1);
+    assert!(!api.get_snapshot().unwrap().usage.known);
+    assert!(api.get_snapshot().unwrap().plan && api.get_snapshot().unwrap().read_only);
+    let cancelled_audit = summary_trace(&api, "cancelled");
+    assert_eq!(cancelled_audit.last().unwrap()["data"]["automatic"], true);
+    let (_, saved) = checkpoint(&api);
+    assert_eq!(saved["state"]["plan"], true);
+    assert_ne!(
+        saved["state"]["auto_compact_off"], true,
+        "cancellation does not disable automatic attempts"
+    );
+    let id = api.get_snapshot().unwrap().session.session_id;
+    api.close().unwrap();
+    let api = resume_session(&id).unwrap();
+    assert!(api.get_snapshot().unwrap().plan && api.get_snapshot().unwrap().read_only);
+    std::fs::write(root.join("automatic.release"), "").unwrap();
+    assert_eq!(
+        run(&api, "fresh explicit message").result.unwrap().reply,
+        b"fresh answer"
+    );
+    assert!(!request(&root, 2)
+        .to_string()
+        .contains("must not be applied"));
+    assert!(request(&root, 2)
+        .to_string()
+        .contains("fresh explicit message"));
+    api.close().unwrap();
+}
+
+#[test]
+fn automatic_compaction_save_failure_poisons_before_any_summary_or_ordinary_request() {
+    let Some(root) = isolated(
+        "automatic_compaction_save_failure_poisons_before_any_summary_or_ordinary_request",
+        vec![(200, measured("source", 840_000), None)],
+    ) else {
+        return;
+    };
+    let api = live(&root, false, false);
+    run(&api, "first");
+    let (path, _) = checkpoint(&api);
+    let backup = block_checkpoint(&path);
+    let outcome = run(&api, "unsent");
+    assert_eq!(outcome.result.unwrap().status, "persistence_error");
+    assert_eq!(
+        api.get_command("unsent").unwrap().state,
+        CommandState::NotApplied
+    );
+    assert!(api.get_snapshot().unwrap().persistence_error.is_some());
+    assert_eq!(api.get_snapshot().unwrap().context.entry_count, 2);
+    assert_eq!(
+        api.send_message("not retried", b"no", PlanMode::Keep)
+            .unwrap_err()
+            .code,
+        "blocked"
+    );
+    api.close().unwrap();
+    restore_checkpoint(&path, &backup);
+}
+
+#[test]
+fn shell_output_events_have_bounded_raw_chunks_offsets_and_explicit_eviction() {
+    let (_root, api) = scripted(json!([text("unused")]), false, false);
+    let initial = api.get_snapshot().unwrap();
+    let result = control(&api, "noisy", shell(b"head -c 400000 /dev/zero"));
+    let ControlResult::Shell(shell) = result.result.unwrap() else {
+        panic!("wrong result")
+    };
+    assert_eq!(shell.output_bytes_seen, 400_000);
+    assert!(shell.output_truncated);
+    assert!(shell.output.len() < 100_000);
+    assert_eq!(
+        api.read_events(initial.event_cursor, 100, 0, None)
+            .unwrap_err()
+            .code,
+        "cursor_expired"
+    );
+    let mut cursor = api.get_snapshot().unwrap().event_cursor;
+    cursor.sequence -= 200;
+    let mut previous = None;
+    let mut chunks = 0;
+    loop {
+        let page = api.read_events(cursor, 100, 0, None).unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 256 << 10);
+        for event in page.events {
+            if let reagent::session_api::EventKind::ShellOutput {
+                request_id,
+                offset,
+                bytes,
+            } = event.change
+            {
+                assert_eq!(request_id, "noisy");
+                assert!(!bytes.is_empty() && bytes.len() <= 1024);
+                assert!(bytes.iter().all(|b| *b == 0));
+                if let Some(previous) = previous {
+                    assert_eq!(offset, previous);
+                }
+                previous = Some(offset + bytes.len() as u64);
+                chunks += 1;
+            }
+        }
+        cursor = page.next_cursor;
+        if !page.has_more {
+            break;
+        }
+    }
+    assert!(chunks > 100);
+    assert_eq!(previous, Some(400_000));
+    api.close().unwrap();
+}
+
+#[test]
+fn api_unknown_window_or_unknown_usage_never_guesses_the_automatic_threshold() {
+    let mut unknown = provider_text("unknown usage");
+    unknown.as_object_mut().unwrap().remove("usage");
+    let Some(root) = isolated(
+        "api_unknown_window_or_unknown_usage_never_guesses_the_automatic_threshold",
+        vec![
+            (200, measured("known usage without a window", 840_000), None),
+            (200, provider_text("ordinary without window"), None),
+            (200, unknown, None),
+            (200, provider_text("ordinary after unknown usage"), None),
+        ],
+    ) else {
+        return;
+    };
+    let unlisted = open_session(SessionOptions {
+        workspace: root.clone(),
+        model: Some("unlisted-local-fixture".into()),
+        ..SessionOptions::default()
+    })
+    .unwrap();
+    run(&unlisted, "unlisted source");
+    let snapshot = unlisted.get_snapshot().unwrap();
+    assert!(snapshot.last_request.known);
+    assert_eq!(snapshot.context_window_tokens, None);
+    assert_eq!(
+        run(&unlisted, "unlisted ordinary").result.unwrap().reply,
+        b"ordinary without window"
+    );
+    assert!(!request(&root, 1)
+        .to_string()
+        .contains("Write a handoff summary"));
+    unlisted.close().unwrap();
+    let known = live(&root, false, false);
+    run(&known, "unknown usage source");
+    assert!(!known.get_snapshot().unwrap().last_request.known);
+    assert_eq!(
+        run(&known, "known window ordinary").result.unwrap().reply,
+        b"ordinary after unknown usage"
+    );
+    assert!(!request(&root, 3)
+        .to_string()
+        .contains("Write a handoff summary"));
+    known.close().unwrap();
+}
+
+fn read_trace(path: &Path) -> Vec<Value> {
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(
+        !text.contains("offline-long-controls-key"),
+        "summary audit must not contain fixture credentials"
+    );
+    text.lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn assert_summary_trace(records: &[Value], status: &str) {
+    assert_eq!(records[0]["type"], "compaction.requested");
+    assert!(records[0]["data"]["history"]
+        .to_string()
+        .contains("Write a handoff summary"));
+    assert!(records
+        .iter()
+        .any(|record| record["type"] == "api.attempt.started"
+            && record["data"]["request_body"]
+                .as_str()
+                .is_some_and(|body| body.contains("Write a handoff summary"))));
+    assert!(records
+        .iter()
+        .any(|record| record["type"] == "api.attempt.finished"));
+    assert!(records.iter().all(|record| record["step"] == 0
+        && record["run_id"] == records[0]["run_id"]
+        && record["type"] != "run.started"));
+    let last = records.last().unwrap();
+    assert_eq!(
+        last["type"],
+        if status == "completed" {
+            "compaction.finished"
+        } else {
+            "compaction.failed"
+        }
+    );
+    assert_eq!(last["data"]["status"], status);
+    assert_eq!(last["data"]["requests"], 1);
+}
+
+fn summary_trace(api: &SessionApi, status: &str) -> Vec<Value> {
+    let snapshot = api.get_snapshot().unwrap();
+    let records = read_trace(snapshot.last_trace.as_ref().unwrap());
+    assert_summary_trace(&records, status);
+    let operation = reagent::session_api::RunRef {
+        session: snapshot.session,
+        run_id: records[0]["run_id"].as_str().unwrap().into(),
+    };
+    assert_eq!(
+        api.get_run(&operation).unwrap_err().code,
+        "not_found",
+        "audit operation IDs are not public conversation Runs"
+    );
+    records
+}
+
+#[test]
+fn a_retained_reported_sample_never_turns_unknown_total_billing_into_known_usage() {
+    let mut unknown = provider_text("usage omitted");
+    unknown.as_object_mut().unwrap().remove("usage");
+    let Some(root) = isolated(
+        "a_retained_reported_sample_never_turns_unknown_total_billing_into_known_usage",
+        vec![
+            (200, provider_text("reported"), None),
+            (200, unknown, None),
+            (200, provider_text("after resume"), None),
+        ],
+    ) else {
+        return;
+    };
+    let api = live(&root, false, false);
+    run(&api, "first");
+    let reported = api.get_snapshot().unwrap().last_request;
+    let rate = checkpoint(&api).1["state"]["tokens_per_byte"].clone();
+    assert!(reported.known && rate.as_f64().unwrap() > 0.0);
+    run(&api, "unknown");
+    let snapshot = api.get_snapshot().unwrap();
+    assert_eq!(
+        snapshot.last_request, reported,
+        "the live snapshot intentionally retains its last reported sample"
+    );
+    assert!(
+        !snapshot.usage.known,
+        "a calibration sample is not total billing certainty"
+    );
+    assert_eq!(
+        api.get_context().unwrap().last_request,
+        reported,
+        "context and snapshot share the retained reported sample"
+    );
+    assert_eq!(
+        checkpoint(&api).1["state"]["last_request"]["known"],
+        false,
+        "owner threshold admission still sees the actual unknown latest attempt"
+    );
+    assert_eq!(checkpoint(&api).1["state"]["tokens_per_byte"], rate);
+    api.close().unwrap();
+    let resumed = resume_session(&snapshot.session.session_id).unwrap();
+    assert!(!resumed.get_snapshot().unwrap().usage.known);
+    assert!(
+        !resumed.get_snapshot().unwrap().last_request.known,
+        "resume does not invent an earlier known observation"
+    );
+    assert_eq!(checkpoint(&resumed).1["state"]["tokens_per_byte"], rate);
+    assert_eq!(
+        run(&resumed, "explicit after resume").result.unwrap().reply,
+        b"after resume"
+    );
+    assert!(!resumed.get_snapshot().unwrap().usage.known);
+    assert_eq!(resumed.get_snapshot().unwrap().usage.input_tokens, 22);
+    resumed.close().unwrap();
 }

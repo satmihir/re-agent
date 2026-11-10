@@ -1,11 +1,18 @@
-use crate::cli::{number, text, yes};
+use crate::cli::{text, yes};
 use crate::render;
-use crate::runtime::Session;
-use crate::terminal::{Input, Submission};
+use crate::session_api::{
+    self, ApiError, CommandInfo, CommandState, ControlResult, EventCursor, EventKind, HistoryMode,
+    RunState, SessionApi, SessionChange, SessionSnapshot,
+};
+use crate::terminal::{Input, RegionHandle, Selection, Submission};
 use serde_json::{json, Value};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 #[path = "cli/context.rs"]
-mod context_measure;
+pub(crate) mod context_measure;
 #[path = "cli/editor.rs"]
 mod editor;
 #[path = "cli/model_switch.rs"]
@@ -65,282 +72,811 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("/help", "", "this text"),
     ("/exit", "", "leave (Ctrl-D does the same)"),
 ];
-const FRICTION:&str="re:agent friction review\nLooking back over this whole session, list the places where the re:agent\nharness got in your way: misleading tool errors, capabilities you worked\naround, unclear tool descriptions or instructions, and harness behavior that\nlooked wrong. For each, give a category (misleading_error,\nmissing_capability, unclear_description, harness_bug, other), one line\nsaying what happened, and the call ids involved. Leave out your own mistakes\nunless the harness made them likely. If there were none, say so.\n";
+const FRICTION: &str = "re:agent friction review\nLooking back over this whole session, list the places where the re:agent\nharness got in your way: misleading tool errors, capabilities you worked\naround, unclear tool descriptions or instructions, and harness behavior that\nlooked wrong. For each, give a category (misleading_error,\nmissing_capability, unclear_description, harness_bug, other), one line\nsaying what happened, and the call ids involved. Leave out your own mistakes\nunless the harness made them likely. If there were none, say so.\n";
+
 fn help() -> String {
     let mut out = "commands\n".to_string();
     for (name, arg, description) in COMMANDS {
-        out.push_str(&format!("  {name:<9} {arg:<18} {description}\n"))
+        out.push_str(&format!("  {name:<9} {arg:<18} {description}\n"));
     }
     out.push_str("keys\n  Enter            send\n  !COMMAND         run COMMAND in the workspace; its output joins the conversation\n  \\ at line end    continue on the next line\n  ↑ ↓              earlier messages\n  Tab              complete a command, model, or effort\n  /model /effort   picker: ↑↓/kj move, Enter/1–9 choose, Esc/q/Ctrl-C/Ctrl-D cancel\n  Ctrl-C           cancel the running turn, or clear the line; twice to exit\n  Ctrl-L           clear the screen\n  Ctrl-A Ctrl-E    start or end of line\n  Ctrl-U Ctrl-K    erase to start or end of line\n  Ctrl-W           erase the previous word\nPasted text is sent as one message, however many lines it has.");
     out
 }
-fn plan_switch(on: bool, region: Option<&crate::terminal::RegionHandle>) {
-    macro_rules! eprintln {
-        ($($args:tt)*) => { crate::terminal::output(region, 2, &format!("{}\n", format_args!($($args)*))) };
-    }
+
+fn output(region: Option<&RegionHandle>, line: &str) {
+    crate::terminal::output(region, 2, &format!("{line}\n"));
+}
+
+fn plan_switch(on: bool, region: Option<&RegionHandle>) {
     let label = if on {
         "plan mode on: edits and commands are refused until /plan again"
     } else {
         "plan mode off"
     };
-    if render::styled(2) {
-        eprintln!(
+    let label = if render::styled(2) {
+        format!(
             "{}{label}\x1b[0m",
             if on { "\x1b[1;38;5;86m" } else { "\x1b[2m" }
         )
     } else {
-        eprintln!("{label}")
-    }
+        label.into()
+    };
+    output(region, &label);
 }
 
-/// Run reads a conversation from stdin and handles local chat commands.
-pub fn run(mut cfg: Value) -> i32 {
-    cfg["_display"] = json!(true);
-    let saved = cfg.as_object_mut().unwrap().remove("restore");
-    if text(&cfg, "session_id").is_empty() {
-        cfg["session_id"] = json!(crate::types::new_id())
+// These are owned display values, not a configuration or state escape from the Session owner.
+fn presentation(snapshot: &SessionSnapshot, recap: bool) -> (Value, Value) {
+    (
+        json!({"provider":snapshot.provider,"model":snapshot.model,"reasoning_effort":(!snapshot.reasoning_effort.is_empty()).then_some(&snapshot.reasoning_effort),
+        "auth_mode":snapshot.auth_mode,"proxied":snapshot.auth_mode == "proxy","workspace":snapshot.workspace,
+        "read_only":snapshot.read_only,"plan":snapshot.plan,"session_id":snapshot.session.session_id,
+        "context_window_tokens":snapshot.context_window_override,"max_steps":snapshot.max_steps,"max_tool_calls":snapshot.max_tool_calls,"recap":recap}),
+        json!({"plan":snapshot.plan,"blocked":snapshot.blocked,"auto_enabled":snapshot.auto.enabled,
+        "last_request":snapshot.last_request,"usage":snapshot.usage}),
+    )
+}
+
+struct Chat {
+    api: SessionApi,
+    input: Input,
+    recap: bool,
+}
+
+impl Chat {
+    fn say(&self, line: &str) {
+        output(self.input.region().as_ref(), line);
     }
-    cfg["checkpoint_enabled"] = json!(text(&cfg, "provider") != "scripted");
-    let mut session = match Session::new(cfg) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 2;
+
+    fn refresh(&mut self) -> Result<SessionSnapshot, ApiError> {
+        let snapshot = self.api.get_snapshot()?;
+        let (config, state) = presentation(&snapshot, self.recap);
+        self.input.set_status(&config, &state);
+        Ok(snapshot)
+    }
+
+    fn failure(&self, error: &ApiError) {
+        self.say(&format!("error: {error}"));
+        if error.code == "resource_exhausted" {
+            let snapshot = self.api.get_snapshot().ok();
+            if let Some(snapshot) = snapshot.filter(|s| s.checkpoint_enabled) {
+                self.say(&format!("this opening's receipt/input capacity is exhausted; stop and resume with reagent chat --resume {}. No rejected work was retried", snapshot.session.session_id));
+            } else {
+                self.say("this opening's receipt/input capacity is exhausted; stop this chat. Checkpoints are disabled, so it cannot be resumed; no rejected work was retried");
+            }
         }
-    };
-    if let Some(saved) = saved {
-        session.history = saved["history"].as_array().cloned().unwrap_or_default();
-        session.state = saved["state"].clone();
-        session.state["session_id"] = session.config["session_id"].clone();
-        session.state["gc"] = session.state["gc_state"].clone();
-        let active = text(&session.state, "active");
-        let launch = text(&session.state, "launch");
-        if !active.is_empty() && active != launch {
-            eprintln!("last active workspace was {}; resumed at launch workspace {}; reauthorize other workspaces before use",render::sanitize(active),render::sanitize(launch))
+    }
+
+    fn resume_hint(&self) {
+        if let Some(snapshot) = self
+            .api
+            .get_snapshot()
+            .ok()
+            .filter(|s| s.checkpoint_enabled)
+        {
+            self.say(&format!(
+                "session ID: {} · resume: reagent chat --resume {}",
+                snapshot.session.session_id, snapshot.session.session_id
+            ));
         }
-        match crate::checkpoint::recover(&mut session) {
-            Ok(message) => {
-                if !message.is_empty() {
-                    eprintln!("{message}")
+    }
+
+    fn wait(
+        &mut self,
+        admitted: &CommandInfo,
+        cursor: EventCursor,
+        flag: &Arc<AtomicBool>,
+    ) -> Result<(CommandInfo, user_shell::Live), ApiError> {
+        let api = &self.api;
+        let region = self.input.region();
+        let stop = AtomicBool::new(false);
+        let mut live = user_shell::Live::new(region.clone());
+        let (result, reader_result) = std::thread::scope(|scope| {
+            let reader = scope.spawn(|| self.input.poll_turn(&stop, flag));
+            let result = (|| {
+                let mut cursor = cursor;
+                let mut cancel_sent = false;
+                loop {
+                    if flag.load(Ordering::Acquire) && !cancel_sent {
+                        if let Some(run) = &admitted.run {
+                            api.cancel_run(run)?;
+                        } else {
+                            api.cancel_command(&admitted.request_id)?;
+                        }
+                        cancel_sent = true;
+                    }
+                    let done = if let Some(run) = &admitted.run {
+                        api.get_run(run)?.state == RunState::Terminal
+                    } else {
+                        api.get_command(&admitted.request_id)?.state != CommandState::Pending
+                    };
+                    match api.read_events(cursor.clone(), 100, if done { 0 } else { 25 }, None) {
+                        Ok(page) => {
+                            for event in &page.events {
+                                match &event.change {
+                                    EventKind::ShellOutput {
+                                        request_id,
+                                        offset,
+                                        bytes,
+                                    } if request_id == &admitted.request_id => {
+                                        live.push(*offset, bytes)
+                                    }
+                                    EventKind::PreTurnCompaction {
+                                        status,
+                                        reason,
+                                        context_percent,
+                                        summary_bytes,
+                                        replaced_entries,
+                                        ..
+                                    } => {
+                                        let line = match status.as_str() {
+                                            "starting" => dim(&format!("context {context_percent}% of the window; compacting before this turn")),
+                                            "completed" => format!("compacted: {} summary replaces {replaced_entries} history entries", context_measure::bytes(*summary_bytes as i64)),
+                                            "cancelled" => "compaction cancelled; message not sent".into(),
+                                            "persistence_error" => format!("automatic compaction checkpoint failed; message not sent: {}", reason.as_deref().unwrap_or("unknown")),
+                                            _ => format!("auto-compaction failed: {}; sending the message anyway (/compact to retry)", render::sanitize(reason.as_deref().unwrap_or(status))),
+                                        };
+                                        output(region.as_ref(), &line);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            cursor = page.next_cursor;
+                            if done && !page.has_more {
+                                break;
+                            }
+                        }
+                        Err(error) if error.code == "cursor_expired" => {
+                            if admitted.run.is_none() {
+                                live.omitted();
+                            } else {
+                                output(region.as_ref(), "operation events omitted; current status and final result remain available");
+                            }
+                            cursor = api.get_snapshot()?.event_cursor;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                api.wait_command(&admitted.request_id)
+            })();
+            stop.store(true, Ordering::Release);
+            (result, reader.join().unwrap())
+        });
+        if let Err(error) = reader_result {
+            output(
+                region.as_ref(),
+                &format!(
+                    "error: read chat input: {}",
+                    crate::errors::stable_io(&error)
+                ),
+            );
+        }
+        result.map(|command| (command, live))
+    }
+
+    fn change(&mut self, change: SessionChange) -> Result<Option<CommandInfo>, ApiError> {
+        let snapshot = self.refresh()?;
+        let compacting = matches!(change, SessionChange::Compact { .. });
+        let long = matches!(
+            change,
+            SessionChange::Compact { .. } | SessionChange::RunUserShell { .. }
+        );
+        let flag = Arc::new(AtomicBool::new(false));
+        let (admitted, _guard) = self.api.change_session_cli(
+            &crate::types::new_id(),
+            snapshot.revision,
+            change,
+            flag.clone(),
+        )?;
+        if compacting {
+            self.say(&dim("compacting context; Ctrl-C cancels the summary"));
+        }
+        let (command, mut live) = if long {
+            self.wait(&admitted, snapshot.event_cursor, &flag)?
+        } else {
+            (
+                self.api.wait_command(&admitted.request_id)?,
+                user_shell::Live::new(self.input.region()),
+            )
+        };
+        if let Some(ControlResult::Shell(result)) = &command.result {
+            live.finish(result);
+        }
+        if command.state != CommandState::Applied {
+            self.say(&format!(
+                "control not applied: {}",
+                render::sanitize(command.reason.as_deref().unwrap_or("unknown"))
+            ));
+            return Ok(None);
+        }
+        if command.replacement_session.is_some() {
+            self.api = self.api.get_replacement()?;
+            self.input.bind_workspace_consent(&self.api)?;
+            self.resume_hint();
+        }
+        self.refresh()?;
+        Ok(Some(command))
+    }
+
+    fn message(&mut self, bytes: &[u8]) -> Result<Option<Vec<u8>>, ApiError> {
+        let before = self.refresh()?;
+        if let Some(blocked) = &before.blocked {
+            let location =
+                before
+                    .last_trace
+                    .as_ref()
+                    .map_or("the run's output above".into(), |trace| {
+                        format!(
+                            "the trace at {}",
+                            render::sanitize(&trace.to_string_lossy())
+                        )
+                    });
+            self.say(&format!(
+                "error: the last run ended with {blocked}; inspect {location} and use {}",
+                render::blocked_advice(blocked)
+            ));
+            return Ok(None);
+        }
+        let request_id = crate::types::new_id();
+        let signal = self.api.signal_config(&request_id);
+        let flag = crate::cancellation::token(&signal);
+        let _guard = crate::cancellation::install(&signal).map_err(|e| ApiError {
+            code: "unavailable".into(),
+            message: e,
+        })?;
+        if let Some(region) = self.input.region() {
+            region.lock().unwrap().printed = false;
+        }
+        let started = Instant::now();
+        let admitted = self
+            .api
+            .send_message(&request_id, bytes, session_api::PlanMode::Keep)?;
+        let run = admitted
+            .run
+            .as_ref()
+            .expect("message receipt identifies a Run");
+        self.wait(&admitted, before.event_cursor, &flag)?;
+        render::model_finished(self.input.region().as_ref());
+        let (mut result, display) = self.api.cli_result(run)?;
+        if self.input.consent_capacity_exhausted {
+            result["resumable"] = json!(false);
+        }
+        let snapshot = self.api.get_snapshot()?;
+        if let Some(error) = &snapshot.persistence_error {
+            self.say(&format!(
+                "error: session checkpoint failed: {error}; stop using this chat"
+            ));
+            return Ok(None);
+        }
+        if !before.plan && snapshot.plan {
+            plan_switch(true, self.input.region().as_ref());
+        }
+        let (config, mut state) = presentation(&snapshot, self.recap);
+        state["_display"] = display["_display"].clone();
+        render::result_in_region(
+            &result,
+            started.elapsed(),
+            &config,
+            &state,
+            true,
+            self.input.region().as_ref(),
+        );
+        self.refresh()?;
+        if let Some((start, end)) = render::plan_block(text(&result, "reply"))
+            .filter(|_| text(&result, "status") == "completed" && snapshot.plan)
+        {
+            let block = &text(&result, "reply")[start..end];
+            let plan = block
+                .strip_prefix("<plan>\n")
+                .unwrap_or(block)
+                .strip_suffix("</plan>")
+                .unwrap_or(block)
+                .trim_end_matches('\n');
+            return self.offer_plan(plan);
+        }
+        Ok(None)
+    }
+
+    fn offer_plan(&mut self, plan: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        self.refresh()?;
+        let choice = match self.input.choose_plan() {
+            Ok(Selection::Chosen(index)) => index,
+            Ok(Selection::NotInteractive) => {
+                self.say("/plan turns plan mode off; then ask for the implementation");
+                return Ok(None);
+            }
+            Ok(Selection::Cancelled) => 2,
+            Err(error) => {
+                self.say(&format!("error: {}", crate::errors::stable_io(&error)));
+                return Ok(None);
+            }
+        };
+        if choice == 2 {
+            self.say("kept planning");
+            return Ok(None);
+        }
+        if self
+            .change(SessionChange::SetPlan { enabled: false })?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        plan_switch(false, self.input.region().as_ref());
+        if choice == 0 {
+            self.input.write_user_frame("Implement the plan.");
+            return Ok(Some(b"Implement the plan.".to_vec()));
+        }
+        if self.change(SessionChange::Reset)?.is_none() {
+            return Ok(None);
+        }
+        self.say("fresh session; implementing plan");
+        Ok(Some(format!("Implement this plan. It was made in an earlier re:agent session, and the workspace may have changed since; check what you rely on.\n\n{plan}").into_bytes()))
+    }
+
+    fn effort(&mut self, arg: &str) -> Result<(), ApiError> {
+        let snapshot = self.refresh()?;
+        if snapshot.provider == "scripted" {
+            self.say("a scripted run sends no requests, so reasoning effort has no effect");
+            return Ok(());
+        }
+        let info = crate::catalog::model_info(&snapshot.model);
+        if info.is_null() {
+            self.say(&format!("{} is not in the catalog, so what it accepts is unknown; start again with --reasoning-effort to choose one", snapshot.model));
+            return Ok(());
+        }
+        let effort = if arg.is_empty() {
+            let efforts = info["efforts"].as_array().cloned().unwrap_or_default();
+            let choices: Vec<_> = efforts
+                .iter()
+                .map(|e| crate::terminal::Choice {
+                    label: e.as_str().unwrap_or("").into(),
+                    detail: String::new(),
+                    note: if e.as_str() == Some(&snapshot.reasoning_effort) {
+                        "current".into()
+                    } else {
+                        String::new()
+                    },
+                    disabled: false,
+                })
+                .collect();
+            let selected = if snapshot.reasoning_effort.is_empty() {
+                text(&info, "effort")
+            } else {
+                &snapshot.reasoning_effort
+            };
+            let current = efforts
+                .iter()
+                .position(|e| e.as_str() == Some(selected))
+                .unwrap_or(usize::MAX);
+            match self
+                .input
+                .choose("Select reasoning effort", &choices, current)
+            {
+                Ok(Selection::Chosen(index)) => efforts[index].as_str().unwrap_or("").to_string(),
+                Ok(Selection::Cancelled) => {
+                    self.say(&format!(
+                        "kept {}",
+                        if snapshot.reasoning_effort.is_empty() {
+                            "provider default"
+                        } else {
+                            &snapshot.reasoning_effort
+                        }
+                    ));
+                    return Ok(());
+                }
+                Ok(Selection::NotInteractive) => {
+                    self.say(&crate::catalog::render_efforts(
+                        &info,
+                        &snapshot.reasoning_effort,
+                    ));
+                    return Ok(());
+                }
+                Err(error) => {
+                    self.say(&format!("error: {}", crate::errors::stable_io(&error)));
+                    return Ok(());
                 }
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return 2;
-            }
-        }
-        if let Err(error) = crate::auto::initialize(&mut session) {
-            eprintln!("error: {error}");
-            return 2;
-        }
-    } else if let Err(e) = crate::checkpoint::save(&session, "idle", "") {
-        eprintln!("error: {e}");
-        return 2;
-    }
-    render::header(&session.config, true);
-    if yes(&session.config, "checkpoint_enabled") {
-        eprintln!(
-            "resume: reagent chat --resume {}",
-            text(&session.config, "session_id")
-        )
-    }
-    let mut input = Input::new();
-    let region = input.region();
-    session.region = region.clone();
-    macro_rules! eprintln {
-        () => { crate::terminal::output(region.as_ref(), 2, "\n") };
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
-    }
-    let mut usage = session
-        .state
-        .get("usage")
-        .cloned()
-        .unwrap_or_else(|| crate::types::usage_zero(true));
-    let mut interrupted = None;
-    let code = 'chat: loop {
-        let prompt = if yes(&session.state, "plan") {
-            "plan> "
         } else {
-            "> "
-        };
-        let prompt = if text(&session.state, "blocked").is_empty() {
-            prompt.into()
-        } else {
-            format!("(blocked) {prompt}")
-        };
-        input.set_status(&session.config, &session.state);
-        let line = match input.read_line(&prompt) {
-            Ok(Submission::Eof) => break 0,
-            Ok(Submission::Interrupted) => {
-                if interrupted.is_some_and(|t: Instant| t.elapsed().as_secs() < 2) {
-                    eprintln!(
-                        "session ID: {} · resume: reagent chat --resume {}",
-                        text(&session.config, "session_id"),
-                        text(&session.config, "session_id")
-                    );
-                    break 0;
+            match crate::catalog::select_effort(&info, arg) {
+                Ok(effort) => effort,
+                Err(error) => {
+                    self.say(&error);
+                    return Ok(());
                 }
-                interrupted = Some(Instant::now());
-                let warning = "  (Ctrl-C again to exit, or Ctrl-D)";
-                if render::styled(2) {
-                    eprintln!("\x1b[2m{warning}\x1b[0m");
+            }
+        };
+        if self
+            .change(SessionChange::SetEffort {
+                effort: session_api::ReasoningEffort::Named(effort.clone()),
+            })?
+            .is_some()
+        {
+            self.say(&format!(
+                "reasoning effort is now {effort}; the next request starts a new prompt cache"
+            ));
+        }
+        Ok(())
+    }
+
+    fn model(&mut self, arg: &str) -> Result<(), ApiError> {
+        let snapshot = self.refresh()?;
+        if snapshot.provider == "scripted" {
+            self.say("a scripted run replays recorded responses, so it has no model to choose");
+            return Ok(());
+        }
+        let available = json!({"openai":!std::env::var("OPENAI_API_KEY").unwrap_or_default().is_empty() || matches!(snapshot.auth_mode.as_str(), "proxy" | "chatgpt"), "anthropic":!std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty()});
+        let (id, history) = if arg.is_empty() {
+            let catalog = crate::catalog::models();
+            let models = catalog.as_array().unwrap();
+            let choices: Vec<_> = models
+                .iter()
+                .map(|model| {
+                    let current = text(model, "id") == snapshot.model;
+                    let disabled = !current && !yes(&available, text(model, "provider"));
+                    let note = if current {
+                        format!("{}  current", text(model, "note"))
+                    } else if disabled {
+                        format!(
+                            "needs {}  {}",
+                            if text(model, "provider") == "openai" {
+                                "OPENAI_API_KEY"
+                            } else {
+                                "ANTHROPIC_API_KEY"
+                            },
+                            text(model, "note")
+                        )
+                    } else {
+                        text(model, "note").into()
+                    };
+                    crate::terminal::Choice {
+                        label: text(model, "id").into(),
+                        detail: text(model, "provider").into(),
+                        note,
+                        disabled,
+                    }
+                })
+                .collect();
+            let current = models
+                .iter()
+                .position(|model| text(model, "id") == snapshot.model)
+                .unwrap_or(usize::MAX);
+            let title = if snapshot.context.entry_count == 0 {
+                "Select a model"
+            } else {
+                "Select a model · carries text; /model N fresh discards"
+            };
+            match self.input.choose(title, &choices, current) {
+                Ok(Selection::Chosen(index)) => {
+                    (text(&models[index], "id").to_string(), HistoryMode::Carry)
+                }
+                Ok(Selection::Cancelled) => {
+                    self.say(&format!("kept {}", snapshot.model));
+                    return Ok(());
+                }
+                Ok(Selection::NotInteractive) => {
+                    self.say(&crate::catalog::render_models(&snapshot.model, &available));
+                    return Ok(());
+                }
+                Err(error) => {
+                    self.say(&format!("error: {}", crate::errors::stable_io(&error)));
+                    return Ok(());
+                }
+            }
+        } else {
+            let words: Vec<_> = arg.split_whitespace().collect();
+            if words.len() > 2 || words.len() == 2 && words[1] != "fresh" {
+                self.say("usage: /model <number or name> [fresh]");
+                return Ok(());
+            }
+            let info = match crate::catalog::select_model(words[0]) {
+                Ok(info) => info,
+                Err(error) => {
+                    self.say(&error);
+                    return Ok(());
+                }
+            };
+            (
+                text(&info, "id").into(),
+                if words.len() == 2 {
+                    HistoryMode::Fresh
                 } else {
-                    eprintln!("{warning}");
-                }
-                continue;
-            }
-            Ok(Submission::Text(s)) => s.into_bytes(),
-            Ok(Submission::Bytes(bytes)) => bytes,
-            Err(e) => {
-                eprintln!("error: read chat input: {}", crate::errors::stable_io(&e));
-                break 2;
-            }
+                    HistoryMode::Carry
+                },
+            )
         };
-        interrupted = None;
-        let raw_line = crate::cli::trim_bytes(&line);
-        let semantic = String::from_utf8_lossy(raw_line);
-        let line = semantic.as_ref();
-        let raw_arg = raw_line
-            .iter()
-            .position(|b| *b == b' ')
-            .map(|offset| crate::cli::trim_bytes(&raw_line[offset + 1..]))
-            .unwrap_or_default();
-        let (command, arg) = line
+        let fresh = history == HistoryMode::Fresh;
+        if let Err(error) = self.input.handoff() {
+            self.say(&format!("error: {}", crate::errors::stable_io(&error)));
+            return Ok(());
+        }
+        match self.change(SessionChange::SwitchModel {
+            model: id.clone(),
+            history,
+        })? {
+            Some(_) => {
+                let now = self.refresh()?;
+                let mut route = now.provider;
+                if now.auth_mode == "proxy" {
+                    route.push_str(" via API_PROXY_URL");
+                } else if now.auth_mode == "chatgpt" {
+                    route.push_str(" · ChatGPT plan");
+                }
+                if fresh {
+                    self.say(&format!(
+                        "switched to {id} ({route}); fresh session, conversation discarded"
+                    ));
+                } else if snapshot.context.entry_count > 0 {
+                    self.say(&format!("switched to {id} ({route}); carried {} entries as historical text; native state omitted; no model request", snapshot.context.entry_count));
+                } else {
+                    self.say(&format!("switched to {id} ({route})"));
+                }
+            }
+            None => self.say(&format!("kept {}; switch failed", snapshot.model)),
+        }
+        Ok(())
+    }
+
+    fn auto_disclosure(&mut self) -> Result<(), ApiError> {
+        let auto = self.refresh()?.auto;
+        self.say(&auto.data_sharing_notice);
+        if let Some(fallback) = &auto.fallback {
+            self.say(&format!("auto fallback: {} / {}; {} allowed route(s); /auto off or manual model/effort selection pins the current route", fallback.model, effort_name(&fallback.effort), auto.allowed_routes.len()));
+        }
+        self.say("auto scope: joint model/effort at user-turn start; current-model effort only within a run; router failure keeps the current pair mid-run");
+        if std::env::var("TYPESAFE_API_KEY")
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            self.say(
+                "TYPESAFE_API_KEY is not set; Auto uses compatible fallback without routing calls",
+            );
+        }
+        Ok(())
+    }
+
+    fn status(&mut self) -> Result<(), ApiError> {
+        let snapshot = self.refresh()?;
+        let (config, _) = presentation(&snapshot, self.recap);
+        let (model, provider, effort) = render::model_presentation(&config);
+        self.say(&if provider.is_empty() {
+            format!("model      {model}")
+        } else {
+            format!("model      {model} ({provider}), {effort}")
+        });
+        if snapshot.auth_mode == "proxy" {
+            self.say(&format!(
+                "endpoint   {} (API_PROXY_URL)",
+                render::sanitize(&crate::transport::redacted(
+                    &std::env::var("API_PROXY_URL").unwrap_or_default()
+                ))
+            ));
+        }
+        self.say(&format!(
+            "workspace  {}",
+            if render::styled(2) {
+                render::short_path(&snapshot.workspace.to_string_lossy())
+            } else {
+                render::sanitize(&snapshot.workspace.to_string_lossy())
+            }
+        ));
+        self.say(&format!(
+            "mode       {}{}",
+            render::mode(&config),
+            if snapshot.plan { " · plan mode" } else { "" }
+        ));
+        for root in self.api.cli_approved_workspaces() {
+            self.say(&format!(
+                "approved   {} (until chat exits)",
+                render::sanitize(&root.to_string_lossy())
+            ));
+        }
+        self.say(&format!(
+            "session    {} · {}",
+            render::plural(snapshot.ordinary_user_turns as i64, "turn", "turns"),
+            render::usage(&serde_json::to_value(&snapshot.usage).unwrap())
+        ));
+        if snapshot.auto.fallback.is_some() {
+            self.say(&format!(
+                "auto       {} · fallback {} / {} · {} router attempts",
+                snapshot.auto.enabled,
+                snapshot
+                    .auto
+                    .fallback
+                    .as_ref()
+                    .map_or("", |route| route.model.as_str()),
+                snapshot
+                    .auto
+                    .fallback
+                    .as_ref()
+                    .map_or("provider default", |route| effort_name(&route.effort)),
+                snapshot.auto.attempts
+            ));
+            if snapshot.auto.attempts > 0 {
+                self.say(&render::router_usage_line(
+                    &serde_json::to_value(&snapshot.auto.usage).unwrap(),
+                ));
+            }
+        }
+        let last = context_measure::last_request(
+            &serde_json::to_value(&snapshot.last_request).unwrap(),
+            snapshot.context_window_tokens.unwrap_or(0) as i64,
+        );
+        if !last.is_empty() {
+            self.say(&last);
+        }
+        if let Some(trace) = &snapshot.last_trace {
+            self.say(&format!(
+                "last trace {}",
+                render::sanitize(&trace.to_string_lossy())
+            ));
+        }
+        if let Some(blocked) = &snapshot.blocked {
+            self.say(&format!(
+                "state      blocked by {blocked}; {}",
+                render::blocked_advice(blocked)
+            ));
+        } else if snapshot.context.entry_count > 0 && snapshot.provider != "scripted" {
+            self.say("history    /compact summarizes; /reset starts over");
+        }
+        Ok(())
+    }
+
+    fn command(&mut self, raw: &[u8]) -> Result<Option<Vec<u8>>, ApiError> {
+        let semantic = String::from_utf8_lossy(raw);
+        let (command, arg) = semantic
             .split_once(' ')
             .map(|(c, a)| (c, a.trim()))
-            .unwrap_or((line, ""));
-        let scripted = text(&session.config, "provider") == "scripted";
-        let mut turn = None;
+            .unwrap_or((&semantic, ""));
+        let raw_arg = raw
+            .iter()
+            .position(|b| *b == b' ')
+            .map(|n| crate::cli::trim_bytes(&raw[n + 1..]))
+            .unwrap_or_default();
         match command {
             "" => {}
-            "/exit" => break 0,
-            "/help" => eprintln!("{}", help()),
+            "/help" => self.say(&help()),
             "/plan" => {
-                let on = if arg.is_empty() {
-                    !yes(&session.state, "plan")
-                } else {
-                    true
-                };
-                session.state["plan"] = json!(on);
-                session.config["plan"] = json!(on);
-                plan_switch(on, region.as_ref());
-                if !arg.is_empty() {
-                    turn = Some(raw_arg.to_vec())
-                }
-            }
-            "/model" => {
-                let id = session.config["session_id"].clone();
-                model(&mut session, arg, scripted, &mut input);
-                if session.config["session_id"] != id {
-                    session.state["phase"] = json!("idle");
-                    usage = crate::types::usage_zero(true);
-                    if let Some(old_id) = id.as_str() {
-                        crate::checkpoint::close(old_id);
+                let on = !arg.is_empty() || !self.refresh()?.plan;
+                if self
+                    .change(SessionChange::SetPlan { enabled: on })?
+                    .is_some()
+                {
+                    plan_switch(on, self.input.region().as_ref());
+                    if !arg.is_empty() {
+                        return Ok(Some(raw_arg.to_vec()));
                     }
                 }
             }
-            "/effort" => effort(&mut session, arg, scripted, &mut input),
-            "/auto" => crate::auto::command(&mut session, arg),
-            "/status" => status(
-                &session,
-                &usage,
-                session
-                    .history
-                    .iter()
-                    .filter(|e| text(e, "kind") == "user" && text(&e["user"], "source").is_empty())
-                    .count() as i64,
-            ),
-            "/context" => {
-                if scripted {
-                    eprintln!("a scripted run replays recorded responses, so it sends no requests to measure")
+            "/model" => self.model(arg)?,
+            "/effort" => self.effort(arg)?,
+            "/auto" => {
+                if self.refresh()?.provider == "scripted" {
+                    self.say("Auto is unavailable in a scripted chat");
+                    return Ok(None);
+                }
+                if arg.is_empty() {
+                    let snapshot = self.refresh()?;
+                    self.say(if snapshot.auto.enabled {
+                        "auto on; /auto off pins the current route"
+                    } else {
+                        "auto off; /auto on enables TypeSafe routing"
+                    });
+                } else if matches!(arg, "on" | "off") {
+                    if self
+                        .change(SessionChange::SetAuto {
+                            enabled: arg == "on",
+                        })?
+                        .is_some()
+                    {
+                        if arg == "on" {
+                            self.auto_disclosure()?;
+                        } else {
+                            self.say("auto off; current model and effort pinned");
+                        }
+                    }
                 } else {
-                    context(&session)
+                    self.say("usage: /auto [on|off]");
+                }
+            }
+            "/status" => self.status()?,
+            "/context" => {
+                if self.refresh()?.provider == "scripted" {
+                    self.say("a scripted run replays recorded responses, so it sends no requests to measure");
+                } else {
+                    self.say(&context_measure::format(&self.api.get_context()?));
+                }
+            }
+            "/trace" => {
+                if let Some(trace) = self.refresh()?.last_trace {
+                    self.say(&render::sanitize(&trace.to_string_lossy()));
+                } else {
+                    self.say("no run has been recorded yet");
                 }
             }
             "/compact" => {
-                if scripted {
-                    eprintln!("/compact is unavailable in a --scripted chat")
-                } else if session.history.is_empty() {
-                    eprintln!("nothing to compact; send a message first")
+                let snapshot = self.refresh()?;
+                if snapshot.provider == "scripted" {
+                    self.say("/compact is unavailable in a --scripted chat");
+                } else if snapshot.context.entry_count == 0 {
+                    self.say("nothing to compact; send a message first");
                 } else {
-                    compact(&mut session, arg, &mut usage);
+                    let verbose = arg.split_whitespace().next() == Some("-v");
+                    let focus = if verbose {
+                        raw_arg
+                            .strip_prefix(b"-v")
+                            .map(crate::cli::trim_bytes)
+                            .unwrap_or_default()
+                    } else {
+                        raw_arg
+                    };
+                    if let Some(CommandInfo {
+                        result: Some(ControlResult::Compact(result)),
+                        ..
+                    }) = self.change(SessionChange::Compact {
+                        focus: focus.to_vec(),
+                    })? {
+                        self.say(&format!(
+                            "compacted: {} summary replaces {} history entries",
+                            context_measure::bytes(result.summary.len() as i64),
+                            result.replaced_entries
+                        ));
+                        if verbose {
+                            crate::terminal::output(
+                                self.input.region().as_ref(),
+                                1,
+                                &format!(
+                                    "{}\n",
+                                    render::display(
+                                        &String::from_utf8_lossy(&result.summary),
+                                        render::styled(1),
+                                        render::columns(1).min(100)
+                                    )
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+            "/reset" => {
+                if self.change(SessionChange::Reset)?.is_some() {
+                    self.say("fresh session; the conversation so far is no longer sent");
                 }
             }
             "/friction" => {
                 if arg.is_empty() {
-                    turn = Some(FRICTION.as_bytes().to_vec())
-                } else {
-                    eprintln!("usage: /friction")
+                    return Ok(Some(FRICTION.as_bytes().to_vec()));
                 }
+                self.say("usage: /friction");
             }
             "/review" => {
-                if !matches!(arg, "" | "low" | "medium" | "high" | "max") {
-                    eprintln!("usage: /review [low|medium|high|max]")
-                } else {
-                    turn = Some(
+                if matches!(arg, "" | "low" | "medium" | "high" | "max") {
+                    return Ok(Some(
                         format!(
                             "re:agent code review\nReview level: {}\n\n{}",
                             if arg.is_empty() { "medium" } else { arg },
                             include_str!("cli/review.txt")
                         )
                         .into_bytes(),
-                    );
+                    ));
                 }
+                self.say("usage: /review [low|medium|high|max]");
             }
-            "/trace" => {
-                let path = text(&session.state, "last_trace");
-                if path.is_empty() {
-                    eprintln!("no run has been recorded yet")
+            "/edit" => return Ok(edit(&mut self.input)),
+            _ if raw.starts_with(b"!") && !raw.contains(&b'\n') => {
+                let command = crate::cli::trim_bytes(&raw[1..]);
+                if command.is_empty() {
+                    self.say(
+                        "!COMMAND runs COMMAND in the workspace; its output joins the conversation",
+                    );
                 } else {
-                    eprintln!("{}", render::sanitize(path))
+                    self.change(SessionChange::RunUserShell {
+                        command: command.to_vec(),
+                    })?;
                 }
             }
-            "/reset" => {
-                let old = text(&session.config, "session_id").to_string();
-                session.reset();
-                session.state["phase"] = json!("idle");
-                session.state["usage"] = crate::types::usage_zero(true);
-                usage = crate::types::usage_zero(true);
-
-                crate::checkpoint::close(&old);
-                if yes(&session.config, "checkpoint_enabled") {
-                    eprintln!(
-                        "session ID: {} · resume: reagent chat --resume {}",
-                        text(&session.config, "session_id"),
-                        text(&session.config, "session_id")
-                    )
-                }
-                eprintln!("fresh session; the conversation so far is no longer sent")
-            }
-            "/edit" => turn = edit(&mut input),
-            _ if line.starts_with('!') && !line.contains('\n') => {
-                crate::cancellation::begin(&session.config);
-                let guard = match crate::cancellation::install(&session.config) {
-                    Ok(guard) => guard,
-                    Err(error) => {
-                        eprintln!("error: {error}");
-                        continue;
-                    }
-                };
-                let stop = std::sync::atomic::AtomicBool::new(false);
-                let cancelled = crate::cancellation::token(&session.config);
-                let reader_result = std::thread::scope(|scope| {
-                    let reader = scope.spawn(|| input.poll_turn(&stop, &cancelled));
-                    user_shell::execute(&mut session, line[1..].trim());
-                    stop.store(true, std::sync::atomic::Ordering::Release);
-                    reader.join().unwrap()
-                });
-                drop(guard);
-                if let Err(error) = reader_result {
-                    eprintln!(
-                        "error: read chat input: {}",
-                        crate::errors::stable_io(&error)
-                    );
-                }
-            }
-            _ if line.starts_with('/') => {
+            _ if raw.starts_with(b"/") => {
                 let suggestion = suggestion(command);
-                eprintln!(
+                self.say(&format!(
                     "unknown command {};{} /help lists commands.",
                     render::sanitize(command),
                     if suggestion.is_empty() {
@@ -348,632 +884,150 @@ pub fn run(mut cfg: Value) -> i32 {
                     } else {
                         format!(" did you mean {suggestion}?")
                     }
-                )
+                ));
             }
-            _ => turn = Some(raw_line.to_vec()),
+            _ => return Ok(Some(raw.to_vec())),
         }
-        if turn.is_some() && !text(&session.state, "blocked").is_empty() {
-            let blocked = text(&session.state, "blocked");
-            let trace = text(&session.state, "last_trace");
-            let location = if trace.is_empty() {
-                "the run's output above".into()
-            } else {
-                format!("the trace at {trace}")
-            };
-            eprintln!(
-                "error: the last run ended with {blocked}; inspect {location} and use {}",
-                render::blocked_advice(blocked)
-            );
-            turn = None;
+        Ok(None)
+    }
+}
+
+/// Run reads a conversation from stdin and translates local commands into typed SessionApi operations.
+pub fn run(mut cfg: Value) -> i32 {
+    cfg["_display"] = json!(true);
+    cfg["checkpoint_enabled"] = json!(text(&cfg, "provider") != "scripted");
+    if text(&cfg, "session_id").is_empty() {
+        cfg["session_id"] = json!(crate::types::new_id());
+    }
+    let recap = yes(&cfg, "recap");
+    let input = Input::new();
+    let api = match session_api::open_resolved(cfg, input.region()) {
+        Ok(api) => api,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
         }
-        if !text(&session.state, "persistence_error").is_empty() {
-            drop(input);
-            eprintln!(
-                "error: session checkpoint failed: {}; stop using this chat",
-                text(&session.state, "persistence_error")
-            );
+    };
+    let mut chat = Chat { api, input, recap };
+    let snapshot = match chat.refresh() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            chat.failure(&error);
+            return 2;
+        }
+    };
+    if let Some(notice) = &snapshot.recovery_notice {
+        chat.say(notice);
+    }
+    let (config, _) = presentation(&snapshot, recap);
+    render::header(&config, true);
+    if snapshot.auto.enabled {
+        if let Err(error) = chat.auto_disclosure() {
+            chat.failure(&error);
+            return 2;
+        }
+    }
+    if snapshot.checkpoint_enabled {
+        chat.say(&format!(
+            "resume: reagent chat --resume {}",
+            snapshot.session.session_id
+        ));
+    }
+    if let Err(error) = chat.input.bind_workspace_consent(&chat.api) {
+        chat.failure(&error);
+        return 2;
+    }
+    let mut interrupted = None;
+    let code = 'chat: loop {
+        let snapshot = match chat.refresh() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                chat.failure(&error);
+                break 1;
+            }
+        };
+        if let Some(error) = &snapshot.persistence_error {
+            chat.say(&format!("error: session checkpoint failed: {error}; stop using this chat; checkpoint state may have changed"));
             break 1;
         }
-        while let Some(message) = turn.take() {
-            if should_auto_compact(&session) {
-                match auto_compact(&mut session, &mut usage) {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(error) => {
-                        drop(input);
-                        eprintln!(
-                            "error: session checkpoint failed: {error}; stop using this chat"
-                        );
-                        break 'chat 1;
-                    }
+        let prompt = format!(
+            "{}{}",
+            if snapshot.blocked.is_some() {
+                "(blocked) "
+            } else {
+                ""
+            },
+            if snapshot.plan { "plan> " } else { "> " }
+        );
+        let bytes = match chat.input.read_line(&prompt) {
+            Ok(Submission::Eof) => break 0,
+            Ok(Submission::Interrupted) => {
+                if interrupted.is_some_and(|time: Instant| time.elapsed().as_secs() < 2) {
+                    chat.resume_hint();
+                    break 0;
                 }
+                interrupted = Some(Instant::now());
+                chat.say(&dim("  (Ctrl-C again to exit, or Ctrl-D)"));
+                continue;
             }
-            input.set_status(&session.config, &session.state);
-            if let Some(region) = &session.region {
-                region.lock().unwrap().printed = false;
-            }
-            let started = Instant::now();
-            let was_plan = yes(&session.state, "plan");
-            render::begin_turn(&mut session.state);
-            crate::cancellation::begin(&session.config);
-            let guard = match crate::cancellation::install(&session.config) {
-                Ok(guard) => guard,
-                Err(error) => {
-                    eprintln!("error: {error}");
-                    break 'chat 1;
-                }
-            };
-            let stop = std::sync::atomic::AtomicBool::new(false);
-            let cancelled = crate::cancellation::token(&session.config);
-            session.tools.workspace_consent = Some(input.workspace_consent());
-            let (result, reader_result) = std::thread::scope(|scope| {
-                let reader = scope.spawn(|| input.poll_turn(&stop, &cancelled));
-                let result = session.submit_bytes(&message);
-                stop.store(true, std::sync::atomic::Ordering::Release);
-                let reader_result = reader.join().unwrap();
-                (result, reader_result)
-            });
-            drop(guard);
-            render::model_finished(region.as_ref());
-            if let Err(error) = reader_result {
-                eprintln!(
+            Ok(Submission::Text(text)) => text.into_bytes(),
+            Ok(Submission::Bytes(bytes)) => bytes,
+            Err(error) => {
+                chat.say(&format!(
                     "error: read chat input: {}",
                     crate::errors::stable_io(&error)
-                );
+                ));
+                break 2;
             }
-            if text(&result, "status") == "persistence_error" {
-                drop(input);
-                eprintln!(
-                    "error: session checkpoint failed: {}; stop using this chat",
-                    text(&result, "reason")
-                );
+        };
+        interrupted = None;
+        let raw = crate::cli::trim_bytes(&bytes);
+        if raw == b"/exit" || raw.starts_with(b"/exit ") {
+            break 0;
+        }
+        let mut turn = match chat.command(raw) {
+            Ok(turn) => turn,
+            Err(error) => {
+                chat.failure(&error);
+                None
+            }
+        };
+        while let Some(message) = turn.take() {
+            match chat.message(&message) {
+                Ok(next) => turn = next,
+                Err(error) => chat.failure(&error),
+            }
+            if chat
+                .api
+                .get_snapshot()
+                .ok()
+                .is_some_and(|s| s.persistence_error.is_some())
+            {
                 break 'chat 1;
             }
-            if !was_plan && yes(&session.state, "plan") {
-                plan_switch(true, region.as_ref())
-            }
-            crate::types::usage_add(&mut usage, &result["usage"]);
-            session.state["phase"] = json!("terminal");
-            render::result_in_region(
-                &result,
-                started.elapsed(),
-                &session.config,
-                &session.state,
-                true,
-                region.as_ref(),
-            );
-            if text(&result, "status") == "completed" && yes(&session.state, "plan") {
-                if let Some((start, end)) = render::plan_block(text(&result, "reply")) {
-                    let block = &text(&result, "reply")[start..end];
-                    let plan = block
-                        .strip_prefix("<plan>\n")
-                        .unwrap_or(block)
-                        .strip_suffix("</plan>")
-                        .unwrap_or(block);
-                    let plan = plan.strip_suffix('\n').unwrap_or(plan);
-                    match offer_plan(&mut session, &mut input, &mut usage, plan) {
-                        Ok(next) => turn = next,
-                        Err(error) => {
-                            drop(input);
-                            eprintln!(
-                                "error: session checkpoint failed: {error}; stop using this chat"
-                            );
-                            break 'chat 1;
-                        }
-                    }
-                }
-            }
-        }
-        session.state["usage"] = usage.clone();
-        session.state["plan"] = json!(yes(&session.state, "plan"));
-        let phase = session.state["phase"]
-            .as_str()
-            .filter(|phase| !phase.is_empty())
-            .unwrap_or("idle");
-        if let Err(e) = crate::checkpoint::save(&session, phase, text(&session.state, "in_flight"))
-        {
-            drop(input);
-            eprintln!("error: session checkpoint failed: {e}; stop using this chat");
-            break 1;
         }
     };
-    crate::checkpoint::close(text(&session.config, "session_id"));
+    if let Err(error) = chat.api.close() {
+        chat.failure(&error);
+        return 1;
+    }
     code
-}
-fn status(s: &Session, usage: &Value, turns: i64) {
-    let region = s.region.clone();
-    macro_rules! eprintln {
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
-    }
-    let (model, provider, effort) = render::model_presentation(&s.config);
-    if provider.is_empty() {
-        eprintln!("model      {model}")
-    } else {
-        eprintln!("model      {model} ({provider}), {effort}")
-    }
-    if yes(&s.config, "proxied") {
-        eprintln!(
-            "endpoint   {} (API_PROXY_URL)",
-            std::env::var("API_PROXY_URL").unwrap_or_default()
-        )
-    }
-    eprintln!(
-        "workspace  {}",
-        if render::styled(2) {
-            render::short_path(text(&s.config, "workspace"))
-        } else {
-            render::sanitize(text(&s.config, "workspace"))
-        }
-    );
-    eprintln!(
-        "mode       {}{}",
-        render::mode(&s.config),
-        if yes(&s.state, "plan") {
-            " · plan mode"
-        } else {
-            ""
-        }
-    );
-    for root in s.tools.approved_paths() {
-        eprintln!("approved   {} (until chat exits)", render::sanitize(&root));
-    }
-    eprintln!(
-        "session    {} · {}",
-        render::plural(turns, "turn", "turns"),
-        render::usage(usage)
-    );
-    if yes(&s.state, "auto") {
-        eprintln!(
-            "auto       {} · fallback {} / {} · {} router attempts",
-            yes(&s.state, "auto_enabled"),
-            text(&s.state, "auto_fallback_model"),
-            text(&s.state, "auto_fallback_effort"),
-            number(&s.state, "auto_attempts")
-        );
-        if number(&s.state, "auto_attempts") > 0 {
-            eprintln!("{}", render::router_usage_line(&s.state["auto_usage"]));
-        }
-    }
-    let window = crate::catalog::effective_context_window(&s.config);
-    if window > 0 {
-        let last = context_measure::last_request(&s.state["last_request"], window);
-        if !last.is_empty() {
-            eprintln!("{last}")
-        }
-    }
-    if !text(&s.state, "last_trace").is_empty() {
-        eprintln!("last trace {}", text(&s.state, "last_trace"))
-    }
-    if !text(&s.state, "blocked").is_empty() {
-        eprintln!(
-            "state      blocked by {}; {}",
-            text(&s.state, "blocked"),
-            render::blocked_advice(text(&s.state, "blocked"))
-        )
-    } else if !s.history.is_empty() && text(&s.config, "provider") != "scripted" {
-        eprintln!("history    /compact summarizes; /reset starts over")
-    }
-}
-fn effort(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
-    let region = s.region.clone();
-    macro_rules! eprintln {
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
-    }
-    if scripted {
-        eprintln!("a scripted run sends no requests, so reasoning effort has no effect");
-        return;
-    }
-    let info = crate::catalog::model_info(text(&s.config, "model"));
-    if info.is_null() {
-        eprintln!("{} is not in the catalog, so what it accepts is unknown; start again with --reasoning-effort to choose one",text(&s.config,"model"));
-        return;
-    }
-    if arg.is_empty() {
-        let efforts = info["efforts"].as_array().cloned().unwrap_or_default();
-        let choices: Vec<_> = efforts
-            .iter()
-            .map(|e| crate::terminal::Choice {
-                label: e.as_str().unwrap_or("").into(),
-                detail: String::new(),
-                note: if e == &s.config["reasoning_effort"] {
-                    "current".into()
-                } else {
-                    String::new()
-                },
-                disabled: false,
-            })
-            .collect();
-        let selected = if text(&s.config, "reasoning_effort").is_empty() {
-            &info["effort"]
-        } else {
-            &s.config["reasoning_effort"]
-        };
-        let current = efforts
-            .iter()
-            .position(|e| e == selected)
-            .unwrap_or(usize::MAX);
-        match input.choose("Select reasoning effort", &choices, current) {
-            Ok(crate::terminal::Selection::Chosen(i)) => {
-                let argument = efforts[i].as_str().unwrap_or("");
-                effort(s, argument, false, input);
-            }
-            Ok(crate::terminal::Selection::Cancelled) => eprintln!(
-                "kept {}",
-                if text(&s.config, "reasoning_effort").is_empty() {
-                    "provider default"
-                } else {
-                    text(&s.config, "reasoning_effort")
-                }
-            ),
-            Ok(crate::terminal::Selection::NotInteractive) => eprintln!(
-                "{}",
-                crate::catalog::render_efforts(&info, text(&s.config, "reasoning_effort"))
-            ),
-            Err(e) => eprintln!("error: {}", crate::errors::stable_io(&e)),
-        }
-        return;
-    }
-    match crate::catalog::select_effort(&info, arg) {
-        Ok(e) => {
-            crate::auto::pin(s);
-            s.config["reasoning_effort"] = json!(e);
-            eprintln!("reasoning effort is now {e}; the next request starts a new prompt cache")
-        }
-        Err(e) => eprintln!("{e}"),
-    }
-}
-fn model(s: &mut Session, arg: &str, scripted: bool, input: &mut Input) {
-    let region = s.region.clone();
-    macro_rules! eprintln {
-        () => { crate::terminal::output(region.as_ref(), 2, "\n") };
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
-    }
-    macro_rules! eprint {
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!($($args)*)) };
-    }
-    if scripted {
-        eprintln!("a scripted run replays recorded responses, so it has no model to choose");
-        return;
-    }
-    if arg.is_empty() {
-        let available = json!({"openai":!std::env::var("OPENAI_API_KEY").unwrap_or_default().is_empty()||yes(&s.config,"proxied")||text(&s.config,"auth_mode")=="chatgpt","anthropic":!std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty()});
-        let catalog = crate::catalog::models();
-        let catalog = catalog.as_array().unwrap();
-        let choices: Vec<_> = catalog
-            .iter()
-            .map(|m| {
-                let current = m["id"] == s.config["model"];
-                let disabled = !current && !yes(&available, text(m, "provider"));
-                let note = if current {
-                    format!("{}  current", text(m, "note"))
-                } else if disabled {
-                    format!(
-                        "needs {}  {}",
-                        if text(m, "provider") == "openai" {
-                            "OPENAI_API_KEY"
-                        } else {
-                            "ANTHROPIC_API_KEY"
-                        },
-                        text(m, "note")
-                    )
-                } else {
-                    text(m, "note").into()
-                };
-                crate::terminal::Choice {
-                    label: text(m, "id").into(),
-                    detail: text(m, "provider").into(),
-                    note,
-                    disabled,
-                }
-            })
-            .collect();
-        let current = catalog
-            .iter()
-            .position(|m| m["id"] == s.config["model"])
-            .unwrap_or(usize::MAX);
-        let title = if s.history.is_empty() {
-            "Select a model"
-        } else {
-            "Select a model · carries text; /model N fresh discards"
-        };
-        match input.choose(title, &choices, current) {
-            Ok(crate::terminal::Selection::Chosen(i)) => {
-                model(s, text(&catalog[i], "id"), false, input)
-            }
-            Ok(crate::terminal::Selection::Cancelled) => {
-                eprintln!("kept {}", text(&s.config, "model"))
-            }
-            Ok(crate::terminal::Selection::NotInteractive) => eprintln!(
-                "{}",
-                crate::catalog::render_models(text(&s.config, "model"), &available)
-            ),
-            Err(e) => eprintln!("error: {}", crate::errors::stable_io(&e)),
-        }
-        return;
-    }
-    let words: Vec<_> = arg.split_whitespace().collect();
-    if words.len() > 2 || words.len() == 2 && words[1] != "fresh" {
-        eprintln!("usage: /model <number or name> [fresh]");
-        return;
-    }
-    match crate::catalog::select_model(words[0]) {
-        Err(e) => eprintln!("{e}"),
-        Ok(info) => {
-            let name = text(&info, "id");
-            if name == text(&s.config, "model") {
-                crate::auto::pin(s);
-                eprintln!("already using {name}");
-                return;
-            }
-            let destination = text(&info, "provider");
-            let available = if destination == "openai" {
-                !std::env::var("OPENAI_API_KEY")
-                    .unwrap_or_default()
-                    .is_empty()
-                    || !std::env::var("API_PROXY_URL")
-                        .unwrap_or_default()
-                        .is_empty()
-                    || text(&s.config, "auth_mode") == "chatgpt"
-            } else {
-                !std::env::var("ANTHROPIC_API_KEY")
-                    .unwrap_or_default()
-                    .is_empty()
-            };
-            if !available {
-                eprint!(
-                    "{name} needs {}, which is not set",
-                    if destination == "openai" {
-                        "OPENAI_API_KEY"
-                    } else {
-                        "ANTHROPIC_API_KEY"
-                    }
-                );
-                if destination == "openai" {
-                    eprint!("; or run reagent login for ChatGPT plan usage")
-                }
-                eprintln!();
-                return;
-            }
-            if let Err(error) = input.handoff() {
-                eprintln!("error: {}", crate::errors::stable_io(&error));
-                return;
-            }
-            let previous_id = s.config["session_id"].clone();
-            match model_switch::transition(s, &info, words.len() == 2) {
-                Ok(handoff) => {
-                    s.region = region.clone();
-                    if s.config["session_id"] != previous_id && yes(&s.config, "checkpoint_enabled")
-                    {
-                        eprintln!(
-                            "session ID: {} · resume: reagent chat --resume {}",
-                            text(&s.config, "session_id"),
-                            text(&s.config, "session_id")
-                        );
-                    }
-                    let mut route = text(&info, "provider").to_string();
-                    if yes(&s.config, "proxied") {
-                        route.push_str(" via API_PROXY_URL");
-                    } else if text(&s.config, "auth_mode") == "chatgpt" {
-                        route.push_str(" · ChatGPT plan");
-                    }
-                    if words.len() == 2 {
-                        eprintln!(
-                            "switched to {name} ({route}); fresh session, conversation discarded"
-                        );
-                    } else if handoff.is_object() {
-                        eprintln!("switched to {name} ({route}); carried {} entries as {} historical text; native state omitted; no model request",handoff["entries"],context_measure::bytes(text(&handoff,"text").len() as i64));
-                    } else {
-                        eprintln!("switched to {name} ({route})");
-                    }
-                }
-                Err(e) => eprintln!(
-                    "kept {}; switch failed: {}",
-                    text(&s.config, "model"),
-                    render::sanitize(&e)
-                ),
-            }
-        }
-    }
-}
-fn context(s: &Session) {
-    let region = s.region.clone();
-    macro_rules! eprintln {
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
-    }
-    match context_measure::measure(s) {
-        Ok(body) => eprintln!("{body}"),
-        Err(e) => eprintln!("error: {}", render::sanitize(&e)),
-    }
-}
-fn compact(s: &mut Session, arg: &str, usage: &mut Value) {
-    let region = s.region.clone();
-    macro_rules! eprintln {
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 2, &format!("{}\n", format_args!($($args)*))) };
-    }
-    macro_rules! println {
-        ($($args:tt)*) => { crate::terminal::output(region.as_ref(), 1, &format!("{}\n", format_args!($($args)*))) };
-    }
-    let verbose = arg.split_whitespace().next() == Some("-v");
-    let focus = if verbose {
-        arg.strip_prefix("-v").unwrap().trim()
-    } else {
-        arg
-    };
-    let replaced = crate::types::json_string(&json!(s.history)).len();
-    match compact_request(s, focus) {
-        Err(e) => eprintln!("error: {}", render::sanitize(&e)),
-        Ok(result) => {
-            crate::types::usage_add(usage, &result["usage"]);
-            if text(&result, "status") != "completed" {
-                if text(&result, "status") == "persistence_error" {
-                    s.state["persistence_error"] = result["reason"].clone();
-                }
-                eprintln!(
-                    "compaction failed: {}",
-                    render::sanitize(text(&result, "reason"))
-                );
-                return;
-            }
-            s.state["auto_compact_off"] = json!(false);
-            eprintln!(
-                "compacted: {} summary replaces {} of history JSON",
-                context_measure::bytes(text(&result, "reply").len() as i64),
-                context_measure::bytes(replaced as i64)
-            );
-            if verbose {
-                println!(
-                    "{}",
-                    render::display(
-                        text(&result, "reply"),
-                        render::styled(1),
-                        render::columns(1).min(100)
-                    )
-                );
-            }
-        }
-    }
-}
-fn compact_request(s: &mut Session, focus: &str) -> Result<Value, String> {
-    crate::cancellation::begin(&s.config);
-    let _guard = crate::cancellation::install(&s.config)?;
-    let result = s.compact(focus)?;
-    s.state["phase"] = json!("terminal");
-    Ok(result)
-}
-fn should_auto_compact(s: &Session) -> bool {
-    let window = crate::catalog::effective_context_window(&s.config);
-    text(&s.config, "provider") != "scripted"
-        && !yes(&s.state, "auto_compact_off")
-        && text(&s.state, "blocked").is_empty()
-        && !s.history.is_empty()
-        && window > 0
-        && yes(&s.state["last_request"], "known")
-        && i128::from(number(&s.state["last_request"], "input_tokens")) * 100
-            >= i128::from(window) * 80
-}
-fn auto_compact(s: &mut Session, usage: &mut Value) -> Result<bool, String> {
-    let region = s.region.clone();
-    let print = |line: &str| crate::terminal::output(region.as_ref(), 2, &format!("{line}\n"));
-    let percent = 100.0 * number(&s.state["last_request"], "input_tokens") as f64
-        / crate::catalog::effective_context_window(&s.config) as f64;
-    let line = format!("context {percent:.0}% of the window; compacting before this turn");
-    print(&if render::styled(2) {
-        format!("\x1b[2m{line}\x1b[0m")
-    } else {
-        line
-    });
-    let replaced = crate::types::json_string(&json!(s.history)).len();
-    let failure = match compact_request(s, "") {
-        Err(error) => error,
-        Ok(result) => {
-            crate::types::usage_add(usage, &result["usage"]);
-            match text(&result, "status") {
-                "completed" => {
-                    print(&format!(
-                        "compacted: {} summary replaces {} of history JSON",
-                        context_measure::bytes(text(&result, "reply").len() as i64),
-                        context_measure::bytes(replaced as i64)
-                    ));
-                    return Ok(true);
-                }
-                "cancelled" => {
-                    print("compaction cancelled; message not sent");
-                    return Ok(false);
-                }
-                "persistence_error" => return Err(text(&result, "reason").into()),
-                _ => text(&result, "reason").into(),
-            }
-        }
-    };
-    s.state["auto_compact_off"] = json!(true);
-    print(&format!(
-        "auto-compaction failed: {}; sending the message anyway (/compact to retry)",
-        render::sanitize(&failure)
-    ));
-    Ok(true)
-}
-fn offer_plan(
-    session: &mut Session,
-    input: &mut Input,
-    usage: &mut Value,
-    plan: &str,
-) -> Result<Option<Vec<u8>>, String> {
-    let region = session.region.clone();
-    input.set_status(&session.config, &session.state);
-    let selection = match input.choose_plan() {
-        Ok(selection) => selection,
-        Err(error) => {
-            crate::terminal::output(
-                region.as_ref(),
-                2,
-                &format!("error: {}\n", crate::errors::stable_io(&error)),
-            );
-            return Ok(None);
-        }
-    };
-    let index = match selection {
-        crate::terminal::Selection::Chosen(index) => index,
-        crate::terminal::Selection::NotInteractive => {
-            let hint = "/plan turns plan mode off; then ask for the implementation";
-            let hint = if render::styled(2) {
-                format!("\x1b[2m{hint}\x1b[0m")
-            } else {
-                hint.into()
-            };
-            crate::terminal::output(region.as_ref(), 2, &format!("{hint}\n"));
-            return Ok(None);
-        }
-        crate::terminal::Selection::Cancelled => 2,
-    };
-    if index == 2 {
-        crate::terminal::output(region.as_ref(), 2, "kept planning\n");
-        return Ok(None);
-    }
-    session.state["plan"] = json!(false);
-    session.config["plan"] = json!(false);
-    if index == 0 {
-        session.state["usage"] = usage.clone();
-        crate::checkpoint::save(session, "terminal", "")?;
-        plan_switch(false, region.as_ref());
-        input.write_user_frame("Implement the plan.");
-        return Ok(Some(b"Implement the plan.".to_vec()));
-    }
-    plan_switch(false, region.as_ref());
-    let old = text(&session.config, "session_id").to_owned();
-    session.reset();
-    session.state["phase"] = json!("idle");
-    session.state["auto_compact_off"] = json!(false);
-    *usage = crate::types::usage_zero(true);
-    session.state["usage"] = usage.clone();
-    let saved = crate::checkpoint::save(session, "idle", "");
-    crate::checkpoint::close(&old);
-    saved?;
-    if yes(&session.config, "checkpoint_enabled") {
-        let id = text(&session.config, "session_id");
-        crate::terminal::output(
-            region.as_ref(),
-            2,
-            &format!("session ID: {id} · resume: reagent chat --resume {id}\n"),
-        );
-    }
-    crate::terminal::output(region.as_ref(), 2, "fresh session; implementing plan\n");
-    Ok(Some(format!("Implement this plan. It was made in an earlier re:agent session, and the workspace may have changed since; check what you rely on.\n\n{plan}").into_bytes()))
 }
 
 fn edit(input: &mut Input) -> Option<Vec<u8>> {
     let region = input.region();
-    let output = |line: &str| crate::terminal::output(region.as_ref(), 2, &format!("{line}\n"));
+    let say = |line: &str| output(region.as_ref(), line);
     if !input.interactive() {
-        output("/edit needs a terminal");
+        say("/edit needs a terminal");
         return None;
     }
     if let Err(error) = input.handoff() {
-        output(&format!("error: {}", crate::errors::stable_io(&error)));
+        say(&format!("error: {}", crate::errors::stable_io(&error)));
         return None;
     }
     let result = editor::compose();
     if let Err(error) = input.restore() {
-        output(&format!(
+        say(&format!(
             "error: restore chat region: {}",
             crate::errors::stable_io(&error)
         ));
@@ -982,13 +1036,13 @@ fn edit(input: &mut Input) -> Option<Vec<u8>> {
     let message = match result {
         Ok(message) => message,
         Err(error) => {
-            output(&format!("error: {}", render::sanitize(&error)));
+            say(&format!("error: {}", render::sanitize(&error)));
             return None;
         }
     };
     let preview = String::from_utf8_lossy(&message);
     if preview.trim().is_empty() {
-        output("nothing to send");
+        say("nothing to send");
         return None;
     }
     let lines: Vec<_> = preview
@@ -996,35 +1050,30 @@ fn edit(input: &mut Input) -> Option<Vec<u8>> {
         .unwrap_or(&preview)
         .split('\n')
         .collect();
-    let dim = |line: &str| {
-        if render::styled(2) {
-            format!("\x1b[2m{line}\x1b[0m")
-        } else {
-            line.into()
-        }
-    };
     for line in lines.iter().take(5) {
-        output(&dim(&format!("  · {}", render::sanitize(line))));
+        say(&dim(&format!("  · {}", render::sanitize(line))));
     }
     if lines.len() > 5 {
-        output(&dim(&format!("  · … {} more lines", lines.len() - 5)));
+        say(&dim(&format!("  · … {} more lines", lines.len() - 5)));
     }
     Some(message)
 }
+
 fn distance(a: &str, b: &str) -> usize {
     let right: Vec<_> = b.chars().collect();
     let mut prev: Vec<_> = (0..=right.len()).collect();
     for (i, c) in a.chars().enumerate() {
         let mut current = vec![i + 1; right.len() + 1];
         for (j, d) in right.iter().enumerate() {
-            current[j + 1] = (prev[j + 1] + 1)
-                .min(current[j] + 1)
-                .min(prev[j] + usize::from(c != *d))
+            current[j + 1] = (current[j] + 1)
+                .min(prev[j + 1] + 1)
+                .min(prev[j] + usize::from(c != *d));
         }
         prev = current;
     }
     prev[right.len()]
 }
+
 fn suggestion(command: &str) -> String {
     let prefix: Vec<_> = COMMANDS
         .iter()
@@ -1041,51 +1090,34 @@ fn suggestion(command: &str) -> String {
         .filter(|c| distance(command, c.0) <= 2)
         .collect();
     if near.len() == 1 {
-        near[0].0.into()
-    } else {
-        String::new()
+        return near[0].0.into();
     }
+    String::new()
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn automatic_compaction_requires_live_unblocked_known_nonempty_history() {
-        let directory = tempfile::tempdir().unwrap();
-        let script = directory.path().join("script.json");
-        std::fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#).unwrap();
-        let mut session = Session::new(json!({"provider":"scripted", "scripted":script, "workspace":directory.path(), "model":"gpt-6-luna", "context_window_tokens":100000})).unwrap();
-        session.config["provider"] = json!("openai");
-        session
-            .history
-            .push(json!({"kind":"user","user":{"text":"task"}}));
-        session.state["last_request"] = json!({"known":true,"input_tokens":79999});
-        assert!(!should_auto_compact(&session));
-        session.state["last_request"]["input_tokens"] = json!(80000);
-        assert!(should_auto_compact(&session));
-        for (key, value) in [
-            ("blocked", json!("protocol_error")),
-            ("auto_compact_off", json!(true)),
-        ] {
-            let old = session.state[key].clone();
-            session.state[key] = value;
-            assert!(!should_auto_compact(&session));
-            session.state[key] = old;
-        }
-        session.state["last_request"]["known"] = json!(false);
-        assert!(!should_auto_compact(&session));
-        session.state["last_request"]["known"] = json!(true);
-        session.config["provider"] = json!("scripted");
-        assert!(!should_auto_compact(&session));
-        session.config["provider"] = json!("openai");
-        session.history.clear();
-        assert!(!should_auto_compact(&session));
-    }
     #[test]
     fn command_suggestions_are_unambiguous() {
         assert_eq!(suggestion("/stat"), "/status");
         assert_eq!(suggestion("/staus"), "/status");
         assert_eq!(suggestion("/re"), "");
         assert!(help().contains("!COMMAND"));
+    }
+}
+
+fn effort_name(effort: &session_api::ReasoningEffort) -> &str {
+    match effort {
+        session_api::ReasoningEffort::Named(name) => name,
+        session_api::ReasoningEffort::ProviderDefault => "provider default",
+    }
+}
+
+fn dim(line: &str) -> String {
+    if render::styled(2) {
+        format!("\x1b[2m{line}\x1b[0m")
+    } else {
+        line.into()
     }
 }

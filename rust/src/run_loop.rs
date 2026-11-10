@@ -2,7 +2,6 @@ use crate::runtime::Session;
 use crate::{context, provider, tools, types};
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 struct DisplayPoller<'a> {
     stopped: &'a std::sync::atomic::AtomicBool,
@@ -94,7 +93,7 @@ impl Session {
                 format!("the trace at {trace}")
             };
             let advice = if status == "limit_exceeded" {
-                "/reset to continue; /compact works before the window fills (watch the 60% warning)"
+                "/reset to continue; /compact works before the window fills (watch the context percentage)"
             } else {
                 "/compact or /reset to continue"
             };
@@ -639,7 +638,7 @@ impl Session {
     }
 
     pub(crate) fn open_trace(&mut self, run_id: &str) {
-        let path = trace_path(&self.config, run_id).unwrap_or_default();
+        let path = crate::trace::operation_path(&self.config, run_id).unwrap_or_default();
         self.trace
             .open(string(&self.state["session_id"]), run_id, &path);
     }
@@ -1106,30 +1105,6 @@ fn validate_response(resp: &Value, seen: &Value) -> Result<(), String> {
         return Err("response contains no visible text, refusal, or tool call".into());
     }
     Ok(())
-}
-fn trace_path(config: &Value, run: &str) -> Option<String> {
-    if !string(&config["trace_file"]).is_empty() {
-        return Some(string(&config["trace_file"]).to_owned());
-    }
-    let dir = if !string(&config["trace_dir"]).is_empty() {
-        PathBuf::from(string(&config["trace_dir"]))
-    } else {
-        let cache = if cfg!(target_os = "macos") {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
-        } else {
-            std::env::var_os("XDG_CACHE_HOME")
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        }?;
-        cache.join("reagent/runs")
-    };
-    Some(
-        dir.join(run)
-            .join("events.jsonl")
-            .to_string_lossy()
-            .into_owned(),
-    )
 }
 fn go_display(v: &Value) -> String {
     match v {

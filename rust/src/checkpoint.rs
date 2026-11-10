@@ -124,6 +124,21 @@ pub(crate) fn claim_api(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Claim_loaded_api atomically transfers the trusted CLI loader's existing lease to one API owner.
+pub(crate) fn claim_loaded_api(id: &str) -> Result<(), String> {
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(Leases::default()))
+        .lock()
+        .unwrap();
+    if locks.api_owners.contains(id) || !locks.files.contains_key(id) {
+        return Err(format!(
+            "session {id} has no transferable CLI checkpoint lease"
+        ));
+    }
+    locks.api_owners.insert(id.into());
+    Ok(())
+}
+
 /// Release_api releases only an API owner's reservation and checkpoint lease.
 pub(crate) fn release_api(id: &str) {
     let mut locks = LOCKS.get().unwrap().lock().unwrap();

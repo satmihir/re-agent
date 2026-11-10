@@ -573,12 +573,16 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
     if command == "chat" {
         return crate::chat::run(cfg);
     }
-    let api = match crate::session_api::open_resolved(cfg.clone()) {
+    let api = match crate::session_api::open_resolved(cfg.clone(), None) {
         Ok(api) => api,
         Err(error) => return startup(&error.to_string()),
     };
-    cfg["session_id"] = json!(api.get_snapshot().unwrap().session.session_id);
+    let snapshot = api.get_snapshot().unwrap();
+    cfg["session_id"] = json!(snapshot.session.session_id);
     crate::render::header(&cfg, false);
+    if snapshot.auto.enabled {
+        eprintln!("{}", snapshot.auto.data_sharing_notice);
+    }
     let started = std::time::Instant::now();
     let plan_mode = if crate::run_loop::plan_requested(&String::from_utf8_lossy(&prompt)) {
         crate::session_api::PlanMode::On

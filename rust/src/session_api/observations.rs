@@ -3,6 +3,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_PAGE_BYTES: usize = 256 << 10;
@@ -220,11 +221,12 @@ fn agent(value: &Value) -> AgentView {
     }
 }
 
-/// Cache owns the immutable public projections, never a Session guard or configuration.
+/// Cache owns immutable observations and the private CLI grant projection, never a Session guard or configuration.
 pub(super) struct Cache {
     hashes: Arc<Vec<[u8; 32]>>,
     entries: Vec<Arc<EntryView>>,
     context: ContextView,
+    cli_approved_workspaces: Vec<PathBuf>,
     agents: Vec<Arc<AgentView>>,
     agents_hash: [u8; 32],
     agents_generation: u64,
@@ -269,9 +271,11 @@ impl Cache {
                 request_entries: None,
                 instruction_bytes: None,
                 tool_definition_bytes: None,
+                request_parts: vec![],
                 encoded_request_bytes: None,
                 measurement_unavailable: Some(MeasurementUnavailable::NotCaptured),
             },
+            cli_approved_workspaces: vec![],
             agents: vec![],
             agents_hash: [0; 32],
             agents_generation: 0,
@@ -294,6 +298,7 @@ pub(super) struct Prepared {
     prefix: usize,
     entries: Vec<Arc<EntryView>>,
     context: ContextView,
+    cli_approved_workspaces: Vec<PathBuf>,
     agents: Vec<Arc<AgentView>>,
     agents_hash: [u8; 32],
     total_cost: Usage,
@@ -368,7 +373,11 @@ pub(super) fn prepare(session: &Session, shared: &Shared, request: Option<&Value
             .run
             .clone()
     });
-    let step = run.as_ref().and_then(|_| session.state["steps"].as_u64());
+    let step = run.as_ref().and_then(|run| {
+        (session.state["run_id"].as_str() == Some(run.run_id.as_str()))
+            .then(|| session.state["steps"].as_u64())
+            .flatten()
+    });
     let entries = session
         .history
         .iter()
@@ -410,6 +419,7 @@ pub(super) fn prepare(session: &Session, shared: &Shared, request: Option<&Value
         request_entries: None,
         instruction_bytes: None,
         tool_definition_bytes: None,
+        request_parts: vec![],
         encoded_request_bytes: None,
         measurement_unavailable: Some(MeasurementUnavailable::NotCaptured),
     };
@@ -444,6 +454,12 @@ pub(super) fn prepare(session: &Session, shared: &Shared, request: Option<&Value
         } else {
             Usage::from_value(&crate::types::usage_zero(true))
         },
+        cli_approved_workspaces: session
+            .tools
+            .approved_paths()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         accounting_complete: !enabled || subtree["accounting_complete"] == true,
         rewrite,
     }
@@ -459,6 +475,7 @@ pub(super) fn install(state: &mut State, prepared: Prepared) {
         context,
         agents,
         agents_hash,
+        cli_approved_workspaces,
         total_cost,
         accounting_complete,
         rewrite,
@@ -479,6 +496,7 @@ pub(super) fn install(state: &mut State, prepared: Prepared) {
     cache.entries.truncate(prefix);
     cache.entries.extend(entries);
     cache.context = context;
+    cache.cli_approved_workspaces = cli_approved_workspaces;
     cache.context_changed = true;
     cache.agents_changed = agents_hash != cache.agents_hash;
     if cache.agents_changed {
@@ -599,6 +617,18 @@ fn stamp(state: &State) -> ObservationStamp {
 }
 
 impl SessionApi {
+    /// cli_approved_workspaces returns an owned local display projection, absent from public snapshots and events.
+    pub(crate) fn cli_approved_workspaces(&self) -> Vec<PathBuf> {
+        self.client
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .observations
+            .cli_approved_workspaces
+            .clone()
+    }
+
     /// Get_context returns the exact cached numeric context, including explicit unsafe/unmeasured states.
     pub fn get_context(&self) -> Result<ContextView, ApiError> {
         let state = self.client.shared.state.lock().unwrap();
@@ -859,6 +889,7 @@ pub(super) fn retain_shell_capture(prepared: &mut Prepared, result: &ShellResult
 }
 
 fn measure(session: &Session, context: &mut ContextView, request: &Value) {
+    context.request_parts = crate::chat::context_measure::measure(session).unwrap_or_default();
     context.request_entries = Some(
         request["history"]
             .as_array()
