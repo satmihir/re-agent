@@ -115,6 +115,16 @@ pub enum HistoryMode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionChange {
+    /// Compact requests a text-only summary without starting a conversation Run.
+    Compact {
+        /// focus is exact caller-supplied emphasis, bounded to 16 KiB.
+        focus: Vec<u8>,
+    },
+    /// RunUserShell executes and records a trusted-local human command despite model restrictions.
+    RunUserShell {
+        /// command is an exact Unix shell command, bounded to 4 KiB and excluding NUL.
+        command: Vec<u8>,
+    },
     /// Reset replaces this opening with fresh context and accounting while preserving its live bindings.
     Reset,
     /// SwitchModel selects an exact catalog ID at its default effort and pins Auto.
@@ -173,7 +183,7 @@ pub enum RunState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandState {
-    /// Pending is waiting for the owner or its initial persistence barrier.
+    /// Pending is queued or executing until its application and terminal persistence handling settle.
     Pending,
     /// Applied has changed the Session and passed the required save barrier.
     Applied,
@@ -329,6 +339,66 @@ pub struct RunInfo {
     pub result: Option<RunResult>,
 }
 
+/// CompactResult records summary application and all summary-request consumption.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompactResult {
+    /// status distinguishes completion, validation, cancellation, provider, and persistence failures.
+    pub status: String,
+    /// summary retains bounded visible summary bytes, never provider-native items.
+    pub summary: Vec<u8>,
+    /// replaced_entries counts accepted Entries removed only on successful application.
+    pub replaced_entries: u64,
+    /// requests counts attempted summary requests, without allocating Runs or Steps.
+    pub requests: u64,
+    /// usage includes reported costs and possible unreported summary attempts exactly once.
+    pub usage: Usage,
+    /// durable marks a successful final context/accounting save with checkpointing enabled.
+    pub durable: bool,
+}
+
+/// ShellResult records bounded raw output independently of exit status and effect uncertainty.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShellResult {
+    /// status distinguishes completion, cancellation, start, capture, and persistence failures.
+    pub status: String,
+    /// workspace is the selected execution directory's original bytes.
+    pub workspace: Vec<u8>,
+    /// command retains the exact admitted command bytes.
+    pub command: Vec<u8>,
+    /// output retains bounded raw merged bytes independently of display repair, with an omission marker when truncated.
+    pub output: Vec<u8>,
+    /// output_bytes_seen counts bytes actually read, not bytes an incomplete capture might have missed.
+    pub output_bytes_seen: u64,
+    /// output_bytes_omitted counts observed bytes absent from the retained head and tail.
+    pub output_bytes_omitted: u64,
+    /// output_truncated distinguishes bounded capture from complete retained output.
+    pub output_truncated: bool,
+    /// output_incomplete warns that cancellation or capture failure may have lost further output.
+    pub output_incomplete: bool,
+    /// exit_code is absent when no normal exit was observed.
+    pub exit_code: Option<i32>,
+    /// signal names an observed terminating Unix signal when present.
+    pub signal: Option<String>,
+    /// interrupted records cancellation, not proof that external work stopped.
+    pub interrupted: bool,
+    /// duration_ms measures elapsed execution and cleanup time.
+    pub duration_ms: u64,
+    /// effect is none before spawn, applied after settled execution, or unknown for interrupted/incomplete capture.
+    pub effect: String,
+    /// durable marks a successful terminal context save with checkpointing enabled.
+    pub durable: bool,
+}
+
+/// ControlResult projects long-running controls without exposing configuration or native provider data.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlResult {
+    /// Compact records summary application and accounting.
+    Compact(CompactResult),
+    /// Shell records execution, bounded output, and possible effects.
+    Shell(ShellResult),
+}
+
 /// CommandInfo is a retained admission/application receipt for one command.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommandInfo {
@@ -338,9 +408,13 @@ pub struct CommandInfo {
     pub run: Option<RunRef>,
     /// replacement_session identifies the immediate successor after reset or a fresh model switch.
     pub replacement_session: Option<SessionRef>,
+    /// cancel_requested records targeted cancellation without claiming that effects were undone.
+    pub cancel_requested: bool,
+    /// result retains an executed long-control outcome, absent before execution and for messages/atomic changes.
+    pub result: Option<ControlResult>,
     /// state records whether the command passed its application barrier.
     pub state: CommandState,
-    /// reason explains why an admitted command was not applied.
+    /// reason explains failure or retained uncertainty, including an Applied shell interrupted after spawn.
     pub reason: Option<String>,
 }
 
@@ -407,8 +481,8 @@ pub struct SessionSnapshot {
     pub workspace: PathBuf,
     /// usage counts completed and currently executing root model requests.
     pub usage: Usage,
-    /// last_request retains reported usage during inference, but a successful Carry (even same-model)
-    /// invalidates the current-model calibration to unknown zero.
+    /// last_request retains reported inference usage until successful Carry or attempted compaction
+    /// publishes replacement calibration, including unknown failed-summary usage.
     pub last_request: Usage,
     /// context_window_tokens is absent when the model window is unknown.
     pub context_window_tokens: Option<u64>,

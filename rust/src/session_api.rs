@@ -1,5 +1,6 @@
 //! Trusted-local Session ownership, queued submissions, and concurrent observations.
 
+mod controls;
 mod types;
 /// Owned records used by the in-process Session interface.
 pub use types::*;
@@ -25,6 +26,13 @@ fn replaces_session(change: &SessionChange) -> bool {
                 history: HistoryMode::Fresh,
                 ..
             }
+    )
+}
+
+fn is_long_control(change: &SessionChange) -> bool {
+    matches!(
+        change,
+        SessionChange::Compact { .. } | SessionChange::RunUserShell { .. }
     )
 }
 
@@ -72,6 +80,8 @@ enum CommandWork {
     Change {
         expected_revision: u64,
         change: SessionChange,
+        cancellation: Option<Arc<AtomicBool>>,
+        started: bool,
     },
 }
 
@@ -129,9 +139,22 @@ impl Drop for Client {
     fn drop(&mut self) {
         let mut state = self.shared.state.lock().unwrap();
         state.closing = true;
-        for message in state.commands.iter().filter_map(|c| c.work.message()) {
-            if message.run.state != RunState::Terminal {
-                message.cancellation.store(true, Ordering::Release);
+        for command in &mut state.commands {
+            if let Some(message) = command.work.message() {
+                if message.run.state != RunState::Terminal {
+                    message.cancellation.store(true, Ordering::Release);
+                    command.info.cancel_requested = true;
+                }
+            }
+            if command.info.state == CommandState::Pending {
+                if let CommandWork::Change {
+                    cancellation: Some(token),
+                    ..
+                } = &command.work
+                {
+                    token.store(true, Ordering::Release);
+                    command.info.cancel_requested = true;
+                }
             }
         }
         let replacement = state.replacement.take();
@@ -416,14 +439,14 @@ impl SessionApi {
         if state.closing || state.closed {
             return Err(error("unavailable", "Session is closing or closed"));
         }
+        if state.control.is_some() {
+            return Err(error("busy", "Session has an unfinished idle control"));
+        }
         if state.snapshot.blocked.is_some() || state.snapshot.persistence_error.is_some() {
             return Err(error(
                 "blocked",
                 "Session requires recovery before another submission",
             ));
-        }
-        if state.control.is_some() {
-            return Err(error("busy", "Session has an unfinished idle control"));
         }
         if state.commands.len() >= MAX_COMMANDS
             || state
@@ -452,6 +475,8 @@ impl SessionApi {
             request_id: request_id.into(),
             run: Some(run.clone()),
             replacement_session: None,
+            cancel_requested: false,
+            result: None,
             state: CommandState::Pending,
             reason: None,
         };
@@ -517,6 +542,24 @@ impl SessionApi {
                 ));
             }
         }
+        let input_bytes = match &change {
+            SessionChange::Compact { focus } => {
+                if focus.len() > 16 << 10 {
+                    return Err(error("invalid_argument", "compaction focus exceeds 16 KiB"));
+                }
+                focus.len()
+            }
+            SessionChange::RunUserShell { command } => {
+                if command.len() > 4 << 10 || command.contains(&0) {
+                    return Err(error(
+                        "invalid_argument",
+                        "shell command exceeds 4 KiB or contains NUL",
+                    ));
+                }
+                command.len()
+            }
+            _ => 0,
+        };
         let shared = &self.client.shared;
         let mut state = shared.state.lock().unwrap();
         if let Some(command) = state
@@ -524,7 +567,7 @@ impl SessionApi {
             .iter()
             .find(|c| c.info.request_id == request_id)
         {
-            if !matches!(&command.work, CommandWork::Change { expected_revision: revision, change: previous } if *revision == expected_revision && previous == &change)
+            if !matches!(&command.work, CommandWork::Change { expected_revision: revision, change: previous, .. } if *revision == expected_revision && previous == &change)
             {
                 return Err(error(
                     "conflict",
@@ -536,30 +579,33 @@ impl SessionApi {
         if state.closing || state.closed {
             return Err(error("unavailable", "Session is closing or closed"));
         }
+        if state.control.is_some() {
+            return Err(error("busy", "Session has an unfinished idle control"));
+        }
         if state.snapshot.persistence_error.is_some()
-            || state.snapshot.blocked.is_some() && !replaces_session(&change)
+            || state.snapshot.blocked.is_some()
+                && !replaces_session(&change)
+                && !is_long_control(&change)
         {
             return Err(error(
                 "blocked",
                 "Session requires recovery before another change",
             ));
         }
-        if state.control.is_some()
-            || state
-                .commands
-                .iter()
-                .filter_map(|c| c.work.message())
-                .any(|m| m.run.state != RunState::Terminal)
+        if state
+            .commands
+            .iter()
+            .filter_map(|c| c.work.message())
+            .any(|m| m.run.state != RunState::Terminal)
         {
-            return Err(error(
-                "busy",
-                "Session has live Runs or an unfinished idle control",
-            ));
+            return Err(error("busy", "Session has live Runs"));
         }
         if expected_revision != state.snapshot.revision {
             return Err(error("conflict", "Session revision has changed"));
         }
-        if state.commands.len() >= MAX_COMMANDS {
+        if state.commands.len() >= MAX_COMMANDS
+            || state.retained_input_bytes + input_bytes > MAX_RETAINED_INPUT_BYTES
+        {
             return Err(error(
                 "resource_exhausted",
                 "Session admission storage is full; close remains available",
@@ -569,15 +615,21 @@ impl SessionApi {
             request_id: request_id.into(),
             run: None,
             replacement_session: None,
+            cancel_requested: false,
+            result: None,
             state: CommandState::Pending,
             reason: None,
         };
+        let cancellation = is_long_control(&change).then(|| Arc::new(AtomicBool::new(false)));
         let index = state.commands.len();
+        state.retained_input_bytes += input_bytes;
         state.commands.push(Command {
             info: info.clone(),
             work: CommandWork::Change {
                 expected_revision,
                 change,
+                cancellation,
+                started: false,
             },
         });
         state.pending.push_back(index);
@@ -627,6 +679,42 @@ impl SessionApi {
         Ok(state.commands[index].info.clone())
     }
 
+    /// Cancel_command requests cancellation of one exact long control, never an atomic change or Run.
+    pub fn cancel_command(&self, target_request_id: &str) -> Result<CommandInfo, ApiError> {
+        let shared = &self.client.shared;
+        let mut state = shared.state.lock().unwrap();
+        let index = state
+            .commands
+            .iter()
+            .position(|c| c.info.request_id == target_request_id)
+            .ok_or_else(|| error("not_found", "request_id is not retained by this handle"))?;
+        let command = &mut state.commands[index];
+        let CommandWork::Change {
+            cancellation: Some(token),
+            started,
+            ..
+        } = &command.work
+        else {
+            return Err(error(
+                "invalid_argument",
+                "only compaction and human shell controls are cancellable; Runs use cancel_run",
+            ));
+        };
+        if command.info.state != CommandState::Pending {
+            return Ok(command.info.clone());
+        }
+        token.store(true, Ordering::Release);
+        command.info.cancel_requested = true;
+        if !started {
+            not_applied(command, "control cancelled before execution");
+            state.pending.retain(|i| *i != index);
+            state.control = None;
+        }
+        state.changed();
+        shared.changed.notify_all();
+        Ok(state.commands[index].info.clone())
+    }
+
     /// Wait_run waits for a retained terminal result without locking the executing Session.
     pub fn wait_run(&self, run: &RunRef) -> Result<RunInfo, ApiError> {
         let shared = &self.client.shared;
@@ -664,7 +752,9 @@ impl SessionApi {
         }
         message.cancellation.store(true, Ordering::Release);
         message.run.cancel_requested = true;
-        if message.run.state == RunState::Queued {
+        let queued = message.run.state == RunState::Queued;
+        state.commands[index].info.cancel_requested = true;
+        if queued {
             state.pending.retain(|i| *i != index);
             not_applied(&mut state.commands[index], "queued Run cancelled");
         }
@@ -848,7 +938,10 @@ fn cancellation_scope(session: &SessionRef, request_id: &str) -> String {
 
 fn change_settings(session: &mut Session, change: SessionChange) -> Result<(), String> {
     match change {
-        SessionChange::Reset | SessionChange::SwitchModel { .. } => {
+        SessionChange::Reset
+        | SessionChange::SwitchModel { .. }
+        | SessionChange::Compact { .. }
+        | SessionChange::RunUserShell { .. } => {
             unreachable!("context changes stage their owner bindings separately")
         }
         SessionChange::SetPlan { enabled } => session.state["plan"] = json!(enabled),
@@ -1108,13 +1201,31 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
             }
             let index = state.pending.pop_front().unwrap();
             let command = &mut state.commands[index];
-            if let CommandWork::Change { change, .. } = &command.work {
+            if let CommandWork::Change {
+                change,
+                cancellation,
+                started,
+                ..
+            } = &mut command.work
+            {
+                *started = true;
+                let cancellation = cancellation.clone();
                 let change = change.clone();
                 drop(state);
                 let replacement = match change {
                     SessionChange::Reset => reset_owner(&mut owner, &shared, index),
                     SessionChange::SwitchModel { model, history } => {
                         switch_model(&mut owner, &shared, index, &model, history)
+                    }
+                    change if is_long_control(&change) => {
+                        controls::execute(
+                            &mut owner.session,
+                            &shared,
+                            index,
+                            change,
+                            cancellation.unwrap(),
+                        );
+                        None
                     }
                     change => {
                         apply_change(&mut owner.session, &shared, index, change);
@@ -1187,6 +1298,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
             .expect("executing Run identifies a message");
         message.run.state = RunState::Terminal;
         message.run.cancel_requested |= message.cancellation.load(Ordering::Acquire);
+        command.info.cancel_requested |= message.run.cancel_requested;
         message.run.activity = "terminal".into();
         message.run.steps = result["steps"].as_u64().unwrap_or(0);
         message.run.tool_calls = result["tool_calls"].as_u64().unwrap_or(0);
@@ -1217,6 +1329,197 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_control_cancellation_storage_is_released_with_the_owner_and_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        std::fs::write(
+            &script,
+            br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+        )
+        .unwrap();
+        let api = open_session(SessionOptions {
+            workspace: root.path().into(),
+            scripted: Some(script),
+            checkpoint: false,
+            agents: false,
+            ..Default::default()
+        })
+        .unwrap();
+        api.change_session("local-token", 0, SessionChange::Compact { focus: vec![] })
+            .unwrap();
+        let token = {
+            let state = api.client.shared.state.lock().unwrap();
+            let CommandWork::Change {
+                cancellation: Some(token),
+                ..
+            } = &state.commands[0].work
+            else {
+                unreachable!()
+            };
+            Arc::downgrade(token)
+        };
+        assert_eq!(
+            api.wait_command("local-token").unwrap().state,
+            CommandState::NotApplied
+        );
+        api.close().unwrap();
+        drop(api);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while token.upgrade().is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(token.upgrade().is_none(), "a long control never installs SIGINT and must not remain in the permanent signal-token registry");
+    }
+
+    #[test]
+    fn pending_long_control_cancellation_prevents_work_and_retains_the_exact_input_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        std::fs::write(
+            &script,
+            br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+        )
+        .unwrap();
+        let session =
+            Session::new(json!({"workspace":root.path(),"provider":"scripted","scripted":script}))
+                .unwrap();
+        let shared = new_shared(&session, None);
+        let api = SessionApi {
+            client: Arc::new(Client {
+                shared: shared.clone(),
+            }),
+        };
+        shared.state.lock().unwrap().retained_input_bytes = MAX_RETAINED_INPUT_BYTES - 3;
+        for change in [
+            SessionChange::Compact {
+                focus: b"four".to_vec(),
+            },
+            SessionChange::RunUserShell {
+                command: b"true".to_vec(),
+            },
+        ] {
+            assert_eq!(
+                api.change_session("too-full", 0, change).unwrap_err().code,
+                "resource_exhausted"
+            );
+            assert_eq!(api.get_command("too-full").unwrap_err().code, "not_found");
+        }
+        shared.state.lock().unwrap().retained_input_bytes -= 1;
+        for (index, change) in [
+            SessionChange::Compact { focus: vec![] },
+            SessionChange::RunUserShell {
+                command: b"true".to_vec(),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("cancel-{index}");
+            let revision = api.get_snapshot().unwrap().revision;
+            api.change_session(&id, revision, change.clone()).unwrap();
+            let result = api.cancel_command(&id).unwrap();
+            assert_eq!(result.state, CommandState::NotApplied);
+            assert!(result.cancel_requested && result.result.is_none());
+            assert_eq!(
+                api.wait_command(&id).unwrap().state,
+                CommandState::NotApplied
+            );
+            assert_eq!(
+                api.change_session(&id, revision, change).unwrap().state,
+                CommandState::NotApplied
+            );
+            assert!(shared.state.lock().unwrap().pending.is_empty());
+            assert!(api
+                .get_snapshot()
+                .unwrap()
+                .active_control_request_id
+                .is_none());
+        }
+        assert_eq!(
+            shared.state.lock().unwrap().retained_input_bytes,
+            MAX_RETAINED_INPUT_BYTES
+        );
+        assert_eq!(
+            api.change_session(
+                "one-byte",
+                api.get_snapshot().unwrap().revision,
+                SessionChange::Compact { focus: vec![1] }
+            )
+            .unwrap_err()
+            .code,
+            "resource_exhausted"
+        );
+        assert!(session.history.is_empty());
+        assert!(!root.path().join("true").exists());
+    }
+
+    #[test]
+    fn cancellation_after_owner_selection_but_before_execution_starts_no_long_work() {
+        for provider in ["scripted", "openai"] {
+            for change in [
+                SessionChange::Compact { focus: vec![0xff] },
+                SessionChange::RunUserShell {
+                    command: b"printf bad > forbidden".to_vec(),
+                },
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let script = root.path().join("script.json");
+                std::fs::write(
+                    &script,
+                    br#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#,
+                )
+                .unwrap();
+                let mut config =
+                    json!({"workspace":root.path(),"provider":provider,"model":"gpt-6.1-sol"});
+                if provider == "scripted" {
+                    config["scripted"] = json!(script);
+                }
+                let mut session = Session::new(config).unwrap();
+                let shared = new_shared(&session, None);
+                let api = SessionApi {
+                    client: Arc::new(Client {
+                        shared: shared.clone(),
+                    }),
+                };
+                api.change_session("cancel", 0, change.clone()).unwrap();
+                let token = {
+                    let mut state = shared.state.lock().unwrap();
+                    state.pending.pop_front();
+                    let CommandWork::Change {
+                        started,
+                        cancellation,
+                        ..
+                    } = &mut state.commands[0].work
+                    else {
+                        unreachable!()
+                    };
+                    *started = true;
+                    cancellation.clone().unwrap()
+                };
+                assert_eq!(
+                    api.cancel_command("cancel").unwrap().state,
+                    CommandState::Pending
+                );
+                controls::execute(&mut session, &shared, 0, change, token);
+                let result = api.wait_command("cancel").unwrap();
+                assert_eq!(result.state, CommandState::NotApplied);
+                assert!(result.cancel_requested);
+                match result.result.unwrap() {
+                    ControlResult::Compact(result) => {
+                        assert_eq!(result.requests, 0);
+                        assert!(result.usage.known);
+                        assert_eq!(result.usage.unreported_attempts, 0);
+                    }
+                    ControlResult::Shell(result) => assert_eq!(result.effect, "none"),
+                }
+                assert!(session.history.is_empty());
+                assert!(!root.path().join("forbidden").exists());
+                assert_eq!(api.get_snapshot().unwrap().usage.input_tokens, 0);
+            }
+        }
+    }
 
     #[test]
     fn unstarted_owner_retires_restored_agent_state_before_reopening() {

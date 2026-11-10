@@ -34,4 +34,5 @@ pub mod tools;
 pub mod trace;
 pub mod transport;
 pub mod types;
+mod user_shell;
 pub mod workspace;

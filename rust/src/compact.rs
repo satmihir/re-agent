@@ -33,11 +33,12 @@ fn request(session: &Session, history: &[Value], focus: &str, step: i64) -> Valu
         tools::specs(&session.config),
     )
 }
-fn text(resp: &Value) -> Result<String, String> {
+/// summary_bytes accepts only visible text and retains its original byte content.
+pub(crate) fn summary_bytes(resp: &Value) -> Result<Vec<u8>, String> {
     let mut parts = Vec::new();
     for block in resp["blocks"].as_array().into_iter().flatten() {
         match string(&block["kind"]) {
-            "text" => parts.push(string(&block["text"])),
+            "text" => parts.push(crate::raw::string_bytes(&block["text"]).unwrap_or_default()),
             "tool_call" => return Err("summary response contains a tool call".into()),
             "refusal" => return Err("summary response contains a refusal".into()),
             kind => {
@@ -47,11 +48,75 @@ fn text(resp: &Value) -> Result<String, String> {
             }
         }
     }
-    let text = parts.join("\n").trim().to_owned();
-    if text.is_empty() {
+    let bytes = parts.join(&b'\n');
+    let bytes = if let Ok(text) = std::str::from_utf8(&bytes) {
+        text.trim().as_bytes().to_vec()
+    } else {
+        let start = bytes
+            .iter()
+            .position(|b| !b.is_ascii_whitespace())
+            .unwrap_or(bytes.len());
+        let end = bytes
+            .iter()
+            .rposition(|b| !b.is_ascii_whitespace())
+            .map_or(start, |n| n + 1);
+        bytes[start..end].to_vec()
+    };
+    if bytes.is_empty() {
         return Err("summary response is empty".into());
     }
-    Ok(text)
+    Ok(bytes)
+}
+fn text(resp: &Value) -> Result<String, String> {
+    Ok(crate::tool_exec::utf8(&summary_bytes(resp)?))
+}
+
+/// idle_request stages bounded manual compaction without allocating a Run or changing history.
+pub(crate) fn idle_request(session: &Session, focus: &[u8]) -> Result<Value, String> {
+    if session.history.is_empty() {
+        return Err("nothing to compact; send a message first".into());
+    }
+    let mut req = request(session, &session.request_history(), "", 0);
+    req["scope"] = scope(string(&session.state["session_id"]), "", 0);
+    req["max_output_tokens"] = json!(8192);
+    if !focus.is_empty() {
+        let mut prompt = PROMPT.trim_end_matches('\n').as_bytes().to_vec();
+        prompt.extend_from_slice(b"\n\nFocus: ");
+        prompt.extend_from_slice(focus);
+        let last = req["history"].as_array_mut().unwrap().last_mut().unwrap();
+        last["user"]["text"] = crate::raw::string(&prompt);
+    }
+    if session.provider.name() != "scripted" {
+        let size = admission_bytes(&session.config, &req)?;
+        let win = window(&session.config);
+        if win > 0 && (size as f64 * admission_rate(session)).ceil() + 16000.0 > win as f64 {
+            return Err("summary request cannot fit with 16000 tokens reserved for output".into());
+        }
+    }
+    Ok(req)
+}
+
+/// stage_summary prepares compacted context while leaving file authorization untouched until save.
+pub(crate) fn stage_summary(session: &Session, summary: &[u8]) -> (Value, Value, Vec<Value>) {
+    let mut config = session.config.clone();
+    context::pin_instructions(&mut config);
+    let mut state = session.state.clone();
+    for entry in session.history.iter().rev() {
+        if entry["user"].is_object() && string(&entry["user"]["source"]).is_empty() {
+            state["compacted_plan"] = entry["user"]["plan"].clone();
+            break;
+        }
+    }
+    state["gc_state"] = json!({"last_pass":0});
+    state["handoff"] = Value::Null;
+    state["routing_entries"] = json!(1);
+    state["tokens_per_byte"] = json!(0.0);
+    state["last_request"] = types::usage_zero(false);
+    state["blocked"] = json!("");
+    let history = vec![
+        json!({"kind":"summary","summary":{"text":crate::raw::string(summary),"replaced_entries":session.history.len(),"model":session.config["model"]}}),
+    ];
+    (config, state, history)
 }
 fn clear_evidence(session: &mut Session) {
     session.tools.forget_seen();

@@ -1242,7 +1242,7 @@ fn plan_marker(history: &[Value], on: bool, compacted: &str) -> String {
             };
         }
     }
-    if history.len() == 1 && history[0]["summary"].is_object() && compacted == "on" {
+    if compacted == "on" && history.iter().any(|entry| entry["summary"].is_object()) {
         "ended".into()
     } else {
         String::new()

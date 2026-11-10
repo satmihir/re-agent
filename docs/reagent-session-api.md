@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1, typed idle controls, reset/replacement, and model switching implemented**, with the remaining
+Status: **milestone 1, typed controls, reset/replacement, model switching, compaction and human shell implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -9,7 +9,7 @@ it does not make `runtime::Session` itself a supported public API.
 
 `rust/src/session_api.rs` and its owned records implement `open_session`,
 `resume_session`, `get_snapshot`, `send_message`, `get_run`, `get_command`,
-`wait_run`, `cancel_run`, and idle-only `close`. One worker owns the Session;
+`wait_run`, `cancel_run`, `cancel_command`, and idle-only `close`. One worker owns the Session;
 cloneable handles share only published metadata, receipts, the queue, and exact
 Run cancellation flags. The model loop remains in `run_loop.rs`.
 
@@ -22,7 +22,7 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   Terminal results remain readable after inventory removal and close.
 - At most 16 live Runs and 256 retained command receipts are admitted; messages
   and controls share the receipt limit. Individual
-  messages fit 10 MiB; total retained message bytes fit 32 MiB. Exhaustion refuses
+  messages fit 10 MiB; retained message plus long-control input bytes fit 32 MiB. Exhaustion refuses
   admission, not cancellation/close, and never evicts deduplication records.
 - Request-ID retries deduplicate within this opening, not across restarts.
   A failed Run discards queued follow-ups rather than starting them automatically.
@@ -47,13 +47,15 @@ local conveniences while that broader observation/control boundary is extracted.
 
 `change_session(request_id, expected_revision, SessionChange)` now supports
 `SetPlan { enabled }`, `SetEffort { effort }`, `SetAuto { enabled }`, `Reset`, and
-`SwitchModel { model, history }`. Compaction and shell controls remain design targets. Settings
+`SwitchModel { model, history }`. `Compact` and `RunUserShell` are implemented below
+as long-running controls. Atomic settings
 are changed by the same exclusive owner as messages, without a model/router
 request, transcript Entry, Run, or additional usage merely to apply a setting.
 
 - A new control requires no queued/running Run or unfinished control and a current
   snapshot revision. The instance must be open and free of persistence failure;
-  only reset or a fresh model switch may recover another blocked terminal status. Admission reserves the
+  reset, a fresh model switch, or compaction may recover other blocked terminal states;
+  human shell inspection is also allowed while blocked, preserving the prior block. Admission reserves the
   exclusive control slot atomically. New messages and close return `busy` until
   it is released. Snapshot `active_control_request_id` identifies this work;
   `live_runs` still contains only Runs.
@@ -69,7 +71,7 @@ request, transcript Entry, Run, or additional usage merely to apply a setting.
   produce retained `NotApplied` receipts without changing settings. Successful
   changes, including effective no-ops, pass the existing save barrier before
   metadata and `Applied` are published together.
-- A save failure restores prior in-memory settings, records `persistence_error`,
+- A save failure in an atomic setting change restores prior in-memory settings, records `persistence_error`,
   and blocks further mutation/inference; inspection and close remain available.
   Failure after checkpoint replacement may already have changed disk state, so
   memory restoration is not proof of disk rollback. There is no automatic retry;
@@ -177,6 +179,115 @@ the old instance without claiming disk rollback. Fresh failures may leave an
 unpublished private candidate checkpoint; the original checkpoint remains the
 recovery target. Resume opens persisted identities without replaying the switch.
 Chat continues to use its legacy command path, sharing only local staging logic.
+
+## Implemented long-running controls
+
+`SessionChange::Compact { focus: Vec<u8> }` and
+`RunUserShell { command: Vec<u8> }` use the same idle reservation, revision,
+request-ID namespace, and 256-receipt limit. Exact bytes are part of retry identity.
+Focus is capped at 16 KiB, shell command at 4 KiB; NUL in a shell command is rejected
+before admission. These bytes share the opening's 32 MiB retained input budget.
+There is no RunRef, implicit ordinary user Entry, model-driven shell tool, or new
+remote permission path. This remains a **trusted-local human-only capability**;
+inference-only callers must not receive the unrestricted handle.
+
+`wait_command` remains pending through execution and terminal persistence handling.
+`cancel_command(target_request_id)` addresses only an admitted compaction/shell
+control in this opening; messages use `cancel_run`, and atomic controls return
+`invalid_argument`. It works at receipt capacity, while blocked, and during
+shutdown. Cancellation before owner selection prevents work/history changes;
+active cancellation is cooperative, not an undo. Repeated or terminal cancellation
+returns retained info and cannot affect the next message/control. Dropping the
+last handle cancels long work as well. No shared mutex is held during model or
+process work; messages, other controls and close stay busy until it settles. Long
+controls own local cancellation flags, not permanent SIGINT-registry entries;
+a later chat integration must call `cancel_command` explicitly. Existing Run and
+CLI signal handling is unchanged.
+
+`CommandInfo.cancel_requested` reports the request independently of application;
+`result: Option<ControlResult>` retains typed `CompactResult`/`ShellResult` for
+settled long work, without native provider state or runtime configuration. Cancellation
+before owner selection, atomic controls and messages leave `result` absent. `Applied` means context/recording
+passed its application barrier, not that a shell exited successfully: an active
+cancelled shell can be Applied with an unknown-effect terminal observation.
+`durable` is false when checkpointing is disabled or the final save failed;
+receipts themselves are still scoped to the live opening, not restored on resume.
+
+### Compaction
+
+Compaction makes one cancellable, text-only Provider summary request with the
+existing summary prompt, projected history and admission checks. It never routes
+through Auto, executes response tools, retries a failed summary, creates a Run,
+or increments ordinary Run/Step/tool counters. Summary output is capped at 32 KiB.
+Current plan, model/settings, authority and workspace grants survive; a subsequent
+plan-ended marker is retained even if human shell observations intervene. Only success
+replaces transcript context, re-pins instructions, clears file-write evidence and
+GC/native/handoff context, and clears the previous terminal block.
+
+The pre-inference save reserves one possible unreported request in cumulative
+usage. A process interrupted there resumes conservatively with that uncertainty,
+without replay. On settled completion/failure, reported usage replaces the
+reservation and is added exactly once. If a live summary call was entered and
+cancelled without token totals, its usage remains unknown with at least one
+unreported attempt, without duplicating an existing unreported count. This is
+possible billing, not an observed provider charge. Provably pre-dispatch
+cancellation makes zero requests and retains known-zero usage; scripted usage
+can likewise remain known zero. This conservative policy is scoped to these
+controls: ordinary Run transport cancellation policy remains unchanged.
+Every attempted compaction publishes its settled `last_request`, including an
+unknown failed-summary calibration, consistently with resume. Preflight/no-attempt
+failure preserves the old published calibration, and ordinary inference still
+retains its latest reported usage. Provider/refusal/protocol/cancel failures
+do not replace history or clear file evidence. Failed final saves retain actual
+costs in memory, restore staged history/configuration, poison the instance, and
+make no disk-rollback claim. No compaction or shell control is allowed after a
+persistence error; inspection, targeted cancellation and close remain available.
+
+### Human shell
+
+The owner runs exact Unix command bytes using `/bin/sh -c` in the selected
+workspace, with stdin closed and the legacy environment whitelist (no harness
+credentials). This human operation intentionally bypasses planning/read-only
+model restrictions without changing those restrictions for later inference.
+`user_shell.rs` shares process/capture behavior with the CLI; rendering stays in
+`cli/shell.rs`. Commands use isolated process groups and the existing targeted
+tree cleanup on cancellation while the direct child is still owned, not a kill of
+the harness's group. Once the child has been reaped (or wait ownership is lost),
+no numeric-PID/tree/group signaling is attempted. Background output holders that
+outlive the capture grace period are left running, matching legacy CLI background
+execution; the API records incomplete output and unknown effects instead.
+
+Before spawn, an idle checkpoint records a conservative shell observation marked
+`user_shell_command_effect_unknown` and blocks the Session as `effect_unknown`.
+It is replaced by a terminal shell observation, and the prior block restored,
+only after settled execution and terminal save. Thus interrupted resume never
+replays the command and cannot silently carry/hand off unknown shell effects.
+A hard process crash can leave external work running; recovery retains evidence,
+not proof that the process stopped. Human inspection can still run while blocked;
+it does not clear an earlier block.
+A pre-spawn save failure starts no process and restores in-memory history.
+After-spawn save failure cannot roll back effects: the owner keeps the observation
+and raw outcome in memory, poisons the instance, and explicitly marks uncertain
+recording/effects rather than pretending the command did not run.
+
+Shell results retain bounded merged raw output bytes, observed/omitted counts,
+exit/signal, elapsed time and independent truncation/incompleteness/effect fields.
+The stored shell record respects the legacy 32 KiB JSON bound; terminal/transcript
+text retains its existing invalid-UTF-8 repair behavior while live receipts retain
+raw byte captures. Display-only UTF-8 boundary repair never removes raw receipt
+bytes; omission counts reflect only bounded raw capture/record trimming. A valid
+UTF-8 character crossing the internal head/tail split is not an encoding error.
+Cancellation, capture I/O errors and inherited-pipe timeouts
+never claim complete output or known no effects. A normal nonzero exit is still
+recorded, with no model/router request or model usage added merely for execution.
+
+Cleanup is cooperative, not process containment or a hard shutdown bound. An
+unkillable, privileged, or D-state child can prevent cancellation/close from
+settling. A TERM handler can fork a new-session child after the one process-tree
+snapshot, and detached output holders may continue after the direct child is
+reaped. Those limits are not repaired with extra threads, timers or a sandbox;
+unknown/incomplete results and blocked effect evidence must not be read as known
+no effects or proof that all external work stopped.
 
 ## Boundary
 
