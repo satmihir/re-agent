@@ -339,8 +339,12 @@ pub(super) fn execute(
     };
     let publish_summary_calibration = matches!(&completion.result, ControlResult::Compact(result)
         if completion.applied || result.requests > 0);
+    let mut prepared = observations::prepare_current(session, shared);
+    if let ControlResult::Shell(result) = &completion.result {
+        observations::retain_shell_capture(&mut prepared, result);
+    }
     let mut state = shared.state.lock().unwrap();
-    update_metadata(session, &mut state.snapshot);
+    observations::install(&mut state, prepared);
     if publish_summary_calibration {
         state.snapshot.last_request = Usage::from_value(&session.state["last_request"]);
     }
@@ -354,6 +358,6 @@ pub(super) fn execute(
     command.info.reason = completion.reason;
     command.info.result = Some(completion.result);
     state.control = None;
-    state.changed();
+    state.command_changed(index);
     shared.changed.notify_all();
 }

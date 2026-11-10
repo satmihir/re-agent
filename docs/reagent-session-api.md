@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1, typed controls, reset/replacement, model switching, compaction and human shell implemented**, with the remaining
+Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell and bounded structured observations implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -10,7 +10,7 @@ it does not make `runtime::Session` itself a supported public API.
 `rust/src/session_api.rs` and its owned records implement `open_session`,
 `resume_session`, `get_snapshot`, `send_message`, `get_run`, `get_command`,
 `wait_run`, `cancel_run`, `cancel_command`, and idle-only `close`. One worker owns the Session;
-cloneable handles share only published metadata, receipts, the queue, and exact
+cloneable handles share only owned published observations, receipts, the queue, and exact
 Run cancellation flags. The model loop remains in `run_loop.rs`.
 
 - Launch settings use the typed `SessionOptions` subset; credentials remain host
@@ -38,8 +38,7 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
 
 This milestone is **trusted-local only**: handles are not capability-filtered and
 must not be given to untrusted clients. Chat and the remaining control migration,
-human consent, entry/agent/event projections, transport authorization, BTW and
-steering are not implemented. The detailed records and operations below describe the full target,
+human consent, transport authorization, BTW and steering are not implemented. The detailed records and operations below describe the full target,
 not a claim that every field or method already exists. `wait_run` and `close` are
 local conveniences while that broader observation/control boundary is extracted.
 
@@ -288,6 +287,139 @@ snapshot, and detached output holders may continue after the direct child is
 reaped. Those limits are not repaired with extra threads, timers or a sandbox;
 unknown/incomplete results and blocked effect evidence must not be read as known
 no effects or proof that all external work stopped.
+
+## Implemented bounded structured observations
+
+`rust/src/session_api/observation_types.rs` defines the serializable owned records,
+re-exported from `session_api`; JSON fields and enum labels are `snake_case`. The Rust boundary is:
+
+```rust
+get_context(&self) -> Result<ContextView, ApiError>
+read_entries(&self, cursor: Option<EntryCursor>, page_limit: usize) -> Result<EntryPage, ApiError>
+read_agents(&self, cursor: Option<AgentCursor>, page_limit: usize) -> Result<AgentPage, ApiError>
+read_events(&self, cursor: EventCursor, page_limit: usize, wait_ms: u64,
+            cancellation: Option<&AtomicBool>) -> Result<EventPage, ApiError>
+```
+
+These reads inspect caches, including after close, replacement or persistence
+failure. They do not borrow/clone the Session, refresh credentials/configuration,
+run tools/Git/processes, request consent, dispatch HTTP, drain child notices or
+update worker accounting. They remain available while provider, summary or tool
+work holds the exclusive owner. This remains **trusted-local content**, not a
+capability-filtered transport API. User workspace/roster snapshots and child
+names, tasks, workspaces and trace paths may be sensitive.
+
+### Publication and context
+
+The owner constructs projections and performs local encoding outside the shared
+State mutex; installation, metadata revision, Unix-millisecond observation time
+and latest `event_cursor` are atomic under that mutex. Pages and `ContextView`
+carry `observed: ObservationStamp { revision, event_cursor, observed_at_ms }` for
+the State they read. Context `captured` identifies its exact last owner boundary;
+Entries retain first-observed Run/Step attribution when known. Recovered/control
+Entries do not invent missing Run identities. Reads do not follow a retired
+handle's successor.
+
+`SessionSnapshot.context` and `ContextView.summary` contain the source history
+generation/count, controlled Entry-class counts/internal-JSON byte totals, and
+independent `settled` and `effects_unknown` flags. Failed or unknown-effect tool
+outcomes settle accepted calls just as successful outcomes do. An accepted batch
+is published before its tools run, not replaced with an older complete prefix;
+terminal visible assistant text is published before the terminal Run observation.
+Shell checkpoint placeholders are not published as completed shell observations;
+recovered placeholders explicitly report unavailable process capture.
+
+`ContextView` additionally retains model, plan, optional window, existing reported
+`last_request` accounting, effective request Entry count, instruction/tool-definition
+JSON bytes and locally encoded provider-request bytes. Safe open/resume, idle/control
+and terminal boundaries measure the current GC/handoff request locally; model
+boundaries reuse the already assembled request. This is bytes, not inferred token
+usage or a provider request. Intermediate boundaries may report `not_captured`;
+incomplete batches, uncertain effects, unsupported/refused local encoding and an
+active exclusive control report `incomplete_tool_batch`, `effects_unknown`,
+`encoding_unavailable` or `control_in_progress`. Scripted generation has no
+provider wire request, so its exact encoded size is always absent with
+`encoding_unavailable` at safe boundaries, never a hypothetical OpenAI-shaped body.
+Missing exact measurements are
+absent, never a stale safe-prefix measurement or a fabricated known usage value.
+No prompts, native items, adapter errors, configuration/environment or credentials
+are included. Source class byte totals need not equal encoded effective-request
+bytes: GC, handoff and provider formatting deliberately differ.
+
+### Content bounds and paging
+
+Limits are **1–100 items**, with every returned page's ordinary serde JSON fitting
+**256 KiB**, including decimal expansion of `Vec<u8>` and wrapper headroom.
+Each content field retains at most 4 KiB of exact original bytes; each Entry/agent
+shares an 8 KiB content budget, and an assistant retains at most 32 Blocks.
+`ContentBytes { bytes, original_bytes, omitted_bytes }`, omitted Block counts,
+source Entry internal-JSON size and explicit reasoning/native/unknown-kind
+omissions distinguish absent content from complete bytes. Oversized Entries are
+returned at their own consecutive index with omissions, never skipped. Tool
+outcomes retain success, code/message, exact opaque data, capture truncation and
+unknown effects. Reasoning, signatures, encrypted/native provider items and
+unsupported raw Entry/Block content are never returned. Ordinary strings are
+borrowed before retaining their bounded prefix, including when the content budget
+is exhausted. These are return-size bounds, not universal temporary-allocation
+bounds: encoded raw fields may still require full-source decoding, and ordinary
+opaque JSON may require full-source serialization.
+
+Shell pages retain live raw receipt capture independently of display repair, plus
+capture omission/incompleteness flags distinct from observation-layer omission.
+Legacy durable shell records do not preserve repaired or boundary-trimmed original
+capture bytes: after resume those cases return absent output with
+`original_bytes_not_retained`, rather than substituting display text as original
+bytes. Recovered unknown-effect or interrupted shell records conservatively retain
+`output_incomplete: true`, even though legacy durable records lack that field.
+An unknown-effect record with zero or missing `output_bytes_seen` cannot establish
+process-capture provenance: output is absent with `capture_not_recorded`. In
+particular, a pre-spawn checkpoint's warning prose is not captured process output.
+This may also conservatively withhold a genuinely empty interrupted capture;
+positive-count unrepaired/untrimmed prefixes remain available with incompleteness.
+Live raw receipts retain their known capture flags. Existing durable/CLI shell
+record formats and blocked-state/no-replay behavior are unchanged.
+
+Entry/agent cursors bind `SessionRef { session_id, instance_id }`, generation and
+next zero-based position. A cursor remains usable at the current end for later
+append. Changed published source prefixes (for example compaction) expire Entry
+cursors; settings and Carry with unchanged source history do not. Reset/Fresh and
+resume create a foreign opening. Any changed observed lifetime roster expires
+agent cursors. Foreign cursors return `conflict`, expired generations return
+`cursor_expired`, and future/out-of-range positions return `invalid_argument`.
+Restart with no cursor after a generation change. Returned records are owned.
+
+The agent cache includes lifetime descendants and ended-at-resume observations,
+independent per-record and total costs, depth/kind/state and `accounting_complete`.
+`roster_observed` records the last owner roster capture. Child progress may remain
+stale until the next owner observation boundary; reading is not a fresh worker
+poll and does not consume completion notices or count child costs again.
+
+### Events and waits
+
+A bounded 256-record `VecDeque` contains typed command/Run changes, content/context/
+roster availability and rewrite hints, replacement, closing and closed boundaries.
+Events contain discovery hints, not transcripts or unbounded terminal results.
+Each queued Run made terminal by failure, cancellation or owner cleanup gets its
+own exact-target terminal event before final close; queue draining and its complete
+inventory changes remain under one State lock, with one revision per event.
+Sequences increase within this opening; the snapshot cursor is the latest sequence
+published under the same State lock. `read_events` reads **strictly after** its
+cursor, so snapshot-then-read has no lost-publication window. `next_cursor` and
+`has_more` support bounded draining. An evicted gap returns `cursor_expired`, never
+an apparently empty feed; resnapshot to discover the complete `live_runs` inventory
+and restart from that snapshot's cursor. This is bounded observation, not durable
+replay or a control-flow event bus; owner publication never waits for consumers.
+
+Zero wait polls. Positive waits are capped at 30,000 ms and use the existing
+condition variable, polling the caller-local cancellation flag at most every
+20 ms. A set flag returns `cancelled` for that read only, without cancelling a Run
+or control. Timeout returns an empty page when nothing changed. Closing publishes
+a wakeup; once its cursor is consumed a later wait can await final cleanup.
+`end_of_opening` becomes true at completed close/replacement (retained events may
+still need draining), and a caught-up terminal read returns immediately. Foreign,
+future and evicted event cursors return `conflict`, `invalid_argument` and
+`cursor_expired` respectively. Sequence exhaustion fails explicitly as an expired
+event stream instead of wrapping identities.
 
 ## Boundary
 

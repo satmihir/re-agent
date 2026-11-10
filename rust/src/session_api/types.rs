@@ -1,3 +1,4 @@
+use super::{ContextSummary, EventCursor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -449,6 +450,12 @@ pub struct AutoInfo {
 pub struct SessionSnapshot {
     /// session identifies this live opening, including after close.
     pub session: SessionRef,
+    /// event_cursor is the latest event atomically included in this snapshot.
+    pub event_cursor: EventCursor,
+    /// observed_at_ms is this publication's Unix millisecond timestamp.
+    pub observed_at_ms: u64,
+    /// context summarizes the published source history, including incomplete batches and uncertainty.
+    pub context: ContextSummary,
     /// replacement_session identifies this retired opening's immediate successor without claiming it.
     pub replacement_session: Option<SessionRef>,
     /// revision increases on each publication or admission.
