@@ -1590,9 +1590,16 @@ fn pty_full_consent_receipt_ledger_cancels_the_run_instead_of_reopening_the_pick
         }
         let mut pty = Pty::start(&mut command);
         pty.wait(b"> ");
-        let mut input = b"/plan\r".repeat(255);
-        input.extend_from_slice(b"ask at capacity\r");
-        pty.send(&input);
+        for index in 0..255 {
+            pty.send(b"/plan\r");
+            pty.wait(if index % 2 == 0 {
+                b"plan mode on:"
+            } else {
+                b"plan mode off"
+            });
+            pty.wait(b"\x1b[?2004h");
+        }
+        pty.send(b"ask at capacity\r");
         if checkpoint_enabled {
             let (mut stream, _) = pty.request(&listener);
             let response = json!({"id":"capacity","object":"response","status":"completed","model":"gpt-6.1-sol","output":[{"type":"function_call","call_id":"capacity","name":"request_workspace_access","arguments":arguments}],"usage":{"input_tokens":13,"output_tokens":3}}).to_string();
