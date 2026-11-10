@@ -39,7 +39,14 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
                 };
             }
             "summary" => {}
-            "shell" => trust = "untrusted_tool_data",
+            "shell" => {
+                if text(data, "kind") == "user_shell_command_effect_unknown"
+                    || yes(data, "interrupted")
+                {
+                    return Err(format!("entry {n} has uncertain human shell effects; inspect before discarding context"));
+                }
+                trust = "untrusted_tool_data";
+            }
             "assistant" => {
                 for block in data["blocks"].as_array().into_iter().flatten() {
                     match text(block, "kind") {
@@ -486,6 +493,18 @@ mod tests {
             session.state["tokens_per_byte"] = json!(measured);
             assert_eq!(admission_rate(&session, "openai"), expected);
             assert_eq!(admission_rate(&session, "anthropic"), 0.5);
+        }
+    }
+
+    #[test]
+    fn human_shell_uncertainty_cannot_be_hidden_by_a_visible_handoff() {
+        for (kind, interrupted, valid) in [
+            ("user_shell_command_effect_unknown", false, false),
+            ("user_shell_command", true, false),
+            ("user_shell_command", false, true),
+        ] {
+            let entry = json!({"kind":"shell","shell":{"kind":kind,"interrupted":interrupted,"command":"human command","output":"observed"}});
+            assert_eq!(handoff(&[entry]).is_ok(), valid);
         }
     }
 

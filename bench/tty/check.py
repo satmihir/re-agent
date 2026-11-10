@@ -556,6 +556,25 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "shared-shell-capture": {
+        "script": [reply("Ordinary turn after the human shell.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "!printf merged; printf '%s' '-stderr' >&2; exit 7"), ("key", "enter"),
+            ("wait", "exit 7", 5),
+            ("wait_status", "scripted / low", 5),
+            ("show", "shared runner preserves merged unterminated output and nonzero footer"),
+            ("expect", "screen_has", "merged-stderr"),
+            ("expect", "screen_has", "added to the conversation"),
+            ("expect", "region_after_output"),
+            ("expect", "status_row_last"),
+            ("type", "continue"), ("key", "enter"),
+            ("wait", "Ordinary turn after the human shell.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "region_after_output"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "interrupt-shell-command": {
         "script": [reply("unused")],
         "steps": [

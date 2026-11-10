@@ -820,7 +820,8 @@ fn process_snapshot() -> std::io::Result<Vec<(i32, i32, i32)>> {
     result
 }
 
-fn terminate_tree(pid: i32) -> std::io::Result<()> {
+/// terminate_tree stops an isolated command's descendants and owned process groups.
+pub(crate) fn terminate_tree(pid: i32) -> std::io::Result<()> {
     let snapshot = process_snapshot();
     let processes = snapshot.as_ref().map(Vec::as_slice).unwrap_or_default();
     let mut tree = vec![(pid, 0, pid)];
