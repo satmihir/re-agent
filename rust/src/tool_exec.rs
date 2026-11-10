@@ -967,10 +967,19 @@ mod tests {
 }
 
 #[cfg(test)]
-fn assert_exec_pids_stopped(dir: &Path, names: &[&str]) {
+fn assert_exec_pids_stopped(dir: &Path, names: &[&str], result: &Value) {
     let mut alive = Vec::new();
     for name in names {
-        let pid: i32 = fs::read_to_string(dir.join(name)).unwrap().parse().unwrap();
+        let marker = dir.join(name);
+        let text = fs::read_to_string(&marker).unwrap_or_else(|error| {
+            panic!("read {}: {error}; exec outcome: {result}", marker.display())
+        });
+        let pid: i32 = text.parse().unwrap_or_else(|error| {
+            panic!(
+                "invalid PID in {}: {error}; exec outcome: {result}",
+                marker.display()
+            )
+        });
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             // Independent of the discovery implementation; missing /proc must not skip this assertion.
@@ -1090,7 +1099,11 @@ time.sleep(30)"#,
                 &json!({}),
             )
             .unwrap();
-            assert_exec_pids_stopped(dir.path(), &["parent.pid", "escaped.pid", "grandchild.pid"]);
+            assert_exec_pids_stopped(
+                dir.path(),
+                &["parent.pid", "escaped.pid", "grandchild.pid"],
+                &value,
+            );
             assert_eq!(value["code"], "timeout", "{value}");
             assert_eq!(value["effect"], "unknown");
             assert_eq!(value["data"]["termination_reason"], "timeout");
@@ -1230,11 +1243,14 @@ mod cancellation_tests {
             } else {
                 crate::cancellation::cancel(&waiting);
             }
-            assert!(ready.exists(), "exec did not reach its readiness marker");
+            ready.exists()
         });
         let script = "import os,time,pathlib\npathlib.Path('parent.pid').write_text(str(os.getpid()))\npid=os.fork()\nif pid==0:\n os.setsid()\n pathlib.Path('escaped.pid').write_text(str(os.getpid()))\nprint('started',flush=True)\ntime.sleep(30)";
         let result = execute(&mut workspace, &config, &json!({"argv":["/usr/bin/python3","-c",script],"cwd":".","timeout_ms":1,"then":[["/bin/sh","-c","touch unexpected"]]})).unwrap();
-        interrupter.join().unwrap();
+        assert!(
+            interrupter.join().unwrap(),
+            "exec did not reach its readiness marker; exec outcome: {result}"
+        );
         assert_eq!(result["code"], "cancelled", "{result}");
         assert_eq!(result["effect"], "unknown");
         assert_eq!(result["message"], "step 1 of 2: the command was cut short by cancellation; its effects are unknown; the 1 after it did not run");
@@ -1274,7 +1290,7 @@ mod cancellation_tests {
         )
         .unwrap();
         assert_eq!(recovered["ok"], true);
-        assert_exec_pids_stopped(Path::new(&dir), &["parent.pid", "escaped.pid"]);
+        assert_exec_pids_stopped(Path::new(&dir), &["parent.pid", "escaped.pid"], &result);
     }
 }
 
