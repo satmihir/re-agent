@@ -41,13 +41,13 @@ fn route(id: &str, model: &str, effort: &str) -> Value {
     };
     json!({"id":id,"model":model,"reasoning_effort":effort,"description":format!("{model} / {effort}. {capability} {description}")})
 }
-fn inventory(session: &Session, fallback: &Value) -> Vec<Value> {
+fn inventory(session: &Session, fallback: &Value, require_available: bool) -> Vec<Value> {
     let mut routes = vec![fallback.clone()];
     for model in ["gpt-6.1-luna", "gpt-6.1-sol", text(fallback, "model")] {
         let info = catalog::model_info(model);
         if info.is_null()
             || info["context_window"].as_i64().unwrap_or(0) == 0
-            || !available(session, text(&info, "provider"))
+            || (require_available && !available(session, text(&info, "provider")))
         {
             continue;
         }
@@ -150,10 +150,12 @@ pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
                 .into(),
         );
     }
-    if !available(session, text(&info, "provider")) {
+    // Explicitly pinned routes are dormant; an absent legacy flag still means enabled.
+    let routing = session.state["auto_enabled"] != false;
+    if routing && !available(session, text(&info, "provider")) {
         return Err("Auto fallback provider is unavailable".into());
     }
-    let routes = inventory(session, &route("capable", &model, &effort));
+    let routes = inventory(session, &route("capable", &model, &effort), routing);
     session.state["auto_routes"] = json!(routes);
     session.state["auto"] = json!(true);
     if session.state.get("auto_enabled").is_none() {

@@ -191,27 +191,23 @@ fn admission_rate(session: &Session, destination_provider: &str) -> f64 {
     crate::run_loop::admission_rate(session)
 }
 
-/// Transition validates a destination locally before replacing model bindings.
-pub(crate) fn transition(
-    session: &mut Session,
-    info: &Value,
-    fresh: bool,
-) -> Result<Value, String> {
-    let mut config = session.config.clone();
+/// destination configures and pins a catalog selection without changing the live Session.
+pub(crate) fn destination(current: &Value, info: &Value) -> Result<Value, String> {
+    let mut config = current.clone();
     config["provider"] = info["provider"].clone();
     config["model"] = info["id"].clone();
     config["reasoning_effort"] = info["effort"].clone();
     provider::configure(&mut config)?;
     context::pin_instructions(&mut config);
-    let provider = provider::Provider::new(&config)?;
-    let run_id = types::new_id();
-    session.open_trace(&run_id);
-    session.state["last_trace"] = json!(session.trace.path());
-    let started = Instant::now();
-    let mut metadata = json!({"source_model":session.config["model"],"source_provider":session.config["provider"],"source_effort":session.config["reasoning_effort"],"destination_model":config["model"],"destination_provider":config["provider"],"destination_effort":config["reasoning_effort"],"fresh":fresh});
-    session
-        .trace
-        .write("model.switch.requested", 0, metadata.clone());
+    Ok(config)
+}
+
+/// stage_session measures the destination against the settled GC view or explicit empty context.
+pub(crate) fn stage_session(
+    session: &Session,
+    config: &Value,
+    fresh: bool,
+) -> Result<(Value, usize), (usize, String)> {
     let history = if fresh {
         vec![]
     } else {
@@ -224,8 +220,30 @@ pub(crate) fn transition(
             },
         )
     };
-    let rate = admission_rate(session, text(&config, "provider"));
-    let staged = stage_measured(&config, &history, rate);
+    stage_measured(
+        config,
+        &history,
+        admission_rate(session, text(config, "provider")),
+    )
+}
+
+/// Transition validates a destination locally before replacing model bindings.
+pub(crate) fn transition(
+    session: &mut Session,
+    info: &Value,
+    fresh: bool,
+) -> Result<Value, String> {
+    let config = destination(&session.config, info)?;
+    let provider = provider::Provider::new(&config)?;
+    let run_id = types::new_id();
+    session.open_trace(&run_id);
+    session.state["last_trace"] = json!(session.trace.path());
+    let started = Instant::now();
+    let mut metadata = json!({"source_model":session.config["model"],"source_provider":session.config["provider"],"source_effort":session.config["reasoning_effort"],"destination_model":config["model"],"destination_provider":config["provider"],"destination_effort":config["reasoning_effort"],"fresh":fresh});
+    session
+        .trace
+        .write("model.switch.requested", 0, metadata.clone());
+    let staged = stage_session(session, &config, fresh);
     metadata["latency_ms"] = json!(started.elapsed().as_millis() as u64);
     let (handoff, size) = match staged {
         Ok(v) => v,
