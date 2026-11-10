@@ -40,7 +40,9 @@ impl Session {
             .map(str::to_owned)
             .unwrap_or_else(types::new_id);
         config["session_id"] = json!(session_id);
-        provider.set_cancellation(crate::cancellation::token(&config));
+        if !flag(&config["tool_free"]) {
+            provider.set_cancellation(crate::cancellation::token(&config));
+        }
         if !config["prompt"]["text"].is_string() {
             context::pin_instructions(&mut config);
         }
@@ -63,6 +65,11 @@ impl Session {
             crate::auto::initialize(&mut session)?;
         }
         Ok(session)
+    }
+
+    fn cancelled(&self) -> bool {
+        crate::session_api::btw_cancelled(self)
+            .unwrap_or_else(|| crate::cancellation::cancelled(&self.config))
     }
 
     /// Submit executes one user submission and returns its terminal RunResult.
@@ -99,7 +106,10 @@ impl Session {
             };
             return json!({"status":"session_blocked","reason":format!("the last run ended with {status}; inspect {location} and use {advice}"),"steps":0,"tool_calls":0,"usage":types::usage_zero(true)});
         }
-        if self.api.is_none() && plan_requested(&String::from_utf8_lossy(text)) {
+        if self.api.is_none()
+            && !flag(&self.config["tool_free"])
+            && plan_requested(&String::from_utf8_lossy(text))
+        {
             self.state["plan"] = json!(true);
         }
         let run_id = self
@@ -178,7 +188,10 @@ impl Session {
                 || foreign && flag(&self.config["read_only"])
         );
         snapshot_config["plan"] = json!(foreign && flag(&self.state["plan"]));
-        let mut user = json!({"text":crate::raw::string(text),"workspace":crate::workspace::snapshot(&snapshot_config)});
+        let mut user = json!({"text":crate::raw::string(text)});
+        if !flag(&self.config["tool_free"]) {
+            user["workspace"] = crate::workspace::snapshot(&snapshot_config);
+        }
         let roster = crate::agents::roster(self);
         if !roster.is_null() {
             user["roster"] = roster;
@@ -199,14 +212,14 @@ impl Session {
         }
         crate::session_api::publish(self, "model", true);
         loop {
-            if crate::agents::cancelled(self) || crate::cancellation::cancelled(&self.config) {
+            if crate::agents::cancelled(self) || self.cancelled() {
                 self.state["resumable"] = json!(true);
                 return self.finish("cancelled", "cancelled before the next model request", "");
             }
             self.deliver_agents();
             if crate::auto::route_next(self).is_err()
                 || crate::agents::cancelled(self)
-                || crate::cancellation::cancelled(&self.config)
+                || self.cancelled()
             {
                 self.state["resumable"] = json!(true);
                 return self.finish("cancelled", "cancelled during routing", "");
@@ -309,9 +322,12 @@ impl Session {
                 );
                 return self.finish("protocol_error", &reason, "");
             }
+            let calls = tool_calls(&resp);
+            if flag(&self.config["tool_free"]) && !calls.is_empty() {
+                return self.finish("protocol_error", "BTW responses must not call tools", "");
+            }
             self.trace
                 .write("model.accepted", step as usize, resp.clone());
-            let calls = tool_calls(&resp);
             self.history
                 .push(json!({"kind":"assistant","assistant":resp}));
             crate::session_api::publish(self, "accepted", false);
@@ -387,7 +403,7 @@ impl Session {
                 continue;
             }
             for (index, call) in calls.iter().enumerate() {
-                if crate::agents::cancelled(self) || crate::cancellation::cancelled(&self.config) {
+                if crate::agents::cancelled(self) || self.cancelled() {
                     self.not_executed(&calls[index..], "cancelled");
                     return self.finish("cancelled", "cancelled during tool dispatch", "");
                 }
@@ -503,9 +519,7 @@ impl Session {
                     return self.finish("persistence_error", &error, "");
                 }
                 if string(&outcome["effect"]) == "unknown" {
-                    if crate::agents::cancelled(self)
-                        || crate::cancellation::cancelled(&self.config)
-                    {
+                    if crate::agents::cancelled(self) || self.cancelled() {
                         self.not_executed(&calls[index + 1..], "run stopped");
                         return self.finish(
                             "cancelled",
@@ -854,7 +868,9 @@ impl Session {
         {
             result["effects"] = self.state["effects"].clone();
         }
-        if flag(&self.state["resumable"]) {
+        if flag(&self.config["tool_free"]) {
+            result["resumable"] = json!(false);
+        } else if flag(&self.state["resumable"]) {
             result["resumable"] = json!(true);
         }
         if flag(&self.config["agents"]) && !flag(&self.config["agent"]) {

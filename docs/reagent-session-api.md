@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell, bounded structured observations, typed workspace consent and interactive chat migration implemented**, with the remaining
+Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell, bounded structured observations, typed workspace consent, interactive chat migration and isolated tool-free BTW questions implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -8,7 +8,7 @@ it does not make `runtime::Session` itself a supported public API.
 ## Implemented first milestone
 
 `rust/src/session_api.rs` and its owned records implement `open_session`,
-`resume_session`, `get_snapshot`, `send_message`, `get_run`, `get_command`,
+`resume_session`, `get_snapshot`, `send_message`, `ask`, `get_run`, `get_command`,
 `wait_run`, `cancel_run`, `cancel_command`, and idle-only `close`. One worker owns the Session;
 cloneable handles share only owned published observations, receipts, the queue, and exact
 Run cancellation flags. The model loop remains in `run_loop.rs`.
@@ -17,12 +17,13 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   environment bindings. The CLI's private adapter retains its existing flags.
 - Messages are literal bytes. `PlanMode` applies an explicit planning change at
   turn start; the CLI translates inline `/plan` rather than letting the API parse it.
-- `live_runs` contains every queued/running conversation Run, without requiring
-  admission receipts or events to discover identities. There are no BTW Runs yet.
+- `live_runs` contains every queued/running conversation and BTW Run, without requiring
+  admission receipts or events to discover identities. BTW has its own SessionRef/RunRef,
+  owned and discovered through the parent handle.
   Terminal results remain readable after inventory removal and close.
 - At most 16 live Runs and 256 retained command receipts are admitted; messages,
-  controls and live human-consent resolutions share the receipt limit. Individual
-  messages fit 10 MiB; retained message plus long-control input bytes fit 32 MiB. Exhaustion refuses
+  BTW questions, controls and live human-consent resolutions share the receipt limit. Individual
+  messages/questions fit 10 MiB; retained message/question plus long-control input bytes fit 32 MiB. Exhaustion refuses
   admission, not cancellation/close, and never evicts deduplication records.
 - Request-ID retries deduplicate within this opening, not across restarts.
   A failed Run discards queued follow-ups rather than starting them automatically.
@@ -37,10 +38,76 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   remains local. Chat never owns or mutates the runtime Session.
 
 This milestone is **trusted-local only**: handles are not capability-filtered and
-must not be given to untrusted clients. Transport authorization, BTW and steering
+must not be given to untrusted clients. Transport authorization and steering
 are not implemented; interactive chat uses the typed human-consent guard. The detailed records and operations below describe the full target,
 not a claim that every field or method already exists. `wait_run` and `close` are
 local conveniences while that broader observation/control boundary is extracted.
+
+## Implemented isolated BTW questions
+
+`ask(request_id, question: &[u8])` reserves a `RunKind::Btw` Run with its own
+SessionRef and RunRef. It shares the command namespace, literal-byte retry identity,
+256 receipts, 16 live-Run slots and 32 MiB retained input budget. Exact retries
+return before current lifecycle/capacity/source validation. A synchronous rejection
+admits nothing; admitted worker initialization failure settles its Run without retry.
+Question conversion, request construction and provider encoding run outside the shared
+State lock. Admission then rechecks exact retries, poison/lifecycle/control/capacity
+and the same immutable source identity atomically before publishing a queued Run.
+A changed source returns explicit `busy`, not an older capture or an internal retry.
+New IDs are blocked after persistence failure; retained exact retries remain readable.
+
+The main owner publishes an immutable full-visible-history/configuration capture
+or an explicit unavailable latest source at settled boundaries, separate from bounded
+public Entry projections. Frozen configuration plus labelled source storage fits a
+10 MiB construction allowance. A capped streaming encoder borrows visible fields,
+never clones native payloads just to omit them, and stops allocating source bytes
+at the cap while still validating the whole settled tool/uncertainty graph. A
+successful capture is complete and lossless; overflow is `context_too_large`, never
+a truncated inference prefix. This bounds added serialized capture storage, not the
+main history/GC originals, graph-validation table, all pre-existing observation
+allocations, process RSS or owner latency; those remain proportional to source data. During an
+unsettled accepted tool batch, admission captures the identified earlier prefix;
+when that batch settles with unknown/failed outcomes, the latest prefix replaces
+it even if handoff validation now rejects it. No older-safe fallback is retained.
+Metadata and rate-only updates reuse immutable labelled history; configuration
+changes reuse it while its construction allowance still fits (or rebuild a previously
+unavailable capture if that allowance changes). Admission calibration participates
+in capture identity even when a rejected response appended no assistant Entry.
+Source publication uses the matching event's actual stamp, including its clock sample.
+RunInfo
+source metadata identifies the source opening, publication revision/cursor/time,
+history generation/length and Run/Step, plus admission time and pending activity.
+Native reasoning/signatures are omitted; invalid ordinary strings and opaque JSON
+are explicitly base64-labelled, never passed off as repaired originals.
+
+Each worker exclusively owns a fresh ephemeral Session/Provider, counters, call IDs,
+GC and tool state, reusing the ordinary loop. Frozen instructions/workspace observations
+are retained without new workspace reads, Git probes or instruction repinning.
+The source model/effort is fixed and Auto disabled. Scripted questions clone loaded
+immutable responses at the source cursor without rereading or consuming the main
+script. Existing uncertainty, encoded-byte and estimated-window checks reject unsafe
+or oversized captures; no trimming, tool queries or main compaction occurs. Tool
+specs are empty and emitted ToolCalls fail before any call executes, with a second
+dispatch guard. This is not read-only delegation and creates no agent-tree delivery.
+
+Only the BTW Run retains its result, trace and usage; question work never mutates
+the main transcript, evidence, checkpoint, projections, model or root/router/tree
+accounting. There is no persisted BTW aggregate or independent resume. Unknown
+provider totals remain unknown, including cancelled started HTTP requests; HTTP
+sends without totals are conservatively unreported attempts even if billing cannot
+be established. Already parsed retry totals are retained exactly once across success,
+read failure and cancellation. Usage becomes an observation only after a complete
+HTTP response body is assembled and validated (including parsed retry responses).
+Cancellation before that boundary conservatively leaves even server-flushed terminal
+SSE totals unreported: a server write is not evidence of harness receipt/validation.
+Partial-body usage salvage is not implemented. Both BTW terminal trace and public
+result forbid independent resume. Existing ordinary transport known-zero cancellation
+policy is unchanged.
+Main completion/failure and cancellation are independent of questions. Settings,
+long controls, reset and close require every Run idle; last owning-handle loss
+cancels questions without workers retaining a Client. Retired handles keep their
+own records; replacement/resumed handles cannot inspect or cancel old question refs.
+There is no CLI question input/display binding yet.
 
 ## Implemented typed idle controls
 
@@ -878,7 +945,7 @@ without model work or a transcript Entry. Queue overflow refuses admission; the
 host never silently replaces or concatenates messages.
 
 **BTW.** `ask` means “answer this from the conversation so far, without changing
-what the main agent is doing.” Proposed first contract:
+what the main agent is doing.” Implemented first contract:
 
 - At admission, capture the latest published settled history prefix and its
   configuration together: a complete accepted tool batch, not a partial provider

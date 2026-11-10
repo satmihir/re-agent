@@ -222,9 +222,17 @@ pub fn encode_request(config: &Value, request: &Value) -> Result<Value, String> 
     }
 }
 
+/// ScriptedCapture owns immutable responses at one source cursor.
+#[derive(Clone)]
+pub(crate) struct ScriptedCapture {
+    responses: std::sync::Arc<Vec<Value>>,
+    next: usize,
+}
+
+/// Provider owns independent transport state and an optional immutable response script.
 pub struct Provider {
     config: Value,
-    responses: Vec<Value>,
+    responses: std::sync::Arc<Vec<Value>>,
     next: usize,
     transport: crate::transport::Transport,
 }
@@ -275,11 +283,34 @@ impl Provider {
         }
         Ok(Self {
             config: config.clone(),
-            responses,
+            responses: std::sync::Arc::new(responses),
             next: 0,
             transport: crate::transport::Transport::new(config),
         })
     }
+    /// scripted_position identifies the loaded source cursor even after a rejected response.
+    pub(crate) fn scripted_position(&self) -> Option<usize> {
+        (self.name() == "scripted").then_some(self.next)
+    }
+
+    /// scripted_capture clones loaded responses without reading a file or moving the source cursor.
+    pub(crate) fn scripted_capture(&self) -> Option<ScriptedCapture> {
+        (self.name() == "scripted").then(|| ScriptedCapture {
+            responses: self.responses.clone(),
+            next: self.next,
+        })
+    }
+
+    /// from_scripted_capture creates independent transport and cursor state from an immutable capture.
+    pub(crate) fn from_scripted_capture(config: &Value, captured: ScriptedCapture) -> Self {
+        Self {
+            config: config.clone(),
+            responses: captured.responses,
+            next: captured.next,
+            transport: crate::transport::Transport::new(config),
+        }
+    }
+
     pub fn name(&self) -> String {
         match s(&self.config, "provider") {
             "scripted" => "scripted",
@@ -360,10 +391,30 @@ impl Provider {
                 &m,
             )
         })?;
+        let tool_free = self.config["tool_free"] == true;
         let (status, raw) =
-            self.transport
-                .call_generation(request, &body, trace, region, summary_deadline)?;
-        let result = if status != 200 {
+            match self
+                .transport
+                .call_generation(request, &body, trace, region, summary_deadline)
+            {
+                Ok(response) => response,
+                Err(mut error) => {
+                    if tool_free {
+                        // Transport errors inconsistently carry prior attempts; its accumulator is authoritative.
+                        error.usage = self.transport.retry_usage.clone();
+                        let missing = self
+                            .transport
+                            .sent_attempts
+                            .saturating_sub(self.transport.reported_retries);
+                        if missing > 0 {
+                            error.usage["known"] = json!(false);
+                            error.usage["unreported_attempts"] = json!(missing);
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+        let mut result = if status != 200 {
             Err(crate::transport::provider_error(status, &raw))
         } else if s(&self.config, "provider") == "anthropic" {
             crate::anthropic::normalize(&raw)
@@ -373,6 +424,23 @@ impl Provider {
         } else {
             crate::openai::normalize(&raw)
         };
+        if tool_free {
+            let usage = match &mut result {
+                Ok(response) => &mut response["usage"],
+                Err(error) => &mut error.usage,
+            };
+            let reported = u64::from(usage["known"] == true);
+            let missing = self
+                .transport
+                .sent_attempts
+                .saturating_sub(self.transport.reported_retries + reported);
+            self.transport.retry_usage["unreported_attempts"] = json!(0);
+            self.transport.retry_usage["known"] = json!(true);
+            usage["unreported_attempts"] = json!(missing);
+            if missing > 0 {
+                usage["known"] = json!(false);
+            }
+        }
         result.map_err(|mut e| {
             usage_add(&mut e.usage, &self.transport.retry_usage);
             e

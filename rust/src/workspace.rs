@@ -86,6 +86,17 @@ pub fn missing_path(path: &Path) -> PathBuf {
 }
 
 impl Workspace {
+    /// tool_free retains only a frozen scope label, without filesystem observations or authority.
+    pub(crate) fn tool_free(root: PathBuf) -> Self {
+        Self {
+            root,
+            seen: HashMap::new(),
+            publish_mu: Arc::new(Mutex::new(())),
+            digests: HashMap::new(),
+            identity: (0, 0),
+        }
+    }
+
     pub fn open(path: &str) -> Result<Self, String> {
         let root = fs::canonicalize(path).map_err(|e| stable_error(&e))?;
         let info = fs::metadata(&root).map_err(|e| stable_error(&e))?;
