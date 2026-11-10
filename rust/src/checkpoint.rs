@@ -30,6 +30,13 @@ static LOCKS: OnceLock<Mutex<Leases>> = OnceLock::new();
 #[cfg(test)]
 thread_local! {
     static CLOSE_ERROR: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+    static DIRECTORY_SYNC_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Fail_next_directory_sync injects one error after real checkpoint replacement for boundary tests.
+#[cfg(test)]
+pub(crate) fn fail_next_directory_sync() {
+    DIRECTORY_SYNC_ERROR.with(|error| error.set(true));
 }
 
 /// Directory returns the private cache location of a validated session ID.
@@ -205,13 +212,43 @@ fn raw(value: &mut Value, decode: bool) -> Result<(), String> {
 }
 
 fn user(value: &mut Value, decode: bool) -> Result<(), String> {
+    // New API input keeps its literal bytes while the ordinary v2 string remains Go-compatible.
+    if decode {
+        if let Some(encoded) = value
+            .as_object_mut()
+            .and_then(|user| user.remove("text_bytes"))
+        {
+            let bytes = encoded
+                .as_str()
+                .and_then(|encoded| STANDARD.decode(encoded).ok())
+                .ok_or("checkpoint user text_bytes must be base64")?;
+            value["text"] = crate::raw::string(&bytes);
+        }
+    } else if value["attribution"].is_object() {
+        if let Some(bytes) = crate::raw::string_bytes(&value["text"])
+            .filter(|bytes| std::str::from_utf8(bytes).is_err())
+        {
+            value["text_bytes"] = json!(STANDARD.encode(bytes));
+        }
+    }
     for key in ["workspace", "roster"] {
         if let Some(v) = value.get_mut(key) {
             raw(v, decode)?;
         }
     }
     if !decode {
-        *value = ordered(value, &["text", "workspace", "roster", "source", "plan"]);
+        *value = ordered(
+            value,
+            &[
+                "text",
+                "workspace",
+                "roster",
+                "source",
+                "plan",
+                "attribution",
+                "text_bytes",
+            ],
+        );
     }
     Ok(())
 }
@@ -595,12 +632,20 @@ pub fn save(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> 
         }
         fs::rename(&staged, destination)
             .map_err(|e| format!("replace checkpoint: {}", crate::errors::stable_io(&e)))?;
-        File::open(&dir).and_then(|f| f.sync_all()).map_err(|e| {
-            format!(
-                "sync checkpoint directory: {}",
-                crate::errors::stable_io(&e)
-            )
-        })
+        File::open(&dir)
+            .and_then(|f| {
+                #[cfg(test)]
+                if DIRECTORY_SYNC_ERROR.with(|error| error.replace(false)) {
+                    return Err(std::io::Error::from_raw_os_error(libc::EIO));
+                }
+                f.sync_all()
+            })
+            .map_err(|e| {
+                format!(
+                    "sync checkpoint directory: {}",
+                    crate::errors::stable_io(&e)
+                )
+            })
     })();
     let _ = fs::remove_file(staged);
     result.map_err(|e| format!("save session {id}: {e}"))
@@ -681,7 +726,10 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             compacted_plan:string blocked:string last_trace:string last_request:usage \
             tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt",
         "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
-        "user" => "text:string workspace:raw roster:raw source:string plan:string",
+        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string",
+        "user_attribution" => "request_id:string target:run_ref kind:string boundary_step:int",
+        "run_ref" => "session:session_ref run_id:string",
+        "session_ref" => "session_id:string instance_id:string",
         "response" => "response_id:string model:string blocks:[]block native:native usage:usage",
         "block" => "kind:string text:string call:call",
         "call" => "call_id:string name:string arguments:string",
@@ -1575,6 +1623,8 @@ mod tests {
         assert_eq!(cp["context_gc_age_steps"], 0);
         assert_eq!(cp["context_gc_consolidate"], false);
         assert_eq!(cp["history"][0]["user"]["text"], "legacy <&> 界");
+        assert!(cp["history"][0]["user"].get("attribution").is_none());
+        assert!(cp["history"][0]["user"].get("text_bytes").is_none());
         assert_eq!(
             crate::raw::bytes(&cp["history"][0]["user"]["workspace"]).unwrap(),
             br#" { "date" : "2026-10-14" } "#

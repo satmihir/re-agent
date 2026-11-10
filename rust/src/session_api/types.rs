@@ -80,6 +80,30 @@ pub struct RunRef {
     pub run_id: String,
 }
 
+/// UserInputKind distinguishes original conversation input from in-Run guidance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserInputKind {
+    /// Message started the target Run.
+    Message,
+    /// Steer was applied at a settled boundary within the target Run.
+    Steer,
+}
+
+/// UserAttribution retains trusted input identity as historical data across resume and handoff.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserAttribution {
+    /// request_id identifies the exact original message or steering receipt.
+    pub request_id: String,
+    /// target identifies the existing Run that received this instruction.
+    pub target: RunRef,
+    /// kind distinguishes an original message from steering.
+    pub kind: UserInputKind,
+    /// boundary_step is the last settled Step when steering was applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boundary_step: Option<u64>,
+}
+
 /// PlanMode applies an explicit mode change when a queued message starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -446,7 +470,7 @@ pub enum ControlResult {
 pub struct CommandInfo {
     /// request_id is the caller's stable idempotency key.
     pub request_id: String,
-    /// run is the reserved execution identity for messages, absent for controls and live consent decisions.
+    /// run identifies a new message/question Run or the existing steering target; controls and consent omit it.
     pub run: Option<RunRef>,
     /// replacement_session identifies the immediate successor after reset or a fresh model switch.
     pub replacement_session: Option<SessionRef>,
@@ -456,7 +480,7 @@ pub struct CommandInfo {
     pub result: Option<ControlResult>,
     /// state records whether the command passed its application barrier.
     pub state: CommandState,
-    /// reason explains failure or retained uncertainty, including an Applied shell interrupted after spawn.
+    /// reason explains failure, uncertainty, an interrupted Applied shell or explicitly in-memory steering.
     pub reason: Option<String>,
 }
 

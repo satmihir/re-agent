@@ -139,6 +139,9 @@ pub enum EntryContent {
         text: ContentBytes,
         /// source attributes delegated observations when known.
         source: ContentBytes,
+        /// attribution retains optional original API message or steering identity, never authority.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attribution: Option<super::UserAttribution>,
         /// plan retains an observed plan marker, not an inferred mode.
         plan: ContentBytes,
         /// workspace retains opaque trusted-local workspace snapshot bytes.
