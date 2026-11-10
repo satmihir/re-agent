@@ -251,6 +251,39 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
     None
 }
 
+/// reset_context stages fresh API context without changing live tools, providers, or agent trees.
+pub(crate) fn reset_context(config: &Value, previous: &Value) -> (Value, Value) {
+    let mut config = config.clone();
+    for key in ["agent_prefix", "agent_tree_id", "cancellation_scope"] {
+        config.as_object_mut().unwrap().remove(key);
+    }
+    config["session_id"] = json!(types::new_id());
+    context::pin_instructions(&mut config);
+    let mut state = json!({
+        "session_id":config["session_id"], "seen_calls":{}, "blocked":"",
+        "gc_state":{"last_pass":0}, "gc_requests":0, "tokens_per_byte":0.0,
+        "usage":types::usage_zero(true), "run_usage":types::usage_zero(true),
+        "last_request":types::usage_zero(false), "auto_usage":types::usage_zero(true),
+        "auto_attempts":0, "steps":0, "tool_calls":0, "compacted_plan":""
+    });
+    for key in [
+        "launch",
+        "launch_instructions",
+        "plan",
+        "auto",
+        "auto_enabled",
+        "auto_fallback_model",
+        "auto_fallback_effort",
+        "auto_routes",
+        "auto_openai_auth",
+    ] {
+        if let Some(value) = previous.get(key) {
+            state[key] = value.clone();
+        }
+    }
+    (config, state)
+}
+
 impl Session {
     /// Compact replaces accepted history only after a successful text-only summary.
     pub fn compact(&mut self, focus: &str) -> Result<Value, String> {

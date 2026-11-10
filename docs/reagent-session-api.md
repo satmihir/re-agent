@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1 and typed idle controls implemented**, with the remaining
+Status: **milestone 1, typed idle controls, and reset/replacement implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -30,7 +30,7 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   checkpoint reservations atomically reject competing API/legacy resume, release
   failed-open leases, and give each successful opening a fresh instance identity.
   Startup failure also retires restored agent state before a later opening.
-- Close requires all admitted Runs to be terminal and awaits descendant cleanup
+- Close requires all admitted Runs and controls to be terminal and awaits descendant cleanup
   and lease release. Dropping the last handle requests asynchronous cancellation
   and cleanup; explicit close is how the host waits for shutdown.
 - `reagent run` now uses this boundary; existing progress/reply rendering remains
@@ -45,14 +45,15 @@ local conveniences while that broader observation/control boundary is extracted.
 
 ## Implemented typed idle controls
 
-`change_session(request_id, expected_revision, SessionChange)` now supports only
-`SetPlan { enabled }`, `SetEffort { effort }`, and `SetAuto { enabled }`. Model
-switching, compaction, reset, and shell controls remain design targets. Settings
+`change_session(request_id, expected_revision, SessionChange)` now supports
+`SetPlan { enabled }`, `SetEffort { effort }`, `SetAuto { enabled }`, and `Reset`.
+Model switching, compaction, and shell controls remain design targets. Settings
 are changed by the same exclusive owner as messages, without a model/router
 request, transcript Entry, Run, or additional usage merely to apply a setting.
 
-- A new control requires no queued/running Run or unfinished control, a current
-  snapshot revision, and an unblocked/open instance. Admission reserves the
+- A new control requires no queued/running Run or unfinished control and a current
+  snapshot revision. The instance must be open and free of persistence failure;
+  only reset may recover another blocked terminal status. Admission reserves the
   exclusive control slot atomically. New messages and close return `busy` until
   it is released. Snapshot `active_control_request_id` identifies this work;
   `live_runs` still contains only Runs.
@@ -94,6 +95,44 @@ allowed routes, usage, attempts, and the existing TypeSafe data-sharing notice;
 provably never-used accounting remains known zero after resume without clearing
 genuine unknown usage. Reads do not probe credential availability or perform HTTP. Enabling is an explicit
 trusted-local host choice under that disclosure, not a new remote consent path.
+
+## Implemented reset and replacement
+
+`SessionChange::Reset` uses the same exclusive idle admission, expected revision,
+request-ID deduplication, and receipt limits. It is also allowed after a blocked
+terminal Run, but not when the instance has a persistence error. It never starts
+inference or replays old work.
+
+A successful reset publishes a fresh Session ID and instance ID, with empty
+history, fresh command storage, zero root/router accounting, and no stale file
+write authorization or GC/handoff/native context. It preserves current settings,
+effective plan mode, launch/read-only authority, launch/active workspace and
+live-opening grants. The existing Provider and ToolState are transferred rather
+than reconstructed; in particular, an offline script's response cursor continues.
+Old children are retired. Old handles retain their observations, receipts and
+recorded costs but reject new mutations; exact reset retries return the same
+replacement reference even after retirement.
+
+Both `CommandInfo.replacement_session` and
+`SessionSnapshot.replacement_session` identify the immediate successor. Once
+`wait_command` reports `Applied`, call `get_replacement()` on the old handle to
+obtain its owning handle. No admission receipt ID is needed for discovery. Pending
+reset returns `busy`; no successful reset returns `not_found`.
+
+The old handle keeps an unclaimed replacement alive until retrieval or release.
+First retrieval hands off ownership and leaves only a weak reference in the old
+handle. Subsequent retrieval clones the still-live recipient handle, or returns
+`unavailable` if all owning recipient handles have been dropped. Closing or
+dropping an old inspector does not cancel a claimed successor; old handles do not
+implicitly follow later reset chains. To await shutdown, close the current handle.
+
+The replacement checkpoint passes its save barrier under a freshly claimed lease
+before publication; the original checkpoint remains recoverable. Reversible
+context changes are staged before irreversible child retirement and write-evidence
+clearing. Failed reset publishes no replacement, restores the previous in-memory
+context, marks persistence failure, releases candidate ownership, and allows only
+inspection/close. Failed I/O may leave an unpublished private checkpoint artifact;
+there is no claim of disk rollback or automatic retry.
 
 ## Boundary
 
