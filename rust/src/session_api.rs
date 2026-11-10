@@ -17,6 +17,17 @@ const MAX_COMMANDS: usize = 256;
 const MAX_MESSAGE_BYTES: usize = 10 << 20;
 const MAX_RETAINED_INPUT_BYTES: usize = 32 << 20;
 
+fn replaces_session(change: &SessionChange) -> bool {
+    matches!(
+        change,
+        SessionChange::Reset
+            | SessionChange::SwitchModel {
+                history: HistoryMode::Fresh,
+                ..
+            }
+    )
+}
+
 fn error(code: &'static str, message: impl Into<String>) -> ApiError {
     ApiError {
         code,
@@ -327,14 +338,14 @@ impl SessionApi {
         Ok(self.client.shared.state.lock().unwrap().snapshot())
     }
 
-    /// Get_replacement claims only this opening's immediate successor after a successful reset.
+    /// Get_replacement claims only the immediate successor after reset or a fresh model switch.
     ///
     /// The first call transfers its retained ownership; later calls clone a still-live successor.
     /// Before that transfer, dropping every old handle shuts the unclaimed successor down;
     /// closing the retired handle is a no-op and does not discard its unclaimed successor.
     /// Old inspectors retain only a weak reference after that transfer, so dropping every claimed
     /// successor handle shuts it down; later retrieval then returns unavailable, never a new opening.
-    /// A pending reset returns busy, and an opening without a successful reset returns not_found.
+    /// A pending replacement returns busy; no successful replacement returns not_found.
     /// This method never follows a successor's own replacement.
     pub fn get_replacement(&self) -> Result<SessionApi, ApiError> {
         let mut state = self.client.shared.state.lock().unwrap();
@@ -354,18 +365,12 @@ impl SessionApi {
             }
             None => {
                 let pending = state.control.is_some_and(|index| {
-                    matches!(
-                        &state.commands[index].work,
-                        CommandWork::Change {
-                            change: SessionChange::Reset,
-                            ..
-                        }
-                    )
+                    matches!(&state.commands[index].work, CommandWork::Change { change, .. } if replaces_session(change))
                 });
                 return Err(if pending {
-                    error("busy", "Session reset has not been published")
+                    error("busy", "Session replacement has not been published")
                 } else {
-                    error("not_found", "Session has no successful reset replacement")
+                    error("not_found", "Session has no successful replacement")
                 });
             }
         };
@@ -504,6 +509,14 @@ impl SessionApi {
                 ));
             }
         }
+        if let SessionChange::SwitchModel { model, .. } = &change {
+            if model.trim().is_empty() || model.len() > 128 {
+                return Err(error(
+                    "invalid_argument",
+                    "model must be nonblank and at most 128 bytes",
+                ));
+            }
+        }
         let shared = &self.client.shared;
         let mut state = shared.state.lock().unwrap();
         if let Some(command) = state
@@ -524,7 +537,7 @@ impl SessionApi {
             return Err(error("unavailable", "Session is closing or closed"));
         }
         if state.snapshot.persistence_error.is_some()
-            || state.snapshot.blocked.is_some() && change != SessionChange::Reset
+            || state.snapshot.blocked.is_some() && !replaces_session(&change)
         {
             return Err(error(
                 "blocked",
@@ -835,7 +848,9 @@ fn cancellation_scope(session: &SessionRef, request_id: &str) -> String {
 
 fn change_settings(session: &mut Session, change: SessionChange) -> Result<(), String> {
     match change {
-        SessionChange::Reset => unreachable!("resets replace the owner binding separately"),
+        SessionChange::Reset | SessionChange::SwitchModel { .. } => {
+            unreachable!("context changes stage their owner bindings separately")
+        }
         SessionChange::SetPlan { enabled } => session.state["plan"] = json!(enabled),
         SessionChange::SetEffort { effort } => {
             if session.config["provider"] == "scripted" {
@@ -896,6 +911,20 @@ fn apply_change(session: &mut Session, shared: &Shared, index: usize, change: Se
 fn finish_change(session: &Session, shared: &Shared, index: usize, reason: Option<String>) {
     let mut state = shared.state.lock().unwrap();
     update_metadata(session, &mut state.snapshot);
+    if reason.is_none()
+        && matches!(
+            &state.commands[index].work,
+            CommandWork::Change {
+                change: SessionChange::SwitchModel {
+                    history: HistoryMode::Carry,
+                    ..
+                },
+                ..
+            }
+        )
+    {
+        state.snapshot.last_request = Usage::from_value(&session.state["last_request"]);
+    }
     let command = &mut state.commands[index];
     command.info.state = if reason.is_some() {
         CommandState::NotApplied
@@ -908,9 +937,90 @@ fn finish_change(session: &Session, shared: &Shared, index: usize, reason: Optio
     shared.changed.notify_all();
 }
 
+fn switch_model(
+    owner: &mut Owner,
+    shared: &Shared,
+    index: usize,
+    model: &str,
+    history: HistoryMode,
+) -> Option<Arc<Shared>> {
+    let session = &mut owner.session;
+    let staged = (|| {
+        if session.config["provider"] == "scripted" {
+            return Err("model switching is unavailable for scripted Sessions".into());
+        }
+        let info = crate::catalog::model_info(model);
+        if info.is_null() {
+            return Err(format!("{model:?} is not an exact catalog model ID"));
+        }
+        let config = crate::chat::model_switch::destination(&session.config, &info)?;
+        let (handoff, _) = crate::chat::model_switch::stage_session(
+            session,
+            &config,
+            history == HistoryMode::Fresh,
+        )
+        .map_err(|(_, reason)| reason)?;
+        let (config, mut state) = if history == HistoryMode::Fresh {
+            crate::compact::reset_context(&config, &session.state)
+        } else {
+            let mut state = session.state.clone();
+            state["handoff"] = handoff;
+            state["last_request"] = crate::types::usage_zero(false);
+            state["tokens_per_byte"] = json!(0.0);
+            (config, state)
+        };
+        state["auto_enabled"] = json!(false);
+        state["auto_compact_off"] = json!(false);
+        let provider = crate::provider::Provider::new(&config)?;
+        Ok::<_, String>((config, state, provider))
+    })();
+    let (config, state, provider) = match staged {
+        Ok(staged) => staged,
+        Err(reason) => {
+            finish_change(session, shared, index, Some(reason));
+            return None;
+        }
+    };
+    if history == HistoryMode::Fresh {
+        return replace_owner(owner, shared, index, config, state, Some(provider));
+    }
+    let previous_config = std::mem::replace(&mut session.config, config);
+    let previous_state = std::mem::replace(&mut session.state, state);
+    let previous_provider = std::mem::replace(&mut session.provider, provider);
+    let reason = match crate::checkpoint::save(session, "idle", "") {
+        Ok(()) => {
+            session
+                .provider
+                .set_cancellation(crate::cancellation::token(&session.config));
+            None
+        }
+        Err(error) => {
+            session.config = previous_config;
+            session.state = previous_state;
+            session.provider = previous_provider;
+            let reason = format!("persist model switch: {error}; in-memory bindings restored, checkpoint state may have changed");
+            session.state["persistence_error"] = json!(reason);
+            Some(reason)
+        }
+    };
+    finish_change(session, shared, index, reason);
+    None
+}
+
 fn reset_owner(owner: &mut Owner, shared: &Shared, index: usize) -> Option<Arc<Shared>> {
     let (config, state) =
         crate::compact::reset_context(&owner.session.config, &owner.session.state);
+    replace_owner(owner, shared, index, config, state, None)
+}
+
+fn replace_owner(
+    owner: &mut Owner,
+    shared: &Shared,
+    index: usize,
+    config: Value,
+    state: Value,
+    provider: Option<crate::provider::Provider>,
+) -> Option<Arc<Shared>> {
     let id = config["session_id"].as_str().unwrap().to_owned();
     let lease = match Lease::claim(&id) {
         Ok(lease) => lease,
@@ -925,11 +1035,16 @@ fn reset_owner(owner: &mut Owner, shared: &Shared, index: usize) -> Option<Arc<S
     let mut previous_config = std::mem::replace(&mut session.config, config);
     let mut previous_state = std::mem::replace(&mut session.state, state);
     let mut previous_history = std::mem::take(&mut session.history);
+    let previous_provider =
+        provider.map(|provider| std::mem::replace(&mut session.provider, provider));
     if let Err(error) = crate::checkpoint::save(session, "idle", "") {
         crate::agents::retire(session);
         session.config = previous_config;
         session.state = previous_state;
         session.history = previous_history;
+        if let Some(provider) = previous_provider {
+            session.provider = provider;
+        }
         let reason = format!("persist reset Session {id}: {error}; in-memory context restored; original checkpoint remains the recovery target; candidate private cache artifacts may remain");
         session.state["persistence_error"] = json!(reason);
         drop(lease);
@@ -996,12 +1111,18 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
             if let CommandWork::Change { change, .. } = &command.work {
                 let change = change.clone();
                 drop(state);
-                if change == SessionChange::Reset {
-                    if let Some(replacement) = reset_owner(&mut owner, &shared, index) {
-                        shared = replacement;
+                let replacement = match change {
+                    SessionChange::Reset => reset_owner(&mut owner, &shared, index),
+                    SessionChange::SwitchModel { model, history } => {
+                        switch_model(&mut owner, &shared, index, &model, history)
                     }
-                } else {
-                    apply_change(&mut owner.session, &shared, index, change);
+                    change => {
+                        apply_change(&mut owner.session, &shared, index, change);
+                        None
+                    }
+                };
+                if let Some(replacement) = replacement {
+                    shared = replacement;
                 }
                 continue;
             }

@@ -101,12 +101,29 @@ pub enum ReasoningEffort {
     Named(String),
 }
 
+/// HistoryMode chooses a validated visible handoff or a fresh Session replacement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryMode {
+    /// Carry preserves source history and projects it without native state to the destination.
+    Carry,
+    /// Fresh discards context and accounting under new Session and instance identities.
+    Fresh,
+}
+
 /// SessionChange selects one trusted-local idle setting change or context replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionChange {
     /// Reset replaces this opening with fresh context and accounting while preserving its live bindings.
     Reset,
+    /// SwitchModel selects an exact catalog ID at its default effort and pins Auto.
+    SwitchModel {
+        /// model is the exact catalog ID, without picker positions or aliases.
+        model: String,
+        /// history selects a settled handoff or a fresh replacement opening.
+        history: HistoryMode,
+    },
     /// SetPlan changes the effective planning restriction without expanding launch authority.
     SetPlan {
         /// enabled selects the effective planning restriction.
@@ -319,7 +336,7 @@ pub struct CommandInfo {
     pub request_id: String,
     /// run is the reserved execution identity for messages and absent for idle controls.
     pub run: Option<RunRef>,
-    /// replacement_session identifies the immediate successor only after a successful reset.
+    /// replacement_session identifies the immediate successor after reset or a fresh model switch.
     pub replacement_session: Option<SessionRef>,
     /// state records whether the command passed its application barrier.
     pub state: CommandState,
@@ -343,7 +360,7 @@ pub struct AutoInfo {
     pub enabled: bool,
     /// fallback is absent until a compatible fallback has been initialized.
     pub fallback: Option<AutoRoute>,
-    /// allowed_routes retains the initialized inventory even while pinned.
+    /// allowed_routes retains or reconstructs dormant catalog routes while pinned; enable rechecks availability.
     pub allowed_routes: Vec<AutoRoute>,
     /// usage is accumulated router consumption, known zero before initialization.
     pub usage: Usage,
@@ -390,7 +407,8 @@ pub struct SessionSnapshot {
     pub workspace: PathBuf,
     /// usage counts completed and currently executing root model requests.
     pub usage: Usage,
-    /// last_request retains the latest reported input usage during inference.
+    /// last_request retains reported usage during inference, but a successful Carry (even same-model)
+    /// invalidates the current-model calibration to unknown zero.
     pub last_request: Usage,
     /// context_window_tokens is absent when the model window is unknown.
     pub context_window_tokens: Option<u64>,

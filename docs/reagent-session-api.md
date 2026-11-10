@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1, typed idle controls, and reset/replacement implemented**, with the remaining
+Status: **milestone 1, typed idle controls, reset/replacement, and model switching implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -46,14 +46,14 @@ local conveniences while that broader observation/control boundary is extracted.
 ## Implemented typed idle controls
 
 `change_session(request_id, expected_revision, SessionChange)` now supports
-`SetPlan { enabled }`, `SetEffort { effort }`, `SetAuto { enabled }`, and `Reset`.
-Model switching, compaction, and shell controls remain design targets. Settings
+`SetPlan { enabled }`, `SetEffort { effort }`, `SetAuto { enabled }`, `Reset`, and
+`SwitchModel { model, history }`. Compaction and shell controls remain design targets. Settings
 are changed by the same exclusive owner as messages, without a model/router
 request, transcript Entry, Run, or additional usage merely to apply a setting.
 
 - A new control requires no queued/running Run or unfinished control and a current
   snapshot revision. The instance must be open and free of persistence failure;
-  only reset may recover another blocked terminal status. Admission reserves the
+  only reset or a fresh model switch may recover another blocked terminal status. Admission reserves the
   exclusive control slot atomically. New messages and close return `busy` until
   it is released. Snapshot `active_control_request_id` identifies this work;
   `live_runs` still contains only Runs.
@@ -87,8 +87,13 @@ they were; the next provider request uses the updated effort.
 Auto can be enabled lazily. Enable rebases the fallback to the current model and
 effort even when already enabled, validates it, and preserves accumulated router
 accounting. Disable pins the current pair without discarding fallback/routes or
-accounting. Fallback provider-default effort survives resume independently of the
-currently selected route. Provider-default effort is not silently replaced with a
+accounting. An explicitly disabled Auto restores dormant fallback/catalog-route
+metadata on resume without requiring the fallback provider's credentials; enabled
+routing rechecks availability. Checkpoints do not store the route inventory, so
+pinned resume reconstructs catalog routes without credential gating, and explicit
+enable rebuilds the usable inventory after rebasing to the current pair. An absent
+legacy enabled flag retains the old enable/validation semantics. Fallback
+provider-default effort survives resume independently of the currently selected route. Provider-default effort is not silently replaced with a
 catalog default when an Auto fallback requires an explicit effort. Failed enable
 restores the previous settings. Snapshot `auto` publishes enabled state, fallback,
 allowed routes, usage, attempts, and the existing TypeSafe data-sharing notice;
@@ -133,6 +138,45 @@ clearing. Failed reset publishes no replacement, restores the previous in-memory
 context, marks persistence failure, releases candidate ownership, and allows only
 inspection/close. Failed I/O may leave an unpublished private checkpoint artifact;
 there is no claim of disk rollback or automatic retry.
+
+## Implemented model switching
+
+`SessionChange::SwitchModel { model, history: HistoryMode::Carry | Fresh }` accepts
+only exact catalog IDs: nonblank, at most 128 UTF-8 bytes, without picker numbers,
+case aliases, or trimming. Both modes reject scripted Sessions and use the same
+idle/revision/receipt rules. Retry identity includes the model, history mode, and
+expected revision. A valid manual selection chooses the destination's catalog
+default effort and pins Auto, even when selecting the current model. Models with
+an empty effort vocabulary keep provider-default effort; callers can use
+`SetEffort` afterward. Fallback/routes and their accounting survive a carry pin.
+
+- **Carry** keeps the Session/instance, accepted history, cumulative usage,
+  authority, workspace grants, and file-write evidence. The settled GC view is
+  validated for complete tool batches and uncertain effects, then measured under
+  the destination encoder and context window. A visible handoff projects native
+  provider items out of subsequent requests without deleting them from source
+  history. Instructions are re-pinned; old request-size calibration is cleared.
+  After the save barrier, `last_request` is atomically published as unknown zero,
+  even for same-model selection; cumulative usage is unchanged. Failed switches
+  preserve the published report, and ordinary inference still retains the latest
+  reported usage until another response reports usage. Resume exposes the same
+  invalidated calibration until the next destination response.
+  No extra Entry, Run, model/router request, or usage is created just to switch.
+- **Fresh** selects the destination bindings and uses the existing reset
+  replacement save/lease/handoff path. Context, file evidence, and accounting are
+  cleared while launch/read-only authority, effective plan, workspaces and grants
+  remain. Only this mode can recover a blocked terminal status; persistence-error
+  instances reject both modes. Retrieve the fresh owner through `get_replacement`;
+  old handles retain costs/results and exact retries return the same successor.
+
+Destination configuration, Provider, and handoff are staged locally before live
+bindings change. Validation failure publishes `NotApplied` without mutation.
+An idle checkpoint save must succeed before settings or replacement are published;
+failed persistence restores in-memory Provider/configuration/context and poisons
+the old instance without claiming disk rollback. Fresh failures may leave an
+unpublished private candidate checkpoint; the original checkpoint remains the
+recovery target. Resume opens persisted identities without replaying the switch.
+Chat continues to use its legacy command path, sharing only local staging logic.
 
 ## Boundary
 
