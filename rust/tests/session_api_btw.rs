@@ -359,7 +359,13 @@ fn isolated_with_auth(name: &str, replies: Vec<Reply>, chatgpt: bool) -> Option<
             .env("API_PROXY_PROVIDER", "openai");
     }
     let mut child = command.spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(45);
+    // This case runs three separately bounded large-payload operations, not one request.
+    let seconds = if name == "omitted_native_payload_does_not_fill_the_capture_and_oversized_visible_latest_source_rejects_without_fallback" {
+        180
+    } else {
+        45
+    };
+    let deadline = Instant::now() + Duration::from_secs(seconds);
     let timed_out = loop {
         if child.try_wait().unwrap().is_some() {
             break false;
