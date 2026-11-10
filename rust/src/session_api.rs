@@ -1,6 +1,12 @@
 //! Trusted-local Session ownership, queued submissions, and concurrent observations.
 
+mod consent;
+mod consent_types;
 mod controls;
+/// Live trusted-local human workspace-consent ownership.
+pub use consent::WorkspaceConsentApi;
+/// Typed human requests, decisions and bounded approval references.
+pub use consent_types::*;
 mod observation_types;
 mod observations;
 mod types;
@@ -81,6 +87,11 @@ struct Command {
 
 enum CommandWork {
     Message(MessageCommand),
+    Consent {
+        owner_id: String,
+        approval: WorkspaceApprovalRef,
+        decision: WorkspaceDecision,
+    },
     Change {
         expected_revision: u64,
         change: SessionChange,
@@ -93,14 +104,14 @@ impl CommandWork {
     fn message(&self) -> Option<&MessageCommand> {
         match self {
             Self::Message(message) => Some(message),
-            Self::Change { .. } => None,
+            Self::Change { .. } | Self::Consent { .. } => None,
         }
     }
 
     fn message_mut(&mut self) -> Option<&mut MessageCommand> {
         match self {
             Self::Message(message) => Some(message),
-            Self::Change { .. } => None,
+            Self::Change { .. } | Self::Consent { .. } => None,
         }
     }
 }
@@ -124,6 +135,8 @@ struct State {
     observations: observations::Cache,
     events: VecDeque<ObservationEvent>,
     events_exhausted: bool,
+    consent_owner: Option<consent::Binding>,
+    workspace_approval: Option<consent::Pending>,
     replacement: Option<Replacement>,
     commands: Vec<Command>,
     pending: VecDeque<usize>,
@@ -146,6 +159,7 @@ impl Drop for Client {
     fn drop(&mut self) {
         let mut state = self.shared.state.lock().unwrap();
         state.closing = true;
+        consent::invalidate(&mut state, WorkspaceConsentState::Unavailable);
         for command in &mut state.commands {
             if let Some(message) = command.work.message() {
                 if message.run.state != RunState::Terminal {
@@ -273,6 +287,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         active_control_request_id: None,
         live_runs: Vec::new(),
         pending_request_ids: Vec::new(),
+        pending_workspace_approval: None,
         model: String::new(),
         provider: String::new(),
         reasoning_effort: String::new(),
@@ -297,6 +312,8 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
             observations: observations::Cache::new(&identity),
             events: VecDeque::new(),
             events_exhausted: false,
+            consent_owner: None,
+            workspace_approval: None,
             replacement: None,
             commands: Vec::new(),
             pending: VecDeque::new(),
@@ -312,8 +329,9 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
     shared
 }
 
-fn start(owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
+fn start(mut owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
     let shared = new_shared(&owner.session, notice);
+    consent::bind(&mut owner.session, &shared);
     let worker = shared.clone();
     std::thread::Builder::new()
         .name("reagent-session".into())
@@ -373,6 +391,7 @@ impl State {
             .filter(|m| m.run.state != RunState::Terminal)
             .map(|m| m.run.clone())
             .collect();
+        snapshot.pending_workspace_approval = consent::pending_ref(self);
         snapshot.active_control_request_id = self
             .control
             .map(|i| self.commands[i].info.request_id.clone());
@@ -808,6 +827,7 @@ impl SessionApi {
         message.run.cancel_requested = true;
         let queued = message.run.state == RunState::Queued;
         state.commands[index].info.cancel_requested = true;
+        consent::invalidate_run(&mut state, run);
         if queued {
             state.pending.retain(|i| *i != index);
             not_applied(&mut state.commands[index], "queued Run cancelled");
@@ -843,6 +863,7 @@ impl SessionApi {
         }
         if !state.closing {
             state.closing = true;
+            consent::invalidate(&mut state, WorkspaceConsentState::Unavailable);
             state.changed(EventKind::Closing);
             shared.changed.notify_all();
         }
@@ -1227,6 +1248,7 @@ fn replace_owner(
         .set_cancellation(crate::cancellation::token(&session.config));
     drop(std::mem::replace(&mut owner.lease, lease));
     let replacement = new_shared(session, None);
+    consent::bind(session, &replacement);
     let mut state = shared.state.lock().unwrap();
     observations::install(&mut state, retired);
     let mut successor = replacement.state.lock().unwrap();
@@ -1369,6 +1391,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         message.run.result = Some(RunResult::from_value(&result));
         message.wire_result = Some(result.clone());
         message.display = session.state["_display"].clone();
+        consent::invalidate_run(&mut state, &run);
         state.snapshot.active_conversation_run = None;
         state.run_changed(index);
         if result["status"] != "completed" && result["status"] != "refused" {

@@ -16,15 +16,18 @@ pub struct WorkspaceDestination {
     spelling: PathBuf,
     requested: PathBuf,
     parent: (u64, u64),
+    identity: Option<(u64, u64)>,
 }
 
-/// WorkspaceConsentError distinguishes missing terminal input from unavailable consent.
+/// WorkspaceConsentError distinguishes missing human adapters, legacy terminal input and unavailable consent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspaceConsentError {
     /// NotInteractive means input cannot grant dynamic workspace access.
     NotInteractive,
-    /// Unavailable means the picker was cancelled or its input failed.
+    /// Unavailable means the consent adapter was cancelled, timed out or became unavailable.
     Unavailable,
+    /// NoAdapter means this API opening has no registered human consent owner.
+    NoAdapter,
 }
 
 /// WorkspaceConsent asks the human without granting access or changing authority.
@@ -36,7 +39,7 @@ pub struct ToolState {
     pub state: Value,
     handles: HashMap<PathBuf, Workspace>,
     approved: Vec<WorkspaceDestination>,
-    /// workspace_consent is a chat-local callback, never checkpointed or model-configured.
+    /// workspace_consent is an owner-installed human adapter, never checkpointed or model-configured.
     pub workspace_consent: Option<Box<WorkspaceConsent>>,
 }
 impl ToolState {
@@ -70,12 +73,14 @@ impl ToolState {
 
     pub fn new(config: &Value) -> Result<Self, String> {
         let workspace = Workspace::open(config["workspace"].as_str().unwrap_or("."))?;
+        // The bootstrap grant remains path-scoped; Workspace owns its root identity.
         let mut approved = vec![WorkspaceDestination {
             path: workspace.root.clone(),
             missing: false,
             spelling: workspace.root.clone(),
             requested: workspace.root.clone(),
             parent: (0, 0),
+            identity: None,
         }];
         for key in [
             "allow_workspace",
@@ -563,15 +568,16 @@ fn workspace_destination(path: &str, prospective: bool) -> Result<WorkspaceDesti
     }
     let spelling = parent.join(requested.file_name().unwrap());
     let path = spelling.clone();
-    let (root, missing) = match fs::symlink_metadata(&path) {
-        Err(e) if prospective && e.kind() == std::io::ErrorKind::NotFound => (path, true),
+    let (root, identity) = match fs::symlink_metadata(&path) {
+        Err(e) if prospective && e.kind() == std::io::ErrorKind::NotFound => (path, None),
         Err(e) => return Err(os_outcome(e)),
         Ok(_) => {
             let root = fs::canonicalize(&path).map_err(os_outcome)?;
-            if !fs::metadata(&root).map_err(os_outcome)?.is_dir() {
+            let info = fs::metadata(&root).map_err(os_outcome)?;
+            if !info.is_dir() {
                 return Err(fail("not_directory", "workspace is not a directory"));
             }
-            (root, false)
+            (root, Some((info.dev(), info.ino())))
         }
     };
     // Session configuration stores paths as strings; lossy conversion could select another directory.
@@ -588,6 +594,7 @@ fn workspace_destination(path: &str, prospective: bool) -> Result<WorkspaceDesti
             "resolved workspace is a filesystem root or withheld location",
         ));
     }
+    let missing = identity.is_none();
     if !missing {
         crate::workspace::validate_destination(&root)?;
     }
@@ -597,6 +604,7 @@ fn workspace_destination(path: &str, prospective: bool) -> Result<WorkspaceDesti
         spelling,
         requested,
         parent: (parent_info.dev(), parent_info.ino()),
+        identity,
     })
 }
 
@@ -661,6 +669,7 @@ fn workspace_tool(
             return Err(fail("permission_required", "workspace access needs human consent; use interactive chat or --allow-workspace PATH"));
         };
         match consent(config, &destination) {
+            Err(WorkspaceConsentError::NoAdapter) => return Err(fail("permission_required", "workspace access needs a registered human consent adapter; use register_workspace_consent on this Session opening, interactive chat, or --allow-workspace PATH")),
             Err(WorkspaceConsentError::NotInteractive) => return Err(fail("permission_required", "workspace consent needs a terminal; preapprove the exact path with --allow-workspace PATH")),
             Err(WorkspaceConsentError::Unavailable) => return Err(fail("permission_denied", "workspace consent was cancelled or unavailable")),
             Ok(allowed) => {
@@ -672,13 +681,6 @@ fn workspace_tool(
     }
     let root = destination.path.clone();
     let missing = destination.missing;
-    if !request && root == state.workspace.root {
-        return Ok(workspace_outcome(
-            &state.workspace,
-            json!({"previous_workspace":root.to_string_lossy(),"workspace":root.to_string_lossy(),"changed":false}),
-            "none",
-        ));
-    }
     let current = workspace_destination(
         if request {
             path
@@ -689,6 +691,8 @@ fn workspace_tool(
     )?;
     if current.path != root
         || current.parent != destination.parent
+        || current.identity != destination.identity
+        || current.missing != missing
         || crate::cancellation::cancelled(config)
     {
         return Err(fail(
@@ -717,6 +721,20 @@ fn workspace_tool(
             state.approved.push(destination);
         }
         return Ok(out);
+    }
+    let identity = destination.identity.ok_or_else(|| {
+        fail(
+            "workspace_validation_failed",
+            "workspace disappeared before selection",
+        )
+    })?;
+    if root == state.workspace.root {
+        state.workspace.check_destination(&root, identity)?;
+        return Ok(workspace_outcome(
+            &state.workspace,
+            json!({"previous_workspace":root.to_string_lossy(),"workspace":root.to_string_lossy(),"changed":false}),
+            "none",
+        ));
     }
     let previous = state.workspace.root.clone();
     let mut next_config = config.clone();
@@ -763,12 +781,15 @@ fn workspace_tool(
             "workspace transition metadata exceeds the result limit",
         ));
     }
-    let mut next = state
-        .handles
-        .remove(&root)
-        .map(Ok)
-        .unwrap_or_else(|| Workspace::open(&root.to_string_lossy()))
-        .map_err(|e| fail("io_error", &e))?;
+    let opened = if let Some(cached) = state.handles.get(&root) {
+        cached.check_destination(&root, identity)?;
+        None
+    } else {
+        let next = Workspace::open(&root.to_string_lossy()).map_err(|e| fail("io_error", &e))?;
+        next.check_destination(&root, identity)?;
+        Some(next)
+    };
+    let mut next = opened.unwrap_or_else(|| state.handles.remove(&root).unwrap());
     next.publish_mu = state.workspace.publish_mu.clone();
     let old = std::mem::replace(&mut state.workspace, next);
     state.handles.insert(previous, old);
@@ -1534,6 +1555,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["data"]["matches"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn workspace_bootstrap_filesystem_root_grant_still_allows_existing_descendants() {
+        let target = tempfile::tempdir().unwrap();
+        let config = json!({"workspace":"/","read_only":true,"plan":true,"session_id":crate::types::new_id()});
+        let mut state = ToolState::new(&config).unwrap();
+        state.workspace_consent = Some(Box::new(|_, _| {
+            panic!("bootstrap grant must not request consent")
+        }));
+        let args = json!({"path":target.path()}).to_string();
+        assert_eq!(
+            execute(&mut state, &config, "request_workspace_access", &args).unwrap()["ok"],
+            true
+        );
+        assert_eq!(
+            execute(&mut state, &config, "switch_workspace", &args).unwrap()["ok"],
+            true
+        );
+        assert_eq!(state.workspace.root, target.path().canonicalize().unwrap());
+        assert!(state.approved_paths().iter().any(|path| path == "/"));
     }
 
     #[test]
