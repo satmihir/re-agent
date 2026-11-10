@@ -399,9 +399,9 @@ fn isolated_with_auth(name: &str, replies: Vec<Reply>, chatgpt: bool) -> Option<
             .env("API_PROXY_PROVIDER", "openai");
     }
     let mut child = command.spawn().unwrap();
-    // This case runs three separately bounded large-payload operations, not one request.
+    // Debug-build staging of these multi-megabyte prefixes is not a latency assertion.
     let seconds = if name == "omitted_native_payload_does_not_fill_the_capture_and_oversized_visible_latest_source_rejects_without_fallback" {
-        180
+        600
     } else {
         45
     };
@@ -1108,7 +1108,7 @@ fn omitted_native_payload_does_not_fill_the_capture_and_oversized_visible_latest
             .unwrap()
             .run
             .unwrap();
-        wait_for(api, &run, Duration::from_secs(30))
+        wait_for(api, &run, Duration::from_secs(120))
     }
     let mut native = answer("visible seed");
     native.body["output"].as_array_mut().unwrap().insert(0, json!({"type":"reasoning","id":"large-native","encrypted_content":"n".repeat(12<<20),"summary":[]}));
@@ -1166,7 +1166,7 @@ fn omitted_native_payload_does_not_fill_the_capture_and_oversized_visible_latest
         .unwrap()
         .run
         .unwrap();
-    let result = wait_for(&api, &next, Duration::from_secs(30))
+    let result = wait_for(&api, &next, Duration::from_secs(120))
         .result
         .unwrap();
     // The ordinary byte guard still refuses the oversized inherited context, without inference.
