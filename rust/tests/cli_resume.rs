@@ -20,7 +20,7 @@ fn chat(root: &Path, arguments: &[&str], input: &[u8]) -> Output {
 }
 
 fn launch(root: &Path, base: &str, arguments: &[&str], input: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_reagent"))
+    let child = Command::new(env!("CARGO_BIN_EXE_reagent"))
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", root)
@@ -35,8 +35,42 @@ fn launch(root: &Path, base: &str, arguments: &[&str], input: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(input).unwrap();
-    child.wait_with_output().unwrap()
+    finish(child, input)
+}
+
+fn finish(mut child: std::process::Child, input: &[u8]) -> Output {
+    let written = child.stdin.take().unwrap().write_all(input);
+    let output = child.wait_with_output().unwrap();
+    if let Err(error) = written {
+        assert!(
+            error.kind() == std::io::ErrorKind::BrokenPipe && !output.status.success(),
+            "write chat input: {error}; child status: {}",
+            output.status
+        );
+    }
+    output
+}
+
+#[test]
+fn failed_startup_can_close_stdin_before_the_fixture_writes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_reagent"))
+        .env_clear()
+        .env("HOME", directory.path())
+        .args(["chat", "--invalid-resume-fixture-option"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while child.try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "startup did not fail");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let output = finish(child, b"next task\n/exit\n");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid-resume-fixture-option"));
 }
 
 fn checkpoint(root: &Path) -> PathBuf {
