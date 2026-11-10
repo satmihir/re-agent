@@ -1135,8 +1135,15 @@ fn omitted_native_payload_does_not_fill_the_capture_and_oversized_visible_latest
     );
     assert!(!request(&root, 1).to_string().contains("large-native"));
     assert!(request(&root, 1).to_string().len() < 32 << 10);
+    // The enclosing subprocess bounds staging of large prefixes, not the small-control helper.
+    api.change_session(
+        "reset-native",
+        api.get_snapshot().unwrap().revision,
+        SessionChange::Reset,
+    )
+    .unwrap();
     assert_eq!(
-        change(&api, "reset-native", SessionChange::Reset).state,
+        api.wait_command("reset-native").unwrap().state,
         CommandState::Applied
     );
     let api = api.get_replacement().unwrap();
@@ -1165,8 +1172,14 @@ fn omitted_native_payload_does_not_fill_the_capture_and_oversized_visible_latest
     // The ordinary byte guard still refuses the oversized inherited context, without inference.
     assert_eq!(result.status, "limit_exceeded", "{result:?}");
     assert!(api.get_snapshot().unwrap().live_runs.is_empty());
+    api.change_session(
+        "reset-visible",
+        api.get_snapshot().unwrap().revision,
+        SessionChange::Reset,
+    )
+    .unwrap();
     assert_eq!(
-        change(&api, "reset-visible", SessionChange::Reset).state,
+        api.wait_command("reset-visible").unwrap().state,
         CommandState::Applied
     );
     let api = api.get_replacement().unwrap();
