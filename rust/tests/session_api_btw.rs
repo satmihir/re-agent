@@ -228,6 +228,7 @@ fn tool(id: &str, name: &str, arguments: Value) -> Value {
     json!({"type":"function_call","id":id,"call_id":id,"name":name,"arguments":arguments.to_string()})
 }
 fn read_request(stream: &mut TcpStream) -> Value {
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -254,6 +255,45 @@ fn read_request(stream: &mut TcpStream) -> Value {
     stream.read_exact(&mut bytes).unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
+#[test]
+fn http_fixture_waits_for_request_bytes_on_an_inherited_nonblocking_socket() {
+    use std::os::fd::AsRawFd;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let (mut server, _) = listener.accept().unwrap();
+    server.set_nonblocking(true).unwrap();
+    let fd = server.as_raw_fd();
+    let request = json!({"message":"delayed client bytes"});
+    let body = request.to_string();
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| read_request(&mut server));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // Keep the socket unreadable until the fixture resets inherited flags.
+        loop {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            assert!(flags >= 0);
+            if flags & libc::O_NONBLOCK == 0 || reader.is_finished() || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        write!(
+            client,
+            "POST /v1/responses HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        assert_eq!(
+            reader.join().expect("fixture must wait for client bytes"),
+            request
+        );
+    });
+}
+
 const ROOT: &str = "REAGENT_BTW_TEST_ROOT";
 fn isolated(name: &str, replies: Vec<Reply>) -> Option<PathBuf> {
     isolated_with_auth(name, replies, false)
