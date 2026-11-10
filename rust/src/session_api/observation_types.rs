@@ -1,4 +1,4 @@
-use super::{RunRef, RunState, SessionRef, Usage};
+use super::{RunRef, RunState, SessionRef, Usage, WorkspaceApprovalRef, WorkspaceConsentState};
 use serde::{Deserialize, Serialize};
 
 /// ObservationStamp identifies one atomic publication, not the instant a caller reads it.
@@ -352,6 +352,18 @@ pub struct AgentPage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
+    /// WorkspaceConsentOwnerChanged records live human registration without exposing its identity or path.
+    WorkspaceConsentOwnerChanged {
+        /// registered distinguishes registration from final human-owner loss.
+        registered: bool,
+    },
+    /// WorkspaceConsentChanged publishes one bounded approval reference, never its sensitive destination.
+    WorkspaceConsentChanged {
+        /// approval identifies the exact request, opening, Run and deadline.
+        approval: WorkspaceApprovalRef,
+        /// state describes pending or terminal human-decision availability.
+        state: WorkspaceConsentState,
+    },
     /// CommandChanged invites the caller to read the retained command receipt.
     CommandChanged {
         /// request_id identifies the changed receipt.

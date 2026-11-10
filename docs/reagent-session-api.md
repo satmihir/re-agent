@@ -1,6 +1,6 @@
 # Session API — design and implementation status
 
-Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell and bounded structured observations implemented**, with the remaining
+Status: **milestone 1, typed controls, reset/replacement, model switching, compaction, human shell, bounded structured observations and typed workspace consent implemented**, with the remaining
 target interface below.
 This defines an in-process boundary for the CLI and a possible later gRPC adapter;
 it does not make `runtime::Session` itself a supported public API.
@@ -20,8 +20,8 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
 - `live_runs` contains every queued/running conversation Run, without requiring
   admission receipts or events to discover identities. There are no BTW Runs yet.
   Terminal results remain readable after inventory removal and close.
-- At most 16 live Runs and 256 retained command receipts are admitted; messages
-  and controls share the receipt limit. Individual
+- At most 16 live Runs and 256 retained command receipts are admitted; messages,
+  controls and live human-consent resolutions share the receipt limit. Individual
   messages fit 10 MiB; retained message plus long-control input bytes fit 32 MiB. Exhaustion refuses
   admission, not cancellation/close, and never evicts deduplication records.
 - Request-ID retries deduplicate within this opening, not across restarts.
@@ -38,7 +38,7 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
 
 This milestone is **trusted-local only**: handles are not capability-filtered and
 must not be given to untrusted clients. Chat and the remaining control migration,
-human consent, transport authorization, BTW and steering are not implemented. The detailed records and operations below describe the full target,
+transport authorization, BTW and steering are not implemented; chat still uses its legacy consent callback. The detailed records and operations below describe the full target,
 not a claim that every field or method already exists. `wait_run` and `close` are
 local conveniences while that broader observation/control boundary is extracted.
 
@@ -287,6 +287,112 @@ snapshot, and detached output holders may continue after the direct child is
 reaped. Those limits are not repaired with extra threads, timers or a sandbox;
 unknown/incomplete results and blocked effect evidence must not be read as known
 no effects or proof that all external work stopped.
+
+## Implemented typed workspace consent
+
+`SessionApi` installs its own workspace-consent adapter before handing the Session
+to its exclusive worker. A host does not supply a TTY or an inference callback:
+
+```rust
+SessionApi::register_workspace_consent(&self, timeout_ms: u64)
+    -> Result<WorkspaceConsentApi, ApiError>
+WorkspaceConsentApi::get_pending_workspace_access(&self)
+    -> Result<Option<WorkspaceConsentRequest>, ApiError>
+WorkspaceConsentApi::resolve_workspace_access(&self, request_id: &str,
+    approval: &WorkspaceApprovalRef, decision: WorkspaceDecision)
+    -> Result<CommandInfo, ApiError>
+WorkspaceConsentApi::get_command(&self, request_id: &str)
+    -> Result<CommandInfo, ApiError>
+```
+
+Registration is an explicit **trusted-local human role**, not model permission or
+an idle `SessionChange`. It can happen while a Run is active, including before the
+Run asks for access. At most one live human owner exists per opening. The required
+per-request timeout is **1–300000 ms**; there is no implicit unbounded/default wait.
+With no owner, a permission-requiring tool promptly returns `permission_required`
+with both Rust `register_workspace_consent` guidance and usable CLI remedies:
+interactive chat or `--allow-workspace PATH`. Legacy `NotInteractive` terminal
+messages and CLI preapproval behavior remain unchanged. There is no
+transport listener or capability authorization layer here.
+
+The cloneable human guard owns only its local role and a weak opening reference;
+State also holds that role weakly. It cannot keep the last Session client, worker,
+checkpoint lease or claimed replacement alive. Guard clones retain the same role;
+only final guard loss invalidates its pending request/unconsumed answer and wakes
+the waiter. Dropping an ordinary observation/client clone is not a human decision.
+A replacement human can register after owner loss, but cannot inherit or resolve
+the previous owner's pending request. Full pending-request reads and decisions
+require this guard; its `get_command` exposes only its own consent receipts.
+
+`WorkspaceConsentRequest` owns an exact validated destination `path: Vec<u8>`,
+`missing`, current execution `plan`/`read_only`, `created_at_ms`, `timeout_ms`, and
+an `approval: WorkspaceApprovalRef`. That reference contains `approval_id`, exact
+`RunRef` (including `SessionRef`) and `deadline_at_ms`. Records/decisions use
+`snake_case` serialization. No provider-native data, configuration, environment or
+credentials are included. The path is trusted-local human content, not metadata:
+`SessionSnapshot.pending_workspace_approval` and `workspace_consent_changed`
+events expose only the bounded reference and status. Human registration/loss has
+its own path-free event. Publications share the existing atomic revision/cursor;
+the named Run's activity is `workspace_consent` while waiting, then returns to
+`tool`. The current serial root tool boundary has at most one pending request.
+
+The callback uses the existing condition variable, releasing State while waiting
+and checking the exact Run token, human-owner loss, close and monotonic deadline
+with waits capped at 20 ms. Cancellation/Run end invalidate the named pending
+request and any unconsumed answer; late allow cannot grant to a cancelled or later
+Run. Expiry is checked again **under State at resolution**, not only by waiter
+polling. A timely registered answer does not expire merely because the waiter is
+scheduled later, but cancellation, owner loss and close still revoke an unconsumed
+answer. Published pending metadata can briefly remain until the deadline is
+observed; presence is not proof that resolution is still timely. Explicit close
+remains idle-only (`busy` during the wait); Run cancellation or final-client drop
+unblocks it without needing a human answer. Snapshot/event/content reads remain
+available during the wait.
+
+`WorkspaceDecision::{Allow,Deny}` answers exactly one approval. Wrong opening,
+Run/reference, owner, already decided, expired or cancelled targets reject without
+creating a new grant. Authorization is checked before deduplication. Resolution
+request IDs share the existing **256-receipt** namespace with messages/controls;
+identity includes method, owner binding, full approval reference and decision.
+Identical authorized retries return their receipt before lifecycle/capacity checks;
+changed payload/method/owner conflicts. Concurrent differing decisions have one
+winner. Full receipt storage may return `resource_exhausted` for a new answer, but
+Run cancellation, timeout, human-owner loss and close-after-settlement still work.
+No separate unbounded approval history is retained.
+
+A resolution receipt's `Applied` means **human decision registered**, not that
+post-consent filesystem revalidation or a workspace grant succeeded. It has no
+new Run or long-control result, performs no inference/Git/filesystem work, and
+requires no checkpoint save: live role/decision state is not durable. The actual
+ToolOutcome is the final grant observation. The existing workspace tool still
+revalidates cancellation, parent/path identity, symlinks and authority after the
+callback. Allow does not directly mutate the workspace or retry a tool, does not
+lift plan/read-only restrictions, and a missing destination reserves only that
+exact path without creating or selecting it.
+
+Workspace consumers now use a conservative point-in-time destination proof:
+existing directories must retain existence and device/inode identity through
+consent and final publication. Missing-to-existing during a pending approval also
+requires a fresh request; creation **after** a successful prospective reservation
+still works with its existing exact-path/parent checks. Before selection, newly
+opened and cached Workspaces must match that validated root/identity and pass
+`check_root`; changed cached roots are rejected without reopening or discarding
+old file evidence. Late redirects/replacements during metadata collection fail
+before workspace, grant or collected instructions are published. These shared
+tool checks benefit legacy consumers too. Bootstrap/path-scoped live grants and
+Reset/Fresh retention remain unchanged: this is not a promise to pin all future
+filesystem contents, nor an OS sandbox or elimination of path-based TOCTOU races.
+
+Reset/Fresh preserve existing live grants as before, but rebind the internal
+callback to a new opening with **no human owner**. Hosts must explicitly register
+on the successor; old guards never follow it. Old-opening receipts/retries remain
+available while that opening's observations are retained; final guard cleanup does
+not append events after completed close/replacement. In particular, the weak guard alone
+does not retain them after all Session clients disappear. Resume reconstructs
+neither human registration, pending approvals/answers nor additional live consent
+grants. Its ordinary launch/restored-active workspace bindings and checkpoint
+recovery behavior are unchanged: in-flight tools become explicit unknown-effect
+observations, never replayed approvals or restarted actions.
 
 ## Implemented bounded structured observations
 

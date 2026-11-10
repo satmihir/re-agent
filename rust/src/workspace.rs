@@ -219,6 +219,17 @@ impl Workspace {
         Err(fail("unknown_digest", &format!("this is not a digest read_file returned for this file; its current digest is {current}")))
     }
 
+    /// check_destination binds an opened Workspace to a point-in-time validated directory proof.
+    pub(crate) fn check_destination(&self, root: &Path, identity: (u64, u64)) -> Result<(), Value> {
+        if self.root != root || self.identity != identity {
+            return Err(fail(
+                "workspace_validation_failed",
+                "opened workspace does not match the validated destination",
+            ));
+        }
+        self.check_root()
+    }
+
     pub fn check_root(&self) -> Result<(), Value> {
         let info = fs::symlink_metadata(&self.root).map_err(os_outcome)?;
         if !info.is_dir()

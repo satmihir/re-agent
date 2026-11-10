@@ -1,4 +1,4 @@
-use super::{ContextSummary, EventCursor};
+use super::{ContextSummary, EventCursor, WorkspaceApprovalRef};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -186,7 +186,7 @@ pub enum RunState {
 pub enum CommandState {
     /// Pending is queued or executing until its application and terminal persistence handling settle.
     Pending,
-    /// Applied has changed the Session and passed the required save barrier.
+    /// Applied passed its required application barrier; live human decisions do not require durable saves.
     Applied,
     /// NotApplied ended without passing the required application barrier.
     NotApplied,
@@ -405,13 +405,13 @@ pub enum ControlResult {
 pub struct CommandInfo {
     /// request_id is the caller's stable idempotency key.
     pub request_id: String,
-    /// run is the reserved execution identity for messages and absent for idle controls.
+    /// run is the reserved execution identity for messages, absent for controls and live consent decisions.
     pub run: Option<RunRef>,
     /// replacement_session identifies the immediate successor after reset or a fresh model switch.
     pub replacement_session: Option<SessionRef>,
     /// cancel_requested records targeted cancellation without claiming that effects were undone.
     pub cancel_requested: bool,
-    /// result retains an executed long-control outcome, absent before execution and for messages/atomic changes.
+    /// result retains a long-control outcome, absent before execution and for messages, atomic changes and live human decisions.
     pub result: Option<ControlResult>,
     /// state records whether the command passed its application barrier.
     pub state: CommandState,
@@ -470,6 +470,8 @@ pub struct SessionSnapshot {
     pub live_runs: Vec<RunInfo>,
     /// pending_request_ids identifies admitted commands still awaiting application.
     pub pending_request_ids: Vec<String>,
+    /// pending_workspace_approval exposes one exact request reference without its sensitive path.
+    pub pending_workspace_approval: Option<WorkspaceApprovalRef>,
     /// model is the last published effective model label.
     pub model: String,
     /// provider is the last published provider label.
