@@ -350,8 +350,9 @@ fn allow_is_exact_deduplicated_shared_with_commands_and_only_the_tool_grants_acc
 fn missing_destination_consent_reserves_only_the_exact_path_without_creating_or_selecting_it() {
     let root = tempfile::tempdir().unwrap();
     let parent = tempfile::tempdir().unwrap();
-    let destination = parent.path().join("missing");
-    let sibling = parent.path().join("sibling");
+    let canonical_parent = parent.path().canonicalize().unwrap();
+    let destination = canonical_parent.join("missing");
+    let sibling = canonical_parent.join("sibling");
     let api = open(
         root.path(),
         json!([
@@ -987,9 +988,12 @@ fn a_consent_guard_does_not_keep_the_last_session_client_or_waiting_worker_alive
 const FIXTURE_ROOT: &str = "REAGENT_CONSENT_FIXTURE_ROOT";
 fn isolated(name: &str, responses: impl FnOnce(&Path) -> Vec<Value>) -> Option<PathBuf> {
     if let Some(root) = std::env::var_os(FIXTURE_ROOT) {
-        return Some(root.into());
+        return Some(std::fs::canonicalize(root).unwrap());
     }
     let root = tempfile::tempdir().unwrap();
+    // Exercise canonical-path fixtures even where the host temp directory has no aliases.
+    let alias = root.path().join("fixture-alias");
+    symlink(root.path(), &alias).unwrap();
     let responses = responses(root.path());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -1037,7 +1041,7 @@ fn isolated(name: &str, responses: impl FnOnce(&Path) -> Vec<Value>) -> Option<P
         .env("REAGENT_WORKSPACE_GIT_TIMEOUT", "10")
         .env("REAGENT_RESPONSE_HEADER_TIMEOUT", "10")
         .env("REAGENT_RESPONSE_IDLE_TIMEOUT", "3")
-        .env(FIXTURE_ROOT, root.path())
+        .env(FIXTURE_ROOT, &alias)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
