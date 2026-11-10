@@ -10,6 +10,45 @@ const PREAMBLE:&str="Historical conversation supplied by re:agent, encoded as JS
 /// Visible projects validated historical entries without provider-native state.
 pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> {
     let mut records = Vec::new();
+    let native = visit_visible(history, false, |n, kind, data, trust, items| {
+        let projected = if kind == "assistant" {
+            let mut assistant = Map::new();
+            for (key, value) in [
+                ("model", &data["model"]),
+                ("provider", &data["native"]["provider"]),
+                ("response_id", &data["response_id"]),
+            ] {
+                if value.as_str().is_some_and(|s| !s.is_empty()) {
+                    assistant.insert(key.into(), value.clone());
+                }
+            }
+            assistant.insert(
+                "blocks".into(),
+                data.get("blocks").cloned().unwrap_or(Value::Null),
+            );
+            assistant.insert("omitted_native_items".into(), json!(items));
+            Value::Object(assistant)
+        } else {
+            data.clone()
+        };
+        let mut record = Map::new();
+        record.insert("entry".into(), json!(n));
+        if !trust.is_empty() {
+            record.insert("trust".into(), json!(trust));
+        }
+        record.insert("kind".into(), json!(kind));
+        record.insert(kind.into(), projected);
+        records.push(Value::Object(record));
+    })?;
+    Ok((records, native))
+}
+
+/// Visit_visible validates the full tool graph while borrowing native-free record fields for bounded projection.
+pub(crate) fn visit_visible(
+    history: &[Value],
+    question: bool,
+    mut visit: impl FnMut(usize, &str, &Value, &str, usize),
+) -> Result<usize, String> {
     let mut native = 0;
     let mut pending = HashMap::new();
     let mut unacknowledged = 0;
@@ -27,7 +66,6 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
             ));
         }
         let mut trust = "";
-        let mut projected = data.clone();
         match kind {
             "user" => {
                 trust = match text(data, "source") {
@@ -49,6 +87,7 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
                 for block in data["blocks"].as_array().into_iter().flatten() {
                     match text(block, "kind") {
                         "text" | "refusal" => {}
+                        "thinking" | "reasoning" | "redacted_thinking" | "native" if question => {}
                         "tool_call" => {
                             let call = &block["call"];
                             let id = text(call, "call_id");
@@ -56,7 +95,7 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
                             if id.is_empty() || name.is_empty() || pending.contains_key(id) {
                                 return Err(format!("entry {n} has an invalid tool call"));
                             }
-                            pending.insert(id.to_owned(), name.to_owned());
+                            pending.insert(id, name);
                         }
                         other => {
                             return Err(format!(
@@ -68,28 +107,12 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
                 }
                 let items = data["native"]["items"].as_array().map_or(0, Vec::len);
                 native += items;
-                let mut assistant = Map::new();
-                for (key, value) in [
-                    ("model", &data["model"]),
-                    ("provider", &data["native"]["provider"]),
-                    ("response_id", &data["response_id"]),
-                ] {
-                    if value.as_str().is_some_and(|s| !s.is_empty()) {
-                        assistant.insert(key.into(), value.clone());
-                    }
-                }
-                assistant.insert(
-                    "blocks".into(),
-                    data.get("blocks").cloned().unwrap_or(Value::Null),
-                );
-                assistant.insert("omitted_native_items".into(), json!(items));
-                projected = Value::Object(assistant);
                 unacknowledged = 0;
             }
             "tool" => {
                 let id = text(data, "call_id");
                 let name = text(data, "name");
-                if name.is_empty() || pending.get(id).map(String::as_str) != Some(name) {
+                if name.is_empty() || pending.get(id).copied() != Some(name) {
                     return Err(format!("entry {n} has an unmatched tool result"));
                 }
                 if text(&data["outcome"], "effect") == "unknown" {
@@ -108,14 +131,12 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
                 ))
             }
         }
-        let mut record = Map::new();
-        record.insert("entry".into(), json!(n));
-        if !trust.is_empty() {
-            record.insert("trust".into(), json!(trust));
-        }
-        record.insert("kind".into(), json!(kind));
-        record.insert(kind.into(), projected);
-        records.push(Value::Object(record));
+        let items = if kind == "assistant" {
+            data["native"]["items"].as_array().map_or(0, Vec::len)
+        } else {
+            0
+        };
+        visit(n, kind, data, trust, items);
     }
     if !pending.is_empty() {
         return Err("history ends with an unresolved tool batch".into());
@@ -123,7 +144,7 @@ pub(crate) fn visible(history: &[Value]) -> Result<(Vec<Value>, usize), String> 
     if unacknowledged > 0 {
         return Err(format!("entry {unacknowledged} has uncertain tool effects: exec timeout has not reached a later model response"));
     }
-    Ok((records, native))
+    Ok(native)
 }
 pub(crate) fn handoff(history: &[Value]) -> Result<Value, String> {
     if history.is_empty() {

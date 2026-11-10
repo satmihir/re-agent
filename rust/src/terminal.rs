@@ -1348,6 +1348,7 @@ mod reader_failure_tests {
         const CHILD: &str = "REAGENT_READER_FAILURE_CHILD";
         if std::env::var_os(CHILD).is_some() {
             let root = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+            std::fs::write(root.join("phase"), "opening Session").unwrap();
             let destination = tempfile::tempdir().unwrap();
             let script = root.join("script.json");
             let arguments = serde_json::json!({"path":destination.path()}).to_string();
@@ -1381,6 +1382,7 @@ mod reader_failure_tests {
             assert_eq!(error.raw_os_error(), Some(libc::EBADF));
             assert!(cancelled.load(Ordering::Acquire));
             assert!(input.consent.is_none());
+            std::fs::write(root.join("phase"), "settling after reader failure").unwrap();
             let run = api
                 .send_message(
                     "after-error",
@@ -1411,6 +1413,7 @@ mod reader_failure_tests {
                 !eof_cancelled.load(Ordering::Acquire),
                 "ordinary EOF withdraws the human role without cancelling work"
             );
+            std::fs::write(root.join("phase"), "settling after EOF").unwrap();
             let run = api
                 .send_message(
                     "after-eof",
@@ -1475,11 +1478,19 @@ mod reader_failure_tests {
             });
         }
         let mut child = command.spawn().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut deadline = Instant::now() + Duration::from_secs(30);
+        let mut phase = String::from("starting child");
         let mut output = Vec::new();
         let mut sent = false;
         let mut restoration = None;
         let status = loop {
+            if let Ok(current) = std::fs::read_to_string(root.path().join("phase")) {
+                if !current.is_empty() && current != phase {
+                    phase = current;
+                    // Slow runner startup must not consume a later operation's stall deadline.
+                    deadline = Instant::now() + Duration::from_secs(10);
+                }
+            }
             if !sent && root.path().join("ready").exists() {
                 master.write_all(b"x\r").unwrap();
                 sent = true;
@@ -1507,7 +1518,7 @@ mod reader_failure_tests {
                 child.kill().unwrap();
                 child.wait().unwrap();
                 panic!(
-                    "reader failure left a live human owner or stalled the operation: {}",
+                    "reader failure stalled during {phase}: {}",
                     String::from_utf8_lossy(&output)
                 );
             }

@@ -29,7 +29,8 @@ impl Write for CountHash {
     }
 }
 
-fn fingerprint(value: &impl Serialize) -> (u64, [u8; 32]) {
+/// fingerprint measures and identifies borrowed records without materializing encoded bytes.
+pub(super) fn fingerprint(value: &impl Serialize) -> (u64, [u8; 32]) {
     let mut writer = CountHash {
         bytes: 0,
         hash: Sha256::new(),
@@ -38,7 +39,7 @@ fn fingerprint(value: &impl Serialize) -> (u64, [u8; 32]) {
     (writer.bytes, writer.hash.finalize().into())
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -304,17 +305,19 @@ pub(super) struct Prepared {
     total_cost: Usage,
     accounting_complete: bool,
     rewrite: bool,
+    source: Option<btw_capture::Source>,
 }
 
 /// prepare performs source inspection and local encoding without holding the shared State mutex.
 pub(super) fn prepare(session: &Session, shared: &Shared, request: Option<&Value>) -> Prepared {
-    let (mut snapshot, old_hashes, generation, observed) = {
+    let (mut snapshot, old_hashes, generation, observed, source) = {
         let state = shared.state.lock().unwrap();
         (
             state.snapshot.clone(),
             state.observations.hashes.clone(),
             state.observations.context.summary.history_generation,
             state.observations.context.observed.clone(),
+            state.source.clone(),
         )
     };
     update_metadata(session, &mut snapshot);
@@ -378,6 +381,19 @@ pub(super) fn prepare(session: &Session, shared: &Shared, request: Option<&Value
             .then(|| session.state["steps"].as_u64())
             .flatten()
     });
+    let source = if pending.is_empty() {
+        btw_capture::prepare(
+            session,
+            source.as_ref(),
+            rewrite || hashes.len() != old_hashes.len(),
+            generation,
+            run.clone(),
+            step,
+            observed.clone(),
+        )
+    } else {
+        None
+    };
     let entries = session
         .history
         .iter()
@@ -462,6 +478,7 @@ pub(super) fn prepare(session: &Session, shared: &Shared, request: Option<&Value
             .collect(),
         accounting_complete: !enabled || subtree["accounting_complete"] == true,
         rewrite,
+        source,
     }
 }
 
@@ -479,7 +496,11 @@ pub(super) fn install(state: &mut State, prepared: Prepared) {
         total_cost,
         accounting_complete,
         rewrite,
+        source,
     } = prepared;
+    if let Some(source) = source {
+        state.source = Some(source);
+    }
     // Concurrent admissions own inventory/lifecycle; only owner-produced metadata is replaced.
     let revision = state.snapshot.revision;
     let cursor = state.snapshot.event_cursor.clone();
@@ -524,6 +545,12 @@ pub(super) fn changed(state: &mut State, change: EventKind) {
         event_cursor: state.snapshot.event_cursor.clone(),
         observed_at_ms: state.snapshot.observed_at_ms,
     };
+    if let Some(source) = &mut state.source {
+        if source.unpublished {
+            source.info.published = stamp.clone();
+            source.unpublished = false;
+        }
+    }
     let cache = &mut state.observations;
     if cache.context_changed {
         cache.context.observed = stamp.clone();
@@ -846,6 +873,10 @@ pub(super) fn initialize(state: &mut State, prepared: Prepared) {
     install(state, prepared);
     state.snapshot.observed_at_ms = now_ms();
     let observed = stamp(state);
+    if let Some(source) = &mut state.source {
+        source.info.published = observed.clone();
+        source.unpublished = false;
+    }
     let cache = &mut state.observations;
     cache.context.observed = observed.clone();
     cache.context.captured = observed.clone();

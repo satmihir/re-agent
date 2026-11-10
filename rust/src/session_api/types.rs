@@ -317,12 +317,53 @@ impl RunResult {
     }
 }
 
+/// RunKind separates conversation work from isolated questions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunKind {
+    /// Conversation appends an ordinary turn to the owning Session.
+    Conversation,
+    /// Btw answers from an immutable capture in an ephemeral Session.
+    Btw,
+}
+
+/// BtwSource identifies the published source and activity at question admission.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BtwSource {
+    /// session identifies the source opening, not the question Session.
+    pub session: SessionRef,
+    /// published identifies when the captured history and configuration became visible.
+    pub published: super::ObservationStamp,
+    /// history_generation changes when the source history is rewritten.
+    pub history_generation: u64,
+    /// entry_count is the full captured prefix length, before native-state omission.
+    pub entry_count: u64,
+    /// run identifies the source Run when the prefix was published during execution.
+    pub run: Option<RunRef>,
+    /// step identifies the source Step when present.
+    pub step: Option<u64>,
+    /// captured_at_ms records question admission time.
+    pub captured_at_ms: u64,
+    /// pending_activity describes the main Run at admission, not eventual tool output.
+    pub pending_activity: Option<String>,
+    /// model is the source's fixed current model.
+    pub model: String,
+    /// reasoning_effort is the source's fixed current effort.
+    pub reasoning_effort: String,
+}
+
 /// RunInfo is an owned observation that does not borrow the executing Session.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunInfo {
     /// run is the exact identity reserved at admission.
     pub run: RunRef,
-    /// request_id identifies the admitted message.
+    /// kind distinguishes conversation work from an isolated question.
+    pub kind: RunKind,
+    /// source records an isolated question's immutable admission boundary.
+    pub source: Option<BtwSource>,
+    /// trace_path identifies this Run's own trace when opened.
+    pub trace_path: Option<PathBuf>,
+    /// request_id identifies the admitted message or question.
     pub request_id: String,
     /// state distinguishes queued, executing, and completed work.
     pub state: RunState,

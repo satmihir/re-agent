@@ -72,6 +72,17 @@ impl ToolState {
     }
 
     pub fn new(config: &Value) -> Result<Self, String> {
+        if config["tool_free"] == true {
+            return Ok(Self {
+                workspace: Workspace::tool_free(PathBuf::from(
+                    config["workspace"].as_str().unwrap_or("."),
+                )),
+                state: json!({}),
+                handles: HashMap::new(),
+                approved: vec![],
+                workspace_consent: None,
+            });
+        }
         let workspace = Workspace::open(config["workspace"].as_str().unwrap_or("."))?;
         // The bootstrap grant remains path-scoped; Workspace owns its root identity.
         let mut approved = vec![WorkspaceDestination {
@@ -138,6 +149,9 @@ static SPECS: LazyLock<Mutex<HashMap<SpecConfig, Arc<Value>>>> =
 
 /// specs returns the declarations enabled by this run's authority and features.
 pub fn specs(config: &Value) -> Value {
+    if config["tool_free"] == true {
+        return json!([]);
+    }
     (*cached_specs(config)).clone()
 }
 
@@ -464,6 +478,9 @@ pub fn execute(
     name: &str,
     arguments: &str,
 ) -> Result<Value, String> {
+    if config["tool_free"] == true {
+        return Ok(fail("permission_denied", "BTW Runs have no tools"));
+    }
     let all = cached_specs(config);
     let spec = all.as_array().unwrap().iter().find(|s| s["name"] == name);
     let write = matches!(

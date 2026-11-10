@@ -89,6 +89,10 @@ pub struct Transport {
     pub config: Value,
     pub events: Vec<Value>,
     pub retry_usage: Value,
+    /// sent_attempts counts HTTP sends in the current generation, including auth refresh sends.
+    pub sent_attempts: u64,
+    /// reported_retries counts retry responses whose provider token totals were retained.
+    pub reported_retries: u64,
     pub cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 impl Transport {
@@ -100,6 +104,8 @@ impl Transport {
             config: config.clone(),
             events: Vec::new(),
             retry_usage: usage_zero(true),
+            sent_attempts: 0,
+            reported_retries: 0,
             cancellation: None,
         }
     }
@@ -236,6 +242,8 @@ impl Transport {
         let overnight = summary_deadline.is_some() || window > 0;
         let mut attempt = 0;
         self.retry_usage = usage_zero(true);
+        self.sent_attempts = 0;
+        self.reported_retries = 0;
         let mut secrets = vec![std::env::var(if provider == "anthropic" {
             "ANTHROPIC_API_KEY"
         } else {
@@ -313,6 +321,7 @@ impl Transport {
                         req = req.header("session-id", key);
                     }
                 }
+                self.sent_attempts = self.sent_attempts.saturating_add(1);
                 match req.send() {
                     Ok(mut response) => {
                         let status = response.status().as_u16();
@@ -440,12 +449,14 @@ impl Transport {
                 }
                 if !stream_reason.is_empty() && stream_usage["known"] == true {
                     usage_add(&mut self.retry_usage, &stream_usage);
+                    self.reported_retries += 1;
                 }
                 self.pause(Duration::from_millis(500))?;
                 continue;
             }
             if !stream_reason.is_empty() && stream_usage["known"] == true {
                 usage_add(&mut self.retry_usage, &stream_usage);
+                self.reported_retries += 1;
             } else {
                 let n = self.retry_usage["unreported_attempts"]
                     .as_u64()

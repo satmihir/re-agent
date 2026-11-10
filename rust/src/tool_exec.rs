@@ -967,10 +967,32 @@ mod tests {
 }
 
 #[cfg(test)]
-fn assert_exec_pids_stopped(dir: &Path, names: &[&str]) {
+fn exec_fixture_python() -> String {
+    // Resolve launchers and initialize imports before measuring process-control deadlines.
+    let output = Command::new("/usr/bin/python3")
+        .args(["-c", "import pathlib, signal, sys; print(sys.executable)"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let path = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    assert!(Path::new(&path).is_absolute(), "{path:?}");
+    path
+}
+
+#[cfg(test)]
+fn assert_exec_pids_stopped(dir: &Path, names: &[&str], result: &Value) {
     let mut alive = Vec::new();
     for name in names {
-        let pid: i32 = fs::read_to_string(dir.join(name)).unwrap().parse().unwrap();
+        let marker = dir.join(name);
+        let text = fs::read_to_string(&marker).unwrap_or_else(|error| {
+            panic!("read {}: {error}; exec outcome: {result}", marker.display())
+        });
+        let pid: i32 = text.parse().unwrap_or_else(|error| {
+            panic!(
+                "invalid PID in {}: {error}; exec outcome: {result}",
+                marker.display()
+            )
+        });
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             // Independent of the discovery implementation; missing /proc must not skip this assertion.
@@ -1057,6 +1079,7 @@ mod boundary_tests {
 
     #[test]
     fn exec_timeout_stops_term_resistant_escaped_descendants_with_both_pipe_modes() {
+        let python = exec_fixture_python();
         for redirected in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let script = format!(
@@ -1076,9 +1099,8 @@ if os.fork()==0:
 time.sleep(30)"#,
                 redirected = if redirected { "True" } else { "False" }
             );
-            let argv = vec!["/usr/bin/python3".into(), "-c".into(), script];
-            // Exercise the execution boundary without paying the public ten-second timeout floor
-            // twice, but leave a cold Python on a slow CI host time to write every pid file.
+            let argv = vec![python.clone(), "-c".into(), script];
+            // Exercise both pipe modes without paying the public ten-second timeout floor twice.
             let value = run(
                 dir.path(),
                 dir.path(),
@@ -1090,7 +1112,11 @@ time.sleep(30)"#,
                 &json!({}),
             )
             .unwrap();
-            assert_exec_pids_stopped(dir.path(), &["parent.pid", "escaped.pid", "grandchild.pid"]);
+            assert_exec_pids_stopped(
+                dir.path(),
+                &["parent.pid", "escaped.pid", "grandchild.pid"],
+                &value,
+            );
             assert_eq!(value["code"], "timeout", "{value}");
             assert_eq!(value["effect"], "unknown");
             assert_eq!(value["data"]["termination_reason"], "timeout");
@@ -1204,6 +1230,7 @@ mod cancellation_tests {
             return;
         };
         let dir = std::env::var("REAGENT_EXEC_CANCEL_DIR").unwrap();
+        let python = exec_fixture_python();
         let mut workspace = Workspace::open(&dir).unwrap();
         let mut config = json!({"session_id":"exec-started"});
         if mode == "targeted" {
@@ -1230,11 +1257,14 @@ mod cancellation_tests {
             } else {
                 crate::cancellation::cancel(&waiting);
             }
-            assert!(ready.exists(), "exec did not reach its readiness marker");
+            ready.exists()
         });
         let script = "import os,time,pathlib\npathlib.Path('parent.pid').write_text(str(os.getpid()))\npid=os.fork()\nif pid==0:\n os.setsid()\n pathlib.Path('escaped.pid').write_text(str(os.getpid()))\nprint('started',flush=True)\ntime.sleep(30)";
-        let result = execute(&mut workspace, &config, &json!({"argv":["/usr/bin/python3","-c",script],"cwd":".","timeout_ms":1,"then":[["/bin/sh","-c","touch unexpected"]]})).unwrap();
-        interrupter.join().unwrap();
+        let result = execute(&mut workspace, &config, &json!({"argv":[python,"-c",script],"cwd":".","timeout_ms":1,"then":[["/bin/sh","-c","touch unexpected"]]})).unwrap();
+        assert!(
+            interrupter.join().unwrap(),
+            "exec did not reach its readiness marker; exec outcome: {result}"
+        );
         assert_eq!(result["code"], "cancelled", "{result}");
         assert_eq!(result["effect"], "unknown");
         assert_eq!(result["message"], "step 1 of 2: the command was cut short by cancellation; its effects are unknown; the 1 after it did not run");
@@ -1274,7 +1304,7 @@ mod cancellation_tests {
         )
         .unwrap();
         assert_eq!(recovered["ok"], true);
-        assert_exec_pids_stopped(Path::new(&dir), &["parent.pid", "escaped.pid"]);
+        assert_exec_pids_stopped(Path::new(&dir), &["parent.pid", "escaped.pid"], &result);
     }
 }
 

@@ -39,6 +39,18 @@ pub fn bytes(value: &Value) -> Option<Vec<u8>> {
     STANDARD.decode(object.get(KEY)?.as_str()?).ok()
 }
 
+/// encoded_bytes borrows an internal base64 payload and its JSON flag without allocating a decoded copy.
+pub(crate) fn encoded_bytes(value: &Value) -> Option<(&str, bool)> {
+    let object = value.as_object().filter(|object| object.len() == 1)?;
+    if let Some(encoded) = object.get(STRING_KEY).and_then(Value::as_str) {
+        return Some((encoded, false));
+    }
+    object
+        .get(KEY)
+        .and_then(Value::as_str)
+        .map(|encoded| (encoded, true))
+}
+
 /// parse returns the semantic JSON view of an opaque value for validation.
 pub fn parse(value: &Value) -> Result<Value, String> {
     match bytes(value) {

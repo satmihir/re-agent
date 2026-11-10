@@ -1,5 +1,7 @@
 //! Trusted-local Session ownership, queued submissions, and concurrent observations.
 
+mod btw;
+mod btw_capture;
 mod consent;
 mod consent_types;
 mod controls;
@@ -134,6 +136,7 @@ enum Replacement {
 struct State {
     snapshot: SessionSnapshot,
     observations: observations::Cache,
+    source: Option<btw_capture::Source>,
     events: VecDeque<ObservationEvent>,
     events_exhausted: bool,
     consent_owner: Option<consent::Binding>,
@@ -349,6 +352,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         state: Mutex::new(State {
             snapshot,
             observations: observations::Cache::new(&identity),
+            source: None,
             events: VecDeque::new(),
             events_exhausted: false,
             consent_owner: None,
@@ -446,10 +450,10 @@ impl State {
             SessionLifecycle::Closing
         } else if self.control.is_some() {
             SessionLifecycle::Running
-        } else if snapshot.blocked.is_some() || snapshot.persistence_error.is_some() {
-            SessionLifecycle::Blocked
         } else if !snapshot.live_runs.is_empty() {
             SessionLifecycle::Running
+        } else if snapshot.blocked.is_some() || snapshot.persistence_error.is_some() {
+            SessionLifecycle::Blocked
         } else {
             SessionLifecycle::Idle
         };
@@ -457,13 +461,23 @@ impl State {
     }
 
     fn find_run(&self, run: &RunRef) -> Result<usize, ApiError> {
-        if run.session != self.snapshot.session {
-            return Err(error("conflict", "Run belongs to another Session opening"));
-        }
-        self.commands
+        if let Some(index) = self
+            .commands
             .iter()
             .position(|c| c.work.message().is_some_and(|m| m.run.run == *run))
-            .ok_or_else(|| error("not_found", "Run is not retained by this handle"))
+        {
+            return Ok(index);
+        }
+        if run.session != self.snapshot.session
+            && !self.commands.iter().any(|c| {
+                c.work
+                    .message()
+                    .is_some_and(|m| m.run.run.session == run.session)
+            })
+        {
+            return Err(error("conflict", "Run belongs to another Session opening"));
+        }
+        Err(error("not_found", "Run is not retained by this handle"))
     }
 }
 
@@ -536,11 +550,11 @@ impl SessionApi {
             .iter()
             .find(|c| c.info.request_id == request_id)
         {
-            if !command
-                .work
-                .message()
-                .is_some_and(|m| m.message == message && m.plan_mode == plan_mode)
-            {
+            if !command.work.message().is_some_and(|m| {
+                m.run.kind == RunKind::Conversation
+                    && m.message == message
+                    && m.plan_mode == plan_mode
+            }) {
                 return Err(error(
                     "conflict",
                     "request_id was already used with another payload",
@@ -597,6 +611,9 @@ impl SessionApi {
             work: CommandWork::Message(MessageCommand {
                 run: RunInfo {
                     run,
+                    kind: RunKind::Conversation,
+                    source: None,
+                    trace_path: None,
                     request_id: request_id.into(),
                     state: RunState::Queued,
                     cancel_requested: false,
@@ -973,8 +990,19 @@ impl SessionApi {
 pub(crate) struct RunObserver {
     shared: Arc<Shared>,
     index: usize,
+    kind: RunKind,
+    cancellation: Arc<AtomicBool>,
     /// run_id is the identity reserved before the worker starts execution.
     pub(crate) run_id: String,
+}
+
+/// btw_cancelled reads a question-local token without registering it as a signal target.
+pub(crate) fn btw_cancelled(session: &Session) -> Option<bool> {
+    session
+        .api
+        .as_ref()
+        .filter(|o| o.kind == RunKind::Btw)
+        .map(|o| o.cancellation.load(Ordering::Acquire))
 }
 
 fn auto_info(session: &Session) -> AutoInfo {
@@ -1072,6 +1100,10 @@ fn publish_observations(session: &Session, activity: &str, applied: bool, reques
     let Some(observer) = &session.api else {
         return;
     };
+    if observer.kind == RunKind::Btw {
+        btw::publish(session, observer, activity, applied);
+        return;
+    }
     let prepared = observations::prepare(session, &observer.shared, request);
     let mut state = observer.shared.state.lock().unwrap();
     observations::install(&mut state, prepared);
@@ -1084,6 +1116,8 @@ fn publish_observations(session: &Session, activity: &str, applied: bool, reques
     message.run.steps = session.state["steps"].as_u64().unwrap_or(0);
     message.run.tool_calls = session.state["tool_calls"].as_u64().unwrap_or(0);
     message.run.usage = Usage::from_value(&session.state["run_usage"]);
+    message.run.trace_path =
+        (!session.trace.path.is_empty()).then(|| std::path::PathBuf::from(&session.trace.path));
     if applied {
         command.info.state = CommandState::Applied;
     }
@@ -1516,6 +1550,8 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         session.api = Some(RunObserver {
             shared: shared.clone(),
             index,
+            kind: RunKind::Conversation,
+            cancellation: cancellation.clone(),
             run_id: run.run_id.clone(),
         });
         crate::render::begin_turn(&mut session.state);
@@ -1550,6 +1586,10 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         message.run.steps = result["steps"].as_u64().unwrap_or(0);
         message.run.tool_calls = result["tool_calls"].as_u64().unwrap_or(0);
         message.run.usage = Usage::from_value(&result["usage"]);
+        message.run.trace_path = result["trace_path"]
+            .as_str()
+            .filter(|path| !path.is_empty())
+            .map(Into::into);
         message.run.result = Some(RunResult::from_value(&result));
         message.wire_result = Some(result.clone());
         message.display = session.state["_display"].clone();
