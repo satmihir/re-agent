@@ -1424,11 +1424,20 @@ mod reader_failure_tests {
             assert_eq!(completed.result.unwrap().reply, b"settled after EOF");
             assert!(!completed.cancel_requested);
             api.close().unwrap();
+            drop(input);
             std::fs::write(
                 root.join("finished"),
                 "reader failed; EOF withdrew owner; later permission tools settled promptly",
             )
             .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !root.join("release").exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "parent did not inspect restored tty"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
             return;
         }
         let root = tempfile::tempdir().unwrap();
@@ -1469,10 +1478,22 @@ mod reader_failure_tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut output = Vec::new();
         let mut sent = false;
+        let mut restoration = None;
         let status = loop {
             if !sent && root.path().join("ready").exists() {
                 master.write_all(b"x\r").unwrap();
                 sent = true;
+            }
+            if restoration.is_none() && root.path().join("finished").exists() {
+                // Darwin can revoke the slave once its controlling Session leader exits.
+                let mut restored: libc::termios = unsafe { std::mem::zeroed() };
+                let result = unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut restored) };
+                restoration = Some(if result == 0 {
+                    Ok(restored)
+                } else {
+                    Err(io::Error::last_os_error())
+                });
+                std::fs::write(root.path().join("release"), "").unwrap();
             }
             if poll_read(master.as_raw_fd(), 10).unwrap() != 0 {
                 let mut bytes = [0; 4096];
@@ -1493,11 +1514,9 @@ mod reader_failure_tests {
         };
         assert!(status.success(), "{}", String::from_utf8_lossy(&output));
         assert!(root.path().join("finished").exists());
-        let mut restored: libc::termios = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut restored) },
-            0
-        );
+        let restored = restoration
+            .expect("tty restoration was inspected before the child exited")
+            .expect("read restored tty attributes while its controlling Session is alive");
         assert_eq!(
             restored.c_lflag & (libc::ICANON | libc::ECHO),
             original.c_lflag & (libc::ICANON | libc::ECHO)
