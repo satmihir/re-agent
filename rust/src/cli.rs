@@ -17,7 +17,7 @@ fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("read-only", "", "withhold write and exec tools; only allow reading", json!(false)),
         ("plan", "", "start in plan mode; model edits and commands are refused", json!(false)),
         ("auto", "", "opt in to TypeSafe routing; default fallback gpt-6.1-sol/medium", json!(false)),
-        ("in-run-compact", "", "opt in to bounded compaction within a long run; default off", json!(false)),
+        ("in-run-compact", "", "bounded compaction within a long run; default on, disable with --in-run-compact=false", json!(true)),
         ("context-gc", "", "lossless context GC with recall; default on, disable with --context-gc=false", json!(true)),
         ("model-retry-window", "DURATION", "keep retrying transient model failures within this window (e.g. 12h); 0 disables", json!(0)),
         ("agents", "", "offer concurrent agents; default on except scripted replay, disable with --agents=false", json!(true)),
