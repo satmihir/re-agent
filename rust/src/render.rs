@@ -455,19 +455,21 @@ fn header_line(line: &str) {
     }
 }
 fn welcome(cfg: &Value, columns: usize, styled: bool) -> String {
-    let room = columns.saturating_sub(1);
+    let illustrated = styled && columns >= 72;
+    let room = columns.saturating_sub(if illustrated { 17 } else { 1 });
     let safe = |s: &str| sanitize(s).replace('\n', "↵").replace('\t', "⇥");
     let (model, provider, effort) = model_presentation(cfg);
     let mut rows = vec![if provider.is_empty() {
-        format!("re:agent · {}", safe(&model))
+        safe(&model)
     } else {
-        format!(
-            "re:agent · {} · {} · {}",
-            safe(&model),
-            safe(&provider),
-            safe(&effort)
-        )
+        format!("{} · {} · {}", safe(&model), safe(&provider), safe(&effort))
     }];
+    if illustrated {
+        rows.insert(0, "re:agent".into());
+        rows.insert(0, String::new());
+    } else {
+        rows[0].insert_str(0, "re:agent · ");
+    }
     let workspace = safe(&short_path(text(cfg, "workspace")));
     rows.push(truncate(&format!("workspace {workspace}"), room));
     rows.push(if yes(cfg, "plan") {
@@ -495,22 +497,66 @@ fn welcome(cfg: &Value, columns: usize, styled: bool) -> String {
         });
     }
     rows.push("/help commands · Ctrl-D exit".into());
-    let mut out = String::new();
+    let art = [
+        "      ●      ",
+        "  ▗▄▖   ▗▄▖  ",
+        "   █  B  █   ",
+        "   █ P   █   ",
+        "  ▟▘     ▝▙  ",
+        " ▟▘LLLLLLL▝▙ ",
+        "▐▌LLLL>LLLL▐▌",
+        "▝▙▄▄▄▄▄▄▄▄▄▟▘",
+    ];
+    let shades = [0, 0, 17, 18, 19, 20, 56, 57, 57, 93, 93, 0, 0];
+    let bubble = "\x1b[38;5;99m";
+    let teal = "\x1b[1;38;5;86m";
+    let mut details = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         // Paths are shortened, not wrapped; disclosures retain their complete text.
-        let lines = if index == 1 {
+        let lines = if index == if illustrated { 3 } else { 1 } {
             vec![row.clone()]
         } else {
             wrap("", "", row, room)
         };
         for line in lines {
-            if styled {
-                out.push_str(&format!("{DIM}{line}{RESET}\n"));
+            details.push(if illustrated && index == 1 {
+                format!("{BOLD}re{bubble}:{RESET}{BOLD}agent{RESET}")
+            } else if illustrated && index == 2 {
+                format!("{BOLD}{line}{RESET}")
+            } else if styled {
+                format!("{DIM}{line}{RESET}")
+                    .replace("plan mode", &format!("{teal}plan mode\x1b[22;39m{DIM}"))
             } else {
-                out.push_str(&line);
-                out.push('\n');
-            }
+                line
+            });
         }
+    }
+    let mut out = String::new();
+    for index in 0..details.len().max(if illustrated { art.len() } else { 0 }) {
+        if illustrated {
+            for (col, c) in art
+                .get(index)
+                .unwrap_or(&"             ")
+                .chars()
+                .enumerate()
+            {
+                match c {
+                    '●' | 'P' => out.push_str(&format!(
+                        "{bubble}{}{RESET}",
+                        if c == '●' { '●' } else { '•' }
+                    )),
+                    'B' => out.push_str(&format!("\x1b[38;5;63m•{RESET}")),
+                    'L' => out.push_str(&format!("\x1b[48;5;{}m {RESET}", shades[col])),
+                    '>' => out.push_str(&format!("\x1b[48;5;{}m{teal}❯{RESET}", shades[col])),
+                    _ => out.push(c),
+                }
+            }
+            out.push_str("   ");
+        }
+        if let Some(detail) = details.get(index) {
+            out.push_str(detail);
+        }
+        out.push('\n');
     }
     out
 }
@@ -1108,14 +1154,25 @@ mod tests {
         );
     }
     #[test]
-    fn welcome_is_short_and_bounds_paths_without_hiding_auth_or_authority() {
+    fn welcome_restores_the_flask_without_hiding_auth_authority_or_resume() {
         let mut cfg = serde_json::json!({"model":"gpt-6-luna", "provider":"openai", "auth_mode":"key", "reasoning_effort":"low", "workspace":"/work/a-very-long-workspace-name-that-must-not-wrap/repo", "session_id":"0123456789abcdef", "checkpoint_enabled":true});
         for styled in [false, true] {
-            for columns in [40, 72, 80, 100] {
+            for columns in [0, 40, 71, 72, 80, 100] {
                 let out = welcome(&cfg, columns, styled);
                 let rows: Vec<_> = out.lines().collect();
-                assert!(rows.iter().all(|row| width(row) < columns), "{out}");
-                assert!(rows.len() <= if columns >= 72 { 5 } else { 8 }, "{out}");
+                assert!(
+                    columns == 0 || rows.iter().all(|row| width(row) < columns),
+                    "{out}"
+                );
+                let illustrated = styled && columns >= 72;
+                assert_eq!(out.contains("▝▙▄▄▄▄▄▄▄▄▄▟▘"), illustrated, "{out}");
+                if illustrated {
+                    assert!(rows.len() >= 8, "{out}");
+                    assert!(rows[1].contains("\x1b[1mre\x1b[38;5;99m:"), "{out}");
+                    assert!(rows[2].contains("gpt-6-luna"), "{out}");
+                } else {
+                    assert!(rows.len() <= 8, "{out}");
+                }
                 assert_eq!(
                     rows.iter().filter(|row| row.contains("workspace ")).count(),
                     1,
