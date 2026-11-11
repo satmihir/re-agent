@@ -1008,6 +1008,7 @@ SCENARIOS = {
             ("expect", "all_lines", ["❯ Show the palette.", "Ready for the next turn."]),
             ("show", "Shared palette: submitted message, heading, read/write/exec rows"),
             ("type", "next draft"), ("wait", "❯ next draft", 5),
+            ("wait_status", "scripted / low", 5),
             ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
     },
