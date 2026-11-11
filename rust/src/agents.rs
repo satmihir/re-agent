@@ -463,6 +463,9 @@ fn child_config(s: &Session, a: &Value, authority: &str) -> Value {
                 .unwrap_or(if provider == "anthropic" { "" } else { "low" }));
         }
     }
+    if c["fast"] == true && !crate::catalog::supports_fast(&c) {
+        c["fast"] = json!(false);
+    }
     c
 }
 
@@ -3094,7 +3097,7 @@ mod tests {
     #[test]
     fn child_launch_keeps_snapshot_restriction_and_resolves_only_changed_model_effort() {
         let dir = tempfile::tempdir().unwrap();
-        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","reasoning_effort":"high","workspace":dir.path(),"plan":true})).unwrap();
+        let mut session = Session::new(json!({"provider":"openai","model":"gpt-6.1-sol","reasoning_effort":"high","workspace":dir.path(),"plan":true,"fast":true})).unwrap();
         for authority in ["read", "write"] {
             for (model, effort) in [
                 ("", "high"),
@@ -3105,6 +3108,7 @@ mod tests {
             ] {
                 let config = child_config(&session, &json!({"model":model}), authority);
                 assert_eq!(config["reasoning_effort"], effort);
+                assert_eq!(config["fast"], crate::catalog::supports_fast(&config));
                 assert_eq!(config["agent_snapshot_refs_only"], true);
                 assert_eq!(config["read_only"], authority == "read");
                 assert_eq!(config["_display"], false);

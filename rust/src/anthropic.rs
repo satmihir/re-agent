@@ -74,6 +74,9 @@ pub fn encode_request(req: &Value) -> Result<Value, String> {
         .filter(|n| *n > 0)
         .unwrap_or(16000);
     let mut body = json!({"model":s(req,"model"),"max_tokens":max,"system":[{"type":"text","text":s(req,"instructions"),"cache_control":{"type":"ephemeral"}}],"messages":if messages.is_empty(){Value::Null}else{json!(messages)}});
+    if req["fast"] == true {
+        body["speed"] = json!("fast");
+    }
     let tools:Vec<Value>=array(req,"tools").iter().map(|t|json!({"name":s(t,"name"),"description":s(t,"description"),"input_schema":t["input_schema"]})).collect();
     if !tools.is_empty() {
         body["tools"] = json!(tools);
@@ -385,6 +388,30 @@ pub(crate) fn transient(raw: &[u8]) -> (String, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fast_requests_select_speed_without_changing_default_bytes() {
+        let mut request = json!({"model":"claude-opus-5-5","instructions":"p","history":[]});
+        let plain = encode_request(&request).unwrap();
+        assert!(plain.get("speed").is_none());
+        for fast in [json!(false), Value::Null, json!("true"), json!(1)] {
+            request["fast"] = fast;
+            assert_eq!(
+                crate::types::json_bytes(&encode_request(&request).unwrap()),
+                crate::types::json_bytes(&plain)
+            );
+        }
+        request["fast"] = true.into();
+        let mut body = encode_request(&request).unwrap();
+        assert_eq!(body["speed"], "fast");
+        assert!(body.get("service_tier").is_none());
+        assert!(body.get("fast").is_none());
+        body.as_object_mut().unwrap().shift_remove("speed");
+        assert_eq!(
+            crate::types::json_bytes(&body),
+            crate::types::json_bytes(&plain)
+        );
+    }
+
     #[test]
     fn completed_stream_preserves_thinking_tool_input_and_usage_for_continuation() {
         let events = [

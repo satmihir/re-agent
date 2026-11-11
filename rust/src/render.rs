@@ -479,6 +479,9 @@ fn welcome(cfg: &Value, columns: usize, styled: bool) -> String {
     } else {
         "! exec: commands run as you; read, write, and network".into()
     });
+    if yes(cfg, "fast") {
+        rows.push("fast mode on (higher token rates)".into());
+    }
     if yes(cfg, "proxied") {
         rows.push(format!(
             "requests go to {} (API_PROXY_URL)",
@@ -577,6 +580,9 @@ pub fn header(cfg: &Value, chat: bool) {
     let mut mode = mode(cfg).to_string();
     if yes(cfg, "plan") {
         mode.push_str(" · plan mode")
+    }
+    if yes(cfg, "fast") {
+        mode.push_str(" · fast (higher token rates)");
     }
     let prefix = "re:agent · ";
     let suffix = format!("{details} · {mode} · {workspace}");
@@ -1198,6 +1204,19 @@ mod tests {
         let scripted = welcome(&serde_json::json!({"provider":"scripted"}), 80, false);
         assert!(!scripted.contains("session ID:"));
         assert_eq!(scripted.lines().count(), 4);
+    }
+
+    #[test]
+    fn welcome_discloses_fast_token_rates_only_when_enabled() {
+        for fast in [false, true] {
+            let cfg = serde_json::json!({"provider":"openai", "model":"gpt-6.1-sol", "fast":fast});
+            for columns in [0, 40, 72, 100] {
+                for styled in [false, true] {
+                    let out = welcome(&cfg, columns, styled);
+                    assert_eq!(out.contains("fast mode on (higher token rates)"), fast);
+                }
+            }
+        }
     }
 
     #[test]

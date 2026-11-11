@@ -77,6 +77,17 @@ pub fn model_info(model: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// supports_fast limits paid fast inference to known provider/model pairs.
+pub fn supports_fast(config: &Value) -> bool {
+    matches!(
+        (
+            config["provider"].as_str().unwrap_or(""),
+            config["model"].as_str().unwrap_or("")
+        ),
+        ("openai", "gpt-6.1-terra" | "gpt-6.1-sol") | ("anthropic", "claude-opus-5-5")
+    )
+}
+
 /// effective_context_window applies a positive override without enlarging a known window.
 pub fn effective_context_window(config: &Value) -> i64 {
     let window = model_info(config["model"].as_str().unwrap_or(""))["context_window"]
@@ -214,6 +225,28 @@ pub fn render_efforts(info: &Value, current: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_support_is_explicit_and_provider_specific() {
+        for (provider, model, supported) in [
+            ("openai", "gpt-6.1-luna", false),
+            ("openai", "gpt-6.1-terra", true),
+            ("openai", "gpt-6.1-sol", true),
+            ("anthropic", "claude-opus-5-5", true),
+            ("anthropic", "claude-sonnet-5-5", false),
+            ("anthropic", "claude-haiku-5-5", false),
+            ("openai", "gpt-future", false),
+            ("anthropic", "claude-future", false),
+            ("scripted", "gpt-6.1-sol", false),
+            ("anthropic", "gpt-6.1-sol", false),
+            ("openai", "claude-opus-5-5", false),
+        ] {
+            assert_eq!(
+                supports_fast(&json!({"provider":provider,"model":model})),
+                supported
+            );
+        }
+    }
 
     #[test]
     fn model_positions_and_model_specific_efforts_are_fixed() {

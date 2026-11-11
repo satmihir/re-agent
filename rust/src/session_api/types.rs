@@ -169,6 +169,11 @@ pub enum SessionChange {
         /// effort is an exact catalog label or the provider default.
         effort: ReasoningEffort,
     },
+    /// SetFast requests paid fast inference without changing model or reasoning effort.
+    SetFast {
+        /// enabled selects fast inference when the current model supports it.
+        enabled: bool,
+    },
     /// SetAuto enables routing from the current pair or pins it without routing.
     SetAuto {
         /// enabled selects whether future model work may use Auto routing.
@@ -543,6 +548,9 @@ pub struct SessionSnapshot {
     pub provider: String,
     /// reasoning_effort is the configured effort label.
     pub reasoning_effort: String,
+    /// fast requests paid fast inference on the current model, defaulting to false.
+    #[serde(default)]
+    pub fast: bool,
     /// auth_mode is a label only and never contains credentials.
     pub auth_mode: String,
     /// read_only is the immutable launch restriction.

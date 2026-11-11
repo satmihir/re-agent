@@ -339,6 +339,7 @@ const FIELDS: &[&str] = &[
     "provider",
     "model",
     "effort",
+    "fast",
     "launch",
     "active",
     "read_only",
@@ -417,7 +418,8 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "tokens_per_byte" => json!(0),
             "compacted_plan" | "blocked" | "last_trace" => json!(""),
             "max_steps" | "max_tool_calls" | "model_retry_window" | "auto_attempts" => json!(0),
-            "read_only"
+            "fast"
+            | "read_only"
             | "plan"
             | "no_project_instructions"
             | "in_run_compact"
@@ -445,6 +447,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             let config_owned = [
                 "provider",
                 "model",
+                "fast",
                 "read_only",
                 "no_project_instructions",
                 "project_instructions",
@@ -470,6 +473,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             .unwrap_or(default)
         };
         let optional = [
+            "fast",
             "project_instructions",
             "launch_instructions",
             "context_window_tokens",
@@ -714,7 +718,7 @@ fn valid_checkpoint_type(value: &mut Value, kind: &str) -> bool {
 
 fn checkpoint_fields(kind: &str) -> &'static str {
     match kind {
-        "checkpoint" => "version:int id:string provider:string model:string effort:string \
+        "checkpoint" => "version:int id:string provider:string model:string effort:string fast:bool \
             launch:string active:string read_only:bool plan:bool no_project_instructions:bool \
             project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
             model_retry_window:int in_run_compact:bool context_window_tokens:int \
@@ -944,6 +948,7 @@ fn restored(id: &str, cp: Value) -> Value {
     for key in [
         "provider",
         "model",
+        "fast",
         "read_only",
         "plan",
         "no_project_instructions",

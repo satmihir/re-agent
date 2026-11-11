@@ -315,8 +315,15 @@ impl Transport {
                     req = req
                         .header("x-api-key", &token)
                         .header("anthropic-version", "2023-06-01");
+                    let mut betas = Vec::new();
                     if body["thinking"]["block_binding"].is_object() {
-                        req = req.header("anthropic-beta", "thinking-binding-controls-2026-08-01");
+                        betas.push("thinking-binding-controls-2026-08-01");
+                    }
+                    if body["speed"] == "fast" {
+                        betas.push("fast-mode-2026-02-01");
+                    }
+                    if !betas.is_empty() {
+                        req = req.header("anthropic-beta", betas.join(","));
                     }
                 } else if !token.is_empty() {
                     req = req.bearer_auth(&token);
@@ -833,17 +840,30 @@ mod tests {
         }
     }
     #[test]
-    fn thinking_binding_beta_is_per_request_and_anthropic_only() {
+    fn fast_and_thinking_betas_follow_each_encoded_request_and_provider() {
         use std::io::Write;
         use std::net::TcpListener;
+        let cases = [
+            (false, false),
+            (false, true),
+            (false, false),
+            (true, false),
+            (true, true),
+            (true, false),
+            (false, false),
+        ];
         for provider in ["anthropic", "openai"] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let endpoint = format!("http://{}/model", listener.local_addr().unwrap());
             let server = std::thread::spawn(move || {
-                for binding in [false, true, false] {
+                for (binding, fast) in cases {
                     let (mut stream, _) = listener.accept().unwrap();
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(5)))
                         .unwrap();
                     let mut headers = Vec::new();
                     let mut byte = [0; 1];
@@ -852,14 +872,18 @@ mod tests {
                         headers.push(byte[0]);
                     }
                     let headers = String::from_utf8(headers).unwrap().to_lowercase();
-                    assert_eq!(
-                        headers.contains("anthropic-beta:"),
-                        provider == "anthropic" && binding
-                    );
-                    if provider == "anthropic" && binding {
-                        assert!(headers
-                            .contains("anthropic-beta: thinking-binding-controls-2026-08-01\r\n"));
-                    }
+                    let beta = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("anthropic-beta: "));
+                    let expected = match (provider, binding, fast) {
+                        ("anthropic", true, true) => {
+                            Some("thinking-binding-controls-2026-08-01,fast-mode-2026-02-01")
+                        }
+                        ("anthropic", true, false) => Some("thinking-binding-controls-2026-08-01"),
+                        ("anthropic", false, true) => Some("fast-mode-2026-02-01"),
+                        _ => None,
+                    };
+                    assert_eq!(beta, expected);
                     let length: usize = headers
                         .lines()
                         .find_map(|line| line.strip_prefix("content-length: "))
@@ -870,6 +894,15 @@ mod tests {
                     stream.read_exact(&mut bytes).unwrap();
                     let body: Value = serde_json::from_slice(&bytes).unwrap();
                     assert_eq!(body.get("thinking").is_some(), binding);
+                    assert_eq!(
+                        body.get("speed"),
+                        (provider == "anthropic" && fast).then_some(&json!("fast"))
+                    );
+                    assert_eq!(
+                        body.get("service_tier"),
+                        (provider == "openai" && fast).then_some(&json!("priority"))
+                    );
+                    assert!(body.get("fast").is_none());
                     write!(
                         stream,
                         "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
@@ -877,22 +910,57 @@ mod tests {
                     .unwrap();
                 }
             });
-            let mut transport = Transport::new(&json!({"provider":provider}));
-            for binding in [false, true, false] {
-                let mut body = json!({"model":"test"});
-                if binding {
+            let mut config = json!({"provider":provider,"model":if provider == "anthropic" {"claude-opus-5-5"} else {"gpt-6.1-sol"},"fast":true});
+            let mut transport = Transport::new(&config);
+            for (binding, fast) in cases {
+                config["fast"] = fast.into();
+                let history = if binding {
+                    vec![
+                        json!({"kind":"tool","tool":{"call_id":"call","outcome":{"ok":true,"code":"context_gc"}}}),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                let request =
+                    crate::context::build_context(&config, json!({}), &history, json!([]));
+                let mut body = crate::provider::encode_request(&config, &request).unwrap();
+                if provider == "openai" && binding {
                     body["thinking"] =
                         json!({"block_binding":{"prefix_mismatch_behavior":"drop_block"}});
                 }
                 assert_eq!(
                     transport
-                        .call_endpoint(&json!({}), &body, &endpoint)
+                        .call_endpoint(&request, &body, &endpoint)
                         .unwrap()
                         .0,
                     200
                 );
             }
             server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn rejected_fast_requests_return_without_retry_or_fallback() {
+        use std::io::Write;
+        for provider in ["anthropic", "openai"] {
+            let (endpoint, server) = http::tests::server(move |mut stream| {
+                let headers = http::tests::request(&mut stream);
+                assert_eq!(
+                    headers.contains("fast-mode-2026-02-01"),
+                    provider == "anthropic"
+                );
+                stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            });
+            let config = json!({"provider":provider});
+            let request = json!({"model":"test","fast":true});
+            let body = crate::provider::encode_request(&config, &request).unwrap();
+            let mut transport = Transport::new(&config);
+            let (status, _) = transport.call_endpoint(&request, &body, &endpoint).unwrap();
+            server.join().unwrap();
+            assert_eq!(status, 400);
+            assert_eq!(transport.sent_attempts, 1);
+            assert_eq!(transport.events.len(), 2);
         }
     }
 

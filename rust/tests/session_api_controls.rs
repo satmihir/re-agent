@@ -1209,3 +1209,95 @@ fn local_http_fixture_reads_a_nonblocking_stream_before_the_client_sends() {
         );
     });
 }
+
+#[test]
+fn fast_controls_affect_next_request_and_resume_without_changing_model_or_effort() {
+    let Some(root) = isolated(
+        "fast_controls_affect_next_request_and_resume_without_changing_model_or_effort",
+        vec![provider_text(); 4],
+    ) else {
+        return;
+    };
+    let api = live(&root, "gpt-6.1-sol", Some("high"));
+    let initial = api.get_snapshot().unwrap();
+    assert!(!initial.fast);
+    run(&api, "standard");
+    assert!(request(&root, 0).get("service_tier").is_none());
+    let before = api.get_snapshot().unwrap();
+    applied(&api, "fast", SessionChange::SetFast { enabled: true });
+    let after = api.get_snapshot().unwrap();
+    assert!(after.fast);
+    assert_eq!(after.session, before.session);
+    assert_eq!(after.model, before.model);
+    assert_eq!(after.reasoning_effort, before.reasoning_effort);
+    assert_eq!(after.usage, before.usage);
+    run(&api, "priority");
+    assert_eq!(request(&root, 1)["service_tier"], "priority");
+    assert_eq!(request(&root, 1)["reasoning"]["effort"], "high");
+    assert_eq!(checkpoint(&api).1["state"]["fast"], true);
+    api.close().unwrap();
+    let api = resume_session(&initial.session.session_id).unwrap();
+    assert!(api.get_snapshot().unwrap().fast);
+    run(&api, "resumed-priority");
+    assert_eq!(request(&root, 2)["service_tier"], "priority");
+    applied(&api, "standard", SessionChange::SetFast { enabled: false });
+    assert!(!api.get_snapshot().unwrap().fast);
+    assert!(checkpoint(&api).1["state"].get("fast").is_none());
+    run(&api, "standard-again");
+    assert!(request(&root, 3).get("service_tier").is_none());
+    api.close().unwrap();
+    let api = resume_session(&initial.session.session_id).unwrap();
+    assert!(!api.get_snapshot().unwrap().fast);
+    api.close().unwrap();
+}
+
+#[test]
+fn fast_controls_reject_unknown_support_and_model_switches_disable_unsupported_fast() {
+    let Some(root) = isolated(
+        "fast_controls_reject_unknown_support_and_model_switches_disable_unsupported_fast",
+        vec![],
+    ) else {
+        return;
+    };
+    for model in [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "gpt-6.1-luna",
+        "gpt-future",
+    ] {
+        let api = live(&root, model, None);
+        let before = api.get_snapshot().unwrap();
+        let receipt = change(
+            &api,
+            "unsupported",
+            SessionChange::SetFast { enabled: true },
+        );
+        assert_eq!(receipt.state, CommandState::NotApplied);
+        assert!(receipt.reason.unwrap().contains("not supported"));
+        let after = api.get_snapshot().unwrap();
+        assert!(!after.fast);
+        assert_eq!(after.model, before.model);
+        assert_eq!(after.reasoning_effort, before.reasoning_effort);
+        assert_eq!(after.usage, before.usage);
+        applied(&api, "off", SessionChange::SetFast { enabled: false });
+        api.close().unwrap();
+    }
+    let api = live(&root, "gpt-6.1-sol", None);
+    applied(&api, "fast", SessionChange::SetFast { enabled: true });
+    for (model, fast) in [
+        ("claude-opus-5-5", true),
+        ("claude-haiku-5-5", false),
+        ("gpt-6.1-sol", false),
+    ] {
+        applied(
+            &api,
+            model,
+            SessionChange::SwitchModel {
+                model: model.into(),
+                history: reagent::session_api::HistoryMode::Carry,
+            },
+        );
+        assert_eq!(api.get_snapshot().unwrap().fast, fast);
+    }
+    api.close().unwrap();
+}

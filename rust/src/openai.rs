@@ -115,6 +115,9 @@ fn encode(req: &Value, proxied: bool, stream: bool) -> Result<Value, String> {
     }
     let tools:Vec<Value>=array(req,"tools").iter().map(|t|json!({"type":"function","name":s(t,"name"),"description":s(t,"description"),"parameters":t["input_schema"],"strict":false})).collect();
     let mut body = json!({"model":s(req,"model"),"instructions":s(req,"instructions"),"input":input,"tools":tools});
+    if req["fast"] == true {
+        body["service_tier"] = json!("priority");
+    }
     if !s(req, "reasoning_effort").is_empty() {
         body["reasoning"] = json!({"effort":s(req,"reasoning_effort")});
     }
@@ -485,6 +488,35 @@ pub fn transient(raw: &[u8], chatgpt_only: bool) -> (String, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fast_requests_select_priority_without_changing_default_bytes_or_cache_key() {
+        for (live, proxied) in [(false, false), (false, true), (true, false), (true, true)] {
+            let encode = |request: &Value| {
+                if live {
+                    encode_live_request(request, proxied)
+                } else {
+                    encode_request(request, proxied)
+                }
+            };
+            let mut request = json!({"model":"gpt-6.1-sol","instructions":"p","history":[]});
+            let plain = encode(&request).unwrap();
+            assert!(plain.get("service_tier").is_none());
+            for fast in [json!(false), Value::Null, json!("true"), json!(1)] {
+                request["fast"] = fast;
+                assert_eq!(json_bytes(&encode(&request).unwrap()), json_bytes(&plain));
+            }
+            let key = cache_key(&request);
+            request["fast"] = true.into();
+            let mut body = encode(&request).unwrap();
+            assert_eq!(body["service_tier"], "priority");
+            assert!(body.get("speed").is_none());
+            assert!(body.get("fast").is_none());
+            assert_eq!(cache_key(&request), key);
+            body.as_object_mut().unwrap().shift_remove("service_tier");
+            assert_eq!(json_bytes(&body), json_bytes(&plain));
+        }
+    }
+
     #[test]
     fn user_parts_keep_workspace_roster_plan_order_for_both_providers() {
         for roster in [false, true] {

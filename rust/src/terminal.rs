@@ -736,6 +736,7 @@ impl Input {
                         "/plan",
                         "/model",
                         "/effort",
+                        "/fast",
                         "/auto",
                         "/status",
                         "/context",
@@ -748,6 +749,11 @@ impl Input {
                         "/help",
                         "/exit",
                     ];
+                    let commands = if line.starts_with("/fast ") {
+                        &["/fast on", "/fast off"][..]
+                    } else {
+                        &commands[..]
+                    };
                     let matches: Vec<_> =
                         commands.iter().filter(|c| c.starts_with(&line)).collect();
                     if matches.len() == 1 {
@@ -1033,6 +1039,7 @@ impl Input {
                         "/plan",
                         "/model",
                         "/effort",
+                        "/fast",
                         "/auto",
                         "/status",
                         "/context",
@@ -1045,6 +1052,11 @@ impl Input {
                         "/help",
                         "/exit",
                     ];
+                    let commands = if line.starts_with("/fast ") {
+                        &["/fast on", "/fast off"][..]
+                    } else {
+                        &commands[..]
+                    };
                     let matches: Vec<_> = commands
                         .iter()
                         .filter(|command| command.starts_with(&line))
@@ -1053,7 +1065,13 @@ impl Input {
                         let command = *matches[0];
                         let suffix = if matches!(
                             command,
-                            "/plan" | "/model" | "/effort" | "/auto" | "/compact" | "/review"
+                            "/plan"
+                                | "/model"
+                                | "/effort"
+                                | "/fast"
+                                | "/auto"
+                                | "/compact"
+                                | "/review"
                         ) {
                             " "
                         } else {

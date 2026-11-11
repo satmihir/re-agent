@@ -18,6 +18,7 @@ pub(super) struct Status {
     model: String,
     effort: String,
     plan: bool,
+    fast: bool,
     blocked: bool,
     auto: bool,
     agents: usize,
@@ -31,6 +32,7 @@ impl Status {
         self.model = config["model"].as_str().unwrap_or("").into();
         self.effort = config["reasoning_effort"].as_str().unwrap_or("").into();
         self.plan = state["plan"].as_bool().unwrap_or(false);
+        self.fast = config["fast"].as_bool().unwrap_or(false);
         self.blocked = !state["blocked"].as_str().unwrap_or("").is_empty();
         self.auto = state["auto_enabled"].as_bool().unwrap_or(false);
         let window = crate::catalog::effective_context_window(config);
@@ -80,6 +82,9 @@ impl Status {
         let mut parts = Vec::new();
         if self.plan {
             parts.push("plan mode".to_string());
+        }
+        if self.fast {
+            parts.push("fast".into());
         }
         if !self.model.is_empty() {
             let mut model = label(&self.model);
@@ -1061,6 +1066,28 @@ mod tests {
             status.row(80, false),
             "  gpt-6-luna / low · window 1M override"
         );
+    }
+
+    #[test]
+    fn fast_status_is_enabled_only_and_survives_model_width_omission() {
+        let mut status = Status::default();
+        for fast in [false, true, false] {
+            status.update(
+                &serde_json::json!({"model":"gpt-6.1-sol", "reasoning_effort":"medium", "fast":fast}),
+                &Value::Null,
+            );
+            assert_eq!(
+                status.row(80, false),
+                if fast {
+                    "  fast · gpt-6.1-sol / medium"
+                } else {
+                    "  gpt-6.1-sol / medium"
+                }
+            );
+            if fast {
+                assert_eq!(status.row(8, false), "  fast");
+            }
+        }
     }
 
     #[test]

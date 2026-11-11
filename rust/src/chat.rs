@@ -37,6 +37,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "choose reasoning effort (picker on a terminal)",
     ),
     (
+        "/fast",
+        "[on|off]",
+        "toggle faster service at higher token rates; same model and effort",
+    ),
+    (
         "/auto",
         "[on|off]",
         "optional TypeSafe routing; off pins the current route",
@@ -109,7 +114,7 @@ fn presentation(snapshot: &SessionSnapshot, recap: bool) -> (Value, Value) {
     (
         json!({"provider":snapshot.provider,"model":snapshot.model,"reasoning_effort":(!snapshot.reasoning_effort.is_empty()).then_some(&snapshot.reasoning_effort),
         "auth_mode":snapshot.auth_mode,"proxied":snapshot.auth_mode == "proxy","workspace":snapshot.workspace,
-        "read_only":snapshot.read_only,"plan":snapshot.plan,"session_id":snapshot.session.session_id,"checkpoint_enabled":snapshot.checkpoint_enabled,
+        "read_only":snapshot.read_only,"plan":snapshot.plan,"fast":snapshot.fast,"session_id":snapshot.session.session_id,"checkpoint_enabled":snapshot.checkpoint_enabled,
         "context_window_tokens":snapshot.context_window_override,"max_steps":snapshot.max_steps,"max_tool_calls":snapshot.max_tool_calls,"recap":recap}),
         json!({"plan":snapshot.plan,"blocked":snapshot.blocked,"auto_enabled":snapshot.auto.enabled,
         "last_request":snapshot.last_request,"usage":snapshot.usage}),
@@ -646,6 +651,11 @@ impl Chat {
         } else {
             format!("model      {model} ({provider}), {effort}")
         });
+        self.say(if snapshot.fast {
+            "fast       on (higher token rates)"
+        } else {
+            "fast       off"
+        });
         if snapshot.auth_mode == "proxy" {
             self.say(&format!(
                 "endpoint   {} (API_PROXY_URL)",
@@ -768,6 +778,24 @@ impl Chat {
             }
             "/model" => self.model(arg)?,
             "/effort" => self.effort(arg)?,
+            "/fast" => {
+                let enabled = match arg {
+                    "" => !self.refresh()?.fast,
+                    "on" => true,
+                    "off" => false,
+                    _ => {
+                        self.say("usage: /fast [on|off]");
+                        return Ok(None);
+                    }
+                };
+                if self.change(SessionChange::SetFast { enabled })?.is_some() {
+                    self.say(if enabled {
+                        "fast mode on (higher token rates)"
+                    } else {
+                        "fast mode off"
+                    });
+                }
+            }
             "/auto" => {
                 if self.refresh()?.provider == "scripted" {
                     self.say("Auto is unavailable in a scripted chat");

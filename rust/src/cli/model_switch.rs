@@ -223,6 +223,9 @@ pub(crate) fn destination(current: &Value, info: &Value) -> Result<Value, String
     config["provider"] = info["provider"].clone();
     config["model"] = info["id"].clone();
     config["reasoning_effort"] = info["effort"].clone();
+    if config["fast"] == true && !crate::catalog::supports_fast(&config) {
+        config["fast"] = json!(false);
+    }
     provider::configure(&mut config)?;
     context::pin_instructions(&mut config);
     Ok(config)
