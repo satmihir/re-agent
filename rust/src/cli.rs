@@ -2,7 +2,9 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 
-const TOP: &str = "re:agent: a small, readable agent harness\n\nusage:\n  reagent run  [flags] \"prompt\"    one task, then exit\n  reagent chat [flags]             a conversation, one turn per line\n  reagent help [run|chat|friction-export]  this text, or a command's flags\n  reagent friction-export [flags] export local friction reports to S3\n  reagent version                  the build's version\n  reagent login                    sign in with ChatGPT\n  reagent logout                   disconnect ChatGPT\n  reagent auth status              account, plan usage, expiry and models\n\nexamples:\n  reagent chat --workspace ./repo\n  reagent run --workspace ./repo \"Set the default timeout to 30s.\"\n  reagent run --workspace . --show-context \"Where is the budget?\" | jq .\n\nenvironment:\n  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run\n  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,\n                                      with no key; the provider must be openai\n  TYPESAFE_API_KEY                    router key for --auto or --git-do jev\n  REAGENT_MODEL                       default model\n  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)\n  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)\n  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)\n  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)\n  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)\n  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)\n  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)\n  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)\n  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume\n  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables\n  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false\n                                      experiments are exclusive and require --context-gc\n                                      empty is unset; validated on resume, saved settings win\n  NO_COLOR                            turn off styling\n";
+mod startup;
+
+const TOP: &str = "re:agent: a small, readable agent harness\n\nusage:\n  reagent [chat flags]             start chat on a terminal\n  reagent --continue               resume this workspace's latest session\n  reagent --resume [ID]            choose a saved session, or resume by ID\n  reagent run  [flags] \"prompt\"    one task, then exit\n  reagent chat [flags]             a conversation, one turn per line\n  reagent help [run|chat|friction-export]  this text, or a command's flags\n  reagent friction-export [flags] export local friction reports to S3\n  reagent version                  the build's version\n  reagent login                    sign in with ChatGPT\n  reagent logout                   disconnect ChatGPT\n  reagent auth status              account, plan usage, expiry and models\n\nexamples:\n  reagent chat --workspace ./repo\n  reagent run --workspace ./repo \"Set the default timeout to 30s.\"\n  reagent run --workspace . --show-context \"Where is the budget?\" | jq .\n\nenvironment:\n  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run\n  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,\n                                      with no key; the provider must be openai\n  TYPESAFE_API_KEY                    router key for --auto or --git-do jev\n  REAGENT_MODEL                       default model\n  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)\n  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)\n  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)\n  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)\n  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)\n  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)\n  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)\n  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)\n  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume\n  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables\n  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false\n                                      experiments are exclusive and require --context-gc\n                                      empty is unset; validated on resume, saved settings win\n  NO_COLOR                            turn off styling\n";
 
 fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
     vec![
@@ -28,7 +30,8 @@ fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("prompt-file", "PATH", "read the prompt from this file, or - for stdin", json!("")),
         ("trace-file", "PATH", "write the trace here instead of the default cache location", json!("")),
         ("trace-dir", "DIR", "write each turn's trace under this directory", json!("")),
-        ("resume", "ID", "resume a live chat by its session ID", json!("")),
+        ("resume", "[ID]", "resume by session ID, or choose a saved session on a terminal", json!("")),
+        ("continue", "", "resume the latest saved session for the current workspace", json!(false)),
         ("max-steps", "N", "maximum model requests in one run (0 means unlimited)", json!(0)),
         ("max-tool-calls", "N", "maximum accepted tool calls in one run (0 means unlimited)", json!(0)),
     ]
@@ -38,7 +41,7 @@ fn help(command: &str) -> String {
     let mut out = if command == "run" {
         "usage: reagent run [flags] \"prompt\"\n       reagent run [flags] --prompt-file PATH\n\nRuns one task to completion and exits. The reply goes to stdout; progress\nand tool activity go to stderr. The run summary always prints.\n--recap also shows the completed run's operation recap. Flags go before the prompt.\n".to_string()
     } else {
-        "usage: reagent chat [flags]\n\nHolds a conversation, one turn per line typed. /help inside lists its commands.\n".to_string()
+        "usage: reagent chat [flags]\n       reagent [flags]          on a terminal\n\nHolds a conversation, one turn per line typed. /help inside lists its commands.\n--continue resumes this workspace's latest session; --resume opens a picker.\n".to_string()
     };
     let mut groups = vec![
         (
@@ -89,7 +92,7 @@ fn help(command: &str) -> String {
         ("Tools", vec!["git-do"]),
     ];
     if command == "chat" {
-        groups.push(("Resume", vec!["resume"]));
+        groups.push(("Resume", vec!["continue", "resume"]));
     }
     groups.push((
         "Offline",
@@ -230,6 +233,8 @@ fn parse(args: &[String]) -> Result<(Value, BTreeSet<String>, Vec<String>, bool)
             v
         } else if f.3.is_boolean() {
             "true"
+        } else if name == "resume" && args.get(i + 1).is_none_or(|arg| arg.starts_with('-')) {
+            ""
         } else {
             i += 1;
             args.get(i)
@@ -310,7 +315,12 @@ pub fn main_os(args: Vec<std::ffi::OsString>) -> i32 {
 }
 
 fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
-    let Some(command) = args.first().map(String::as_str) else {
+    let implicit_chat = startup::implicit_chat(&args);
+    let command = if implicit_chat {
+        "chat"
+    } else if let Some(command) = args.first() {
+        command.as_str()
+    } else {
         eprint!("{TOP}");
         return 2;
     };
@@ -354,7 +364,8 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
             return 2;
         }
     }
-    let (mut cfg, used, positional, terminated) = match parse(&args[1..]) {
+    let (mut cfg, used, positional, terminated) = match parse(&args[usize::from(!implicit_chat)..])
+    {
         Ok(v) => v,
         Err(e) if e == "help" => {
             print!("{}", help(command));
@@ -387,11 +398,14 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         cfg["agents"] = json!(false);
     }
     let preview = yes(&cfg, "show_context");
-    let resume = !text(&cfg, "resume").is_empty();
+    let continuing = yes(&cfg, "continue");
+    let resume = used.contains("resume") || continuing;
     let bad = if command == "run" && used.contains("resume") {
         Some("--resume applies to chat only")
-    } else if command == "chat" && used.contains("resume") && !resume {
-        Some("--resume requires a session ID")
+    } else if command == "run" && used.contains("continue") {
+        Some("--continue applies to chat only")
+    } else if continuing && used.contains("resume") {
+        Some("--continue and --resume are mutually exclusive")
     } else if command == "run" && prompt.is_empty() && text(&cfg, "prompt_file").is_empty() {
         Some("a prompt is required, as an argument or with --prompt-file")
     } else if command == "run" && !prompt.is_empty() && !text(&cfg, "prompt_file").is_empty() {
@@ -422,6 +436,31 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
     if let Some(e) = bad {
         return usage(command, e);
     }
+    if resume {
+        let selector = if continuing { "continue" } else { "resume" };
+        if let Some(conflict) = used
+            .iter()
+            .filter(|name| {
+                !matches!(
+                    name.as_str(),
+                    "resume" | "continue" | "recap" | "trace-dir" | "openai-auth"
+                ) && !(continuing && name.as_str() == "workspace")
+            })
+            .last()
+        {
+            return usage(
+                command,
+                &format!("--{selector} cannot be combined with --{conflict}"),
+            );
+        }
+        if continuing || text(&cfg, "resume").is_empty() {
+            match startup::select_session(&cfg, continuing) {
+                Ok(Some(id)) => cfg["resume"] = json!(id),
+                Ok(None) => return 0,
+                Err(error) => return startup(&error),
+            }
+        }
+    }
     if let Err(e) = crate::provider::validate_environment() {
         return startup(&e);
     }
@@ -429,16 +468,6 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         return startup(&e);
     }
     if resume {
-        if let Some(conflict) = used
-            .iter()
-            .filter(|n| !matches!(n.as_str(), "resume" | "recap" | "trace-dir" | "openai-auth"))
-            .last()
-        {
-            return usage(
-                command,
-                &format!("--resume cannot be combined with --{conflict}"),
-            );
-        }
         match crate::checkpoint::load(text(&cfg, "resume")) {
             Ok(saved) => {
                 let local = cfg;
@@ -688,6 +717,26 @@ mod tests {
         assert_eq!(duration("1d"), None)
     }
     #[test]
+    fn resume_accepts_an_optional_id_without_consuming_the_next_flag() {
+        for (args, id, recap) in [
+            (vec!["--resume"], "", false),
+            (vec!["--resume", "--recap"], "", true),
+            (
+                vec!["--resume", "0123456789abcdef", "--recap"],
+                "0123456789abcdef",
+                true,
+            ),
+            (vec!["--resume=0123456789abcdef"], "0123456789abcdef", false),
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+            let (cfg, used, positional, _) = parse(&args).unwrap();
+            assert!(used.contains("resume"));
+            assert_eq!(text(&cfg, "resume"), id);
+            assert_eq!(yes(&cfg, "recap"), recap);
+            assert!(positional.is_empty());
+        }
+    }
+    #[test]
     fn help_wraps() {
         assert!(help("run")
             .split_once("\nModel\n")
@@ -695,6 +744,6 @@ mod tests {
             .1
             .lines()
             .all(|s| s.len() <= 80));
-        assert!(help("chat").contains("--resume ID"));
+        assert!(help("chat").contains("--resume [ID]"));
     }
 }

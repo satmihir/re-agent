@@ -3,8 +3,9 @@
     python3 bench/tty/check.py BINARY [SCENARIO ...]
 
 `make tty-check` builds the binary and runs every scenario. Most start
-`reagent chat --scripted`; Auto startup uses an offline proxy without making
-requests. Each runs in a pty of a fixed size, answers the terminal queries a
+`reagent chat --scripted`; startup scenarios use a local HTTP fixture and real
+checkpoints. Auto startup uses an offline proxy without making requests.
+Each runs in a pty of a fixed size, answers the terminal queries a
 real terminal would, and interprets the output with an
 independent emulator (vt.py). Screens marked `show` are printed so a reviewer
 can see them; `expect` steps fail the run.
@@ -126,6 +127,120 @@ EXEC_TAIL_FIRST_STDOUT = "".join(f"TAIL stdout {number}\n" for number in range(1
 #   ("wait_check", check, *args) wait for a CHECKS invariant, at most 5 seconds
 #   ("restart", kind)           new chat with shared HOME, using an alias or isolated workspace
 SCENARIOS = {
+    "startup-bare": {
+        "startup_argv": [],
+        "startup_selected": None,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "screen_has", "re:agent"),
+            ("expect", "screen_has", "session ID:"),
+            ("type", "First bare startup message."), ("key", "enter"),
+            ("wait", "Startup follow-up accepted.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("show", "Bare reagent opens chat and accepts its first real offline request"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+            ("key", "ctrl-d"), ("exit", 0, "", 5),
+        ],
+    },
+    "startup-continue": {
+        "startup_argv": ["--continue"],
+        "startup_seeds": [("current", "Older workspace conversation."),
+                          ("current", "Latest workspace conversation."),
+                          ("other", "Newer unrelated conversation.")],
+        "startup_selected": 1,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "Continue the saved conversation."), ("key", "enter"),
+            ("wait", "Startup follow-up accepted.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("show", "Continue restores this workspace's latest history, not the newest unrelated session"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+            ("key", "ctrl-d"), ("exit", 0, "", 5),
+        ],
+    },
+    "startup-continue-workspace": {
+        "startup_argv": ["chat", "--continue", "--workspace", "workspace-alias"],
+        "startup_alias": True,
+        "startup_seeds": [("current", "Conversation selected through a workspace alias."),
+                          ("other", "Newer conversation outside the selected workspace.")],
+        "startup_selected": 0,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "Continue through a symlinked workspace."), ("key", "enter"),
+            ("wait", "Startup follow-up accepted.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("show", "Explicit chat --continue accepts a canonical-equivalent --workspace selector"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+            ("key", "ctrl-d"), ("exit", 0, "", 5),
+        ],
+    },
+    "startup-picker": {
+        "startup_argv": ["--resume"],
+        "startup_seeds": [("current", "Older local conversation."),
+                          ("other", "Newest cross-workspace conversation.")],
+        "startup_selected": 1,
+        "size": (24, 110),
+        "steps": [
+            ("wait", "Resume session", 5),
+            ("wait_regex", r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", 5),
+            ("expect", "screen_has", "Newest cross-workspace conversation."),
+            ("show", "Resume picker shows dated session previews across workspaces"),
+            ("key", "enter"), ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "Follow up after choosing a session."), ("key", "enter"),
+            ("wait", "Startup follow-up accepted.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("show", "The picked conversation accepts its next message with restored history"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+            ("key", "ctrl-d"), ("exit", 0, "", 5),
+        ],
+    },
+    "startup-picker-page-narrow": {
+        "startup_argv": ["--resume"],
+        "startup_seeds": [("current", f"Page seed {number}.") for number in range(1, 10)],
+        "startup_selected": 3,
+        "size": (12, 60),
+        "steps": [
+            ("wait", "Resume session · 1/2", 5),
+            ("expect", "screen_has", "Next page"),
+            ("expect", "screen_has", "Page seed 9."),
+            ("show", "A short, narrow terminal keeps startup paging controls visible"),
+            ("key", "down"), ("key", "down"), ("key", "down"),
+            ("key", "down"), ("key", "down"), ("key", "enter"),
+            ("wait", "Resume session · 2/2", 5),
+            ("expect", "screen_has", "Previous page"),
+            ("expect", "screen_has", "Page seed 4."),
+            ("key", "down"), ("key", "down"), ("key", "down"),
+            ("key", "down"), ("key", "enter"),
+            ("wait", "Resume session · 1/2", 5),
+            ("key", "down"), ("key", "down"), ("key", "down"),
+            ("key", "down"), ("key", "down"), ("key", "enter"),
+            ("wait", "Resume session · 2/2", 5),
+            ("show", "Startup selection can page forward, back, then select an older Session"),
+            ("key", "enter"), ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "Continue the paged conversation."), ("key", "enter"),
+            ("wait", "Startup follow-up accepted.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+            ("key", "ctrl-d"), ("exit", 0, "", 5),
+        ],
+    },
+    "startup-picker-cancel": {
+        "startup_argv": ["--resume"],
+        "startup_seeds": [("current", "Cancel leaves this session untouched.")],
+        "steps": [
+            ("wait", "Resume session", 5),
+            ("show", "Escape cancels startup selection without opening a fresh Session"),
+            ("key", "esc"), ("exit", 0, "", 5),
+        ],
+    },
+    "startup-picker-empty": {
+        "startup_argv": ["--resume"],
+        "steps": [("exit", 2, "no saved", 5)],
+    },
+    "startup-continue-empty": {
+        "startup_argv": ["--continue"],
+        "steps": [("exit", 2, "no saved", 5)],
+    },
     "chat-fast-service-tier": {
         "fast": True,
         "size": (28, 110),
@@ -755,6 +870,7 @@ SCENARIOS = {
             ("wait_check", "input_rows", ["❯ first edited", "  second"]),
             ("show", "Up edits the earlier physical row before submitting a two-line message"),
             ("key", "enter"), ("wait", "Earlier line edited.", 5),
+            ("wait_status", "scripted / low", 5),
             ("wait_check", "dispatched_prompts", ["alpha delta\nsecond\nthird", "first edited\nsecond"]),
             ("expect", "status_row_last"),
         ],
@@ -787,6 +903,7 @@ SCENARIOS = {
             ("wait_regex", "^❯ /fast off$", 5),
             ("key", "ctrl-u"), ("type", "ordinary follow-up"), ("key", "enter"),
             ("wait", "Plain text still sends.", 5),
+            ("wait_status", "scripted / low", 5),
             ("wait_check", "dispatched_prompts", ["ordinary follow-up"]),
             ("expect", "status_row_last"),
         ],
@@ -1429,7 +1546,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None, startup_argv=None):
         self.workspace, self.home = workspace, home or workspace
         self.rows, self.cols = size
         self.raw = bytearray()
@@ -1445,7 +1562,10 @@ class Session:
             env.update(HOME=self.home, XDG_CACHE_HOME=os.path.join(self.home, ".cache"),
                        XDG_CONFIG_HOME=os.path.join(self.home, ".config"))
             args = [binary, "run" if run_prompt is not None else "chat", "--workspace", workspace]
-            if login:
+            if startup_argv is not None:
+                os.chdir(workspace)
+                args = [binary] + startup_argv
+            elif login:
                 args = [binary, "login"]
             elif chatgpt:
                 args += ["--openai-auth", "chatgpt", "--no-project-instructions"]
@@ -1798,6 +1918,20 @@ def show(s, label):
         print("  %2d│%s" % (i + 1, line))
 
 
+def session_checkpoints(home):
+    directory = os.path.join(cache_root(home), "reagent", "sessions")
+    checkpoints = {}
+    if os.path.isdir(directory):
+        for session_id in os.listdir(directory):
+            path = os.path.join(directory, session_id, "checkpoint.json")
+            if os.path.isfile(path):
+                with open(path, "rb") as checkpoint:
+                    checkpoints[session_id] = checkpoint.read()
+            else:
+                checkpoints[session_id] = None
+    return checkpoints
+
+
 def trace_events(workspace):
     events = []
     for directory, _, files in os.walk(workspace):
@@ -1837,6 +1971,59 @@ def run(binary, name, scenario, workspace):
         preview_parts += ["**PREVIEW TAIL READY**\n", "UNFINISHED GIANT LINE " + "u" * 40000]
         stream_tail = "\n```\nFinal tail."
     stream_reply = "".join(preview_parts) + stream_tail
+    startup_requests, startup_before = [], {}
+    startup_seeds = scenario.get("startup_seeds", [])
+    if "startup_argv" in scenario:
+        if scenario.get("startup_alias"):
+            os.symlink(workspace, os.path.join(workspace, "workspace-alias"))
+
+        class StartupHandler(http.server.BaseHTTPRequestHandler):
+            def setup(self):
+                # macOS accepted sockets need not inherit the listener's blocking mode.
+                self.request.setblocking(True)
+                super().setup()
+
+            def do_POST(self):
+                startup_requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                ordinal = len(startup_requests)
+                text = f"Seed answer {ordinal}." if ordinal <= len(startup_seeds) else "Startup follow-up accepted."
+                response = {"id": f"startup-{ordinal}", "status": "completed", "model": "gpt-6.1-sol",
+                            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}],
+                            "usage": {"input_tokens": 11, "output_tokens": 3}}
+                body = json.dumps(response).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StartupHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_env.update(API_PROXY_PROVIDER="openai", API_PROXY_URL=f"http://127.0.0.1:{server.server_port}/v1/responses",
+                         OPENAI_API_KEY="", ANTHROPIC_API_KEY="", TYPESAFE_API_KEY="", REAGENT_MODEL="gpt-6.1-sol",
+                         REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+                         REAGENT_ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+                         REAGENT_CONTEXT_WINDOW_TOKENS="", REAGENT_CONTEXT_GC_AGE_STEPS="", REAGENT_CONTEXT_GC_CONSOLIDATE="")
+        seed_env = dict(os.environ, **extra_env, HOME=workspace,
+                        XDG_CACHE_HOME=cache_root(workspace), XDG_CONFIG_HOME=os.path.join(workspace, ".config"))
+        for ordinal, (location, prompt) in enumerate(startup_seeds):
+            destination = workspace if location == "current" else os.path.join(workspace, "other-workspace")
+            os.makedirs(destination, exist_ok=True)
+            seeded = subprocess.run([binary, "chat", "--no-project-instructions"], input=prompt + "\n", text=True,
+                                    cwd=destination, env=seed_env, capture_output=True, timeout=15)
+            after = session_checkpoints(workspace)
+            created = after.keys() - startup_before.keys()
+            if seeded.returncode or len(created) != 1 or len(startup_requests) != ordinal + 1:
+                server.shutdown()
+                server.server_close()
+                return [f"offline startup seed failed: exit {seeded.returncode}; {seeded.stderr}"]
+            # A deterministic checkpoint clock exercises ordering without sleeps or timestamp ties.
+            checkpoint = os.path.join(cache_root(workspace), "reagent", "sessions", created.pop(), "checkpoint.json")
+            os.utime(checkpoint, (1735689600 + ordinal * 60, 1735689600 + ordinal * 60))
+            startup_before = after
     if scenario.get("live_stream"):
         class StreamHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
@@ -2188,7 +2375,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False), startup_argv=scenario.get("startup_argv"))
     try:
         for index, step in enumerate(scenario["steps"]):
             kind, args = step[0], step[1:]
@@ -2328,6 +2515,26 @@ def run(binary, name, scenario, workspace):
         if server is not None:
             server.shutdown()
             server.server_close()
+    if "startup_argv" in scenario:
+        after = session_checkpoints(workspace)
+        sends_message = "startup_selected" in scenario
+        expected_requests = len(startup_seeds) + int(sends_message)
+        if len(startup_requests) != expected_requests:
+            failures.append(f"startup made {len(startup_requests)} requests, expected {expected_requests}")
+        selected = scenario.get("startup_selected")
+        if sends_message and selected is not None and len(startup_requests) == expected_requests:
+            restored = json.dumps(startup_requests[-1].get("input", []))
+            for ordinal, (_, prompt) in enumerate(startup_seeds):
+                expected = ordinal == selected
+                if (prompt in restored) != expected or (f"Seed answer {ordinal + 1}." in restored) != expected:
+                    failures.append(f"startup restored the wrong history for seed {ordinal + 1}")
+        if startup_seeds or not sends_message:
+            if after.keys() != startup_before.keys():
+                failures.append("startup selection created or removed a Session")
+            if not sends_message and after != startup_before:
+                failures.append("cancelled startup modified an existing checkpoint")
+        elif len(after) != 1:
+            failures.append("bare startup did not save exactly one resumable Session")
     if scenario.get("fast"):
         if len(fast_requests) != 3:
             failures.append("Fast commands did not produce exactly three ordinary requests")

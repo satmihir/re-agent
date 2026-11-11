@@ -11,6 +11,9 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 mod legacy;
+mod listing;
+
+pub(crate) use listing::{list, SavedSession};
 
 #[derive(Default)]
 struct Leases {
@@ -370,6 +373,7 @@ const FIELDS: &[&str] = &[
     "auto_compact_off",
     "history",
     "pending_submission",
+    "first_message",
     "seen",
     "handoff",
     "compacted_plan",
@@ -485,6 +489,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "auto_fallback_model",
             "auto_fallback_effort",
             "pending_submission",
+            "first_message",
             "handoff",
             "in_flight",
             "prompt",
@@ -600,7 +605,11 @@ fn close_checkpoint(file: File) -> std::io::Result<()> {
 }
 
 /// Save persists an execution barrier without replaying any pending work.
-pub fn save(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Result<(), String> {
+pub fn save(
+    session: &mut crate::runtime::Session,
+    phase: &str,
+    in_flight: &str,
+) -> Result<(), String> {
     if !session.config["checkpoint_enabled"]
         .as_bool()
         .unwrap_or(false)
@@ -610,6 +619,10 @@ pub fn save(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> 
         || session.config["agent"].as_bool().unwrap_or(false)
     {
         return Ok(());
+    }
+    let preview = listing::first_message(&session.state, &session.history);
+    if !preview.is_empty() {
+        session.state["first_message"] = json!(preview);
     }
     let cp = state(session, phase, in_flight);
     let id = cp["id"].as_str().ok_or("session ID is missing")?;
@@ -726,7 +739,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             gc_requests:int agents:bool agent_roster:[]thread agent_subtree:subtree \
             report_friction:bool auto:bool auto_enabled:bool auto_fallback_model:string \
             auto_fallback_effort:string auto_usage:usage auto_attempts:int auto_compact_off:bool \
-            history:[]entry pending_submission:user seen:map:bool handoff:handoff \
+            history:[]entry pending_submission:user first_message:string seen:map:bool handoff:handoff \
             compacted_plan:string blocked:string last_trace:string last_request:usage \
             tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt",
         "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
@@ -980,6 +993,10 @@ fn restored(id: &str, cp: Value) -> Value {
     config.insert("workspace".into(), cp["launch"].clone());
     config.insert("checkpoint_enabled".into(), json!(true));
     let mut s = cp.clone();
+    let preview = listing::first_message(&cp, cp["history"].as_array().map_or(&[], Vec::as_slice));
+    if !preview.is_empty() {
+        s["first_message"] = json!(preview);
+    }
     s["launch_instructions"] = project.clone();
     s["seen_calls"] = cp["seen"].clone();
     s["session_id"] = json!(id);
@@ -1332,7 +1349,7 @@ mod tests {
             assert_eq!(expected.1["total_agents"], 4);
             assert_eq!(expected.1["total_cost"]["input_tokens"], 110);
             assert_eq!(expected.1["accounting_complete"], true);
-            save(&session, "idle", "").unwrap();
+            save(&mut session, "idle", "").unwrap();
             close("0123456789abcdef");
             let saved = load("0123456789abcdef").unwrap();
             assert_eq!(saved["state"]["agent_roster"], expected.0);
@@ -1352,7 +1369,7 @@ mod tests {
             session.history = saved["history"].as_array().cloned().unwrap_or_default();
             assert_eq!(recover(&mut session).unwrap(), "");
             assert_eq!(crate::agents::snapshot(&session), expected);
-            save(&session, "idle", "").unwrap();
+            save(&mut session, "idle", "").unwrap();
             let saved_again = load("0123456789abcdef").unwrap();
             assert_eq!(saved_again["state"]["agent_subtree"], expected.1);
 
@@ -1414,7 +1431,7 @@ mod tests {
             session.config["provider"] = json!("openai");
             session.config["model"] = json!("gpt-6-sol");
             session.config["scripted"] = json!("");
-            save(&session, "idle", "").unwrap();
+            save(&mut session, "idle", "").unwrap();
             let path = directory("0123456789abcdef")
                 .unwrap()
                 .join("checkpoint.json");
@@ -1428,7 +1445,7 @@ mod tests {
             session.state = saved["state"].clone();
             session.history = saved["history"].as_array().cloned().unwrap_or_default();
             assert_eq!(recover(&mut session).unwrap(), "");
-            save(&session, "idle", "").unwrap();
+            save(&mut session, "idle", "").unwrap();
             assert_ne!(std::fs::metadata(&path).unwrap().ino(), old);
             let rewritten: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(rewritten["state"]["history"], json!([]));
@@ -1440,7 +1457,7 @@ mod tests {
             let previous_inode = std::fs::metadata(&path).unwrap().ino();
             CLOSE_ERROR.with(|fault| fault.set(Some(libc::EIO)));
             assert_eq!(
-                save(&session, "terminal", "").unwrap_err(),
+                save(&mut session, "terminal", "").unwrap_err(),
                 format!(
                     "save session 0123456789abcdef: close checkpoint: {}",
                     crate::errors::stable_io(&std::io::Error::from_raw_os_error(libc::EIO))
@@ -1457,7 +1474,7 @@ mod tests {
                         .to_string_lossy()
                         .starts_with(".checkpoint-")
                 }));
-            save(&session, "terminal", "").unwrap();
+            save(&mut session, "terminal", "").unwrap();
             assert_eq!(
                 load("0123456789abcdef").unwrap()["checkpoint"]["phase"],
                 "terminal"
@@ -1498,6 +1515,7 @@ mod tests {
                 ("/seen", json!({"c":"true"})),
                 ("/gc_state", json!({"paths":{"c":1}})),
                 ("/pending_submission", json!([])),
+                ("/first_message", json!(17)),
                 ("/prompt", json!({"text":true})),
                 ("/agent_roster", json!([{"steps":"1"}])),
                 ("/agent_roster", json!([{"kind":true}])),
@@ -1520,7 +1538,7 @@ mod tests {
             session.config = legacy["config"].clone();
             session.state = legacy["state"].clone();
             session.history = legacy["history"].as_array().unwrap().clone();
-            save(&session, "terminal", "").unwrap();
+            save(&mut session, "terminal", "").unwrap();
             let migrated = load("0123456789abcdef").unwrap();
             assert_eq!(migrated["checkpoint"]["version"], 2);
             assert_eq!(migrated["config"]["read_only"], true);
@@ -1532,7 +1550,7 @@ mod tests {
             std::fs::remove_file(&path).unwrap();
             std::fs::create_dir(&path).unwrap();
             assert_eq!(
-                save(&session, "terminal", "").unwrap_err(),
+                save(&mut session, "terminal", "").unwrap_err(),
                 "save session 0123456789abcdef: replace checkpoint: path already exists"
             );
             assert!(path.is_dir());
