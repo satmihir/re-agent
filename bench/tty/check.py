@@ -514,7 +514,7 @@ SCENARIOS = {
             ("wait", "Review complete; zero review agents", 8),
             ("wait_status", "scripted", 5),
             ("show", "review command completion, real tool loop and prompt recovery"),
-            ("expect", "screen_has", "1 listing"),
+            ("expect", "screen_has", "1 tool call"),
             ("expect", "all_lines", ["❯ /review high", "inline verification."]),
             ("expect", "status_row_last"),
             ("type", "next question"), ("key", "enter"),
@@ -536,12 +536,13 @@ SCENARIOS = {
             ("show", "live wait, nested count and elapsed clock"),
             ("expect", "screen_has", "2 agents"),
             ("release", "finish"),
-            ("wait", "t1 research results delivered", 8),
-            ("wait", "tree cost: 70 input", 8),
+            ("wait", "t1 research finished", 8),
+            ("wait", "tree 105 tokens", 8),
             ("wait_status", "gpt-6.1-sol / high", 8),
-            ("show", "finished and delivered notices"),
-            ("expect", "all_lines", ["t1 research finished · completed", "t1 research results delivered"]),
-            ("expect", "all_lack", ["t2 nested finished", "PRIVATE CHILD REPLY"]),
+            ("show", "one agent completion notice and readable rows"),
+            ("expect", "all_lines", ['spawn (read) research: "research task"', 'wait research', 't1 research finished · completed']),
+            ("expect", "all_count", "t1 research finished", 1),
+            ("expect", "all_lack", ["t2 nested finished", "PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
             ("expect", "status_row_last"),
         ],
     },
@@ -555,7 +556,7 @@ SCENARIOS = {
             ("show", "writing agent effects in the root recap"),
             ("expect", "screen_has", "Agent changed a file."),
             ("expect", "screen_has", "agent t1: create agent.txt (applied)"),
-            ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
+            ("expect", "all_lack", ["PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
             ("expect", "status_row_last"),
         ],
     },
@@ -568,7 +569,7 @@ SCENARIOS = {
             ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "named task retires instead of retaining a teammate Session"),
             ("expect", "screen_has", "Named task retired after delivery."),
-            ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
+            ("expect", "all_lack", ["PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
             ("expect", "status_row_last"),
         ],
     },
@@ -576,17 +577,17 @@ SCENARIOS = {
         "agents": True,
         "steps": [
             ("idle", 0.5), ("type", "delegate two tasks"), ("key", "enter"),
-            ("wait", "tree cost: 50 input", 8),
+            ("wait", "tree 75 tokens", 8),
             ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "parallel agents and tree token cost"),
-            ("expect", "screen_has", "tree cost: 50 input"),
-            ("expect", "all_lack", ["PRIVATE CHILD REPLY"]),
+            ("expect", "screen_has", "tree 75 tokens"),
+            ("expect", "all_lack", ["PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
             ("expect", "status_row_last"),
             ("type", "ask my tests agent again"), ("key", "enter"),
-            ("wait", "tree cost: 40 input", 8),
+            ("wait", "tree 60 tokens", 8),
             ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "teammate reused in another chat turn"),
-            ("expect", "screen_has", "tree cost: 40 input"),
+            ("expect", "screen_has", "tree 60 tokens"),
             ("expect", "status_row_last"),
         ],
     },
@@ -663,6 +664,7 @@ SCENARIOS = {
         "steps": [
             ("idle", 1.0),
             ("show", "a fresh chat"),
+            ("expect", "compact_welcome"),
             ("expect", "region_after_output"),
             ("expect", "status_row_last"),
         ],
@@ -688,13 +690,20 @@ SCENARIOS = {
             ("idle", 0.4),
             ("key", "enter"),
             ("wait", "got it", 5),
+            ("wait_status", "scripted / low", 5),
             ("show", "after a pasted two-line message"),
             ("expect", "screen_has", "❯ line one"),
             ("expect", "screen_has", "  line two"),
+            ("expect", "submitted_unframed", ["❯ line one", "  line two"]),
+            ("expect", "no_adjacent_rules"),
+            ("expect", "status_row_last"),
         ],
     },
     "tool-turn": {
-        "script": [tool("Checking.", "c1", "echo", {"text": "ping"}), reply("Done: ping.")],
+        "script": [dict(tool("Checking.", "c1", "echo", {"text": "ping"}),
+                        usage={"known": True, "input_tokens": 12, "cached_input_tokens": 4, "output_tokens": 3}),
+                   dict(reply("Done: ping."),
+                        usage={"known": True, "input_tokens": 8, "cached_input_tokens": 2, "output_tokens": 7})],
         "steps": [
             ("idle", 1.0),
             ("type", "run the tool"),
@@ -703,8 +712,15 @@ SCENARIOS = {
             ("wait_status", "scripted / low", 5),
             ("show", "after a turn with a tool call"),
             ("expect", "screen_has", "echo"),
-            ("expect", "screen_has", "completed"),
+            ("expect", "quiet_summary"),
+            ("expect", "submitted_unframed", ["❯ run the tool"]),
+            ("expect", "no_adjacent_rules"),
             ("expect", "status_row_last"),
+            ("type", "/status"), ("key", "enter"),
+            ("wait", "20 in (6 cached) · 10 out", 5),
+            ("show", "Full usage remains available in /status"),
+            ("expect", "all_lines", ["session    1 turn · 20 in (6 cached) · 10 out",
+                                      "last run   completed · 2 steps · 1 tool call · 20 in (6 cached) · 10 out"]),
         ],
     },
     "markdown-progress": {
@@ -718,6 +734,8 @@ SCENARIOS = {
                    reply("Finished **checking**.")],
         "steps": [
             ("idle", 1.0),
+            ("show", "Compact welcome at 48 columns"),
+            ("expect", "compact_welcome"),
             ("type", "check progress"),
             ("key", "enter"),
             ("wait", "ready := true", 5),
@@ -733,7 +751,7 @@ SCENARIOS = {
             ("wait", "Finished checking.", 8),
             ("wait_status", "scripted / low", 5),
             ("show", "Progress, tools and final reply at 48 columns"),
-            ("expect", "all_lines", ["Next check.", "Finished checking.", "completed"]),
+            ("expect", "all_lines", ["Next check.", "Finished checking.", "2 tool calls · tokens unknown"]),
             ("expect", "all_lack", ["Next **check**.", "Finished **checking**."]),
             ("expect", "screen_has", "❯ follow-up"),
             ("expect", "region_after_output"),
@@ -839,7 +857,7 @@ SCENARIOS = {
             ("wait", "Next ordinary turn works.", 5),
             ("wait_status", "scripted / low", 5),
             ("show", "normal turn succeeds after the editor launch failure"),
-            ("expect", "all_lines", ["error: run editor: path does not exist", "Next ordinary turn works.", "completed"]),
+            ("expect", "all_lines", ["error: run editor: path does not exist", "Next ordinary turn works.", "0 tool calls · tokens unknown"]),
             ("expect", "all_lack", ["fork/exec", "no such file or directory", "missing-editor", "^[["]),
             ("expect", "region_after_output"),
             ("expect", "status_row_last"),
@@ -1212,6 +1230,7 @@ SCENARIOS = {
 }
 
 SCENARIOS["lively-indicator-no-color"] = {**SCENARIOS["lively-indicator"], "no_color": True}
+SCENARIOS["fresh-prompt-symlinked-root"] = {**SCENARIOS["fresh-prompt"], "symlink_workspace": True}
 
 KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "esc": "\x1b",
         "left": "\x1b[D", "up": "\x1b[A"}
@@ -1406,6 +1425,50 @@ def check_rule_width(s, width):
     return None if widths == {width} else "rule widths on screen: %s, want %d" % (sorted(widths), width)
 
 
+def check_all_count(s, text, count):
+    actual = sum(line.count(text) for line in s.term.text())
+    return None if actual == count else "%r occurred %d times, expected %d" % (text, actual, count)
+
+
+def check_compact_welcome(s):
+    screen = s.term.screen()
+    rules = region_rows(screen)
+    if not rules:
+        return "missing live prompt frame"
+    header = [line for line in screen[:rules[0]] if line]
+    if len(header) > 5:
+        return "welcome is longer than five rows: %r" % header
+    return None if any("~" in line for line in header) else "welcome lacks shortened workspace"
+
+
+def check_quiet_summary(s):
+    summaries = [line for line in s.term.text() if "1 tool call" in line and "30 tokens" in line]
+    if len(summaries) != 1:
+        return "expected one tool/token summary, got %r" % summaries
+    noise = [line for line in s.term.text() if "tree cost:" in line or "listings" in line or " cached)" in line]
+    return "detailed completion noise: %r" % noise if noise else None
+
+
+def check_submitted_unframed(s, message):
+    lines = s.term.text()
+    for index in range(len(lines) - len(message) + 1):
+        if lines[index:index + len(message)] != message:
+            continue
+        neighbors = lines[max(0, index - 1):index] + lines[index + len(message):index + len(message) + 1]
+        if any(line and set(line) == {RULE} for line in neighbors):
+            return "submitted message still has a frame"
+        return None
+    return "submitted message is missing: %r" % message
+
+
+def check_no_adjacent_rules(s):
+    lines = s.term.text()
+    return "adjacent transcript rules" if any(
+        left and right and set(left) == set(right) == {RULE}
+        for left, right in zip(lines, lines[1:])
+    ) else None
+
+
 def check_no_rules(s):
     return "rules drawn on a narrow terminal" if any(line and set(line) == {RULE} for line in s.term.screen()) else None
 
@@ -1479,6 +1542,11 @@ CHECKS = {
     "all_lack": check_all_lack,
     "rule_width": check_rule_width,
     "no_rules": check_no_rules,
+    "all_count": check_all_count,
+    "compact_welcome": check_compact_welcome,
+    "quiet_summary": check_quiet_summary,
+    "submitted_unframed": check_submitted_unframed,
+    "no_adjacent_rules": check_no_adjacent_rules,
     "indicator": check_indicator,
     "indicator_style": check_indicator_style,
     "exec_tail": check_exec_tail,
@@ -2068,6 +2136,14 @@ def main():
     for name in names:
         print("● %s" % name)
         with tempfile.TemporaryDirectory(prefix="reagent-tty-" + name + "-") as workspace:
+            if SCENARIOS[name].get("symlink_workspace"):
+                target = os.path.join(workspace, "real")
+                os.mkdir(target)
+                alias = os.path.join(workspace, "alias")
+                os.symlink(target, alias)
+                workspace = alias
+            # Rust canonicalizes --workspace; HOME must use the same spelling.
+            workspace = os.path.realpath(workspace)
             env = dict(os.environ, HOME=workspace, XDG_CACHE_HOME=os.path.join(workspace, ".cache"),
                        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
             subprocess.run(["git", "init", "-q", workspace], env=env, check=True)

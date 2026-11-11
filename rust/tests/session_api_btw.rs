@@ -1004,9 +1004,23 @@ fn only_last_owning_handle_drop_cancels_questions_and_the_ephemeral_session_cann
         RunState::Running
     );
     assert!(!root.join("disconnected-0").exists());
+    assert_eq!(
+        resume_session(&source.session_id).err().unwrap().code,
+        "busy"
+    );
     drop(observer);
     wait_file(&root.join("disconnected-0"));
-    let reopened = resume_session(&source.session_id).unwrap();
+    // Socket cancellation can finish before the owner releases its checkpoint lease.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let reopened = loop {
+        match resume_session(&source.session_id) {
+            Ok(api) => break api,
+            Err(error) if error.code == "busy" && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("owner did not release its checkpoint: {error}"),
+        }
+    };
     assert!(reopened.get_run(&question).is_err());
     assert!(reopened.get_snapshot().unwrap().live_runs.is_empty());
     assert_eq!(reopened.get_snapshot().unwrap().usage.input_tokens, 0);

@@ -562,15 +562,12 @@ impl Region {
         true
     }
 
-    /// Submit commits the user frame above the next input pane.
+    /// Submit leaves the user message above the next input pane without its frame.
     pub(super) fn submit(&mut self, message: &str) -> io::Result<()> {
         if message.is_empty() || !self.active {
             return Ok(());
         }
         let mut rows = Vec::new();
-        if self.width >= 20 {
-            rows.push(self.rule());
-        }
         let safe = sanitize(message).replace('\t', "⇥");
         for (index, line) in safe.split('\n').enumerate() {
             rows.extend(crate::render::wrap(
@@ -580,8 +577,10 @@ impl Region {
                 self.width.saturating_sub(1),
             ));
         }
-        if self.width >= 20 {
-            rows.push(self.rule());
+        if self.color {
+            for row in &mut rows {
+                *row = format!("{DIM}{row}{RESET}");
+            }
         }
         self.draw(rows, 0, 0, self.width, self.height)?;
         emit(&format!(
@@ -816,6 +815,33 @@ mod tests {
         assert!(region.stream_rows.is_empty());
         assert_eq!(region.buffer, draft);
         assert_eq!(region.caret, 7);
+    }
+
+    #[test]
+    fn submitted_multiline_messages_lose_the_frame_but_the_next_prompt_keeps_it() {
+        for color in [false, true] {
+            let mut region = Region::new();
+            region.color = color;
+            region.input(&[], 0, "", 40, 24).unwrap();
+            region.submit("hello\nworld\t\x1b[2J").unwrap();
+            let expected = ["❯ hello", "  world⇥\\x1b[2J"];
+            assert_eq!(region.visible.len(), expected.len());
+            for (row, expected) in region.visible.iter().zip(expected) {
+                assert_eq!(
+                    row,
+                    &if color {
+                        format!("{DIM}{expected}{RESET}")
+                    } else {
+                        expected.into()
+                    }
+                );
+            }
+            assert!(!region.active);
+            region.input(&['n'], 1, "", 40, 24).unwrap();
+            assert!(region.visible[0].contains('─'));
+            assert!(region.visible[1].contains("❯ n"));
+            assert!(region.visible[2].contains('─'));
+        }
     }
 
     #[test]

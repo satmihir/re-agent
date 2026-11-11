@@ -5,7 +5,11 @@ use serde_json::{json, Value};
 
 /// Begin turn resets presentation-only state without changing session history.
 pub fn begin_turn(state: &mut Value) {
-    state["_display"] = json!({"printed":false,"reads":[],"searches":0,"listings":0,"recap":[]});
+    let agents = state["_display"]["agents"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    state["_display"] = json!({"printed":false,"reads":[],"searches":0,"listings":0,"recap":[],"agents":agents,"agents_ran":false});
 }
 
 /// Tool finished displays one outcome immediately and accumulates browsing and effects.
@@ -262,6 +266,95 @@ fn target(call: &Value, a: Option<&Value>) -> String {
     truncate(&sanitize(&argument_summary(text(call, "arguments"))), 160)
 }
 
+fn remember_agents(name: &str, outcome: &Value, state: &mut Value) {
+    if !yes(outcome, "ok") {
+        return;
+    }
+    let data = &outcome["data"];
+    let records = match name {
+        "spawn" | "send" => std::slice::from_ref(data),
+        "wait" => data["statuses"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        "threads" => data
+            .as_array()
+            .or_else(|| data["threads"].as_array())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        _ => return,
+    };
+    for record in records {
+        let id = text(record, "id");
+        let name = text(record, "name");
+        if !id.is_empty() && !name.is_empty() {
+            state["_display"]["agents"][id] = json!(name);
+        }
+    }
+}
+
+fn agent_label(id: &str, state: &Value) -> String {
+    let name = state["_display"]["agents"][id].as_str().or_else(|| {
+        ["agent_roster", "agent_receipts"].iter().find_map(|key| {
+            state[*key]
+                .as_array()?
+                .iter()
+                .find(|record| text(record, "id") == id)
+                .map(|record| text(record, "name"))
+                .filter(|name| !name.is_empty())
+        })
+    });
+    one_row(name.unwrap_or(id))
+}
+
+fn agent_target(name: &str, a: Option<&Value>, outcome: &Value, state: &Value) -> Option<String> {
+    if !matches!(
+        name,
+        "spawn" | "send" | "wait" | "cancel" | "dismiss" | "reset"
+    ) {
+        return None;
+    }
+    let Some(a) = a.filter(|a| a.is_object()) else {
+        return Some("invalid arguments".into());
+    };
+    if name == "wait" {
+        return Some(match a["ids"].as_array() {
+            Some(ids) if ids.iter().all(Value::is_string) => ids
+                .iter()
+                .map(|id| agent_label(id.as_str().unwrap(), state))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => "invalid arguments".into(),
+        });
+    }
+    let data = &outcome["data"];
+    let label = [text(a, "name"), text(data, "name")]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .map(one_row)
+        .or_else(|| {
+            [text(a, "id"), text(data, "id")]
+                .into_iter()
+                .find(|s| !s.is_empty())
+                .map(|id| agent_label(id, state))
+        })
+        .unwrap_or_else(|| "agent".into());
+    if name == "spawn" || name == "send" {
+        let key = if name == "spawn" { "task" } else { "message" };
+        let summary = serde_json::to_string(&one_row(text(a, key))).unwrap();
+        let target = format!("{label}: {summary}");
+        if name == "spawn" {
+            let authority = [text(data, "authority"), text(a, "authority")]
+                .into_iter()
+                .find(|s| !s.is_empty())
+                .unwrap_or("read");
+            return Some(format!("({}) {target}", one_row(authority)));
+        }
+        return Some(target);
+    }
+    Some(label)
+}
+
 fn elapsed(ms: i64) -> String {
     if ms < 60_000 {
         format!("{:.1}s", ms as f64 / 1000.)
@@ -335,7 +428,11 @@ fn activity_text(
     }
     let name = text(call, "name");
     let a = args(call);
+    remember_agents(name, outcome, state);
     if yes(outcome, "ok") {
+        if matches!(name, "spawn" | "send" | "wait") {
+            state["_display"]["agents_ran"] = json!(true);
+        }
         match name {
             "read_file" if a.is_some() => {
                 let key = json!([outcome["workspace"], text(a.as_ref().unwrap(), "path")]);
@@ -357,7 +454,8 @@ fn activity_text(
             _ => {}
         }
     }
-    let original_target = target(call, a.as_ref());
+    let original_target =
+        agent_target(name, a.as_ref(), outcome, state).unwrap_or_else(|| target(call, a.as_ref()));
     let mut target = original_target.clone();
     let (mut mark, mut color) = if yes(outcome, "ok") {
         ("✓", "\x1b[32m")
@@ -491,6 +589,9 @@ fn activity_text(
                     .into();
                 }
                 "request_workspace_access" => result = "approved for this conversation".into(),
+                "wait" if yes(data, "timed_out") => {
+                    result = "timed out; agents still running".into()
+                }
                 "echo" if a.is_some() => {
                     target = serde_json::to_string(&sanitize(text(a.as_ref().unwrap(), "text")))
                         .unwrap()
@@ -595,6 +696,152 @@ pub(super) fn browsing_summary(state: &Value, styled: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn agent_activity_uses_named_rows_and_remembers_names_across_turns() {
+        let mut state = json!({});
+        for (name, arguments, data, expected) in [
+            (
+                "spawn",
+                json!({"name":"research","task":"research task","authority":"write","context":{"files":["src"],"brief":"private context"}}),
+                json!({"id":"t1","name":"research","authority":"write"}),
+                "  ✓ spawn (write) research: \"research task\"\n",
+            ),
+            (
+                "spawn",
+                json!({"task":"review task","context":{}}),
+                json!({"id":"t2","authority":"read"}),
+                "  ✓ spawn (read) t2: \"review task\"\n",
+            ),
+            (
+                "send",
+                json!({"id":"t1","message":"check tests"}),
+                json!({"id":"t1","name":"research"}),
+                "  ✓ send research: \"check tests\"\n",
+            ),
+            (
+                "wait",
+                json!({"ids":["t1","t2"]}),
+                json!({"statuses":[{"id":"t1","name":"research"},{"id":"t2"}]}),
+                "  ✓ wait research, t2\n",
+            ),
+            (
+                "cancel",
+                json!({"id":"t1"}),
+                json!({"action":"cancel","id":"t1","name":""}),
+                "  ✓ cancel research\n",
+            ),
+            (
+                "dismiss",
+                json!({"name":"research"}),
+                json!({"action":"dismiss","id":"","name":"research"}),
+                "  ✓ dismiss research\n",
+            ),
+        ] {
+            let call = json!({"name":name,"arguments":arguments.to_string()});
+            let outcome = json!({"ok":true,"effect":"none","data":data});
+            assert_eq!(
+                activity_text(&call, &outcome, &mut state, false, 0),
+                expected
+            );
+            begin_turn(&mut state);
+        }
+        assert_eq!(state["_display"]["agents"], json!({"t1":"research"}));
+        assert_eq!(browsing_summary(&state, false), "");
+    }
+
+    #[test]
+    fn agent_rows_resolve_roster_receipts_and_thread_results_without_changing_them() {
+        let mut state = json!({"agent_roster":[{"id":"t1","name":"research"}],"agent_receipts":[{"id":"t2","name":"review"}]});
+        let original = state.clone();
+        let call = json!({"name":"wait","arguments":r#"{"ids":["t1","t2","t3"]}"#});
+        assert_eq!(
+            activity_text(&call, &json!({"ok":true}), &mut state, false, 0),
+            "  ✓ wait research, review, t3\n"
+        );
+        for data in [
+            json!([{"id":"t3","name":"tests"}]),
+            json!({"threads":[{"id":"t3","name":"tests"}]}),
+        ] {
+            activity_text(
+                &json!({"name":"threads","arguments":"{}"}),
+                &json!({"ok":true,"data":data}),
+                &mut state,
+                false,
+                0,
+            );
+            assert_eq!(
+                activity_text(&call, &json!({"ok":true}), &mut state, false, 0),
+                "  ✓ wait research, review, tests\n"
+            );
+        }
+        assert_eq!(state["agent_roster"], original["agent_roster"]);
+        assert_eq!(state["agent_receipts"], original["agent_receipts"]);
+    }
+
+    #[test]
+    fn agent_rows_keep_errors_timeouts_and_controls_visible_without_debug_arguments() {
+        let mut state = json!({});
+        for (name, arguments, outcome, expected) in [
+            (
+                "spawn",
+                r#"{"task":"blocked","context":{"nested":[1,2]},"authority":"write"}"#,
+                json!({"code":"spawn_denied","message":"read-only parent"}),
+                "  ✗ spawn (write) agent: \"blocked\" → spawn_denied: read-only parent\n",
+            ),
+            (
+                "send",
+                "[]",
+                json!({"code":"invalid_arguments","message":"one object required"}),
+                "  ✗ send invalid arguments → invalid_arguments: one object required\n",
+            ),
+            (
+                "wait",
+                r#"{"ids":[{"bad":[1]}]}"#,
+                json!({"code":"invalid_arguments","message":"expected strings"}),
+                "  ✗ wait invalid arguments → invalid_arguments: expected strings\n",
+            ),
+            (
+                "wait",
+                r#"{"ids":["t1"],"timeout":0}"#,
+                json!({"ok":true,"data":{"timed_out":true}}),
+                "  ✓ wait t1 → timed out; agents still running\n",
+            ),
+            (
+                "cancel",
+                r#"{"name":"research"}"#,
+                json!({"code":"not_executed","message":"run stopped"}),
+                "  – cancel research → not run: run stopped\n",
+            ),
+            (
+                "send",
+                r#"{"name":"worker","message":"a\nb\u001b[2J\""}"#,
+                json!({"ok":true}),
+                "  ✓ send worker: \"a↵b\\\\x1b[2J\\\"\"\n",
+            ),
+        ] {
+            let call = json!({"name":name,"arguments":arguments});
+            assert_eq!(
+                activity_text(&call, &outcome, &mut state, false, 0),
+                expected
+            );
+        }
+        let call = json!({"name":"send","arguments":json!({"name":"worker","message":"long message"}).to_string()});
+        let row = activity_text(&call, &json!({"ok":true}), &mut state, true, 18);
+        assert!(width(&row.trim_end()) <= 18, "{row}");
+    }
+
+    #[test]
+    fn long_spawn_tasks_keep_authority_before_the_truncated_description() {
+        for columns in [0, 80] {
+            let mut state = json!({});
+            let call = json!({"name":"spawn", "arguments":json!({"name":"worker", "task":"x".repeat(256), "authority":"write"}).to_string()});
+            let row = activity_text(&call, &json!({"ok":true}), &mut state, false, columns);
+            assert!(row.starts_with("  ✓ spawn (write) worker: \""), "{row}");
+            assert!(row.contains('…'), "{row}");
+            assert!(width(row.trim_end()) <= if columns == 0 { 170 } else { columns });
+        }
+    }
+
     #[test]
     fn echo_quotes_unicode_line_separators() {
         let mut state = json!({});

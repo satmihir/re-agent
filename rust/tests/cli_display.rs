@@ -70,6 +70,8 @@ fn recaps_follow_the_flag_and_failure_status_in_run_and_chat() {
                 );
                 let status = if failed {
                     "✗ protocol_error"
+                } else if mode == "chat" {
+                    "\n✓ "
                 } else {
                     "✓ completed"
                 };
