@@ -53,7 +53,10 @@ def tool(text, call_id, name, arguments):
 
 LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 41))
 
-EXEC_TAIL_SCRIPT = """import pathlib
+EXEC_TAIL_SCRIPT = """import json
+import os
+import pathlib
+import signal
 import sys
 import time
 
@@ -72,6 +75,19 @@ if sys.argv[1] == "second":
 elif sys.argv[1] == "cancel":
     print("CANCEL transient output", flush=True)
     wait("tail-finish")
+elif sys.argv[1] == "stalled":
+    def terminated(signum, frame):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        pathlib.Path("stall-terminated").write_text(str(time.monotonic()))
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, terminated)
+    pathlib.Path("stall-started").write_text(json.dumps({"pid": os.getpid(), "time": time.monotonic()}))
+    number = 0
+    while True:
+        print(f"STALLED output {number:04d} " + "x" * 90, flush=True)
+        number += 1
+        time.sleep(0.05)
 else:
     print("TAIL stdout 1", flush=True)
     wait("tail-partial")
@@ -97,6 +113,7 @@ EXEC_TAIL_FIRST_STDOUT = "".join(f"TAIL stdout {number}\n" for number in range(1
 #   ("wait_status", text, seconds) wait for text below the last drawn prompt rule
 #   ("wait_absent", text, seconds) wait until transient screen text disappears
 #   ("release_file", name)      release an exec fixture's workspace file gate
+#   ("stall_exec_timeout",)     observe exec termination without reading the pty
 #   ("animate", seconds)        assert bubble and elapsed time advance while held
 #   ("idle", seconds)           let output settle
 #   ("resize", rows, cols)
@@ -587,6 +604,31 @@ SCENARIOS = {
             ("expect", "screen_has", "timed out after"),
             ("expect", "screen_lacks", "session blocked:"),
             ("expect", "status_row_last"),
+        ],
+    },
+    "exec-timeout-stalled-pty": {
+        "stalled_exec": True,
+        "size": (28, 120),
+        "script": [tool("Checking a stalled terminal.", "stalled", "exec",
+                        {"argv": ["python3", "tty-tail.py", "stalled"], "cwd": ".", "timeout_ms": 10000}),
+                   reply("Timeout returned after terminal recovery."), reply("Next turn after stalled terminal.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "run with a stalled terminal"), ("key", "enter"),
+            ("wait_regex", "^ +STALLED output [0-9]", 5),
+            ("show", "Noisy exec starts before the PTY reader stalls"),
+            ("stall_exec_timeout",),
+            ("wait", "Timeout returned after terminal recovery.", 5),
+            ("wait_status", "scripted / low", 5), ("wait_absent", "⚗", 5),
+            ("expect", "screen_has", "timed out after"),
+            ("expect", "screen_has", "effects unknown"),
+            ("expect", "screen_lacks", "STALLED output"),
+            ("show", "Timeout recovery clears the transient tail and restores the prompt"),
+            ("type", "inspect after the timeout"), ("key", "enter"),
+            ("wait", "Next turn after stalled terminal.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "screen_lacks", "STALLED output"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
     },
     "model-retry": {
@@ -1475,7 +1517,7 @@ def run(binary, name, scenario, workspace):
     extra_env = {"REAGENT_OPENAI_AUTH": "auto"}
     if scenario.get("no_color"):
         extra_env["NO_COLOR"] = "1"
-    if scenario.get("exec_tail"):
+    if scenario.get("exec_tail") or scenario.get("stalled_exec"):
         with open(os.path.join(workspace, "tty-tail.py"), "w", encoding="utf-8") as fixture:
             fixture.write(EXEC_TAIL_SCRIPT)
     server = None
@@ -1831,6 +1873,27 @@ def run(binary, name, scenario, workspace):
             elif kind == "release_file":
                 with open(os.path.join(workspace, args[0]), "w"):
                     pass
+            elif kind == "stall_exec_timeout":
+                started_path = os.path.join(workspace, "stall-started")
+                if not os.path.exists(started_path):
+                    failures.append("noisy exec did not publish its startup marker")
+                    continue
+                with open(started_path) as started:
+                    child = json.load(started)
+                deadline = child["time"] + 13
+                terminated = os.path.join(workspace, "stall-terminated")
+                # A file signal avoids both PTY reads and zombie-sensitive kill(pid, 0).
+                while time.monotonic() < deadline:
+                    if os.path.exists(terminated) and os.path.getsize(terminated):
+                        with open(terminated) as marker:
+                            elapsed = float(marker.read()) - child["time"]
+                        if elapsed < 8:
+                            failures.append("noisy exec terminated before its timeout: %.2fs" % elapsed)
+                        print("  exec termination observed after %.2fs with PTY reads still stalled" % elapsed)
+                        break
+                    time.sleep(0.02)
+                else:
+                    failures.append("noisy exec did not terminate while PTY reads were stalled")
             elif kind == "animate":
                 initial = indicator_line(s)
                 deadline = time.monotonic() + args[0]
@@ -1886,6 +1949,14 @@ def run(binary, name, scenario, workspace):
     finally:
         for gate in gates.values():
             gate.set()
+        if scenario.get("stalled_exec") and os.path.exists(os.path.join(workspace, "stall-started")) and not os.path.exists(os.path.join(workspace, "stall-terminated")):
+            with open(os.path.join(workspace, "stall-started")) as started:
+                pid = json.load(started)["pid"]
+            try:
+                if os.getpgid(pid) == pid:
+                    os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         s.close()
         if script_path is not None: os.unlink(script_path)
         if consent_root is not None: consent_root.cleanup()
@@ -1940,6 +2011,22 @@ def run(binary, name, scenario, workspace):
                         failures.append("transient tail changed the traced %s bytes" % stream)
                     if step.get(stream + "_bytes_seen") != len(text.encode()) or step.get(stream + "_truncated"):
                         failures.append("transient tail changed %s capture byte counts or truncation" % stream)
+    if scenario.get("stalled_exec"):
+        outcomes = [event["data"]["outcome"] for event in trace_events(workspace)
+                    if event.get("type") == "tool.finished" and event["data"].get("call_id") == "stalled"]
+        if len(outcomes) != 1:
+            failures.append("expected exactly one stalled exec ToolOutcome")
+        else:
+            outcome = outcomes[0]
+            data = outcome.get("data", {})
+            if outcome.get("ok") or outcome.get("code") != "timeout" or outcome.get("effect") != "unknown" or data.get("termination_reason") != "timeout":
+                failures.append("stalled exec did not retain its timeout and uncertain effects")
+            stdout = data.get("stdout", "")
+            expected = "".join(f"STALLED output {number:04d} " + "x" * 90 + "\n" for number in range(len(stdout.splitlines())))
+            if not stdout or stdout != expected or data.get("stderr") != "":
+                failures.append("stalled terminal changed the exec output bytes")
+            if data.get("stdout_bytes_seen") != len(stdout.encode()) or data.get("stdout_truncated") or data.get("stderr_bytes_seen") != 0 or data.get("stderr_truncated") or data.get("encoding_replaced"):
+                failures.append("stalled terminal changed exec capture counts, truncation or encoding")
     if scenario.get("workspace_consent") == "deny":
         outcomes = {"first": [], "second": []}
         cache = os.path.join(workspace, "Library", "Caches") if sys.platform == "darwin" else os.path.join(workspace, ".cache")

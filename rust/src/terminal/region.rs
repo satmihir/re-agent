@@ -465,15 +465,8 @@ impl Region {
         self.repaint()
     }
 
-    /// Exec progress replaces the current command or updates its display-only output tail.
-    pub(crate) fn exec_progress(
-        &mut self,
-        label: Option<&str>,
-        lines: &[String],
-    ) -> io::Result<()> {
-        if let Some(label) = label {
-            self.set_progress(Some(label))?;
-        }
+    /// Set exec lines retains a bounded tail for the display owner's next repaint.
+    pub(crate) fn set_exec_lines(&mut self, lines: &[String]) {
         self.exec_lines = lines
             .iter()
             .rev()
@@ -481,7 +474,6 @@ impl Region {
             .map(|line| sanitize(line).replace('\n', "↵").replace('\t', "⇥"))
             .collect();
         self.exec_lines.reverse();
-        self.repaint()
     }
 
     /// Stream progress updates counters and optionally replaces the bounded complete-line preview.
@@ -870,12 +862,15 @@ mod tests {
         region.color = true;
         let draft: Vec<_> = "next question".chars().collect();
         region.input(&draft, 3, "", 40, 24).unwrap();
-        region.exec_progress(Some("running first"), &[]).unwrap();
+        region.set_progress(Some("running first")).unwrap();
         let started = region.progress.as_ref().unwrap().started;
         let mut lines: Vec<_> = (0..7).map(|i| format!("output {i}")).collect();
         lines.push("\x1b[2J\r\t**literal**".into());
         lines.push("界".repeat(100));
-        region.exec_progress(None, &lines).unwrap();
+        let visible = region.visible.clone();
+        region.set_exec_lines(&lines);
+        assert_eq!(region.visible, visible, "publishing must not repaint");
+        region.input(&draft, 3, "", 40, 24).unwrap();
         assert_eq!(region.exec_lines.len(), 5);
         assert_eq!(region.progress.as_ref().unwrap().started, started);
         assert!(region.visible[1].contains("output 4"));
@@ -886,7 +881,7 @@ mod tests {
         region.input(&draft, 3, "", 20, 8).unwrap();
         assert!(region.visible.len() < 8);
         assert!(region.visible.iter().all(|line| width(line) <= 20));
-        region.exec_progress(Some("running second"), &[]).unwrap();
+        region.set_progress(Some("running second")).unwrap();
         assert!(region.exec_lines.is_empty());
         region.set_progress(None).unwrap();
         assert!(region

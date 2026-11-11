@@ -665,8 +665,11 @@ fn run(
         crate::process::capture_with_output(command, options, &mut |stream, bytes| {
             tail.push(stream, bytes);
             if tail.dirty && updated.elapsed() >= Duration::from_millis(100) {
-                let _ = region.lock().unwrap().exec_progress(None, &tail.lines());
-                tail.dirty = false;
+                // Terminal backpressure must not hold up process deadlines or cancellation.
+                if let Ok(mut region) = region.try_lock() {
+                    region.set_exec_lines(&tail.lines());
+                    tail.dirty = false;
+                }
                 updated = Instant::now();
             }
         })
@@ -983,6 +986,58 @@ mod tests {
             assert_eq!(displayed, plain);
             assert!(!dir.path().join("forbidden").exists());
         }
+    }
+
+    #[test]
+    fn exec_cancellation_does_not_wait_for_the_display_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_owned();
+        let region = std::sync::Arc::new(Mutex::new(crate::terminal::Region::new()));
+        let display = region.clone();
+        let config = json!({"session_id":crate::types::new_id()});
+        let execution = config.clone();
+        let worker = thread::spawn(move || {
+            let mut workspace = Workspace::open(root.to_str().unwrap()).unwrap();
+            execute_in_region(
+                &mut workspace,
+                &execution,
+                &json!({"argv":["/bin/sh","-c",
+                    "touch ready; while [ ! -f release ]; do sleep 0.01; done; printf first; sleep 0.2; touch emitting; while :; do printf 'next\\n'; sleep 0.01; done"],"cwd":"."}),
+                Some(&display),
+            ).unwrap()
+        });
+        let setup = Instant::now() + Duration::from_secs(5);
+        while !dir.path().join("ready").exists() && Instant::now() < setup {
+            thread::sleep(Duration::from_millis(2));
+        }
+        if !dir.path().join("ready").exists() {
+            crate::cancellation::cancel(&config);
+            let result = worker.join().unwrap();
+            panic!("command did not reach its readiness marker: {result}");
+        }
+        let held = region.lock().unwrap();
+        fs::write(dir.path().join("release"), "").unwrap();
+        let setup = Instant::now() + Duration::from_secs(5);
+        while !dir.path().join("emitting").exists() && Instant::now() < setup {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let emitting = dir.path().join("emitting").exists();
+        crate::cancellation::cancel(&config);
+        let completion = Instant::now() + Duration::from_secs(3);
+        while !worker.is_finished() && Instant::now() < completion {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let stopped_while_locked = worker.is_finished();
+        drop(held);
+        let result = worker.join().unwrap();
+        assert!(emitting, "command did not start emitting: {result}");
+        assert!(
+            stopped_while_locked,
+            "capture waited for the display lock: {result}"
+        );
+        assert_eq!(result["code"], "cancelled");
+        assert_eq!(result["effect"], "unknown");
+        assert!(result["data"]["stdout_bytes_seen"].as_u64().unwrap() > 0);
     }
 
     #[test]
