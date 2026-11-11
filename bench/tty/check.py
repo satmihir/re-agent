@@ -663,8 +663,10 @@ SCENARIOS = {
         "script": [reply("hi")],
         "steps": [
             ("idle", 1.0),
-            ("show", "a fresh chat"),
-            ("expect", "compact_welcome"),
+            ("show", "Restored flask welcome"),
+            ("expect", "screen_has", "▝▙▄▄▄▄▄▄▄▄▄▟▘"),
+            ("expect", "screen_has", "re:agent"),
+            ("expect", "raw_has", "\x1b[38;5;99m"),
             ("expect", "region_after_output"),
             ("expect", "status_row_last"),
         ],
@@ -1231,6 +1233,22 @@ SCENARIOS = {
 
 SCENARIOS["lively-indicator-no-color"] = {**SCENARIOS["lively-indicator"], "no_color": True}
 SCENARIOS["fresh-prompt-symlinked-root"] = {**SCENARIOS["fresh-prompt"], "symlink_workspace": True}
+for name, options in [("fresh-prompt-no-color", {"no_color": True}),
+                      ("fresh-prompt-narrow", {"size": (24, 71)})]:
+    SCENARIOS[name] = {
+        "script": [reply("Welcome follow-up works.")],
+        **options,
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("show", name),
+            ("expect", "compact_welcome"),
+            ("expect", "screen_lacks", "▝▙▄▄▄▄▄▄▄▄▄▟▘"),
+            ("type", "hello"), ("key", "enter"),
+            ("wait", "Welcome follow-up works.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    }
 
 KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "esc": "\x1b",
         "left": "\x1b[D", "up": "\x1b[A"}
