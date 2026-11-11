@@ -20,7 +20,8 @@ pub(crate) mod model_switch;
 #[path = "cli/shell.rs"]
 mod user_shell;
 
-const COMMANDS: &[(&str, &str, &str)] = &[
+/// COMMANDS supplies help and terminal completion from the same command table.
+pub(crate) const COMMANDS: &[(&str, &str, &str)] = &[
     (
         "/plan",
         "[text]",
@@ -84,7 +85,7 @@ fn help() -> String {
     for (name, arg, description) in COMMANDS {
         out.push_str(&format!("  {name:<9} {arg:<18} {description}\n"));
     }
-    out.push_str("keys\n  Enter            send\n  !COMMAND         run COMMAND in the workspace; its output joins the conversation\n  \\ at line end    continue on the next line\n  ↑ ↓              earlier messages\n  Tab              complete a command, model, or effort\n  /model /effort   picker: ↑↓/kj move, Enter/1–9 choose, Esc/q/Ctrl-C/Ctrl-D cancel\n  Esc              cancel the running turn\n  Ctrl-C           cancel the running turn, or clear the line; twice to exit\n  Ctrl-L           clear the screen\n  Ctrl-A Ctrl-E    start or end of line\n  Ctrl-U Ctrl-K    erase to start or end of line\n  Ctrl-W           erase the previous word\nPasted text is sent as one message, however many lines it has.");
+    out.push_str("keys\n  Enter            send\n  Alt-Enter Ctrl-J insert an editable newline\n  !COMMAND         run COMMAND in the workspace; its output joins the conversation\n  \\ at line end    continue on the next line\n  ↑ ↓              move between lines or earlier messages; select command suggestions\n  Up Backspace     pull a queued message back for editing\n  Tab              accept the highlighted command, model, or effort\n  /model /effort   picker: ↑↓/kj move, Enter/1–9 choose, Esc/q/Ctrl-C/Ctrl-D cancel\n  Esc              cancel the running turn\n  Ctrl-C           cancel the running turn, or clear the line; twice to exit\n  Ctrl-L           clear the screen\n  Ctrl-A Ctrl-E    start or end of line\n  Ctrl-U Ctrl-K    erase to start or end of line\n  Ctrl-← Ctrl-→    move by word (also Alt-B Alt-F)\n  Ctrl-W Alt-Bksp  erase the previous word\n  Alt-D            erase the next word\n  Ctrl-D Delete    delete forward (Ctrl-D on empty input exits)\n  Ctrl-Y           paste the last erased text\nPasted text is sent as one message, however many lines it has.");
     out
 }
 
@@ -136,6 +137,7 @@ impl Chat {
     fn refresh(&mut self) -> Result<SessionSnapshot, ApiError> {
         let snapshot = self.api.get_snapshot()?;
         let (config, state) = presentation(&snapshot, self.recap);
+        self.input.set_workspace(&snapshot.workspace);
         self.input.set_status(&config, &state);
         Ok(snapshot)
     }

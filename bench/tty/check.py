@@ -20,6 +20,7 @@ quirks (resize reflow especially), so UI changes still deserve a manual look.
 
 import codecs
 import fcntl
+import hashlib
 import http.server
 import json
 import os
@@ -72,6 +73,9 @@ def wait(name):
 if sys.argv[1] == "second":
     print("CHAIN fresh output", flush=True)
     wait("tail-finish")
+elif sys.argv[1] == "queue":
+    print("QUEUE gate ready", flush=True)
+    wait("queue-finish")
 elif sys.argv[1] == "cancel":
     print("CANCEL transient output", flush=True)
     wait("tail-finish")
@@ -119,6 +123,8 @@ EXEC_TAIL_FIRST_STDOUT = "".join(f"TAIL stdout {number}\n" for number in range(1
 #   ("resize", rows, cols)
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
+#   ("wait_check", check, *args) wait for a CHECKS invariant, at most 5 seconds
+#   ("restart", kind)           new chat with shared HOME, using an alias or isolated workspace
 SCENARIOS = {
     "chat-fast-service-tier": {
         "fast": True,
@@ -730,12 +736,101 @@ SCENARIOS = {
             ("expect", "screen_lacks", "keeps going"),
         ],
     },
+    "input-word-keys-and-multiline": {
+        "script": [reply("Word keys accepted."), reply("Earlier line edited.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "alpha beta gamma"),
+            ("key", "ctrl-left"), ("key", "ctrl-left"), ("key", "ctrl-right"),
+            ("key", "alt-backspace"), ("key", "alt-d"),
+            ("type", "xdelta"), ("key", "ctrl-left"), ("key", "ctrl-d"),
+            ("key", "ctrl-e"), ("key", "alt-enter"), ("type", "second"),
+            ("key", "ctrl-j"), ("type", "third"),
+            ("wait_check", "input_rows", ["❯ alpha delta", "  second", "  third"]),
+            ("show", "Word movement/deletion, nonempty Ctrl-D, Alt-Enter and Ctrl-J edit one message"),
+            ("key", "enter"), ("wait", "Word keys accepted.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("type", "first"), ("key", "ctrl-j"), ("type", "second"),
+            ("key", "up"), ("type", " edited"),
+            ("wait_check", "input_rows", ["❯ first edited", "  second"]),
+            ("show", "Up edits the earlier physical row before submitting a two-line message"),
+            ("key", "enter"), ("wait", "Earlier line edited.", 5),
+            ("wait_check", "dispatched_prompts", ["alpha delta\nsecond\nthird", "first edited\nsecond"]),
+            ("expect", "status_row_last"),
+        ],
+    },
+    "input-slash-suggestions": {
+        "size": (28, 110),
+        "script": [reply("Plain text still sends.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5), ("type", "/co"),
+            ("wait", "what the next request is made of, by size", 5),
+            ("expect", "screen_has", "summarize and replace the conversation"),
+            ("show", "Slash prefix lists /context and /compact with descriptions"),
+            ("key", "down"), ("key", "tab"),
+            ("wait_regex", "^❯ /compact$", 5),
+            ("type", "focus"), ("wait_regex", "^❯ /compact focus$", 5),
+            ("expect", "no_suggestions"),
+            ("key", "ctrl-u"), ("type", "/co"), ("resize", 20, 72),
+            ("wait_check", "rule_width", 72),
+            ("wait", "what the next request", 5),
+            ("show", "Command suggestions survive terminal resize"),
+            ("key", "ctrl-u"), ("type", "ordinary /co text"),
+            ("wait_regex", "^❯ ordinary /co text$", 5), ("expect", "no_suggestions"),
+            ("key", "ctrl-u"), ("type", "/not-a-command"),
+            ("wait_regex", "^❯ /not-a-command$", 5), ("expect", "no_suggestions"),
+            ("key", "ctrl-u"), ("type", "/context extra"),
+            ("wait_regex", "^❯ /context extra$", 5), ("expect", "no_suggestions"),
+            ("key", "ctrl-u"), ("type", "/fa"), ("key", "tab"),
+            ("type", "on"), ("key", "tab"), ("wait_regex", "^❯ /fast on$", 5),
+            ("key", "ctrl-u"), ("type", "/fast of"), ("key", "tab"),
+            ("wait_regex", "^❯ /fast off$", 5),
+            ("key", "ctrl-u"), ("type", "ordinary follow-up"), ("key", "enter"),
+            ("wait", "Plain text still sends.", 5),
+            ("wait_check", "dispatched_prompts", ["ordinary follow-up"]),
+            ("expect", "status_row_last"),
+        ],
+    },
+    "input-history-restart": {
+        "script": [reply("History turn accepted.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "history first"), ("key", "ctrl-j"), ("type", "history second"),
+            ("key", "enter"), ("wait", "History turn accepted.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("wait_check", "input_history", ["history first\nhistory second"]),
+            ("key", "ctrl-d"), ("exit", 0, "", 5), ("restart", "alias"),
+            ("wait_status", "scripted / low", 5), ("key", "up"),
+            ("wait_check", "input_rows", ["❯ history first", "  history second"]),
+            ("show", "A new process recalls the exact multiline input through a workspace alias"),
+            ("key", "enter"), ("wait", "History turn accepted.", 5),
+            ("wait_check", "dispatched_prompts", ["history first\nhistory second", "history first\nhistory second"]),
+            ("wait_check", "input_history", ["history first\nhistory second"]),
+        ],
+    },
+    "input-history-workspace-isolation": {
+        "script": [reply("Workspace history accepted.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5), ("type", "private to the first workspace"),
+            ("key", "enter"), ("wait", "Workspace history accepted.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("wait_check", "input_history", ["private to the first workspace"]),
+            ("key", "ctrl-d"), ("exit", 0, "", 5), ("restart", "isolated"),
+            ("wait_status", "scripted / low", 5), ("key", "up"),
+            ("wait_check", "input_rows", ["❯ "]),
+            ("type", "only in the second workspace"), ("key", "enter"),
+            ("wait", "Workspace history accepted.", 5),
+            ("wait_check", "input_history", ["only in the second workspace"]),
+            ("wait_check", "dispatched_prompts", ["private to the first workspace", "only in the second workspace"]),
+            ("show", "A second workspace with the same HOME has independent input history"),
+        ],
+    },
     "paste-and-submit": {
         "script": [reply("got it")],
         "steps": [
-            ("idle", 1.0),
+            ("wait_status", "scripted / low", 5),
             ("paste", "line one\nline two"),
-            ("idle", 0.4),
+            ("wait_check", "input_rows", ["❯ line one", "  line two"]),
             ("key", "enter"),
             ("wait", "got it", 5),
             ("wait_status", "scripted / low", 5),
@@ -743,6 +838,7 @@ SCENARIOS = {
             ("expect", "screen_has", "❯ line one"),
             ("expect", "screen_has", "  line two"),
             ("expect", "submitted_unframed", ["❯ line one", "  line two"]),
+            ("wait_check", "dispatched_prompts", ["line one\nline two"]),
             ("expect", "no_adjacent_rules"),
             ("expect", "status_row_last"),
         ],
@@ -837,6 +933,34 @@ SCENARIOS = {
             ("wait_status", "scripted / low", 10),
             ("show", "after queued input and long reply"),
             ("expect", "all_lines", ["reply line %02d of a long answer" % i for i in range(1, 41)]),
+            ("expect", "status_row_last"),
+        ],
+    },
+    "typeahead-edit-queue-long-reply": {
+        "queue_gate": True,
+        "script": [tool("Holding the first turn.", "queue-gate", "exec",
+                        {"argv": ["python3", "tty-tail.py", "queue"], "cwd": "."}),
+                   reply(LONG_REPLY), reply("Only the edited queue arrived.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5), ("type", "start queued edit"), ("key", "enter"),
+            ("wait", "QUEUE gate ready", 5),
+            ("type", "next first"), ("key", "ctrl-j"), ("type", "next second"),
+            ("key", "enter"), ("wait", "queued", 5),
+            ("key", "up"),
+            ("wait_check", "input_rows", ["❯ next first", "  next second"]),
+            ("type", " edited"), ("key", "enter"), ("wait", "queued", 5),
+            ("key", "backspace"),
+            ("wait_check", "input_rows", ["❯ next first", "  next second edited"]),
+            ("type", "!"), ("key", "enter"), ("wait", "queued", 5),
+            ("wait_check", "input_history", ["start queued edit"]),
+            ("show", "Up and Backspace restore the queued message without moving or deleting its last character"),
+            ("release_file", "queue-finish"),
+            ("wait", "Only the edited queue arrived.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "all_lines", ["reply line %02d of a long answer" % i for i in range(1, 41)]),
+            ("wait_check", "dispatched_prompts", ["start queued edit", "next first\nnext second edited!"]),
+            ("wait_check", "input_history", ["start queued edit", "next first\nnext second edited!"]),
+            ("show", "The long reply completes and dispatches only the final edited queued text"),
             ("expect", "status_row_last"),
         ],
     },
@@ -1297,13 +1421,16 @@ for name, options in [("fresh-prompt-no-color", {"no_color": True}),
     }
 
 KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "esc": "\x1b",
-        "left": "\x1b[D", "up": "\x1b[A"}
+        "left": "\x1b[D", "up": "\x1b[A", "down": "\x1b[B", "tab": "\t", "backspace": "\x7f",
+        "ctrl-left": "\x1b[1;5D", "ctrl-right": "\x1b[1;5C", "alt-backspace": "\x1b\x7f",
+        "alt-d": "\x1bd", "ctrl-d": "\x04", "ctrl-e": "\x05", "ctrl-j": "\n", "alt-enter": "\x1b\r"}
 
 
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None):
+        self.workspace, self.home = workspace, home or workspace
         self.rows, self.cols = size
         self.raw = bytearray()
         self.no_color = "NO_COLOR" in (extra_env or {})
@@ -1315,8 +1442,8 @@ class Session:
             env = dict(os.environ, TERM="xterm-256color")
             env.pop("NO_COLOR", None)
             env.update(extra_env or {})
-            env.update(HOME=workspace, XDG_CACHE_HOME=os.path.join(workspace, ".cache"),
-                       XDG_CONFIG_HOME=os.path.join(workspace, ".config"))
+            env.update(HOME=self.home, XDG_CACHE_HOME=os.path.join(self.home, ".cache"),
+                       XDG_CONFIG_HOME=os.path.join(self.home, ".config"))
             args = [binary, "run" if run_prompt is not None else "chat", "--workspace", workspace]
             if login:
                 args = [binary, "login"]
@@ -1395,7 +1522,8 @@ class Session:
         # Keep reading while the process exits: closing a terminal can wait for
         # pending output to drain, and a real terminal would read it.
         try:
-            os.kill(self.pid, signal.SIGKILL)
+            if self.alive:
+                os.kill(self.pid, signal.SIGKILL)
         except OSError:
             pass
         end = time.time() + 5
@@ -1461,6 +1589,44 @@ def check_screen_has(s, text):
 
 def check_screen_lacks(s, text):
     return "screen still shows %r" % text if any(text in line for line in s.term.screen()) else None
+
+
+def check_input_rows(s, expected):
+    screen = s.term.screen()
+    rules = region_rows(screen)
+    actual = screen[rules[0] + 1:rules[1]] if rules else None
+    return None if actual == [line.rstrip() for line in expected] else "input rows %r, expected %r" % (actual, expected)
+
+
+def check_no_suggestions(s):
+    screen = s.term.screen()
+    rules = region_rows(screen)
+    if not rules:
+        return "no prompt region on screen"
+    rows = [row for row in screen[rules[0] + 1:rules[1]] if re.search(r"/[a-z]+(?:\s+\[[^]]+\])*\s{2,}\S", row)]
+    return "unexpected command suggestions: %r" % rows if rows else None
+
+
+def cache_root(home):
+    return os.path.join(home, "Library", "Caches") if sys.platform == "darwin" else os.path.join(home, ".cache")
+
+
+def check_dispatched_prompts(s, expected):
+    events = trace_events(os.path.join(cache_root(s.home), "reagent", "runs"))
+    actual = [event["data"]["prompt"] for event in events if event.get("type") == "run.started"]
+    return None if sorted(actual) == sorted(expected) else "dispatched prompts %r, expected %r" % (actual, expected)
+
+
+def check_input_history(s, expected):
+    key = hashlib.sha256(os.fsencode(os.path.realpath(s.workspace))).hexdigest()
+    path = os.path.join(cache_root(s.home), "reagent", "input-history", key + ".json")
+    if not os.path.isfile(path):
+        return "workspace input history file is missing"
+    if os.stat(path).st_mode & 0o777 != 0o600:
+        return "workspace input history is not private (0600)"
+    with open(path) as history:
+        actual = json.load(history)
+    return None if actual == expected else "input history %r, expected %r" % (actual, expected)
 
 
 def check_line_count(s, text, count):
@@ -1603,6 +1769,10 @@ CHECKS = {
     "screen_has": check_screen_has,
     "screen_lacks": check_screen_lacks,
     "line_count": check_line_count,
+    "input_rows": check_input_rows,
+    "no_suggestions": check_no_suggestions,
+    "dispatched_prompts": check_dispatched_prompts,
+    "input_history": check_input_history,
     "raw_has": check_raw_has,
     "all_lines": check_all_lines,
     "all_lack": check_all_lack,
@@ -1651,7 +1821,7 @@ def run(binary, name, scenario, workspace):
     extra_env = {"REAGENT_OPENAI_AUTH": "auto"}
     if scenario.get("no_color"):
         extra_env["NO_COLOR"] = "1"
-    if scenario.get("exec_tail") or scenario.get("stalled_exec"):
+    if scenario.get("exec_tail") or scenario.get("stalled_exec") or scenario.get("queue_gate"):
         with open(os.path.join(workspace, "tty-tail.py"), "w", encoding="utf-8") as fixture:
             fixture.write(EXEC_TAIL_SCRIPT)
     server = None
@@ -2020,7 +2190,7 @@ def run(binary, name, scenario, workspace):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
     s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False))
     try:
-        for step in scenario["steps"]:
+        for index, step in enumerate(scenario["steps"]):
             kind, args = step[0], step[1:]
             if kind == "type":
                 s.send(args[0])
@@ -2090,7 +2260,9 @@ def run(binary, name, scenario, workspace):
                 if not s.wait_for(args[0], args[1], status=True):
                     failures.append("timed out waiting for the prompt status row")
             elif kind == "exit":
-                s.pump(args[2])
+                deadline = time.monotonic() + args[2]
+                while s.alive and time.monotonic() < deadline:
+                    s.pump(0.05)
                 if s.alive:
                     failures.append("reagent did not exit when expected")
                 else:
@@ -2098,6 +2270,31 @@ def run(binary, name, scenario, workspace):
                     code = os.waitstatus_to_exitcode(status)
                     if code != args[0] or args[1] not in s.raw.decode("utf-8", "replace"):
                         failures.append(f"exit {code}, expected {args[0]} with {args[1]!r}")
+            elif kind == "restart":
+                if s.alive:
+                    failures.append("cannot restart a process that has not exited")
+                    break
+                s.close()
+                destination = workspace
+                if args[0] == "alias":
+                    destination = os.path.join(workspace, "workspace-alias")
+                    os.symlink(workspace, destination)
+                elif args[0] == "isolated":
+                    destination = os.path.join(workspace, "isolated-workspace")
+                    os.mkdir(destination)
+                    subprocess.run(["git", "init", "-q", destination], check=True,
+                                   env=dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull))
+                s = Session(binary, destination, script_path, scenario.get("size", (24, 80)), extra_env, home=workspace)
+            elif kind == "wait_check":
+                deadline = time.monotonic() + 5
+                while True:
+                    error = CHECKS[args[0]](s, *args[1:])
+                    if not error:
+                        break
+                    if time.monotonic() >= deadline:
+                        failures.append(error)
+                        break
+                    s.pump(0.05)
             elif kind == "idle":
                 s.pump(args[0])
             elif kind == "resize":
@@ -2108,7 +2305,9 @@ def run(binary, name, scenario, workspace):
                 error = CHECKS[args[0]](s, *args[1:])
                 if error:
                     failures.append(error)
-            if not s.alive and not scenario.get("login") and scenario.get("run_prompt") is None:
+            next_steps = scenario["steps"][index + 1:index + 2]
+            expected_exit = next_steps and next_steps[0][0] == "exit"
+            if not s.alive and kind != "exit" and not expected_exit and not scenario.get("login") and scenario.get("run_prompt") is None:
                 failures.append("reagent exited during %r" % (step,))
                 break
     finally:

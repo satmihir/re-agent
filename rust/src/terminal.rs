@@ -10,6 +10,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 mod editor;
+mod history;
 #[cfg(test)]
 mod panic_tests;
 mod readiness;
@@ -86,6 +87,9 @@ impl Drop for Raw {
 pub struct Input {
     terminal: bool,
     history: Vec<String>,
+    history_workspace: Option<std::path::PathBuf>,
+    history_failed: bool,
+    completion: CommandCompletion,
     reader: io::BufReader<io::Stdin>,
     tty: Option<File>,
     raw: Option<Raw>,
@@ -123,6 +127,9 @@ impl Input {
         Self {
             terminal,
             history: Vec::new(),
+            history_workspace: None,
+            history_failed: false,
+            completion: CommandCompletion::default(),
             reader: io::BufReader::new(io::stdin()),
             tty,
             raw: None,
@@ -292,26 +299,7 @@ impl Input {
             let rows: Vec<String> = options
                 .iter()
                 .enumerate()
-                .map(|(index, option)| {
-                    let row = format!(
-                        "{} {}  {:<17} {:<10} {}",
-                        if index == selected { "❯" } else { " " },
-                        index + 1,
-                        sanitize(&option.label),
-                        sanitize(&option.detail),
-                        sanitize(&option.note)
-                    );
-                    let row = truncate(row.trim_end(), width - 1);
-                    if !styled(2) {
-                        row
-                    } else if option.disabled {
-                        format!("\x1b[2m{row}\x1b[0m")
-                    } else if index == selected {
-                        format!("\x1b[36m\x1b[1m{row}\x1b[0m")
-                    } else {
-                        row
-                    }
-                })
+                .map(|(index, option)| choice_row(option, index, selected, width, styled(2)))
                 .collect();
             region.lock().unwrap().picker(&header, rows, width, height)
         };
@@ -427,6 +415,46 @@ impl Input {
     pub fn set_status(&mut self, config: &serde_json::Value, state: &serde_json::Value) {
         if let Some(region) = &self.region {
             let _ = region.lock().unwrap().refresh_status(config, state);
+        }
+    }
+    /// Set workspace loads interactive history when the active workspace changes.
+    pub(crate) fn set_workspace(&mut self, workspace: &std::path::Path) {
+        if !self.terminal || self.history_workspace.as_deref() == Some(workspace) {
+            return;
+        }
+        self.history_workspace = Some(workspace.to_path_buf());
+        self.history_failed = false;
+        self.history.clear();
+        self.next.editor.forget_history();
+        match history::load(workspace) {
+            Ok(history) => self.history = history,
+            Err(error) => self.history_error(error),
+        }
+    }
+    fn history_error(&mut self, error: io::Error) {
+        if !self.history_failed {
+            output(
+                self.region.as_ref(),
+                2,
+                &format!("input history unavailable: {error}; keeping history in memory\n"),
+            );
+        }
+        self.history_failed = true;
+    }
+    fn remember(&mut self, text: &str) {
+        if text.trim().is_empty() || self.history.last().is_some_and(|last| last == text) {
+            return;
+        }
+        self.history.push(text.to_string());
+        if self.history.len() > 500 {
+            self.history.remove(0);
+        }
+        if !self.history_failed {
+            if let Some(workspace) = &self.history_workspace {
+                if let Err(error) = history::remember(workspace, text) {
+                    self.history_error(error);
+                }
+            }
         }
     }
     /// Interactive reports whether raw terminal editing is available.
@@ -673,6 +701,7 @@ impl Input {
                         current_prompt = "… ";
                         continue;
                     }
+                    self.remember(&line);
                     return Ok(Submission::Text(line));
                 }
                 other => return Ok(other),
@@ -680,87 +709,30 @@ impl Input {
         }
     }
     fn physical(&mut self, prompt: &str) -> io::Result<Submission> {
-        let mut editor = Editor::default();
-        let mut history = 0;
-        let mut draft = String::new();
+        let mut editor = IdleEditor::default();
         eprint!("{prompt}");
         io::stderr().flush()?;
         loop {
-            let key = read_key(&mut self.reader, &mut self.decoder, None)?;
-            match key.as_str() {
-                "eof" => {
-                    if editor.buffer.is_empty() {
+            let key = decoded_key(&mut self.reader, &mut self.decoder, None)?;
+            if !self.completion.apply(&mut editor, &key, true, true) {
+                match editor.apply(&key, &self.history, 0, prompt) {
+                    Some("enter") => {
+                        let text = editor.value();
+                        self.completion = CommandCompletion::default();
+                        eprint!("\r\n");
+                        return Ok(Submission::Text(text));
+                    }
+                    Some("eof") => {
                         eprint!("\r\n");
                         return Ok(Submission::Eof);
                     }
-                }
-                "interrupt" => {
-                    eprint!("^C\r\n");
-                    return Ok(Submission::Interrupted);
-                }
-                "paste-start" | "paste-end" => {}
-                "enter" => {
-                    let text = editor.value();
-                    if !text.is_empty() && self.history.last() != Some(&text) {
-                        self.history.push(text.clone());
-                        if self.history.len() > 200 {
-                            self.history.remove(0);
-                        }
+                    Some("interrupt") => {
+                        eprint!("^C\r\n");
+                        return Ok(Submission::Interrupted);
                     }
-                    eprint!("\r\n");
-                    return Ok(Submission::Text(text));
+                    Some("clear") => eprint!("\x1b[2J\x1b[H"),
+                    _ => {}
                 }
-                "clear" => eprint!("\x1b[2J\x1b[H"),
-                "up" => {
-                    if history < self.history.len() {
-                        if history == 0 {
-                            draft = editor.value()
-                        }
-                        history += 1;
-                        editor.replace(&self.history[self.history.len() - history])
-                    }
-                }
-                "down" => {
-                    if history > 0 {
-                        history -= 1;
-                        editor.replace(if history == 0 {
-                            &draft
-                        } else {
-                            &self.history[self.history.len() - history]
-                        })
-                    }
-                }
-                "tab" => {
-                    let line = editor.value();
-                    let commands = [
-                        "/plan",
-                        "/model",
-                        "/effort",
-                        "/fast",
-                        "/auto",
-                        "/status",
-                        "/context",
-                        "/compact",
-                        "/friction",
-                        "/review",
-                        "/trace",
-                        "/reset",
-                        "/edit",
-                        "/help",
-                        "/exit",
-                    ];
-                    let commands = if line.starts_with("/fast ") {
-                        &["/fast on", "/fast off"][..]
-                    } else {
-                        &commands[..]
-                    };
-                    let matches: Vec<_> =
-                        commands.iter().filter(|c| c.starts_with(&line)).collect();
-                    if matches.len() == 1 {
-                        editor.replace(matches[0])
-                    }
-                }
-                _ => editor.apply(&key),
             }
             draw(prompt, &editor)?;
         }
@@ -834,12 +806,11 @@ impl Input {
             handle.lock().unwrap().initial_row = self.cursor_row()?;
         }
         let (columns, height) = self.size()?;
-        let result =
-            handle
-                .lock()
-                .unwrap()
-                .input(&editor.buffer, editor.caret, prefix, columns, height);
-        result
+        let mut region = handle.lock().unwrap();
+        region.command_selection = self
+            .completion
+            .selection(editor, prefix.is_empty() && !region.queued);
+        region.input(&editor.buffer, editor.caret, prefix, columns, height)
     }
 
     /// Poll turn edits type-ahead while the main thread runs the model and tools.
@@ -944,12 +915,23 @@ impl Input {
             let mut changed = !ended && region.tick_progress();
             if let Some(key) = key {
                 let prompt = region.prompt();
-                match next.apply(&key, &mut self.history, columns, &prompt) {
+                let completed = next.queued.is_none()
+                    && self
+                        .completion
+                        .apply(&mut next.editor, &key, next.prefix.is_empty(), false);
+                match if completed {
+                    None
+                } else {
+                    next.apply(&key, &self.history, columns, &prompt)
+                } {
                     Some("interrupt") if !ended => cancelled.store(true, Ordering::Release),
                     Some("clear") if !ended => region.clear()?,
                     _ => {}
                 }
                 region.queued = next.queued.is_some();
+                region.command_selection = self
+                    .completion
+                    .selection(&next.editor, next.prefix.is_empty() && !region.queued);
                 changed = true;
             }
             if ended || next.exit {
@@ -981,6 +963,8 @@ impl Input {
             return Ok(Submission::Eof);
         }
         if let Some(line) = self.next.queued.take() {
+            self.remember(&line);
+            self.completion = CommandCompletion::default();
             self.next = TurnInput::default();
             self.region.as_ref().unwrap().lock().unwrap().queued = false;
             self.region
@@ -1032,66 +1016,15 @@ impl Input {
                     continue;
                 }
             };
-            if matches!(key, Key::Name("tab")) {
-                let line = editor.value();
-                if editor.caret == editor.buffer.len() {
-                    let commands = [
-                        "/plan",
-                        "/model",
-                        "/effort",
-                        "/fast",
-                        "/auto",
-                        "/status",
-                        "/context",
-                        "/compact",
-                        "/friction",
-                        "/review",
-                        "/trace",
-                        "/reset",
-                        "/edit",
-                        "/help",
-                        "/exit",
-                    ];
-                    let commands = if line.starts_with("/fast ") {
-                        &["/fast on", "/fast off"][..]
-                    } else {
-                        &commands[..]
-                    };
-                    let matches: Vec<_> = commands
-                        .iter()
-                        .filter(|command| command.starts_with(&line))
-                        .collect();
-                    if matches.len() == 1 {
-                        let command = *matches[0];
-                        let suffix = if matches!(
-                            command,
-                            "/plan"
-                                | "/model"
-                                | "/effort"
-                                | "/fast"
-                                | "/auto"
-                                | "/compact"
-                                | "/review"
-                        ) {
-                            " "
-                        } else {
-                            ""
-                        };
-                        editor.replace(&format!("{command}{suffix}"));
-                    }
-                }
-            } else {
+            if !self
+                .completion
+                .apply(&mut editor, &key, prefix.is_empty(), true)
+            {
                 let columns = self.size()?.0;
                 let prompt = self.region.as_ref().unwrap().lock().unwrap().prompt();
                 match editor.apply(&key, &self.history, columns, &prompt) {
                     Some("enter") => {
                         let line = editor.value();
-                        if !line.trim().is_empty() && self.history.last() != Some(&line) {
-                            self.history.push(line.clone());
-                            if self.history.len() > 500 {
-                                self.history.remove(0);
-                            }
-                        }
                         if line.ends_with('\\') && !line.ends_with("\\\\") {
                             prefix.push_str(&line[..line.len() - 1]);
                             prefix.push('\n');
@@ -1100,6 +1033,8 @@ impl Input {
                             continue;
                         }
                         let line = prefix + &line;
+                        self.remember(&line);
+                        self.completion = CommandCompletion::default();
                         self.region
                             .as_ref()
                             .unwrap()
@@ -1138,7 +1073,7 @@ impl Drop for Input {
         self.raw.take();
     }
 }
-fn draw(prompt: &str, editor: &Editor) -> io::Result<()> {
+fn draw(prompt: &str, editor: &IdleEditor) -> io::Result<()> {
     let text = display(&editor.value(), false, 0)
         .replace('\n', "↵")
         .replace('\t', "⇥");
@@ -1156,15 +1091,22 @@ fn read_key(
     decoder: &mut Decoder,
     withdrawn: Option<&dyn Fn() -> bool>,
 ) -> io::Result<String> {
+    Ok(match decoded_key(reader, decoder, withdrawn)? {
+        Key::Name(name) => name.into(),
+        Key::Text(c) => format!("text:{c}"),
+    })
+}
+fn decoded_key(
+    reader: &mut io::BufReader<io::Stdin>,
+    decoder: &mut Decoder,
+    withdrawn: Option<&dyn Fn() -> bool>,
+) -> io::Result<Key> {
     loop {
         if withdrawn.is_some_and(|withdrawn| withdrawn()) {
-            return Ok("escape".into());
+            return Ok(Key::Name("escape"));
         }
         if let Some(key) = decoder.next() {
-            return Ok(match key {
-                Key::Name(name) => name.into(),
-                Key::Text(c) => format!("text:{c}"),
-            });
+            return Ok(key);
         }
         if reader.buffer().is_empty() {
             let ready = match poll_read(0, 20) {
@@ -1173,8 +1115,8 @@ fn read_key(
                 Err(error) => return Err(error),
             };
             if ready == 0 {
-                if let Some(Key::Name(name)) = decoder.escape() {
-                    return Ok(name.into());
+                if let Some(key) = decoder.escape() {
+                    return Ok(key);
                 }
                 continue;
             }
@@ -1182,86 +1124,92 @@ fn read_key(
         let mut bytes = [0; 256];
         let count = reader.read(&mut bytes)?;
         if count == 0 {
-            return Ok("eof".into());
+            return Ok(Key::Name("eof"));
         }
         decoder.feed(&bytes[..count]);
     }
 }
 #[derive(Default)]
-struct Editor {
-    buffer: Vec<char>,
-    caret: usize,
-    kill: Vec<char>,
+struct CommandCompletion {
+    selected: usize,
+    dismissed: bool,
 }
-impl Editor {
-    fn value(&self) -> String {
-        self.buffer.iter().collect()
+impl CommandCompletion {
+    fn selection(&self, editor: &IdleEditor, enabled: bool) -> Option<usize> {
+        (enabled && !self.dismissed && editor.caret == editor.buffer.len()).then_some(self.selected)
     }
-    fn replace(&mut self, text: &str) {
-        self.buffer = text.chars().collect();
-        self.caret = self.buffer.len()
-    }
-    fn insert(&mut self, c: char) {
-        self.buffer.insert(self.caret, c);
-        self.caret += 1
-    }
-    fn apply(&mut self, key: &str) {
-        if let Some(text) = key.strip_prefix("text:") {
-            for c in text.chars() {
-                self.insert(c)
+    fn apply(
+        &mut self,
+        editor: &mut IdleEditor,
+        key: &Key,
+        enabled: bool,
+        dismiss_on_escape: bool,
+    ) -> bool {
+        let choices = if self.selection(editor, enabled).is_some() {
+            command_choices(&editor.value())
+        } else {
+            Vec::new()
+        };
+        if !choices.is_empty() {
+            match key {
+                Key::Name("up") => {
+                    self.selected = (self.selected + choices.len() - 1) % choices.len();
+                    return true;
+                }
+                Key::Name("down") => {
+                    self.selected = (self.selected + 1) % choices.len();
+                    return true;
+                }
+                Key::Name("tab") => {
+                    let label = &choices[self.selected.min(choices.len() - 1)].label;
+                    let args = crate::chat::COMMANDS
+                        .iter()
+                        .any(|(name, arg, _)| name == label && !arg.is_empty());
+                    editor.replace(&format!("{label}{}", if args { " " } else { "" }));
+                    self.dismissed = true;
+                    return true;
+                }
+                Key::Name("escape") if dismiss_on_escape => {
+                    self.dismissed = true;
+                    return true;
+                }
+                _ => {}
             }
-            return;
         }
-        match key {
-            "left" => self.caret = self.caret.saturating_sub(1),
-            "right" => self.caret = (self.caret + 1).min(self.buffer.len()),
-            "home" => self.caret = 0,
-            "end" => self.caret = self.buffer.len(),
-            "backspace" => {
-                if self.caret > 0 {
-                    self.caret -= 1;
-                    self.buffer.remove(self.caret);
-                }
-            }
-            "delete" => {
-                if self.caret < self.buffer.len() {
-                    self.buffer.remove(self.caret);
-                }
-            }
-            "word-left" => {
-                while self.caret > 0 && self.buffer[self.caret - 1].is_whitespace() {
-                    self.caret -= 1
-                }
-                while self.caret > 0 && !self.buffer[self.caret - 1].is_whitespace() {
-                    self.caret -= 1
-                }
-            }
-            "word-right" => {
-                while self.caret < self.buffer.len() && !self.buffer[self.caret].is_whitespace() {
-                    self.caret += 1
-                }
-                while self.caret < self.buffer.len() && self.buffer[self.caret].is_whitespace() {
-                    self.caret += 1
-                }
-            }
-            "kill-end" => self.kill = self.buffer.drain(self.caret..).collect(),
-            "kill-start" => {
-                self.kill = self.buffer.drain(..self.caret).collect();
-                self.caret = 0
-            }
-            "kill-word" => {
-                let end = self.caret;
-                self.apply("word-left");
-                self.kill = self.buffer.drain(self.caret..end).collect()
-            }
-            "yank" => {
-                for c in self.kill.clone() {
-                    self.insert(c)
-                }
-            }
-            _ => {}
-        }
+        self.selected = 0;
+        self.dismissed = false;
+        false
     }
+}
+fn command_choices(prefix: &str) -> Vec<Choice> {
+    if !prefix.starts_with('/') {
+        return Vec::new();
+    }
+    if prefix.starts_with("/fast ") {
+        return ["/fast on", "/fast off"]
+            .into_iter()
+            .filter(|name| name.starts_with(prefix))
+            .map(|name| Choice {
+                label: name.into(),
+                detail: String::new(),
+                note: String::new(),
+                disabled: false,
+            })
+            .collect();
+    }
+    if prefix.chars().any(char::is_whitespace) {
+        return Vec::new();
+    }
+    crate::chat::COMMANDS
+        .iter()
+        .filter(|(name, _, _)| name.starts_with(prefix))
+        .map(|(name, arg, description)| Choice {
+            label: (*name).into(),
+            detail: (*arg).into(),
+            note: (*description).into(),
+            disabled: false,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1327,16 +1275,50 @@ mod tests {
     }
 
     #[test]
-    fn editing_unicode_and_kill() {
-        let mut e = Editor::default();
-        e.replace("a 界b");
-        e.apply("word-left");
-        e.apply("kill-end");
-        assert_eq!(e.value(), "a ");
-        e.apply("yank");
-        assert_eq!(e.value(), "a 界b");
-        e.apply("backspace");
-        assert_eq!(e.value(), "a 界");
+    fn command_suggestions_share_help_and_accept_the_highlighted_match() {
+        let mut editor = IdleEditor::default();
+        let mut completion = CommandCompletion::default();
+        assert_eq!(command_choices("/").len(), crate::chat::COMMANDS.len());
+        for prefix in ["", "hello", "/unknown", "/context ", "/compact focus"] {
+            assert!(command_choices(prefix).is_empty(), "{prefix:?}");
+        }
+        editor.replace("/co");
+        let choices = command_choices(&editor.value());
+        assert_eq!(
+            choices
+                .iter()
+                .map(|choice| choice.label.as_str())
+                .collect::<Vec<_>>(),
+            ["/context", "/compact"]
+        );
+        assert!(!choices[0].note.is_empty());
+        assert!(completion.apply(&mut editor, &Key::Name("up"), true, true));
+        assert_eq!(completion.selected, 1);
+        assert!(completion.apply(&mut editor, &Key::Name("tab"), true, true));
+        assert_eq!(editor.value(), "/compact ");
+        assert_eq!(completion.selection(&editor, true), None);
+        assert!(!completion.apply(&mut editor, &Key::Text('f'), true, true));
+        editor.replace("/fast o");
+        assert!(completion.apply(&mut editor, &Key::Name("down"), true, true));
+        assert!(completion.apply(&mut editor, &Key::Name("tab"), true, true));
+        assert_eq!(editor.value(), "/fast off");
+    }
+
+    #[test]
+    fn command_completion_respects_caret_prefix_and_escape_ownership() {
+        let mut editor = IdleEditor::default();
+        let mut completion = CommandCompletion::default();
+        editor.replace("/co");
+        editor.caret = 1;
+        assert!(!completion.apply(&mut editor, &Key::Name("tab"), true, true));
+        assert_eq!(editor.value(), "/co");
+        editor.caret = editor.buffer.len();
+        assert!(!completion.apply(&mut editor, &Key::Name("tab"), false, true));
+        assert!(!completion.apply(&mut editor, &Key::Name("escape"), true, false));
+        assert!(completion.apply(&mut editor, &Key::Name("escape"), true, true));
+        assert_eq!(completion.selection(&editor, true), None);
+        assert!(!completion.apply(&mut editor, &Key::Text('n'), true, true));
+        assert_eq!(completion.selection(&editor, true), Some(0));
     }
 }
 
@@ -1551,4 +1533,32 @@ mod reader_failure_tests {
             original.c_lflag & (libc::ICANON | libc::ECHO)
         );
     }
+}
+
+fn choice_row(
+    option: &Choice,
+    index: usize,
+    selected: usize,
+    columns: usize,
+    color: bool,
+) -> String {
+    let row = format!(
+        "{} {}  {:<17} {:<10} {}",
+        if index == selected { "❯" } else { " " },
+        index + 1,
+        sanitize(&option.label),
+        sanitize(&option.detail),
+        sanitize(&option.note)
+    );
+    let row = truncate(row.trim_end(), columns.saturating_sub(1));
+    if !color {
+        return row;
+    }
+    if option.disabled {
+        return format!("\x1b[2m{row}\x1b[0m");
+    }
+    if index == selected {
+        return format!("\x1b[36m\x1b[1m{row}\x1b[0m");
+    }
+    row
 }
