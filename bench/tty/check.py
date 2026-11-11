@@ -809,20 +809,147 @@ SCENARIOS = {
         ],
     },
     "interrupt-running-command": {
-        # Ctrl-C while a tool command runs cancels the turn and returns to the
-        # prompt; a cancelled exec leaves uncertain effects, so the session blocks.
-        "script": [tool("Sleeping.", "s1", "exec", {"argv": ["sleep", "6"], "cwd": "."}), reply("unused")],
+        "script": [tool("Sleeping.", "s1", "exec", {"argv": ["sleep", "30"], "cwd": "."}), reply("Follow-up after Ctrl-C.")],
         "steps": [
-            ("idle", 1.0),
-            ("type", "go"),
-            ("key", "enter"),
-            ("idle", 1.0),
-            ("key", "ctrl-c"),
-            ("wait", "cancelled", 5),
             ("wait_status", "scripted / low", 5),
-            ("show", "Ctrl-C during a running exec"),
+            ("type", "go"), ("key", "enter"),
+            ("wait", "running sleep 30", 5),
+            ("key", "ctrl-c"), ("wait", "cancelled", 5),
+            ("wait_status", "scripted / low", 5),
+            ("show", "Ctrl-C returns to an ordinary prompt without hiding unknown effects"),
             ("expect", "screen_has", "effects unknown"),
+            ("expect", "screen_lacks", "(blocked) ❯"),
+            ("type", "inspect before continuing"), ("key", "enter"),
+            ("wait", "Follow-up after Ctrl-C.", 5),
+            ("wait_status", "scripted / low", 5),
             ("expect", "status_row_last"),
+        ],
+    },
+    "escape-running-command": {
+        "script": [tool("Sleeping.", "s1", "exec", {"argv": ["sleep", "30"], "cwd": "."}), reply("Follow-up after Esc.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "go"), ("key", "enter"),
+            ("wait", "running sleep 30", 5),
+            ("type", "discard this queued message"), ("key", "enter"),
+            ("wait", "queued", 5), ("key", "esc"),
+            ("wait", "cancelled", 5), ("wait_status", "scripted / low", 5),
+            ("show", "Esc interrupts the Run and discards queued typeahead"),
+            ("expect", "screen_has", "effects unknown"),
+            ("expect", "screen_lacks", "(blocked) ❯"),
+            ("expect", "screen_lacks", "Follow-up after Esc."),
+            ("type", "inspect before continuing"), ("key", "enter"),
+            ("wait", "Follow-up after Esc.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "status_row_last"),
+        ],
+    },
+    "live-openai-reply": {
+        "live_stream": "openai", "agents": True,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "stream a reply"), ("key", "enter"),
+            ("wait", "thinking", 5),
+            ("show", "The stream is thinking, before any visible reply"),
+            ("release", "advance"),
+            ("wait", "First live line.", 5), ("wait", "writing", 5),
+            ("expect", "screen_lacks", "Final tail."),
+            ("show", "A completed reply line is visible while the response is still open"),
+            ("release", "finish"), ("wait", "Final tail.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "line_count", "First live line.", 1),
+            ("expect", "line_count", "Second live line.", 1),
+            ("expect", "screen_lacks", "PRIVATE REASONING"),
+            ("expect", "region_after_output"),
+            ("type", "next turn"), ("key", "enter"),
+            ("wait", "Follow-up after stream.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("show", "The accepted reply is not duplicated and the next turn works"),
+            ("expect", "status_row_last"),
+        ],
+    },
+    "live-anthropic-reply": {
+        "live_stream": "anthropic", "anthropic": True,
+        "steps": [
+            ("wait_status", "claude-haiku-5-5", 5),
+            ("type", "stream a reply"), ("key", "enter"),
+            ("wait", "thinking", 5), ("release", "advance"),
+            ("wait", "First live line.", 5), ("wait", "writing", 5),
+            ("expect", "screen_lacks", "Final tail."),
+            ("show", "Anthropic text arrives before message_stop, without exposing thinking"),
+            ("release", "finish"), ("wait", "Final tail.", 5),
+            ("wait_status", "claude-haiku-5-5", 5),
+            ("expect", "line_count", "First live line.", 1),
+            ("expect", "line_count", "Second live line.", 1),
+            ("expect", "screen_lacks", "PRIVATE REASONING"),
+            ("type", "next turn"), ("key", "enter"),
+            ("wait", "Follow-up after stream.", 5),
+            ("wait_status", "claude-haiku-5-5", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "large-stream-preview": {
+        "live_stream": "openai", "agents": True, "large_stream": True,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "stream a large reply"), ("key", "enter"),
+            ("wait", "thinking", 5), ("release", "advance"),
+            ("wait", "PREVIEW TAIL READY", 20),
+            ("expect", "screen_lacks", "PREVIEW FIRST LINE"),
+            ("expect", "screen_lacks", "UNFINISHED GIANT LINE"),
+            ("type", "draft after a large preview"),
+            ("wait", "❯ draft after a large preview", 2),
+            ("resize", 24, 70), ("wait", "PREVIEW TAIL READY", 5),
+            ("expect", "screen_has", "**PREVIEW TAIL READY**"),
+            ("expect", "screen_has", "❯ draft after a large preview"),
+            ("show", "A clipped code preview keeps draft input and resize responsive"),
+            ("release", "finish"), ("wait", "Final tail.", 20),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "raw_has", "PREVIEW FIRST LINE"),
+            ("key", "enter"), ("wait", "Follow-up after stream.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "interrupt-large-stream-preview": {
+        "live_stream": "openai", "agents": True, "large_stream": True, "cancel_stream": True,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "stream a large reply"), ("key", "enter"),
+            ("wait", "thinking", 5), ("release", "advance"),
+            ("wait", "PREVIEW TAIL READY", 20),
+            ("type", "discard this draft"), ("key", "esc"),
+            ("wait", "cancelled", 3),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "screen_lacks", "PREVIEW TAIL READY"),
+            ("expect", "screen_lacks", "(blocked) ❯"),
+            ("show", "Esc interrupts a large speculative reply without retaining its text"),
+            ("release", "finish"),
+            ("type", "continue after the interrupted stream"), ("key", "enter"),
+            ("wait", "Follow-up after stream.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "screen_lacks", "discard this draft"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "file-tool-progress": {
+        "slow_read": True,
+        "script": [tool("Reading a dense file.", "read", "read_file", {"path": "dense.txt", "max_lines": 500000}),
+                   tool("", "list", "list_files", {"path": "."}),
+                   tool("", "search", "search_text", {"path": "dense.txt", "query": "needle"}),
+                   reply("File exploration complete.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "explore"), ("key", "enter"),
+            ("wait", "reading dense.txt", 5),
+            ("show", "Read progress is visible while the dense file result is assembled"),
+            ("wait", "File exploration complete.", 15),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "raw_has", "listing ."),
+            ("expect", "raw_has", "searching"),
+            ("expect", "screen_lacks", "reading dense.txt"),
+            ("expect", "screen_lacks", "listing ."),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
     },
     "ctrl-l-clears-screen": {
@@ -906,7 +1033,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -928,6 +1055,8 @@ class Session:
                     env["REAGENT_MODEL"] = ""
                 else:
                     args += ["--model", "gpt-6.1-luna"]
+            elif anthropic:
+                args += ["--model", "claude-haiku-5-5", "--no-project-instructions"]
             elif context_gc:
                 args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6.1-sol"]
             elif agents:
@@ -1061,6 +1190,15 @@ def check_screen_lacks(s, text):
     return "screen still shows %r" % text if any(text in line for line in s.term.screen()) else None
 
 
+def check_line_count(s, text, count):
+    actual = sum(line.strip() == text for line in s.term.text())
+    return None if actual == count else "%r appeared %d times, expected %d" % (text, actual, count)
+
+
+def check_raw_has(s, text):
+    return None if text.encode() in s.raw else "terminal output never contained %r" % text
+
+
 def check_all_lines(s, lines):
     seen = s.term.text()
     missing = [line for line in lines if not any(line in row for row in seen)]
@@ -1090,6 +1228,8 @@ CHECKS = {
     "status_row_last": check_status_row_last,
     "screen_has": check_screen_has,
     "screen_lacks": check_screen_lacks,
+    "line_count": check_line_count,
+    "raw_has": check_raw_has,
     "all_lines": check_all_lines,
     "all_lack": check_all_lack,
     "rule_width": check_rule_width,
@@ -1108,6 +1248,9 @@ def run(binary, name, scenario, workspace):
     failures = []
     script_path = None
     consent_root = tempfile.TemporaryDirectory(prefix="reagent-tty-consent-") if scenario.get("workspace_consent") else None
+    if scenario.get("slow_read"):
+        with open(os.path.join(workspace, "dense.txt"), "w") as dense:
+            dense.write("x\n" * 500000)
     if "script" in scenario:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
             f.write(json.dumps(scenario["script"]).replace("__CONSENT__", consent_root.name) if consent_root else json.dumps(scenario["script"]))
@@ -1115,6 +1258,93 @@ def run(binary, name, scenario, workspace):
     extra_env = {"REAGENT_OPENAI_AUTH": "auto"}
     server = None
     gates = {name: threading.Event() for name in ("advance", "finish")}
+    stream_requests, stream_bodies = [], {}
+    stream_done = threading.Event()
+    preview_parts = ["First live line.\n"]
+    stream_tail = "Second live line.\nFinal tail."
+    if scenario.get("large_stream"):
+        preview_parts = ["PREVIEW FIRST LINE\n```rust\n"]
+        for start in range(0, 2048, 128):
+            preview_parts.append("".join(f'let row_{row:04} = "' + "x" * 48 + '";\n' for row in range(start, start + 128)))
+        preview_parts += ["**PREVIEW TAIL READY**\n", "UNFINISHED GIANT LINE " + "u" * 40000]
+        stream_tail = "\n```\nFinal tail."
+    stream_reply = "".join(preview_parts) + stream_tail
+    if scenario.get("live_stream"):
+        class StreamHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                request = self.rfile.read(int(self.headers["Content-Length"]))
+                ordinal = len(stream_requests) + 1
+                stream_requests.append(request.decode())
+                if json.loads(request).get("stream") is not True:
+                    failures.append("live provider request did not enable streaming")
+                first = ordinal == 1
+                anthropic = scenario["live_stream"] == "anthropic"
+                text = stream_reply if first else "Follow-up after stream."
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                chunks = []
+
+                def send(event):
+                    chunk = ("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n").encode()
+                    chunks.append(chunk)
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+
+                try:
+                    if anthropic:
+                        send({"type": "message_start", "message": {"id": "tty-stream", "type": "message", "role": "assistant",
+                              "model": "claude-haiku-5-5", "content": [], "stop_reason": None,
+                              "usage": {"input_tokens": 10, "output_tokens": 1}}})
+                        if first:
+                            send({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})
+                            send({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "PRIVATE REASONING"}})
+                            send({"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "tty-signature"}})
+                            send({"type": "content_block_stop", "index": 0})
+                            if not gates["advance"].wait(20):
+                                failures.append("stream fixture timed out before text release")
+                        index = 1 if first else 0
+                        send({"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}})
+                        for part in preview_parts if first else [text]:
+                            send({"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": part}})
+                        if first:
+                            if not gates["finish"].wait(20):
+                                failures.append("stream fixture timed out before completion release")
+                            send({"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": stream_tail}})
+                        send({"type": "content_block_stop", "index": index})
+                        send({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 12}})
+                        send({"type": "message_stop"})
+                    else:
+                        if first:
+                            send({"type": "response.created", "response": {"usage": {"output_tokens": 1}}})
+                            send({"type": "response.reasoning_summary_text.delta", "delta": "PRIVATE REASONING"})
+                            if not gates["advance"].wait(20):
+                                failures.append("stream fixture timed out before text release")
+                            for part in preview_parts:
+                                send({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": part})
+                            if not gates["finish"].wait(20):
+                                failures.append("stream fixture timed out before completion release")
+                            send({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": stream_tail})
+                        result = {"id": "tty-stream", "model": "gpt-6.1-sol", "status": "completed", "output": [
+                                  {"type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": text}]}],
+                                  "usage": {"input_tokens": 10, "output_tokens": 12}}
+                        send({"type": "response.completed", "response": result})
+                    stream_bodies[ordinal] = b"".join(chunks).decode()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                finally:
+                    if first:
+                        stream_done.set()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StreamHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_env.update(API_PROXY_PROVIDER="", API_PROXY_URL="", TYPESAFE_API_KEY="", REAGENT_MODEL="",
+                         OPENAI_API_KEY="offline-fixture", ANTHROPIC_API_KEY="offline-fixture",
+                         REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+                         REAGENT_ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}")
     if scenario.get("api_compact"):
         class CompactHandler(http.server.BaseHTTPRequestHandler):
             requests = 0
@@ -1176,7 +1406,7 @@ def run(binary, name, scenario, workspace):
     if scenario.get("context_gc"):
         with open(os.path.join(workspace, "gc.txt"), "w") as f:
             f.write("x" * 25000 + "\n")
-    if scenario.get("agents") or scenario.get("context_gc") or scenario.get("chatgpt"):
+    if (scenario.get("agents") or scenario.get("context_gc") or scenario.get("chatgpt")) and not scenario.get("live_stream"):
         class AgentHandler(http.server.BaseHTTPRequestHandler):
             root_requests = 0
             child_requests = 0
@@ -1359,7 +1589,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]
@@ -1419,6 +1649,32 @@ def run(binary, name, scenario, workspace):
         if server is not None:
             server.shutdown()
             server.server_close()
+    if scenario.get("live_stream"):
+        if not stream_done.wait(5):
+            failures.append("stream fixture did not settle after completion or interruption")
+        events = []
+        for directory, _, files in os.walk(workspace):
+            for filename in files:
+                if filename.endswith(".jsonl"):
+                    with open(os.path.join(directory, filename)) as trace:
+                        events += [json.loads(line) for line in trace]
+        traced_requests = [event["data"]["request_body"] for event in events if event.get("type") == "api.attempt.started"]
+        traced_bodies = [event["data"]["response_body"] for event in events if event.get("type") == "api.attempt.finished" and "response_body" in event.get("data", {})]
+        if len(stream_requests) != 2:
+            failures.append("live stream follow-up did not produce exactly two requests")
+        if sorted(traced_requests) != sorted(stream_requests):
+            failures.append("request trace bytes differed from the bytes received by the streaming fixture")
+        expected_bodies = [body for ordinal, body in stream_bodies.items() if not (scenario.get("cancel_stream") and ordinal == 1)]
+        if sorted(traced_bodies) != sorted(expected_bodies):
+            failures.append("response trace bytes differed from the complete streaming fixture bytes")
+        if len(stream_requests) == 2:
+            followup = json.loads(stream_requests[1])
+            accepted = json.dumps(followup.get("messages", followup.get("input", [])))
+            if scenario.get("cancel_stream"):
+                if "PREVIEW FIRST LINE" in accepted or "PREVIEW TAIL READY" in accepted:
+                    failures.append("interrupted speculative text entered the next model request")
+            elif json.dumps(stream_reply)[1:-1] not in accepted:
+                failures.append("next request did not contain the complete accepted streamed reply")
     if scenario.get("workspace_consent") == "deny":
         outcomes = {"first": [], "second": []}
         cache = os.path.join(workspace, "Library", "Caches") if sys.platform == "darwin" else os.path.join(workspace, ".cache")

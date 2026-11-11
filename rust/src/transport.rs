@@ -15,6 +15,7 @@ mod redaction;
 #[cfg(test)]
 #[path = "transport/security_tests.rs"]
 mod security_tests;
+mod stream;
 use sha2::{Digest, Sha256};
 use std::{
     io::Read,
@@ -124,6 +125,17 @@ impl Transport {
             usage: self.retry_usage.clone(),
         }
     }
+    fn retain_stream_usage(&mut self, usage: &Value) {
+        usage_add(&mut self.retry_usage, usage);
+        if usage["known"] == true {
+            self.reported_retries += 1;
+        } else {
+            let missing = self.retry_usage["unreported_attempts"]
+                .as_u64()
+                .unwrap_or(0);
+            self.retry_usage["unreported_attempts"] = json!(missing + 1);
+        }
+    }
     fn pause(&self, duration: Duration) -> Result<(), ModelError> {
         let end = Instant::now() + duration;
         while Instant::now() < end {
@@ -229,7 +241,7 @@ impl Transport {
         let provider = s(&self.config, "provider").to_owned();
         let proxied = self.config["proxied"].as_bool().unwrap_or(false);
         let chatgpt = s(&self.config, "auth_mode") == "chatgpt";
-        let stream = provider != "anthropic" && (proxied || chatgpt);
+        let stream = body["stream"] == true || (provider != "anthropic" && (proxied || chatgpt));
         let bytes = crate::types::json_bytes(body);
         let step = request["scope"]["step"].as_u64().unwrap_or(1) as usize;
         let started = Instant::now();
@@ -309,7 +321,7 @@ impl Transport {
                 } else if !token.is_empty() {
                     req = req.bearer_auth(&token);
                 }
-                if stream {
+                if provider != "anthropic" && (proxied || chatgpt) {
                     let key = crate::openai::cache_key(request);
                     if chatgpt {
                         req = req.header(
@@ -345,9 +357,48 @@ impl Transport {
                             .unwrap_or("")
                             .to_string();
                         let mut raw = Vec::new();
-                        match response.read_to_end(&mut raw) {
+                        let preview_region =
+                            region.filter(|_| self.config["_display"] == true && status == 200);
+                        let mut preview = stream::Preview::new(preview_region);
+                        let read = (|| -> std::io::Result<()> {
+                            let mut chunk = [0; 8192];
+                            loop {
+                                let count = response.read(&mut chunk)?;
+                                if count == 0 {
+                                    return Ok(());
+                                }
+                                raw.extend_from_slice(&chunk[..count]);
+                                preview.push(&chunk[..count], &secrets, endpoint);
+                            }
+                        })();
+                        drop(preview);
+                        let raw = redact_bytes(&raw, &secrets, endpoint);
+                        // Wire redaction cannot recognize a secret reconstructed from separate deltas.
+                        if stream
+                            && crate::openai::stream_shaped(&raw)
+                            && stream::contains_credentials(&raw, &secrets, endpoint)
+                        {
+                            let message =
+                                "provider stream contained credentials; response discarded";
+                            self.event(
+                                &mut trace,
+                                "api.attempt.finished",
+                                step,
+                                json!({
+                                    "attempt":attempt,"http_status":status,
+                                    "duration_ms":sent.elapsed().as_millis() as u64,
+                                    "error":message
+                                }),
+                            );
+                            let mut error = error("provider_error", message);
+                            if provider == "anthropic" {
+                                self.retain_stream_usage(&crate::anthropic::transient(&raw).1);
+                                error.usage = self.retry_usage.clone();
+                            }
+                            return Err(error);
+                        }
+                        match read {
                             Ok(_) => {
-                                let raw = redact_bytes(&raw, &secrets, &endpoint);
                                 let replaced = std::str::from_utf8(&raw).is_err();
                                 let text = trace_utf8(&raw);
                                 self.event(&mut trace,"api.attempt.finished",step,json!({"attempt":attempt,"http_status":status,"request_id":redact(&id,&secrets,&endpoint),"duration_ms":sent.elapsed().as_millis()as u64,"response_body":text,"body_utf8_replaced":replaced}));
@@ -396,11 +447,19 @@ impl Transport {
                                 if e.kind() == std::io::ErrorKind::ConnectionAborted
                                     || self.request_cancelled(summary_deadline)
                                 {
+                                    if provider == "anthropic"
+                                        && stream
+                                        && crate::openai::stream_shaped(&raw)
+                                    {
+                                        self.retain_stream_usage(
+                                            &crate::anthropic::transient(&raw).1,
+                                        );
+                                    }
                                     return Err(
                                         self.cancelled_error("cancelled during a model request")
                                     );
                                 }
-                                break (0, Vec::new(), String::new(), Some(msg));
+                                break (0, raw, String::new(), Some(msg));
                             }
                         }
                     }
@@ -423,15 +482,32 @@ impl Transport {
                     }
                 }
             };
-            if self.request_cancelled(summary_deadline) {
-                return Err(self.cancelled_error("cancelled during a model request"));
-            }
-            let (stream_reason, stream_usage) = if status == 200 && stream && (overnight || chatgpt)
-            {
+            let anthropic_stream = provider == "anthropic"
+                && stream
+                && (crate::openai::stream_shaped(&raw) || (status == 200 && raw.is_empty()));
+            let (mut stream_reason, stream_usage) = if anthropic_stream {
+                crate::anthropic::transient(&raw)
+            } else if status == 200 && stream && provider != "anthropic" && (overnight || chatgpt) {
                 crate::openai::transient(&raw, !overnight)
             } else {
                 (String::new(), usage_zero(false))
             };
+            if self.request_cancelled(summary_deadline) {
+                if anthropic_stream {
+                    self.retain_stream_usage(&stream_usage);
+                }
+                return Err(self.cancelled_error("cancelled during a model request"));
+            }
+            if anthropic_stream && failure.is_some() && stream_reason.is_empty() {
+                if let Err(mut error) = crate::anthropic::assemble(&raw) {
+                    self.retain_stream_usage(&stream_usage);
+                    error.usage = self.retry_usage.clone();
+                    return Err(error);
+                }
+            }
+            if anthropic_stream && (!overnight || status != 200) {
+                stream_reason.clear();
+            }
             let retry_http = (status == 429 || (500..=599).contains(&status))
                 && !terminal_code(&provider_code(&raw));
             if stream_reason.is_empty() && failure.is_none() && !retry_http {
@@ -439,10 +515,13 @@ impl Transport {
             }
             if !overnight {
                 if let Some(msg) = failure {
-                    return Err(error(
-                        "provider_error",
-                        &format!("model request failed: {}", msg),
-                    ));
+                    let mut error =
+                        error("provider_error", &format!("model request failed: {}", msg));
+                    if anthropic_stream {
+                        self.retain_stream_usage(&stream_usage);
+                        error.usage = self.retry_usage.clone();
+                    }
+                    return Err(error);
                 }
                 if attempt >= 2 {
                     return Ok((status, raw));
@@ -454,7 +533,9 @@ impl Transport {
                 self.pause(Duration::from_millis(500))?;
                 continue;
             }
-            if !stream_reason.is_empty() && stream_usage["known"] == true {
+            if anthropic_stream {
+                self.retain_stream_usage(&stream_usage);
+            } else if !stream_reason.is_empty() && stream_usage["known"] == true {
                 usage_add(&mut self.retry_usage, &stream_usage);
                 self.reported_retries += 1;
             } else {

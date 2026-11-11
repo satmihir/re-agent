@@ -206,9 +206,31 @@ fn command(a: &Value) -> String {
     result
 }
 
-/// Call target describes the command shown during live tool progress.
-pub(super) fn call_target(call: &Value) -> String {
-    target(call, args(call).as_ref())
+/// Progress label describes browsing and execution only while the tool runs.
+pub(super) fn progress_label(call: &Value) -> Option<String> {
+    let verb = match text(call, "name") {
+        "read_file" => "reading",
+        "list_files" => "listing",
+        "search_text" => "searching",
+        "exec" => "running",
+        _ => return None,
+    };
+    let a = args(call);
+    let mut target = target(call, a.as_ref());
+    if text(call, "name") == "search_text" {
+        if let Some(a) = &a {
+            if let Some(paths) = a["paths"].as_array() {
+                let paths = paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(one_row)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                target = format!("\"{}\" in {paths}", one_row(text(a, "query")));
+            }
+        }
+    }
+    Some(format!("{verb} {}", one_row(&target)))
 }
 
 fn target(call: &Value, a: Option<&Value>) -> String {

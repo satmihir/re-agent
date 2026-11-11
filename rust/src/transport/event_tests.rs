@@ -367,6 +367,10 @@ fn serve(responses: Vec<String>) -> (String, std::thread::JoinHandle<usize>) {
                 }
                 std::thread::sleep(Duration::from_millis(5));
             };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             http::tests::request(&mut stream);
             stream.write_all(response.as_bytes()).unwrap();
         }
@@ -575,4 +579,225 @@ fn http_400_overflow_uses_owned_wording_and_other_failures_stay_provider_errors(
         assert_eq!(error.status, expected_status, "{body}");
         assert_eq!(error.message, message, "{body}");
     }
+}
+
+fn anthropic_prefix(final_usage: bool) -> String {
+    let mut events = vec![
+        json!({"type":"message_start","message":{"content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":3,"cache_read_input_tokens":5,"output_tokens":1}}}),
+    ];
+    if final_usage {
+        events.push(json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":29}}));
+    }
+    events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect()
+}
+
+#[test]
+fn anthropic_overload_and_clean_eof_retry_only_with_a_window_and_keep_attempt_usage() {
+    let completed = anthropic_prefix(true) + "data: {\"type\":\"message_stop\"}\n\n";
+    for final_usage in [false, true] {
+        for ending in ["", "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n"] {
+            for window in [0u64, 3_000_000_000] {
+                let first = anthropic_prefix(final_usage) + ending;
+                let mut responses = vec![reply(200, &first)];
+                if window > 0 {
+                    responses.push(reply(200, &completed));
+                }
+                let (endpoint, server) = serve(responses);
+                let mut transport = Transport::new(&json!({"provider":"anthropic","model_retry_window":window}));
+                let (status, raw) = transport.call_endpoint(&json!({}), &json!({"stream":true}), &endpoint).unwrap();
+                assert_eq!(status, 200);
+                assert_eq!(server.join().unwrap(), if window > 0 {2} else {1});
+                let finished = transport.events.iter().find(|event| event["event"] == "api.attempt.finished").unwrap();
+                assert_eq!(finished["data"]["response_body"], first);
+                if window == 0 {
+                    assert_eq!(raw, first.as_bytes());
+                    assert_eq!(transport.retry_usage, usage_zero(true));
+                    assert_eq!(count(&transport, "api.retry.scheduled"), 0);
+                    continue;
+                }
+                assert_eq!(raw, completed.as_bytes());
+                let response = crate::anthropic::normalize(&crate::types::json_bytes(&crate::anthropic::assemble(&raw).unwrap())).unwrap();
+                assert_eq!(response["usage"]["input_tokens"], 18);
+                assert_eq!(response["usage"]["output_tokens"], 29);
+                assert_eq!(transport.retry_usage["input_tokens"], 18);
+                assert_eq!(transport.retry_usage["cached_input_tokens"], 5);
+                assert_eq!(transport.retry_usage["output_tokens"], if final_usage {29} else {1});
+                assert_eq!(transport.retry_usage["known"], final_usage);
+                assert_eq!(transport.reported_retries, u64::from(final_usage));
+                if !final_usage {
+                    assert_eq!(transport.retry_usage["unreported_attempts"], 1);
+                }
+                assert_eq!(count(&transport, "api.retry.scheduled"), 1);
+                assert_eq!(count(&transport, "api.retry.exhausted"), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn anthropic_exhaustion_and_read_failures_retain_reported_and_partial_usage_once() {
+    for read_failure in [false, true] {
+        for final_usage in [false, true] {
+            for window in [0u64, 1] {
+                if !read_failure && window == 0 {
+                    continue;
+                }
+                let body = anthropic_prefix(final_usage);
+                let response = if read_failure {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len() + 100
+                    )
+                } else {
+                    reply(200, &body)
+                };
+                let (endpoint, server) = serve(vec![response]);
+                let mut transport =
+                    Transport::new(&json!({"provider":"anthropic","model_retry_window":window}));
+                let error = transport
+                    .call_endpoint(&json!({}), &json!({"stream":true}), &endpoint)
+                    .unwrap_err();
+                assert_eq!(server.join().unwrap(), 1);
+                assert_eq!(error.status, "provider_error");
+                assert_eq!(error.usage["input_tokens"], 18);
+                assert_eq!(error.usage["cached_input_tokens"], 5);
+                assert_eq!(
+                    error.usage["output_tokens"],
+                    if final_usage { 29 } else { 1 }
+                );
+                assert_eq!(error.usage["known"], final_usage);
+                assert_eq!(error.usage, transport.retry_usage);
+                assert_eq!(transport.reported_retries, u64::from(final_usage));
+                assert_eq!(count(&transport, "api.attempt.started"), 1);
+                assert_eq!(
+                    count(&transport, "api.retry.exhausted"),
+                    usize::from(window > 0)
+                );
+                if !final_usage {
+                    assert_eq!(error.usage["unreported_attempts"], 1);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cancellation_of_an_anthropic_retry_retains_usage_without_counting_it_twice() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    for final_usage in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.jsonl");
+        let observed_path = path.clone();
+        let token = Arc::new(AtomicBool::new(false));
+        let signal = token.clone();
+        let observer = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let scheduled = std::fs::read_to_string(&observed_path)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                    .any(|event| event["type"] == "api.retry.scheduled");
+                if scheduled {
+                    signal.store(true, Ordering::SeqCst);
+                    return;
+                }
+                assert!(Instant::now() < deadline, "retry was not scheduled");
+                std::thread::yield_now();
+            }
+        });
+        let (endpoint, server) = serve(vec![reply(200, &anthropic_prefix(final_usage))]);
+        let mut transport =
+            Transport::new(&json!({"provider":"anthropic","model_retry_window":30_000_000_000u64}));
+        transport.cancellation = Some(token);
+        let mut trace = crate::trace::Trace::new(path.to_str(), "session", "run");
+        let error = transport
+            .call_endpoint_traced(
+                &json!({}),
+                &json!({"stream":true}),
+                &endpoint,
+                Some(&mut trace),
+            )
+            .unwrap_err();
+        observer.join().unwrap();
+        assert_eq!(server.join().unwrap(), 1);
+        assert_eq!(error.status, "cancelled");
+        assert_eq!(error.usage["input_tokens"], 18);
+        assert_eq!(
+            error.usage["output_tokens"],
+            if final_usage { 29 } else { 1 }
+        );
+        assert_eq!(error.usage["known"], final_usage);
+        assert_eq!(error.usage, transport.retry_usage);
+        assert_eq!(transport.sent_attempts, 1);
+        assert_eq!(transport.reported_retries, u64::from(final_usage));
+    }
+}
+
+#[test]
+fn anthropic_terminal_and_protocol_failures_do_not_retry_even_when_http_body_is_truncated() {
+    for (suffix, status) in [
+        ("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":29}}\n\n", "incomplete_response"),
+        ("data: not-json\n\n", "protocol_error"),
+        ("data: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"not retryable\"}}\n\n", "provider_error"),
+    ] {
+        let body = anthropic_prefix(true) + suffix;
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len() + 100);
+        let (endpoint, server) = serve(vec![response]);
+        let mut transport = Transport::new(&json!({"provider":"anthropic","model_retry_window":3_000_000_000u64}));
+        let error = transport.call_endpoint(&json!({}), &json!({"stream":true}), &endpoint).unwrap_err();
+        assert_eq!(server.join().unwrap(), 1);
+        assert_eq!(error.status, status);
+        assert_eq!(error.usage["known"], true);
+        assert_eq!(error.usage["input_tokens"], 18);
+        assert_eq!(error.usage["output_tokens"], 29);
+        assert_eq!(count(&transport, "api.retry.scheduled"), 0);
+        assert_eq!(count(&transport, "api.retry.exhausted"), 0);
+    }
+}
+
+#[test]
+fn anthropic_empty_stream_retry_keeps_the_unknown_attempt_explicit() {
+    let completed = anthropic_prefix(true) + "data: {\"type\":\"message_stop\"}\n\n";
+    let (endpoint, server) = serve(vec![reply(200, ""), reply(200, &completed)]);
+    let mut transport =
+        Transport::new(&json!({"provider":"anthropic","model_retry_window":3_000_000_000u64}));
+    let (_, raw) = transport
+        .call_endpoint(&json!({}), &json!({"stream":true}), &endpoint)
+        .unwrap();
+    assert_eq!(server.join().unwrap(), 2);
+    assert_eq!(raw, completed.as_bytes());
+    assert_eq!(transport.retry_usage["known"], false);
+    assert_eq!(transport.retry_usage["unreported_attempts"], 1);
+    assert_eq!(transport.retry_usage["input_tokens"], 0);
+    assert_eq!(transport.retry_usage["output_tokens"], 0);
+    assert_eq!(transport.reported_retries, 0);
+}
+
+#[test]
+fn anthropic_max_tokens_without_message_stop_is_terminal_not_a_retryable_eof() {
+    let body = anthropic_prefix(true).replace("end_turn", "max_tokens");
+    let (endpoint, server) = serve(vec![reply(200, &body)]);
+    let mut transport =
+        Transport::new(&json!({"provider":"anthropic","model_retry_window":3_000_000_000u64}));
+    let (status, raw) = transport
+        .call_endpoint(&json!({}), &json!({"stream":true}), &endpoint)
+        .unwrap();
+    assert_eq!(server.join().unwrap(), 1);
+    assert_eq!(status, 200);
+    assert_eq!(raw, body.as_bytes());
+    let error = crate::anthropic::assemble(&raw).unwrap_err();
+    assert_eq!(error.status, "incomplete_response");
+    assert_eq!(error.usage["known"], true);
+    assert_eq!(error.usage["input_tokens"], 18);
+    assert_eq!(error.usage["output_tokens"], 29);
+    assert_eq!(count(&transport, "api.retry.scheduled"), 0);
+    assert_eq!(count(&transport, "api.retry.exhausted"), 0);
+    assert_eq!(transport.retry_usage, usage_zero(true));
 }

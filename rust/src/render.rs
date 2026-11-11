@@ -622,7 +622,7 @@ pub fn model_started(
     step: i64,
     max_steps: i64,
 ) {
-    let mut label = format!("waiting for {} · step {step}", sanitize(model));
+    let mut label = format!("thinking · {} · step {step}", sanitize(model));
     if max_steps > 0 {
         label.push_str(&format!(" of {max_steps}"));
     }
@@ -658,13 +658,9 @@ pub fn agents_refreshed(
     }
 }
 
-/// Tool started shows progress for an executing command.
+/// Tool started shows transient progress without adding browsing transcript lines.
 pub fn tool_started(region: Option<&crate::terminal::RegionHandle>, call: &Value) {
-    if text(call, "name") != "exec" {
-        return;
-    }
-    if let Some(region) = region {
-        let label = format!("running {}", activity::call_target(call));
+    if let (Some(region), Some(label)) = (region, activity::progress_label(call)) {
         let _ = region.lock().unwrap().set_progress(Some(&label));
     }
 }
@@ -724,7 +720,7 @@ pub fn retry_scheduled(
 /// Retry started shows the request following a backoff wait.
 pub fn retry_started(region: Option<&crate::terminal::RegionHandle>, attempt: i64) {
     if let Some(region) = region {
-        let label = format!("waiting for model · attempt {attempt}");
+        let label = format!("thinking · model · attempt {attempt}");
         let _ = region.lock().unwrap().set_progress(Some(&label));
     }
 }
@@ -951,7 +947,11 @@ pub fn result_in_region(
     }
     eprint!("{}", router_usage_note(&result["router_usage"], styled(2)));
     if chat && text(state, "blocked").is_empty() && yes(result, "resumable") {
-        let line = "  nothing was lost; your next message continues from the last completed step";
+        let line = if status == "cancelled" {
+            "  interrupted; inspect unknown effects before continuing"
+        } else {
+            "  nothing was lost; your next message continues from the last completed step"
+        };
         if styled(2) {
             eprintln!("{DIM}{line}{RESET}");
         } else {

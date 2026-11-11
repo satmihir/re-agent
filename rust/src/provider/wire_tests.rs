@@ -411,3 +411,304 @@ fn pooled_post_is_not_replayed_after_the_peer_receives_it() {
         std::io::ErrorKind::WouldBlock
     );
 }
+
+#[test]
+fn streamed_credentials_are_rejected_before_acceptance_or_trace_body_recording() {
+    const CHILD: &str = "REAGENT_TEST_SPLIT_CREDENTIAL_PROVIDER";
+    if let Ok(provider_name) = std::env::var(CHILD) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.jsonl");
+        let config = json!({"provider":provider_name,"auth_mode":"key"});
+        let mut provider = Provider::new(&config).unwrap();
+        let mut trace = crate::trace::Trace::new(Some(path.to_str().unwrap()), "session", "run");
+        let result =
+            provider.generate_traced(&json!({"model":"local-test","history":[]}), &mut trace);
+        if std::env::var("REAGENT_TEST_CREDENTIAL_EXPECT_ALLOWED").as_deref() == Ok("true") {
+            assert!(result.is_ok(), "{result:?}");
+            let recorded = std::fs::read_to_string(path).unwrap();
+            assert!(recorded.contains("response_body"));
+            return;
+        }
+        let error = result.unwrap_err();
+        assert_eq!(error.status, "provider_error");
+        assert_eq!(
+            error.message,
+            "provider stream contained credentials; response discarded"
+        );
+        let recorded = std::fs::read_to_string(path).unwrap();
+        for secret in [
+            "fixture-split-credential-7431",
+            "fixture-split-",
+            "credential-7431",
+        ] {
+            assert!(
+                !recorded.contains(secret),
+                "credential fragment was recorded"
+            );
+        }
+        let events: Vec<Value> = recorded
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2);
+        assert!(events[1]["data"]["response_body"].is_null());
+        assert_eq!(events[1]["data"]["error"], error.message);
+        if provider_name == "anthropic" {
+            let partial =
+                std::env::var("REAGENT_TEST_CREDENTIAL_PARTIAL_USAGE").as_deref() == Ok("true");
+            assert_eq!(error.usage["known"], !partial);
+            assert_eq!(error.usage["input_tokens"], 18);
+            assert_eq!(error.usage["cached_input_tokens"], 5);
+            assert_eq!(error.usage["output_tokens"], if partial { 1 } else { 12 });
+            assert_eq!(error.usage, provider.retry_usage());
+            assert_eq!(provider.transport.reported_retries, u64::from(!partial));
+            assert_eq!(
+                error.usage["unreported_attempts"].as_u64().unwrap_or(0),
+                u64::from(partial)
+            );
+            assert!(!format!("{error:?}").contains("fixture-split-"));
+            assert!(!format!("{error:?}").contains("credential-7431"));
+        }
+        return;
+    }
+
+    use std::io::Write;
+    for scenario in 0..9 {
+        let anthropic = !matches!(scenario, 0 | 6 | 8);
+        let mut events = if !anthropic {
+            vec![
+                json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"fixture-split-"}),
+                json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"credential-7431"}),
+                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","status":"completed","content":[{"type":"output_text","text":"fixture-split-"},{"type":"output_text","text":"credential-7431"}]}]}}),
+            ]
+        } else {
+            let tool = scenario == 2 || scenario == 5;
+            vec![
+                json!({"type":"message_start","message":{"content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":3,"cache_read_input_tokens":5,"output_tokens":1}}}),
+                json!({"type":"content_block_start","index":0,"content_block":if tool {json!({"type":"tool_use","id":"call","name":"exec","input":{}})} else {json!({"type":"text","text":""})}}),
+                json!({"type":"content_block_delta","index":0,"delta":if tool {json!({"type":"input_json_delta","partial_json":"{\"key\":\"fixture-split-"})} else {json!({"type":"text_delta","text":"fixture-split-"})}}),
+                json!({"type":"content_block_delta","index":0,"delta":if tool {json!({"type":"input_json_delta","partial_json":"credential-7431\"}"})} else {json!({"type":"text_delta","text":"credential-7431"})}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"message_delta","delta":{"stop_reason":if tool {"tool_use"} else {"end_turn"}},"usage":{"output_tokens":12}}),
+                json!({"type":"message_stop"}),
+            ]
+        };
+        if scenario == 3 {
+            events.truncate(4);
+        }
+        if matches!(scenario, 4 | 5 | 7) {
+            let tool = scenario == 5;
+            events.splice(3..3, [
+                json!({"type":"content_block_start","index":1,"content_block":if tool {json!({"type":"tool_use","id":"other","name":"exec","input":{}})} else {json!({"type":"text","text":""})}}),
+                json!({"type":"content_block_delta","index":1,"delta":if tool {json!({"type":"input_json_delta","partial_json":"{\"note\":\"unrelated\"}"})} else {json!({"type":"text_delta","text":"unrelated"})}}),
+                json!({"type":"content_block_stop","index":1}),
+            ]);
+        }
+        if matches!(scenario, 6 | 8) {
+            events.insert(1, json!({"type":"response.output_text.delta","output_index":0,"content_index":1,"delta":"unrelated"}));
+        }
+        let mut body = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+        if scenario >= 7 {
+            body = body
+                .replace("fixture-split-", "first")
+                .replace("credential-7431", "last");
+        }
+        let (endpoint, server) = crate::transport::http::tests::server(move |mut stream| {
+            stream.set_nonblocking(false).unwrap();
+            crate::transport::http::tests::request(&mut stream);
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "provider::wire_tests::streamed_credentials_are_rejected_before_acceptance_or_trace_body_recording", "--nocapture"])
+            .env(CHILD, if anthropic {"anthropic"} else {"openai"})
+            .env("REAGENT_TEST_CREDENTIAL_EXPECT_ALLOWED", (scenario >= 7).to_string())
+            .env("REAGENT_TEST_CREDENTIAL_PARTIAL_USAGE", (scenario == 3).to_string())
+            .env(if anthropic {"ANTHROPIC_API_KEY"} else {"OPENAI_API_KEY"}, "fixture-split-credential-7431")
+            .env(if anthropic {"REAGENT_ANTHROPIC_BASE_URL"} else {"REAGENT_OPENAI_BASE_URL"}, endpoint)
+            .output().unwrap();
+        server.join().unwrap();
+        assert!(
+            child.status.success(),
+            "scenario {scenario}: stdout={} stderr={}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+    }
+}
+
+#[test]
+fn anthropic_stream_failures_keep_usage_and_never_accept_truncated_tools() {
+    const CHILD: &str = "REAGENT_TEST_ANTHROPIC_FAILURE_USAGE";
+    if let Ok(scenario) = std::env::var(CHILD) {
+        let window = if scenario.ends_with("eof") {
+            0
+        } else {
+            2_000_000_000u64
+        };
+        let mut provider =
+            Provider::new(&json!({"provider":"anthropic", "model_retry_window":window})).unwrap();
+        let error = provider
+            .generate(&json!({"model":"claude-local", "history":[]}))
+            .unwrap_err();
+        let (status, known, output) = match scenario.as_str() {
+            "max_tokens" => ("incomplete_response", true, 29),
+            "malformed_tool" | "malformed_event" | "malformed_block" | "invalid_block_field" => {
+                ("protocol_error", true, 29)
+            }
+            "nontransient" | "final_eof" => ("provider_error", true, 29),
+            "partial_usage" | "early_eof" => ("provider_error", false, 1),
+            _ => panic!("unexpected scenario"),
+        };
+        assert_eq!(error.status, status, "{error:?}");
+        assert_eq!(
+            error.usage,
+            json!({"known":known,"input_tokens":18,"cached_input_tokens":5,"output_tokens":output,"reasoning_tokens":0})
+        );
+        assert_eq!(
+            provider
+                .drain_events()
+                .iter()
+                .filter(|event| event["event"] == "api.attempt.started")
+                .count(),
+            1
+        );
+        return;
+    }
+    use std::io::Write;
+    for scenario in [
+        "max_tokens",
+        "malformed_tool",
+        "malformed_event",
+        "malformed_block",
+        "invalid_block_field",
+        "nontransient",
+        "partial_usage",
+        "early_eof",
+        "final_eof",
+    ] {
+        let mut events = vec![
+            json!({"type":"message_start","message":{"content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":3,"cache_read_input_tokens":5,"output_tokens":1}}}),
+        ];
+        if matches!(scenario, "max_tokens" | "malformed_tool") {
+            events.extend([
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"exec","input":{}}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"argv\":[\"unfinished"}}),
+                json!({"type":"content_block_stop","index":0}),
+            ]);
+        }
+        if matches!(scenario, "malformed_block" | "invalid_block_field") {
+            let block = if scenario == "malformed_block" {
+                json!({"type":"unsupported_block"})
+            } else {
+                json!({"type":"text","text":123})
+            };
+            events.extend([
+                json!({"type":"content_block_start","index":0,"content_block":block}),
+                json!({"type":"content_block_stop","index":0}),
+            ]);
+        }
+        if !matches!(scenario, "partial_usage" | "early_eof") {
+            events.push(json!({"type":"message_delta","delta":{"stop_reason":if scenario == "max_tokens" {"max_tokens"} else {"tool_use"}},"usage":{"output_tokens":29}}));
+        }
+        match scenario {
+            "nontransient" | "partial_usage" => events.push(json!({"type":"error","error":{"type":"invalid_request_error","message":"not retryable"}})),
+            "malformed_event" => events.push(json!({"type":"not_a_messages_event"})),
+            "early_eof" | "final_eof" => {},
+            _ => events.push(json!({"type":"message_stop"})),
+        }
+        let body = events
+            .iter()
+            .map(|event| format!("data: {event}\r\n\r\n"))
+            .collect::<String>();
+        let (endpoint, server) = crate::transport::http::tests::server(move |mut stream| {
+            stream.set_nonblocking(false).unwrap();
+            crate::transport::http::tests::request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "provider::wire_tests::anthropic_stream_failures_keep_usage_and_never_accept_truncated_tools", "--nocapture"])
+            .env(CHILD, scenario)
+            .env("ANTHROPIC_API_KEY", "fixture-anthropic-key")
+            .env("REAGENT_ANTHROPIC_BASE_URL", endpoint)
+            .output().unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{scenario}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn many_tiny_anthropic_fragments_preserve_content_signatures_and_argument_bytes() {
+    let mut events = vec![
+        json!({"type":"message_start","message":{"content":[],"usage":{"input_tokens":7,"output_tokens":1}}}),
+    ];
+    for (index, kind, fields) in [
+        (0, "text", vec![("text", "text_delta", "é")]),
+        (
+            1,
+            "thinking",
+            vec![
+                ("thinking", "thinking_delta", "思"),
+                ("signature", "signature_delta", "/+"),
+            ],
+        ),
+    ] {
+        events.push(
+            json!({"type":"content_block_start","index":index,"content_block":{"type":kind}}),
+        );
+        for _ in 0..4096 {
+            for (field, delta, fragment) in &fields {
+                events.push(json!({"type":"content_block_delta","index":index,"delta":{"type":delta,*field:fragment}}));
+            }
+        }
+        events.push(json!({"type":"content_block_stop","index":index}));
+    }
+    events.push(json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call","name":"exec","input":{}}}));
+    let arguments = "{ \"n\":1.2300, \"s\":\"".to_owned() + &"x".repeat(4096) + "\" }";
+    for fragment in arguments.chars() {
+        events.push(json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":fragment.to_string()}}));
+    }
+    events.extend([
+        json!({"type":"content_block_stop","index":2}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1234}}),
+        json!({"type":"message_stop"}),
+    ]);
+    let raw = events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>();
+    let body = crate::anthropic::assemble(raw.as_bytes()).unwrap();
+    assert_eq!(
+        crate::raw::bytes(&body["content"][2]["input"]).unwrap(),
+        arguments.as_bytes()
+    );
+    let response = crate::anthropic::normalize(&crate::types::json_bytes(&body)).unwrap();
+    assert_eq!(response["blocks"][0]["text"], "é".repeat(4096));
+    let compact = String::from_utf8(crate::types::json_bytes(&crate::raw::new(
+        arguments.as_bytes(),
+    )))
+    .unwrap();
+    assert_eq!(response["blocks"][1]["call"]["arguments"], compact);
+    assert_eq!(response["usage"]["input_tokens"], 7);
+    assert_eq!(response["usage"]["output_tokens"], 1234);
+    let request = crate::anthropic::encode_request(
+        &json!({"history":[{"kind":"assistant","assistant":response}]}),
+    )
+    .unwrap();
+    let native = crate::raw::bytes(&request["messages"][0]["content"][1]).unwrap();
+    let thinking: Value = serde_json::from_slice(&native).unwrap();
+    assert_eq!(thinking["thinking"], "思".repeat(4096));
+    assert_eq!(thinking["signature"], "/+".repeat(4096));
+}

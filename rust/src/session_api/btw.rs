@@ -374,32 +374,15 @@ mod tests {
             api.ask("unsafe", b"latest").unwrap_err().code,
             "unsafe_context"
         );
-        assert_eq!(
-            api.send_message("next", b"continue", PlanMode::Keep)
-                .unwrap_err()
-                .code,
-            "blocked"
-        );
-        api.change_session(
-            "reset",
-            api.get_snapshot().unwrap().revision,
-            SessionChange::Reset,
-        )
-        .unwrap();
-        assert_eq!(
-            api.wait_command("reset").unwrap().state,
-            CommandState::Applied
-        );
-        let replacement = api.get_replacement().unwrap();
-        let next = replacement
+        let next = api
             .send_message("next", b"continue", PlanMode::Keep)
             .unwrap()
             .run
             .unwrap();
         assert_eq!(
-            replacement.wait_run(&next).unwrap().result.unwrap().reply,
+            api.wait_run(&next).unwrap().result.unwrap().reply,
             b"ordinary next message"
         );
-        replacement.close().unwrap();
+        api.close().unwrap();
     }
 }

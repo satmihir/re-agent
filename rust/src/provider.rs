@@ -212,14 +212,17 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
 }
 
 pub fn encode_request(config: &Value, request: &Value) -> Result<Value, String> {
-    if s(config, "provider") == "anthropic" {
-        crate::anthropic::encode_request(request)
+    let mut body = if s(config, "provider") == "anthropic" {
+        crate::anthropic::encode_request(request)?
     } else {
-        crate::openai::encode_request(
+        crate::openai::encode_live_request(
             request,
             config["proxied"].as_bool().unwrap_or(false) || s(config, "auth_mode") == "chatgpt",
-        )
-    }
+        )?
+    };
+    body["stream"] = json!(true);
+    crate::openai::check_size(&body)?;
+    Ok(body)
 }
 
 /// ScriptedCapture owns immutable responses at one source cursor.
@@ -417,8 +420,13 @@ impl Provider {
         let mut result = if status != 200 {
             Err(crate::transport::provider_error(status, &raw))
         } else if s(&self.config, "provider") == "anthropic" {
-            crate::anthropic::normalize(&raw)
-        } else if body["stream"] == true {
+            if crate::openai::stream_shaped(&raw) {
+                crate::anthropic::assemble(&raw)
+                    .and_then(|body| crate::anthropic::normalize(&crate::types::json_bytes(&body)))
+            } else {
+                crate::anthropic::normalize(&raw)
+            }
+        } else if body["stream"] == true && crate::openai::stream_shaped(&raw) {
             crate::openai::assemble(&raw)
                 .and_then(|b| crate::openai::normalize(&crate::types::json_bytes(&b)))
         } else {

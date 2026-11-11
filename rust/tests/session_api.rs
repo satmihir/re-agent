@@ -82,7 +82,7 @@ fn snapshots_and_targeted_cancellation_do_not_wait_for_an_executing_tool() {
         "write_file",
         json!({"path":"forbidden","content":"bad"}),
     ));
-    let (root, api) = open(json!([blocked]));
+    let (root, api) = open(json!([blocked, reply("followup completed")]));
     let active = api
         .send_message("active", b"task", PlanMode::Keep)
         .unwrap()
@@ -116,6 +116,7 @@ fn snapshots_and_targeted_cancellation_do_not_wait_for_an_executing_tool() {
         .result
         .unwrap();
     assert_eq!(stopped.status, "cancelled");
+    assert!(stopped.resumable);
     assert!(stopped.effects.iter().any(|e| e.effect == "unknown"));
     assert!(!root.path().join("forbidden").exists());
     assert_eq!(
@@ -125,6 +126,15 @@ fn snapshots_and_targeted_cancellation_do_not_wait_for_an_executing_tool() {
     assert_eq!(api.get_run(&queued).unwrap().steps, 0);
     assert!(api.get_snapshot().unwrap().live_runs.is_empty());
     assert!(!api.get_snapshot().unwrap().plan);
+    assert!(api.get_snapshot().unwrap().blocked.is_none());
+    let followup = api
+        .send_message("followup", b"inspect before retrying", PlanMode::Keep)
+        .unwrap()
+        .run
+        .unwrap();
+    completed(&api, &followup, "followup completed");
+    assert_eq!(std::fs::read(root.path().join("executions")).unwrap(), b"x");
+    assert!(!root.path().join("forbidden").exists());
     api.close().unwrap();
 }
 
