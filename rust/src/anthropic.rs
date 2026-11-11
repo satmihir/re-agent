@@ -96,17 +96,16 @@ pub fn encode_request(req: &Value) -> Result<Value, String> {
 }
 
 pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
-    let body = crate::provider::wire::decode(raw, &crate::provider::wire::ANTHROPIC_BODY)
-        .map_err(|_| error("protocol_error", "response is not valid JSON"))?;
-    let u = &body["usage"];
-    let mut usage = usage_zero(!u.is_null());
-    usage["input_tokens"] = json!(u["input_tokens"]
-        .as_i64()
-        .unwrap_or(0)
-        .wrapping_add(u["cache_creation_input_tokens"].as_i64().unwrap_or(0))
-        .wrapping_add(u["cache_read_input_tokens"].as_i64().unwrap_or(0)));
-    usage["cached_input_tokens"] = json!(u["cache_read_input_tokens"].as_i64().unwrap_or(0));
-    usage["output_tokens"] = json!(u["output_tokens"].as_i64().unwrap_or(0));
+    let body = crate::provider::wire::decode(raw, &crate::provider::wire::ANTHROPIC_BODY).map_err(
+        |_| {
+            let mut error = error("protocol_error", "response is not valid JSON");
+            if let Ok(body) = crate::provider::decode_json(raw) {
+                error.usage = usage(&body);
+            }
+            error
+        },
+    )?;
+    let usage = usage(&body);
     let fail = |status: &str, msg: String| ModelError {
         status: status.into(),
         message: msg,
@@ -132,7 +131,7 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
     let mut blocks = Vec::new();
     for (i, raw_block) in raw_content.iter().enumerate() {
         let b = crate::provider::wire::decode(raw_block, &crate::provider::wire::ANTHROPIC_BLOCK)
-            .map_err(|_| error("protocol_error", "content block is not valid JSON"))?;
+            .map_err(|_| fail("protocol_error", "content block is not valid JSON".into()))?;
         let b = &b;
         match s(b, "type") {
             "text" => blocks.push(crate::openai::text_block("text", s(b, "text"))),
@@ -146,9 +145,9 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
                 blocks.push(json!({"kind":"tool_call","call":{"call_id":s(b,"id"),"name":s(b,"name"),"arguments":arguments}}));
             }
             other => {
-                return Err(error(
+                return Err(fail(
                     "protocol_error",
-                    &format!("unsupported content block type {}", other),
+                    format!("unsupported content block type {}", other),
                 ))
             }
         }
@@ -187,9 +186,342 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
     Ok(response)
 }
 
+fn usage(body: &Value) -> Value {
+    let u = &body["usage"];
+    let mut usage = usage_zero(!u.is_null());
+    usage["input_tokens"] = json!(u["input_tokens"]
+        .as_i64()
+        .unwrap_or(0)
+        .wrapping_add(u["cache_creation_input_tokens"].as_i64().unwrap_or(0))
+        .wrapping_add(u["cache_read_input_tokens"].as_i64().unwrap_or(0)));
+    usage["cached_input_tokens"] = json!(u["cache_read_input_tokens"].as_i64().unwrap_or(0));
+    usage["output_tokens"] = json!(u["output_tokens"].as_i64().unwrap_or(0));
+    usage
+}
+
+/// Assemble validates a completed Messages stream before normalizing its reply.
+pub fn assemble(raw: &[u8]) -> Result<Value, ModelError> {
+    let mut message = Value::Null;
+    let mut blocks = Vec::new();
+    let mut arguments = std::collections::BTreeMap::<usize, String>::new();
+    let mut stopped = false;
+    let mut open = std::collections::BTreeSet::new();
+    let malformed = || error("protocol_error", "invalid Messages stream event");
+    let mut final_usage = false;
+    let result = (|| {
+        for data in crate::openai::stream_data(raw) {
+            let event: Value = serde_json::from_slice(&data).map_err(|_| malformed())?;
+            match s(&event, "type") {
+                "message_start" => {
+                    if !message.is_null() || !event["message"].is_object() {
+                        return Err(malformed());
+                    }
+                    message = event["message"].clone();
+                }
+                "content_block_start" => {
+                    let index = event["index"]
+                        .as_u64()
+                        .and_then(|index| usize::try_from(index).ok())
+                        .ok_or_else(malformed)?;
+                    if index != blocks.len() || !event["content_block"].is_object() {
+                        return Err(malformed());
+                    }
+                    if !message.is_object() {
+                        return Err(malformed());
+                    }
+                    open.insert(index);
+                    blocks.push(event["content_block"].clone());
+                }
+                "content_block_delta" => {
+                    let index = event["index"]
+                        .as_u64()
+                        .and_then(|index| usize::try_from(index).ok())
+                        .ok_or_else(malformed)?;
+                    let block = blocks.get_mut(index).ok_or_else(malformed)?;
+                    if !open.contains(&index) {
+                        return Err(malformed());
+                    }
+                    let delta = &event["delta"];
+                    let field = match s(delta, "type") {
+                        "text_delta" => "text",
+                        "thinking_delta" => "thinking",
+                        "signature_delta" => "signature",
+                        "input_json_delta" => {
+                            if s(block, "type") != "tool_use" {
+                                return Err(malformed());
+                            }
+                            arguments
+                                .entry(index)
+                                .or_default()
+                                .push_str(delta["partial_json"].as_str().ok_or_else(malformed)?);
+                            continue;
+                        }
+                        _ => return Err(malformed()),
+                    };
+                    let expected = match field {
+                        "text" => "text",
+                        _ => "thinking",
+                    };
+                    if s(block, "type") != expected {
+                        return Err(malformed());
+                    }
+                    if block[field].is_null() {
+                        block[field] = json!("");
+                    }
+                    let Value::String(text) = &mut block[field] else {
+                        return Err(malformed());
+                    };
+                    text.push_str(delta[field].as_str().ok_or_else(malformed)?);
+                }
+                "content_block_stop" => {
+                    let index = event["index"]
+                        .as_u64()
+                        .and_then(|index| usize::try_from(index).ok())
+                        .ok_or_else(malformed)?;
+                    if !open.remove(&index) {
+                        return Err(malformed());
+                    }
+                }
+                "message_delta" => {
+                    if !message.is_object() {
+                        return Err(malformed());
+                    }
+                    for (key, value) in event["delta"].as_object().ok_or_else(malformed)? {
+                        message[key] = value.clone();
+                    }
+                    if let Some(usage) = event["usage"].as_object() {
+                        final_usage |= usage.get("output_tokens").and_then(Value::as_i64).is_some()
+                            && !s(&message, "stop_reason").is_empty();
+                        for (key, value) in usage {
+                            if !message["usage"].is_object() {
+                                message["usage"] = json!({});
+                            }
+                            message["usage"][key] = value.clone();
+                        }
+                    }
+                }
+                "message_stop" => {
+                    stopped = true;
+                    break;
+                }
+                "error" => {
+                    return Err(error(
+                        "provider_error",
+                        &format!(
+                            "provider reported a stream error: {}",
+                            s(&event["error"], "message")
+                        ),
+                    ));
+                }
+                "ping" => {}
+                _ => return Err(malformed()),
+            }
+        }
+        if s(&message, "stop_reason") == "max_tokens" {
+            return Err(error(
+                "incomplete_response",
+                "provider returned an incomplete response: max_tokens",
+            ));
+        }
+        if !stopped || !message.is_object() || !open.is_empty() {
+            return Err(error(
+                "provider_error",
+                "stream ended before the message completed",
+            ));
+        }
+        for (index, input) in arguments {
+            crate::provider::decode_json(input.as_bytes()).map_err(|_| malformed())?;
+            blocks[index]["input"] = crate::raw::new(input.as_bytes());
+        }
+        message["content"] = json!(blocks);
+        Ok(())
+    })();
+    result.map_err(|mut error| {
+        error.usage = usage(&message);
+        error.usage["known"] =
+            json!(final_usage && message["usage"]["input_tokens"].as_i64().is_some());
+        error
+    })?;
+    Ok(message)
+}
+
+/// Transient classifies retryable Messages failures without accepting partial replies.
+pub(crate) fn transient(raw: &[u8]) -> (String, Value) {
+    let failure = match assemble(raw) {
+        Ok(body) => return (String::new(), usage(&body)),
+        Err(failure) => failure,
+    };
+    if failure.status != "provider_error" {
+        return (String::new(), failure.usage);
+    }
+    for data in crate::openai::stream_data(raw) {
+        let Ok(event) = serde_json::from_slice::<Value>(&data) else {
+            break;
+        };
+        if s(&event, "type") == "message_stop" || s(&event["delta"], "stop_reason") == "max_tokens"
+        {
+            return (String::new(), failure.usage);
+        }
+        if s(&event, "type") == "error" {
+            if matches!(
+                s(&event["error"], "type"),
+                "overloaded_error" | "rate_limit_error" | "api_error"
+            ) {
+                return ("provider stream overload".into(), failure.usage);
+            }
+            break;
+        }
+    }
+    (
+        if failure.message == "stream ended before the message completed" {
+            "stream ended early".into()
+        } else {
+            String::new()
+        },
+        failure.usage,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_stream_preserves_thinking_tool_input_and_usage_for_continuation() {
+        let events = [
+            json!({"type":"message_start","message":{"id":"m","model":"claude","content":[],"usage":{"input_tokens":12,"output_tokens":1,"cache_read_input_tokens":4}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"private"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello\nworld"}}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call","name":"read_file","input":{}}}),
+            json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a\",\"n\":1.2300}"}}),
+            json!({"type":"content_block_stop","index":2}),
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}),
+            json!({"type":"message_stop"}),
+        ];
+        let raw = events
+            .iter()
+            .map(|event| format!("data: {event}\r\n\r\n"))
+            .collect::<String>();
+        let body = assemble(raw.as_bytes()).unwrap();
+        let response = normalize(&crate::types::json_bytes(&body)).unwrap();
+        assert_eq!(response["blocks"][0]["text"], "hello\nworld");
+        assert_eq!(response["usage"]["output_tokens"], 20);
+        assert_eq!(response["usage"]["input_tokens"], 16);
+        let request = encode_request(
+            &json!({"model":"claude","history":[{"kind":"assistant","assistant":response}]}),
+        )
+        .unwrap();
+        let native = &request["messages"][0]["content"];
+        assert!(crate::types::json_string(native).contains("signed"));
+        let encoded = String::from_utf8(crate::types::json_bytes(native)).unwrap();
+        assert!(encoded.contains("1.2300"), "{encoded}");
+        let cutoff = raw.rfind("data:").unwrap();
+        assert_eq!(
+            assemble(&raw.as_bytes()[..cutoff]).unwrap_err().status,
+            "provider_error"
+        );
+        let failed = raw[..cutoff].to_owned()
+            + "data: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n\n";
+        assert!(assemble(failed.as_bytes())
+            .unwrap_err()
+            .message
+            .contains("overloaded"));
+    }
+
+    #[test]
+    fn malformed_and_errored_streams_never_produce_an_accepted_message() {
+        let start = json!({"type":"message_start","message":{"content":[]}});
+        let block = json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}});
+        let stop = json!({"type":"message_stop"});
+        for (events, status) in [
+            (vec![stop.clone()], "provider_error"),
+            (vec![start.clone(), start.clone()], "protocol_error"),
+            (vec![block.clone()], "protocol_error"),
+            (
+                vec![start.clone(), block.clone(), stop.clone()],
+                "provider_error",
+            ),
+            (
+                vec![
+                    start.clone(),
+                    json!({"type":"content_block_start","index":u64::MAX,"content_block":{"type":"text"}}),
+                ],
+                "protocol_error",
+            ),
+            (
+                vec![
+                    start.clone(),
+                    block.clone(),
+                    json!({"type":"content_block_delta","index":u64::MAX,"delta":{"type":"text_delta","text":"x"}}),
+                ],
+                "protocol_error",
+            ),
+            (
+                vec![
+                    start.clone(),
+                    block.clone(),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":42}}),
+                ],
+                "protocol_error",
+            ),
+            (
+                vec![
+                    start.clone(),
+                    block.clone(),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}),
+                ],
+                "protocol_error",
+            ),
+            (
+                vec![
+                    start.clone(),
+                    block.clone(),
+                    json!({"type":"content_block_stop","index":0}),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"late"}}),
+                ],
+                "protocol_error",
+            ),
+            (
+                vec![
+                    start.clone(),
+                    json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"f","input":{}}}),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}),
+                    json!({"type":"content_block_stop","index":0}),
+                    json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}),
+                    stop.clone(),
+                ],
+                "protocol_error",
+            ),
+            (
+                vec![
+                    start.clone(),
+                    block.clone(),
+                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"speculative"}}),
+                    json!({"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}),
+                ],
+                "provider_error",
+            ),
+        ] {
+            let raw = events
+                .iter()
+                .map(|event| format!("data: {event}\n\n"))
+                .collect::<String>();
+            assert_eq!(
+                assemble(raw.as_bytes()).unwrap_err().status,
+                status,
+                "{raw}"
+            );
+        }
+        assert_eq!(
+            assemble(b"data: {invalid}\n\n").unwrap_err().status,
+            "protocol_error"
+        );
+    }
+
     #[test]
     fn tool_results_precede_following_user_parts_and_keep_inherited_markers() {
         let native = crate::raw::new(

@@ -79,7 +79,7 @@ fn help() -> String {
     for (name, arg, description) in COMMANDS {
         out.push_str(&format!("  {name:<9} {arg:<18} {description}\n"));
     }
-    out.push_str("keys\n  Enter            send\n  !COMMAND         run COMMAND in the workspace; its output joins the conversation\n  \\ at line end    continue on the next line\n  ↑ ↓              earlier messages\n  Tab              complete a command, model, or effort\n  /model /effort   picker: ↑↓/kj move, Enter/1–9 choose, Esc/q/Ctrl-C/Ctrl-D cancel\n  Ctrl-C           cancel the running turn, or clear the line; twice to exit\n  Ctrl-L           clear the screen\n  Ctrl-A Ctrl-E    start or end of line\n  Ctrl-U Ctrl-K    erase to start or end of line\n  Ctrl-W           erase the previous word\nPasted text is sent as one message, however many lines it has.");
+    out.push_str("keys\n  Enter            send\n  !COMMAND         run COMMAND in the workspace; its output joins the conversation\n  \\ at line end    continue on the next line\n  ↑ ↓              earlier messages\n  Tab              complete a command, model, or effort\n  /model /effort   picker: ↑↓/kj move, Enter/1–9 choose, Esc/q/Ctrl-C/Ctrl-D cancel\n  Esc              cancel the running turn\n  Ctrl-C           cancel the running turn, or clear the line; twice to exit\n  Ctrl-L           clear the screen\n  Ctrl-A Ctrl-E    start or end of line\n  Ctrl-U Ctrl-K    erase to start or end of line\n  Ctrl-W           erase the previous word\nPasted text is sent as one message, however many lines it has.");
     out
 }
 

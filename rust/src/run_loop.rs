@@ -862,6 +862,11 @@ impl Session {
         }
     }
     pub(crate) fn finish(&mut self, status: &str, reason: &str, reply: &str) -> Value {
+        // Human interruption ends the Run, not its Session. Uncertain child Sessions
+        // still require reset before their parent can send more work.
+        if status == "cancelled" && !flag(&self.config["agent"]) {
+            self.state["resumable"] = json!(true);
+        }
         crate::session_api::steering::finish(self, reason);
         if flag(&self.config["agents"]) && !matches!(status, "completed" | "refused") {
             crate::agents::stop(self, false);
@@ -2471,15 +2476,42 @@ mod boundary_tests {
     }
     #[test]
     fn cancelling_exec_stops_the_accepted_batch_without_running_later_writes() {
+        const CHILD: &str = "REAGENT_INTERRUPTED_TOOL_TEST";
+        let Ok(mode) = std::env::var(CHILD) else {
+            for mode in ["live", "resumed", "child"] {
+                let root = tempfile::tempdir().unwrap();
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "run_loop::boundary_tests::cancelling_exec_stops_the_accepted_batch_without_running_later_writes", "--nocapture"])
+                    .env(CHILD, mode)
+                    .env("XDG_CACHE_HOME", root.path().join("cache"))
+                    .env("HOME", root.path())
+                    .output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
         let mut session = scripted(
             &dir,
-            json!([{"blocks":[
-                {"kind":"tool_call","call":{"call_id":"exec","name":"exec","arguments":"{\"argv\":[\"sh\",\"-c\",\"printf ready > started; sleep 2\"],\"cwd\":\".\"}"}},
-                {"kind":"tool_call","call":{"call_id":"write","name":"write_file","arguments":"{\"path\":\"must-not-exist\",\"content\":\"bad\"}"}}
-            ]}]),
-            json!({}),
+            json!([
+                {"blocks":[
+                    {"kind":"tool_call","call":{"call_id":"exec","name":"exec","arguments":"{\"argv\":[\"sh\",\"-c\",\"printf ready > started; exec sleep 10\"],\"cwd\":\".\"}"}},
+                    {"kind":"tool_call","call":{"call_id":"write","name":"write_file","arguments":"{\"path\":\"must-not-exist\",\"content\":\"bad\"}"}}
+                ]},
+                {"blocks":[{"kind":"text","text":"followup completed"}]}
+            ]),
+            json!({"agent":mode == "child"}),
         );
+        let script = session.config["scripted"].clone();
+        if mode == "resumed" {
+            session.config["checkpoint_enabled"] = json!(true);
+            session.config["scripted"] = json!("");
+        }
         let config = session.config.clone();
         let started = dir.path().join("started");
         let worker = std::thread::spawn(move || {
@@ -2504,6 +2536,58 @@ mod boundary_tests {
             "not_executed"
         );
         assert!(!dir.path().join("must-not-exist").exists());
+        if mode == "child" {
+            assert_eq!(session.state["blocked"], "cancelled");
+            assert_ne!(result["resumable"], true);
+            return;
+        }
+        assert_eq!(result["resumable"], true);
+        assert_eq!(session.state["blocked"], "");
+        assert!(result["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|effect| effect["effect"] == "unknown"));
+        let interrupted_history = session.history.clone();
+        let id = string(&session.state["session_id"]).to_owned();
+        if mode == "resumed" {
+            crate::checkpoint::close(&id);
+            let saved = crate::checkpoint::load(&id).unwrap();
+            let mut config = saved["config"].clone();
+            config["scripted"] = script;
+            let mut resumed = Session::new(config).unwrap();
+            resumed.provider = session.provider;
+            resumed.state = saved["state"].clone();
+            resumed.history = saved["history"].as_array().unwrap().clone();
+            assert!(crate::checkpoint::recover(&mut resumed).unwrap().is_empty());
+            assert_eq!(resumed.state["blocked"], "");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&types::json_bytes(&json!(resumed.history)))
+                    .unwrap(),
+                json!(interrupted_history)
+            );
+            session = resumed;
+        }
+        crate::cancellation::begin(&session.config);
+        let followup = session.submit("inspect the interrupted effects without retrying");
+        assert_eq!(followup["status"], "completed", "{followup}");
+        assert_eq!(followup["reply"], "followup completed");
+        let request = std::fs::read_to_string(string(&followup["trace_path"]))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|event| event["type"] == "model.requested")
+            .unwrap();
+        assert_eq!(
+            &request["data"]["history"].as_array().unwrap()[..interrupted_history.len()],
+            interrupted_history.as_slice()
+        );
+        assert!(request["data"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Do not repeat an operation merely because its effects are uncertain."));
+        assert!(!dir.path().join("must-not-exist").exists());
+        crate::checkpoint::close(&id);
     }
     #[test]
     fn session_binds_provider_cancellation_to_the_current_session_identity() {

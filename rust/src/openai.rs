@@ -90,6 +90,15 @@ pub fn cache_key(req: &Value) -> String {
 }
 
 pub fn encode_request(req: &Value, stream: bool) -> Result<Value, String> {
+    encode(req, stream, stream)
+}
+
+/// Encode live request enables streaming without changing proxy-specific fields.
+pub(crate) fn encode_live_request(req: &Value, proxied: bool) -> Result<Value, String> {
+    encode(req, proxied, true)
+}
+
+fn encode(req: &Value, proxied: bool, stream: bool) -> Result<Value, String> {
     let mut input = Vec::new();
     for entry in array(req, "history") {
         match s(entry,"kind") {
@@ -122,7 +131,7 @@ pub fn encode_request(req: &Value, stream: bool) -> Result<Value, String> {
     ] {
         body[k] = v;
     }
-    if !stream {
+    if !proxied {
         body["truncation"] = json!("disabled");
     }
     body["stream"] = json!(stream);

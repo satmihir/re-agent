@@ -127,6 +127,12 @@ pub struct Region {
     pub(super) status: Status,
     pub(super) queued: bool,
     progress: Option<Progress>,
+    stream_text: String,
+    stream_rows: Vec<String>,
+    stream_columns: usize,
+    stream_color: bool,
+    #[cfg(test)]
+    stream_layouts: usize,
     buffer: Vec<char>,
     caret: usize,
     prefix: String,
@@ -146,12 +152,16 @@ struct Progress {
     started: Instant,
     ticked: Instant,
     frame: usize,
+    output_tokens: Option<usize>,
 }
 
 impl Progress {
     fn text(&self, columns: usize, color: bool) -> String {
         let frames: Vec<_> = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".chars().collect();
         let mut text = format!("{} {}", frames[self.frame % frames.len()], self.label);
+        if let Some(tokens) = self.output_tokens {
+            text.push_str(&format!(" · ~{tokens} output tokens"));
+        }
         let elapsed = self.started.elapsed();
         if elapsed >= Duration::from_secs(1) {
             let elapsed = if elapsed.as_secs() < 60 {
@@ -184,7 +194,7 @@ fn emit_line(prefix: &str, line: &[u8], suffix: &str) -> io::Result<()> {
 
 impl Region {
     /// New creates an inactive pane for the controlling terminal.
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             width: 0,
             height: 0,
@@ -193,6 +203,12 @@ impl Region {
             status: Status::default(),
             queued: false,
             progress: None,
+            stream_text: String::new(),
+            stream_rows: Vec::new(),
+            stream_columns: 0,
+            stream_color: false,
+            #[cfg(test)]
+            stream_layouts: 0,
             buffer: Vec::new(),
             caret: 0,
             prefix: String::new(),
@@ -288,10 +304,43 @@ impl Region {
             rows.insert(0, self.rule());
             rows.push(self.rule());
             rows.push(self.status.row(columns, self.color));
-            if let Some(progress) = &self.progress {
-                let text = progress.text(columns.saturating_sub(2), self.color);
-                rows.push(format!("  {}", truncate(&text, columns - 2)));
+            if self.stream_columns != columns || self.stream_color != self.color {
+                #[cfg(test)]
+                {
+                    self.stream_layouts += 1;
+                }
+                self.stream_rows.clear();
+                if !self.stream_text.is_empty() {
+                    let preview = crate::render::display(
+                        &self.stream_text,
+                        self.color,
+                        columns.saturating_sub(1),
+                    );
+                    for line in preview.split('\n') {
+                        self.stream_rows.extend(crate::render::wrap(
+                            "",
+                            "",
+                            line,
+                            columns.saturating_sub(1),
+                        ));
+                    }
+                }
+                self.stream_columns = columns;
+                self.stream_color = self.color;
             }
+            // Copy only visible cached rows on draft, spinner, and height-only redraws.
+            let limit = height.saturating_sub(rows.len() + 2);
+            let preview_limit = limit.saturating_sub(usize::from(self.progress.is_some()));
+            let start = self.stream_rows.len().saturating_sub(preview_limit);
+            let mut above = self.stream_rows[start..].to_vec();
+            if limit > 0 {
+                if let Some(progress) = &self.progress {
+                    above.push(progress.text(columns, self.color));
+                }
+            }
+            row += above.len();
+            above.extend(rows);
+            rows = above;
             if self.queued {
                 rows.push("  queued".into());
             }
@@ -363,12 +412,53 @@ impl Region {
         if label.is_none() && self.progress.is_none() {
             return Ok(());
         }
+        self.stream_text.clear();
+        self.stream_rows.clear();
+        self.stream_columns = 0;
         self.progress = label.map(|label| Progress {
             label: label.into(),
             started: Instant::now(),
             ticked: Instant::now(),
             frame: 0,
+            output_tokens: label.starts_with("thinking").then_some(0),
         });
+        self.repaint()
+    }
+
+    /// Stream progress updates counters and optionally replaces the bounded complete-line preview.
+    pub(crate) fn stream_progress(
+        &mut self,
+        writing: bool,
+        tokens: usize,
+        text: Option<&str>,
+    ) -> io::Result<()> {
+        if let Some(progress) = &mut self.progress {
+            let suffix = progress
+                .label
+                .split_once(" · ")
+                .map_or("", |(_, suffix)| suffix);
+            progress.label = format!(
+                "{} · {suffix}",
+                if writing { "writing" } else { "thinking" }
+            );
+            progress.output_tokens = Some(tokens);
+        }
+        if let Some(text) = text {
+            self.stream_text.clear();
+            self.stream_text.push_str(text);
+            self.stream_columns = 0;
+        }
+        self.repaint()
+    }
+
+    /// Clear stream removes speculative text after completion, failure, or cancellation.
+    pub(crate) fn clear_stream(&mut self) -> io::Result<()> {
+        if self.stream_text.is_empty() {
+            return Ok(());
+        }
+        self.stream_text.clear();
+        self.stream_rows.clear();
+        self.stream_columns = 0;
         self.repaint()
     }
 
@@ -631,6 +721,119 @@ mod tests {
     }
 
     #[test]
+    fn preview_layout_is_reused_for_drafts_ticks_and_height_only_resizes() {
+        let mut region = Region::new();
+        region.color = true;
+        let draft: Vec<_> = "next question".chars().collect();
+        region.input(&draft, 3, "", 80, 24).unwrap();
+        region.set_progress(Some("thinking · model")).unwrap();
+        let text = format!(
+            "```\n{}\n```\n# outside",
+            "**literal** code line\n".repeat(128)
+        );
+        region.stream_progress(true, 1000, Some(&text)).unwrap();
+        let layouts = region.stream_layouts;
+        assert!(region.stream_rows[1].contains("\x1b[36m**literal** code line"));
+        assert!(region
+            .stream_rows
+            .last()
+            .unwrap()
+            .contains("\x1b[1moutside"));
+        assert!(region.visible.len() < 24);
+        region.stream_progress(true, 1001, None).unwrap();
+        region.progress.as_mut().unwrap().ticked = Instant::now() - Duration::from_millis(101);
+        assert!(region.tick_progress());
+        region.repaint().unwrap();
+        region.input(&draft, 7, "", 80, 30).unwrap();
+        assert_eq!(region.stream_layouts, layouts);
+        assert_eq!(region.buffer, draft);
+        assert_eq!(region.caret, 7);
+        assert_eq!(region.stream_text, text);
+        region.input(&draft, 7, "", 30, 20).unwrap();
+        assert_eq!(region.stream_layouts, layouts + 1);
+        assert_eq!(region.stream_columns, 30);
+        assert_eq!(region.buffer, draft);
+        assert_eq!(region.caret, 7);
+        assert!(region.visible.len() < 20);
+        region.clear_stream().unwrap();
+        assert!(region.stream_rows.is_empty());
+        assert_eq!(region.buffer, draft);
+        assert_eq!(region.caret, 7);
+    }
+
+    #[test]
+    fn streamed_lines_remain_speculative_above_the_frame_and_preserve_the_draft() {
+        let mut region = Region::new();
+        region.color = false;
+        let draft: Vec<_> = "next question".chars().collect();
+        region.input(&draft, 3, "", 80, 24).unwrap();
+        region
+            .set_progress(Some("thinking · model · step 1"))
+            .unwrap();
+        let started = region.progress.as_ref().unwrap().started;
+        region
+            .stream_progress(true, 12, Some("First live line.\nSecond live line."))
+            .unwrap();
+        assert_eq!(region.visible[0], "First live line.");
+        assert_eq!(region.visible[1], "Second live line.");
+        assert!(region.visible[2].contains("writing · model · step 1 · ~12 output tokens"));
+        assert!(region.visible[3].starts_with('─'));
+        assert_eq!(region.progress.as_ref().unwrap().started, started);
+        assert_eq!(region.buffer, draft);
+        assert_eq!(region.caret, 3);
+        assert!(region.pending.is_empty());
+        assert!(!region.printed);
+        region.clear_stream().unwrap();
+        assert!(!region.visible.iter().any(|line| line.contains("live line")));
+        region
+            .set_progress(Some("thinking · model · attempt 2"))
+            .unwrap();
+        assert_eq!(region.progress.as_ref().unwrap().output_tokens, Some(0));
+        region.stream_progress(false, 5, None).unwrap();
+        assert!(region.visible[0].contains("thinking"));
+        assert!(!region.visible[0].contains("writing"));
+        region.set_progress(None).unwrap();
+        assert!(region.visible[0].starts_with('─'));
+    }
+
+    #[test]
+    fn browsing_progress_is_transient_and_accepts_multi_path_searches() {
+        let region = Arc::new(Mutex::new(Region::new()));
+        for (name, arguments, expected) in [
+            (
+                "read_file",
+                serde_json::json!({"path":"src/a.rs"}),
+                "reading src/a.rs",
+            ),
+            (
+                "list_files",
+                serde_json::json!({"path":"src"}),
+                "listing src",
+            ),
+            (
+                "search_text",
+                serde_json::json!({"paths":["src", "tests"], "query":"needle"}),
+                "searching \"needle\" in src, tests",
+            ),
+            (
+                "exec",
+                serde_json::json!({"argv":["cargo", "test"]}),
+                "running cargo test",
+            ),
+        ] {
+            crate::render::tool_started(
+                Some(&region),
+                &serde_json::json!({"name":name,"arguments":arguments.to_string()}),
+            );
+            let pane = region.lock().unwrap();
+            assert_eq!(pane.progress.as_ref().unwrap().label, expected);
+            assert!(!pane.printed);
+        }
+        crate::render::model_finished(Some(&region));
+        assert!(region.lock().unwrap().progress.is_none());
+    }
+
+    #[test]
     fn progress_reserves_caret_cell_and_uses_elapsed_only_after_one_second() {
         let now = Instant::now();
         let mut progress = Progress {
@@ -638,6 +841,7 @@ mod tests {
             started: now,
             ticked: now,
             frame: 0,
+            output_tokens: None,
         };
         assert_eq!(progress.text(80, false), "⠋ waiting for model · step 1");
         assert_eq!(progress.text(10, false), "⠋ waitin…");

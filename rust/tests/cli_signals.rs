@@ -475,7 +475,10 @@ fn pty_turn_cancellation_discards_queued_text_before_next_request() {
     let output = String::from_utf8_lossy(&pty.raw);
     assert!(output.contains("cancelled"));
     assert_cancelled_trace_restore(&output);
-    assert!(output.contains("\x1b[2m  nothing was lost; your next message continues from the last completed step\x1b[0m"), "{output}");
+    assert!(
+        output.contains("\x1b[2m  interrupted; inspect unknown effects before continuing\x1b[0m"),
+        "{output}"
+    );
     let trace = output.find("trace: ").unwrap();
     let prompt = output[..trace].rfind("❯ ").unwrap();
     assert!(
@@ -814,7 +817,7 @@ fn pty_idle_interrupt_hint_is_dim_and_clear_keeps_the_fresh_editor() {
 }
 
 #[test]
-fn pty_exec_cancellation_prints_trace_before_changing_the_prompt_status() {
+fn pty_exec_cancellation_prints_trace_and_accepts_followup_without_reset() {
     let directory = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -845,13 +848,19 @@ fn pty_exec_cancellation_prints_trace_before_changing_the_prompt_status() {
     assert!(output[prompt..trace].starts_with("❯ \r\n"), "{output}");
     assert!(!output[..trace].contains("(blocked) ❯"), "{output}");
     assert_cancelled_trace_restore(&output);
-    assert!(output[trace..].contains("(blocked) ❯"), "{output}");
-    pty.send(b"/reset\r");
-    pty.wait(b"\x1b[?2004h");
+    assert!(!output[trace..].contains("(blocked) ❯"), "{output}");
+    assert!(output.contains("effects are unknown"), "{output}");
+    assert!(
+        output.contains("interrupted; inspect unknown effects before continuing"),
+        "{output}"
+    );
+    assert!(!output.contains("nothing was lost"), "{output}");
     pty.send(b"after cancelled command\r");
     let (mut stream, body) = pty.request(&listener);
     assert!(
-        body.to_string().contains("after cancelled command"),
+        body.to_string().contains("after cancelled command")
+            && body.to_string().contains("cancelled")
+            && body.to_string().contains("unknown"),
         "{body}"
     );
     respond(&mut stream, false);

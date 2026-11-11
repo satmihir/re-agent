@@ -284,7 +284,7 @@ impl TurnInput {
         columns: usize,
         prompt: &str,
     ) -> Option<&'static str> {
-        if *key == Key::Name("interrupt") {
+        if matches!(key, Key::Name("interrupt" | "escape")) {
             return Some("interrupt");
         }
         if self.queued.is_some() || self.exit {
@@ -502,6 +502,27 @@ mod tests {
         assert_eq!(history, vec!["second\\", "line"]);
         assert_eq!(actions, vec!["interrupt"]);
         assert!(!turn.exit);
+    }
+
+    #[test]
+    fn escape_and_ctrl_c_interrupt_running_turns_without_losing_drafts_or_queued_text() {
+        for queued in [false, true] {
+            for bytes in [b"\x03".as_slice(), b"\x1b".as_slice()] {
+                let mut turn = TurnInput::default();
+                turn.editor.replace("draft");
+                let mut history = Vec::new();
+                if queued {
+                    turn.apply(&Key::Name("enter"), &mut history, 80, "❯ ");
+                }
+                let mut decoder = Decoder::default();
+                decoder.feed(bytes);
+                let key = decoder.next().or_else(|| decoder.escape()).unwrap();
+                assert_eq!(turn.apply(&key, &mut history, 80, "❯ "), Some("interrupt"));
+                assert_eq!(turn.editor.value(), "draft");
+                assert_eq!(turn.queued.as_deref(), queued.then_some("draft"));
+                assert!(!turn.exit);
+            }
+        }
     }
 
     #[test]
