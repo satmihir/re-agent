@@ -690,6 +690,7 @@ SCENARIOS = {
             ("idle", 0.4),
             ("key", "enter"),
             ("wait", "got it", 5),
+            ("wait_status", "scripted / low", 5),
             ("show", "after a pasted two-line message"),
             ("expect", "screen_has", "❯ line one"),
             ("expect", "screen_has", "  line two"),
