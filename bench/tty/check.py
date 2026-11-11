@@ -41,6 +41,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vt import Terminal  # noqa: E402
 
 RULE = "─"
+WRITING_PHRASE_PATTERN = "(?:" + "|".join(re.escape(phrase) for phrase in (
+    "Transmuting caffeine into questionable code…",
+    "Pouring unstable compounds into production…",
+    "Writing equations the universe hasn't approved…",
+    "Adding another ingredient to the primordial soup…",
+    "Documenting the explosion as an expected result…",
+)) + ")"
 
 
 def reply(text):
@@ -979,9 +986,11 @@ SCENARIOS = {
             ("expect", "status_row_last"),
             ("type", "/status"), ("key", "enter"),
             ("wait", "20 in (6 cached) · 10 out", 5),
+            ("wait_status", "scripted / low", 5),
             ("show", "Full usage remains available in /status"),
             ("expect", "all_lines", ["session    1 turn · 20 in (6 cached) · 10 out",
                                       "last run   completed · 2 steps · 1 tool call · 20 in (6 cached) · 10 out"]),
+            ("key", "ctrl-d"), ("exit", 0, "", 5),
         ],
     },
     "markdown-progress": {
@@ -1238,21 +1247,22 @@ SCENARIOS = {
         "steps": [
             ("wait_status", "gpt-6.1-sol", 5),
             ("type", "hold the model open"), ("key", "enter"),
-            ("wait", "thinking through the mix", 5),
-            ("expect", "indicator", "thinking through the mix"),
+            ("wait", "Distilling thoughts…", 5),
+            ("expect", "indicator", "Distilling thoughts…"),
             ("expect", "indicator_style"),
             ("show", "A bubble and flask sit above the input, with elapsed time and output estimate"),
             ("animate", 2),
-            ("wait", "following the thread", 5),
-            ("expect", "indicator", "following the thread"),
+            ("wait", "Attempting to turn tokens into gold…", 5),
+            ("expect", "indicator", "Attempting to turn tokens into gold…"),
             ("type", "draft stays editable"),
             ("resize", 28, 80), ("wait_regex", "^─{80}$", 5),
             ("expect", "screen_has", "❯ draft stays editable"),
             ("show", "A held model rotates phrases and animates without losing the draft on resize"),
             ("release", "advance"),
             ("wait", "First live line.", 5),
-            ("wait_regex", "^[·∘°]⚗ (writing the next line|putting ideas on the page|bringing it together)", 5),
+            ("wait_regex", "^[·∘°]⚗ " + WRITING_PHRASE_PATTERN, 5),
             ("expect", "indicator", "writing"),
+            ("show", "An alchemy writing phrase replaces thinking beside the flask during the held reply"),
             ("release", "finish"), ("wait", "Final tail.", 5),
             ("wait_status", "gpt-6.1-sol", 5), ("wait_absent", "⚗", 5),
             ("expect", "screen_lacks", "⚗"),
@@ -1341,10 +1351,10 @@ SCENARIOS = {
         "steps": [
             ("wait_status", "gpt-6.1-sol", 5),
             ("type", "stream a reply"), ("key", "enter"),
-            ("wait", "thinking", 5),
+            ("wait", "Distilling thoughts…", 5),
             ("show", "The stream is thinking, before any visible reply"),
             ("release", "advance"),
-            ("wait", "First live line.", 5), ("wait", "writing", 5),
+            ("wait", "First live line.", 5), ("wait_regex", "^[·∘°]⚗ " + WRITING_PHRASE_PATTERN, 5),
             ("expect", "screen_lacks", "Final tail."),
             ("show", "A completed reply line is visible while the response is still open"),
             ("release", "finish"), ("wait", "Final tail.", 5),
@@ -1365,8 +1375,8 @@ SCENARIOS = {
         "steps": [
             ("wait_status", "claude-haiku-5-5", 5),
             ("type", "stream a reply"), ("key", "enter"),
-            ("wait", "thinking", 5), ("release", "advance"),
-            ("wait", "First live line.", 5), ("wait", "writing", 5),
+            ("wait", "Distilling thoughts…", 5), ("release", "advance"),
+            ("wait", "First live line.", 5), ("wait_regex", "^[·∘°]⚗ " + WRITING_PHRASE_PATTERN, 5),
             ("expect", "screen_lacks", "Final tail."),
             ("show", "Anthropic text arrives before message_stop, without exposing thinking"),
             ("release", "finish"), ("wait", "Final tail.", 5),
@@ -1385,7 +1395,7 @@ SCENARIOS = {
         "steps": [
             ("wait_status", "gpt-6.1-sol", 5),
             ("type", "stream a large reply"), ("key", "enter"),
-            ("wait", "thinking", 5), ("release", "advance"),
+            ("wait", "Distilling thoughts…", 5), ("release", "advance"),
             ("wait", "PREVIEW TAIL READY", 20),
             ("expect", "screen_lacks", "PREVIEW FIRST LINE"),
             ("expect", "screen_lacks", "UNFINISHED GIANT LINE"),
@@ -1408,7 +1418,7 @@ SCENARIOS = {
         "steps": [
             ("wait_status", "gpt-6.1-sol", 5),
             ("type", "stream a large reply"), ("key", "enter"),
-            ("wait", "thinking", 5), ("release", "advance"),
+            ("wait", "Distilling thoughts…", 5), ("release", "advance"),
             ("wait", "PREVIEW TAIL READY", 20),
             ("type", "discard this draft"), ("key", "esc"),
             ("wait", "cancelled", 3),
@@ -1834,7 +1844,7 @@ def check_indicator(s, phrase):
     screen = s.term.screen()
     rules = region_rows(screen)
     line = indicator_line(s)
-    words = "(?:writing the next line|putting ideas on the page|bringing it together)" if phrase == "writing" else re.escape(phrase)
+    words = WRITING_PHRASE_PATTERN if phrase == "writing" else re.escape(phrase)
     pattern = r"^[·∘°]⚗ " + words + r" · \d+\.\ds · ~\d+ output tokens$"
     if not re.fullmatch(pattern, line):
         return "indicator lacks animated glyph, phrase, elapsed time or output estimate: %r" % line

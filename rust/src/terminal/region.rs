@@ -158,6 +158,26 @@ pub struct Region {
     color: bool,
 }
 
+const THINKING_PHRASES: &[&str] = &[
+    "Distilling thoughts…",
+    "Attempting to turn tokens into gold…",
+    "Checking for impurities…",
+    "Waiting for the precipitate…",
+    "Reaction proceeding at geological timescales…",
+    "Consulting the periodic table of excuses…",
+    "Applying heat to a questionable hypothesis…",
+    "Separating signal from sediment…",
+    "Searching for the philosopher’s stone…",
+    "The experiment is under control. Probably.",
+];
+const WRITING_PHRASES: &[&str] = &[
+    "Transmuting caffeine into questionable code…",
+    "Pouring unstable compounds into production…",
+    "Writing equations the universe hasn't approved…",
+    "Adding another ingredient to the primordial soup…",
+    "Documenting the explosion as an expected result…",
+];
+
 struct Progress {
     label: String,
     started: Instant,
@@ -171,17 +191,9 @@ impl Progress {
         let frames = ['·', '∘', '°', '∘'];
         let elapsed = self.started.elapsed();
         let words = if self.label.starts_with("writing") {
-            [
-                "writing the next line",
-                "putting ideas on the page",
-                "bringing it together",
-            ]
+            WRITING_PHRASES
         } else {
-            [
-                "thinking through the mix",
-                "following the thread",
-                "testing the fit",
-            ]
+            THINKING_PHRASES
         };
         let label = if self.output_tokens.is_some() {
             words[(elapsed.as_secs() / 4) as usize % words.len()]
@@ -884,7 +896,7 @@ mod tests {
             .unwrap();
         assert_eq!(region.visible[0], "First live line.");
         assert_eq!(region.visible[1], "Second live line.");
-        assert!(region.visible[2].contains("writing the next line"));
+        assert!(region.visible[2].contains(WRITING_PHRASES[0]));
         assert!(region.visible[2].contains("~12 output tokens"));
         assert!(!region.visible[2].contains("model"));
         assert!(region.visible.last().unwrap().contains("step 1"));
@@ -901,8 +913,8 @@ mod tests {
             .unwrap();
         assert_eq!(region.progress.as_ref().unwrap().output_tokens, Some(0));
         region.stream_progress(false, 5, None).unwrap();
-        assert!(region.visible[0].contains("thinking"));
-        assert!(!region.visible[0].contains("writing"));
+        assert!(region.visible[0].contains(THINKING_PHRASES[0]));
+        assert!(!region.visible[0].contains(WRITING_PHRASES[0]));
         region.set_progress(None).unwrap();
         assert!(region.visible[0].starts_with('─'));
     }
@@ -992,7 +1004,7 @@ mod tests {
             output_tokens: Some(12),
         };
         let first = progress.text(80, false);
-        assert!(first.starts_with("·⚗ thinking through the mix · 0.0s"));
+        assert!(first.starts_with("·⚗ Distilling thoughts… · 0.0s"));
         assert!(!first.contains("model"));
         assert!(!first.contains("step"));
         assert_eq!(width(&progress.text(10, false)), 9);
@@ -1004,9 +1016,60 @@ mod tests {
             .text(80, true)
             .ends_with(" · 1.5s · ~12 output tokens\x1b[0m"));
         progress.started = now - Duration::from_secs(4);
-        assert!(progress.text(80, false).contains("following the thread"));
+        assert!(progress.text(80, false).contains(THINKING_PHRASES[1]));
         progress.started = now - Duration::from_secs(65);
         assert!(progress.text(80, false).contains(" · 1m05s"));
+    }
+
+    #[test]
+    fn model_progress_keeps_phrase_lists_separate_and_truncates_every_phrase_cleanly() {
+        for (label, phrases) in [
+            ("thinking", THINKING_PHRASES),
+            ("writing reply", WRITING_PHRASES),
+        ] {
+            for index in 0..=phrases.len() {
+                let now = Instant::now();
+                let progress = Progress {
+                    label: label.into(),
+                    started: now - Duration::from_secs(4 * index as u64 + 1),
+                    ticked: now,
+                    frame: 0,
+                    output_tokens: Some(12),
+                };
+                let full = progress.text(120, false);
+                assert!(full.starts_with(&format!("·⚗ {} · ", phrases[index % phrases.len()])));
+                assert!(full.ends_with(" · ~12 output tokens"));
+                for columns in [2_usize, 10, 20, 40, 80] {
+                    for color in [false, true] {
+                        let row = progress.text(columns, color);
+                        let plain = if color {
+                            row.strip_prefix(TEAL).unwrap().strip_suffix(RESET).unwrap()
+                        } else {
+                            &row
+                        };
+                        let available = columns.saturating_sub(1);
+                        assert!(
+                            width(plain) <= available,
+                            "{label}, {index}, {columns}: {row:?}"
+                        );
+                        if width(&full) > available {
+                            assert!(plain.ends_with('…'), "{row:?}");
+                        }
+                    }
+                }
+            }
+        }
+        let now = Instant::now();
+        let tool = Progress {
+            label: "searching for a file".into(),
+            started: now,
+            ticked: now,
+            frame: 0,
+            output_tokens: None,
+        };
+        assert!(tool
+            .text(80, false)
+            .starts_with("·⚗ searching for a file · "));
     }
 
     #[test]
