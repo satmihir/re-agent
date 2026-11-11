@@ -111,7 +111,7 @@ fn bare_startup_keeps_usage_when_stdout_is_redirected_even_with_terminal_input()
         },
         0
     );
-    let master = unsafe { File::from_raw_fd(master) };
+    let mut master = unsafe { File::from_raw_fd(master) };
     let slave = unsafe { File::from_raw_fd(slave) };
     // Parallel subprocess fixtures must not inherit each other's PTY handles.
     for file in [&master, &slave] {
@@ -120,13 +120,51 @@ fn bare_startup_keeps_usage_when_stdout_is_redirected_even_with_terminal_input()
             -1
         );
     }
+    // Fill Linux's larger PTY queue to recreate macOS's usage-banner backpressure.
+    let flags = unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_GETFL) };
+    assert!(flags >= 0);
+    assert_eq!(
+        unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
+    loop {
+        match (&slave).write(&[b'x'; 4096]) {
+            Ok(0) => panic!("PTY output queue closed"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("fill PTY output queue: {error}"),
+        }
+    }
+    assert_eq!(
+        unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags) },
+        0
+    );
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut bytes = [0; 4096];
+        loop {
+            match master.read(&mut bytes) {
+                Ok(0) => return output,
+                Ok(count) => output.extend_from_slice(&bytes[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => return output,
+                Err(error) => panic!("read PTY output: {error}"),
+            }
+        }
+    });
     let mut command = reagent(root.path(), root.path());
     command
         .stdin(slave.try_clone().unwrap())
         .stderr(slave.try_clone().unwrap());
-    let output = finish(command.spawn().unwrap());
+    let child = command.spawn().unwrap();
+    drop(command);
+    let output = finish(child);
+    drop(slave);
+    let terminal = reader.join().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&terminal).contains("usage:"));
     assert!(!cache(root.path()).exists());
 }
 
