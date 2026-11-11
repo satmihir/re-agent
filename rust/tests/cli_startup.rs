@@ -120,48 +120,80 @@ fn bare_startup_keeps_usage_when_stdout_is_redirected_even_with_terminal_input()
             -1
         );
     }
-    // Fill Linux's larger PTY queue to recreate macOS's usage-banner backpressure.
-    let flags = unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_GETFL) };
-    assert!(flags >= 0);
-    assert_eq!(
-        unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
-        0
-    );
-    loop {
-        match (&slave).write(&[b'x'; 4096]) {
-            Ok(0) => panic!("PTY output queue closed"),
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-            Err(error) => panic!("fill PTY output queue: {error}"),
-        }
-    }
-    assert_eq!(
-        unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags) },
-        0
-    );
-    let reader = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let mut bytes = [0; 4096];
-        loop {
-            match master.read(&mut bytes) {
-                Ok(0) => return output,
-                Ok(count) => output.extend_from_slice(&bytes[..count]),
+    if cfg!(target_os = "linux") {
+        // Recreate macOS's usage-banner backpressure with Linux's larger PTY queue.
+        let flags = unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+        let mut full = false;
+        for _ in 0..128 {
+            match (&slave).write(&[b'x'; 4096]) {
+                Ok(0) => panic!("PTY output queue closed"),
+                Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) if error.raw_os_error() == Some(libc::EIO) => return output,
-                Err(error) => panic!("read PTY output: {error}"),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    full = true;
+                    break;
+                }
+                Err(error) => panic!("fill PTY output queue: {error}"),
             }
         }
-    });
+        assert!(full, "PTY output queue did not fill");
+        assert_eq!(
+            unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags) },
+            0
+        );
+    }
+    let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
+    assert!(flags >= 0);
+    assert_eq!(
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
     let mut command = reagent(root.path(), root.path());
     command
         .stdin(slave.try_clone().unwrap())
         .stderr(slave.try_clone().unwrap());
-    let child = command.spawn().unwrap();
+    let mut child = command.spawn().unwrap();
     drop(command);
-    let output = finish(child);
     drop(slave);
-    let terminal = reader.join().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut terminal = Vec::new();
+    let mut exited = false;
+    loop {
+        let mut bytes = [0; 4096];
+        for _ in 0..16 {
+            match master.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(count) => terminal.extend_from_slice(&bytes[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(libc::EIO) =>
+                {
+                    break
+                }
+                Err(error) => panic!("read PTY output: {error}"),
+            }
+        }
+        // Drain once after observing exit; do not depend on platform-specific PTY EOF.
+        if exited {
+            break;
+        }
+        exited = child.try_wait().unwrap().is_some();
+        if !exited && Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("startup timed out: {}", String::from_utf8_lossy(&terminal));
+        }
+        if !exited {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let output = child.wait_with_output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&terminal).contains("usage:"));
