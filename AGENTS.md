@@ -86,6 +86,18 @@ For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is
 - Name tests after the scenario or invariant they check, for example
   `accepted_tool_observation_precedes_the_next_model_request`.
 - Tests are code too. The same rules apply.
+- **Linux and macOS:** Before finishing changes to tests or OS-facing behavior,
+  review platform cache/config paths, canonical versus literal paths (including
+  symlinked temporary roots), case-insensitive filesystems, accepted-socket
+  blocking mode, and BSD versus GNU command options. Read the existing platform
+  handling rather than assuming Linux behavior carries over.
+- Synchronize concurrent fixtures on observable events, not fixed sleeps;
+  separate setup/completion deadlines from responsiveness assertions.
+- When fixing a macOS-only failure, add a Linux-runnable regression test that
+  explicitly recreates the hazard where practical (for example, a symlinked
+  temporary root or a nonblocking accepted socket). If it cannot be reproduced
+  on Linux, say why. Environment variables, containers and cross-compilation
+  are not substitutes for running on macOS; report which OS actually ran.
 
 ## Working style
 
