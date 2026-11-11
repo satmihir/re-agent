@@ -53,12 +53,51 @@ def tool(text, call_id, name, arguments):
 
 LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 41))
 
+EXEC_TAIL_SCRIPT = """import pathlib
+import sys
+import time
+
+
+def wait(name):
+    deadline = time.monotonic() + 25
+    while not pathlib.Path(name).exists():
+        if time.monotonic() > deadline:
+            raise RuntimeError("tty fixture gate not released: " + name)
+        time.sleep(0.01)
+
+
+if sys.argv[1] == "second":
+    print("CHAIN fresh output", flush=True)
+    wait("tail-finish")
+elif sys.argv[1] == "cancel":
+    print("CANCEL transient output", flush=True)
+    wait("tail-finish")
+else:
+    print("TAIL stdout 1", flush=True)
+    wait("tail-partial")
+    sys.stderr.write("TAIL stderr partial")
+    sys.stderr.flush()
+    wait("tail-lines")
+    sys.stderr.write("-done\\n")
+    sys.stderr.flush()
+    for number in range(2, 8):
+        time.sleep(0.5)
+        suffix = " " + "x" * 150 + "HIDDEN-END" if number == 7 else ""
+        print(f"TAIL stdout {number}" + suffix, flush=True)
+    wait("tail-chain")
+"""
+
+EXEC_TAIL_FIRST_STDOUT = "".join(f"TAIL stdout {number}\n" for number in range(1, 7)) + "TAIL stdout 7 " + "x" * 150 + "HIDDEN-END\n"
+
 # Each scenario: a scripted model, a terminal size, and steps.
 #   ("type", text)              keys one at a time
 #   ("key", name)               enter, ctrl-c, ctrl-u, esc, left, up
 #   ("paste", text)             a bracketed paste
 #   ("wait", text, seconds)     until text is on screen or in scrollback
 #   ("wait_status", text, seconds) wait for text below the last drawn prompt rule
+#   ("wait_absent", text, seconds) wait until transient screen text disappears
+#   ("release_file", name)      release an exec fixture's workspace file gate
+#   ("animate", seconds)        assert bubble and elapsed time advance while held
 #   ("idle", seconds)           let output settle
 #   ("resize", rows, cols)
 #   ("show", label)             print the screen
@@ -844,6 +883,110 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "lively-indicator": {
+        "live_stream": "openai", "agents": True,
+        "size": (28, 100),
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "hold the model open"), ("key", "enter"),
+            ("wait", "thinking through the mix", 5),
+            ("expect", "indicator", "thinking through the mix"),
+            ("expect", "indicator_style"),
+            ("show", "A bubble and flask sit above the input, with elapsed time and output estimate"),
+            ("animate", 2),
+            ("wait", "following the thread", 5),
+            ("expect", "indicator", "following the thread"),
+            ("type", "draft stays editable"),
+            ("resize", 28, 80), ("wait_regex", "^─{80}$", 5),
+            ("expect", "screen_has", "❯ draft stays editable"),
+            ("show", "A held model rotates phrases and animates without losing the draft on resize"),
+            ("release", "advance"),
+            ("wait", "First live line.", 5),
+            ("wait_regex", "^[·∘°]⚗ (writing the next line|putting ideas on the page|bringing it together)", 5),
+            ("expect", "indicator", "writing"),
+            ("release", "finish"), ("wait", "Final tail.", 5),
+            ("wait_status", "gpt-6.1-sol", 5), ("wait_absent", "⚗", 5),
+            ("expect", "screen_lacks", "⚗"),
+            ("expect", "screen_has", "❯ draft stays editable"),
+            ("show", "Completion removes the indicator cleanly and retains the typed draft"),
+            ("key", "enter"), ("wait", "Follow-up after stream.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "exec-output-tail": {
+        "exec_tail": True,
+        "size": (28, 100),
+        "script": [tool("Checking incremental command output.", "tail", "exec",
+                        {"argv": ["python3", "tty-tail.py", "first"],
+                         "then": [["python3", "tty-tail.py", "second"]], "cwd": "."}),
+                   reply("Tail command complete."), reply("Next turn after tail.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "run the incremental command"), ("key", "enter"),
+            ("wait_regex", "^ +TAIL stdout 1$", 5),
+            ("expect", "exec_tail", ["TAIL stdout 1"], "first"),
+            ("release_file", "tail-partial"),
+            ("wait_regex", "^ +TAIL stderr partial$", 5),
+            ("expect", "exec_tail", ["TAIL stdout 1", "TAIL stderr partial"], "first"),
+            ("show", "A running argv has an indented dim tail, including an unfinished stderr line"),
+            ("release_file", "tail-lines"),
+            ("wait_regex", "^ +TAIL stdout 3$", 5),
+            ("expect", "screen_lacks", "TAIL stdout 7"),
+            ("show", "The tail advances before the process has exited"),
+            ("wait_regex", "^ +TAIL stdout 7 ", 5),
+            ("expect", "exec_tail", ["TAIL stdout 3", "TAIL stdout 4", "TAIL stdout 5", "TAIL stdout 6", "TAIL stdout 7 "], "first"),
+            ("expect", "screen_lacks", "TAIL stdout 1"),
+            ("expect", "screen_lacks", "TAIL stderr partial"),
+            ("expect", "screen_lacks", "HIDDEN-END"),
+            ("expect", "raw_has", "\x1b[2mTAIL stdout"),
+            ("type", "draft during exec"),
+            ("resize", 28, 80), ("wait_regex", "^─{80}$", 5),
+            ("expect", "screen_has", "❯ draft during exec"),
+            ("expect", "screen_lacks", "HIDDEN-END"),
+            ("show", "Only the last five width-truncated output lines remain above an editable resized prompt"),
+            ("release_file", "tail-chain"),
+            ("wait_regex", "^ +CHAIN fresh output$", 5),
+            ("expect", "exec_tail", ["CHAIN fresh output"], "second"),
+            ("expect", "screen_lacks", "TAIL stdout"),
+            ("expect", "screen_lacks", "TAIL stderr"),
+            ("expect", "fresh_exec_clock"),
+            ("show", "The next chained argv starts a fresh tail and clock"),
+            ("release_file", "tail-finish"), ("wait", "Tail command complete.", 5),
+            ("wait_status", "scripted / low", 5), ("wait_absent", "⚗", 5),
+            ("expect", "screen_lacks", "CHAIN fresh output"),
+            ("expect", "screen_lacks", "⚗"),
+            ("expect", "exec_result_row"),
+            ("show", "Completion collapses the transient tail into the ordinary single result row"),
+            ("key", "enter"), ("wait", "Next turn after tail.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "interrupt-exec-output-tail": {
+        "exec_tail": True, "cancel_tail": True,
+        "script": [tool("Waiting with output.", "tail-cancel", "exec",
+                        {"argv": ["python3", "tty-tail.py", "cancel"], "cwd": "."}),
+                   reply("Next turn after tail cancellation.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "run until interrupted"), ("key", "enter"),
+            ("wait_regex", "^ +CANCEL transient output$", 5),
+            ("expect", "exec_tail", ["CANCEL transient output"], "cancel"),
+            ("type", "discard this tail draft"), ("key", "esc"),
+            ("wait", "cancelled", 5), ("wait_status", "scripted / low", 5),
+            ("wait_absent", "⚗", 5),
+            ("expect", "screen_lacks", "CANCEL transient output"),
+            ("expect", "screen_lacks", "⚗"),
+            ("expect", "screen_lacks", "discard this tail draft"),
+            ("expect", "screen_has", "effects unknown"),
+            ("show", "Esc removes the tail and draft without hiding uncertain command effects"),
+            ("type", "inspect after cancelling"), ("key", "enter"),
+            ("wait", "Next turn after tail cancellation.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "live-openai-reply": {
         "live_stream": "openai", "agents": True,
         "steps": [
@@ -1026,6 +1169,8 @@ SCENARIOS = {
     },
 }
 
+SCENARIOS["lively-indicator-no-color"] = {**SCENARIOS["lively-indicator"], "no_color": True}
+
 KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "esc": "\x1b",
         "left": "\x1b[D", "up": "\x1b[A"}
 
@@ -1036,6 +1181,7 @@ class Session:
     def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False):
         self.rows, self.cols = size
         self.raw = bytearray()
+        self.no_color = "NO_COLOR" in (extra_env or {})
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.term = Terminal(self.rows, self.cols)
         self.pid, self.fd = pty.fork()
@@ -1222,6 +1368,63 @@ def check_no_rules(s):
     return "rules drawn on a narrow terminal" if any(line and set(line) == {RULE} for line in s.term.screen()) else None
 
 
+def indicator_line(s):
+    lines = [line for line in s.term.screen() if "⚗" in line]
+    return lines[0] if len(lines) == 1 else ""
+
+
+def check_indicator(s, phrase):
+    screen = s.term.screen()
+    rules = region_rows(screen)
+    line = indicator_line(s)
+    words = "(?:writing the next line|putting ideas on the page|bringing it together)" if phrase == "writing" else re.escape(phrase)
+    pattern = r"^[·∘°]⚗ " + words + r" · \d+\.\ds · ~\d+ output tokens$"
+    if not re.fullmatch(pattern, line):
+        return "indicator lacks animated glyph, phrase, elapsed time or output estimate: %r" % line
+    if not rules or rules[0] == 0 or screen[rules[0] - 1] != line:
+        return "indicator is not immediately above the input frame"
+    if "gpt-6.1-sol" not in screen[rules[1] + 1] or "step 1" not in screen[rules[1] + 1]:
+        return "model and step are not retained in the status row below the input frame"
+    return None
+
+
+def check_indicator_style(s):
+    raw = s.raw.decode("utf-8", "replace")
+    styled_indicator = re.search(r"\x1b\[1;38;5;86m[·∘°]⚗ ", raw)
+    if s.no_color:
+        if re.search(r"\x1b\[[0-9;]*m[·∘°]⚗ ", raw):
+            return "NO_COLOR indicator still has ANSI styling"
+        return None
+    return None if styled_indicator else "indicator was not drawn in bold accent teal"
+
+
+def check_exec_tail(s, expected, command):
+    screen = s.term.screen()
+    rules = region_rows(screen)
+    if not rules or rules[0] < len(expected) + 1:
+        return "running output is not above an input frame"
+    header = screen[rules[0] - len(expected) - 1]
+    if not re.match(r"^[·∘°]⚗ running .*" + re.escape(command), header):
+        return "tail is not immediately below its running argv: %r" % header
+    actual = screen[rules[0] - len(expected):rules[0]]
+    for line, prefix in zip(actual, expected):
+        if not line.startswith("    " + prefix):
+            return "tail lines differ: %r, expected prefixes %r" % (actual, expected)
+    if len(expected) > 5:
+        return "exec tail exceeded five lines"
+    return None
+
+
+def check_fresh_exec_clock(s):
+    line = indicator_line(s)
+    return None if re.search(r" · 0\.\ds$", line) else "next command did not reset its clock: %r" % line
+
+
+def check_exec_result_row(s):
+    rows = [line for line in s.term.text() if re.match(r"^  ✓ exec .* → exit 0 in ", line)]
+    return None if len(rows) == 1 else "expected one ordinary exec result row, got %r" % rows
+
+
 CHECKS = {
     "region_after_output": check_region_after_output,
     "input_at_top": check_input_at_top,
@@ -1234,6 +1437,11 @@ CHECKS = {
     "all_lack": check_all_lack,
     "rule_width": check_rule_width,
     "no_rules": check_no_rules,
+    "indicator": check_indicator,
+    "indicator_style": check_indicator_style,
+    "exec_tail": check_exec_tail,
+    "fresh_exec_clock": check_fresh_exec_clock,
+    "exec_result_row": check_exec_result_row,
 }
 
 
@@ -1242,6 +1450,15 @@ def show(s, label):
         label, s.rows, s.cols, s.term.row + 1, s.term.col + 1, len(s.term.scrollback)))
     for i, line in enumerate(s.term.screen()):
         print("  %2d│%s" % (i + 1, line))
+
+
+def trace_events(workspace):
+    events = []
+    for directory, _, files in os.walk(workspace):
+        if "events.jsonl" in files:
+            with open(os.path.join(directory, "events.jsonl")) as trace:
+                events += [json.loads(line) for line in trace]
+    return events
 
 
 def run(binary, name, scenario, workspace):
@@ -1256,6 +1473,11 @@ def run(binary, name, scenario, workspace):
             f.write(json.dumps(scenario["script"]).replace("__CONSENT__", consent_root.name) if consent_root else json.dumps(scenario["script"]))
             script_path = f.name
     extra_env = {"REAGENT_OPENAI_AUTH": "auto"}
+    if scenario.get("no_color"):
+        extra_env["NO_COLOR"] = "1"
+    if scenario.get("exec_tail"):
+        with open(os.path.join(workspace, "tty-tail.py"), "w", encoding="utf-8") as fixture:
+            fixture.write(EXEC_TAIL_SCRIPT)
     server = None
     gates = {name: threading.Event() for name in ("advance", "finish")}
     stream_requests, stream_bodies = [], {}
@@ -1606,6 +1828,20 @@ def run(binary, name, scenario, workspace):
                     failures.append("timed out waiting for %r" % args[0])
             elif kind == "release":
                 gates[args[0]].set()
+            elif kind == "release_file":
+                with open(os.path.join(workspace, args[0]), "w"):
+                    pass
+            elif kind == "animate":
+                initial = indicator_line(s)
+                deadline = time.monotonic() + args[0]
+                while time.monotonic() < deadline:
+                    s.pump(0.05)
+                    current = indicator_line(s)
+                    if initial and current and current[0] != initial[0] and current.split(" · ")[1:2] != initial.split(" · ")[1:2]:
+                        show(s, "The same held operation advances its bubble and elapsed clock")
+                        break
+                else:
+                    failures.append("held indicator did not animate its bubble and elapsed time")
             elif kind == "wait_regex":
                 deadline = time.monotonic() + args[1]
                 while time.monotonic() < deadline:
@@ -1614,6 +1850,14 @@ def run(binary, name, scenario, workspace):
                     s.pump(0.05)
                 else:
                     failures.append("timed out waiting for screen pattern %r" % args[0])
+            elif kind == "wait_absent":
+                deadline = time.monotonic() + args[1]
+                while time.monotonic() < deadline:
+                    if not any(args[0] in line for line in s.term.screen()):
+                        break
+                    s.pump(0.05)
+                else:
+                    failures.append("transient screen text did not disappear: %r" % args[0])
             elif kind == "wait_status":
                 if not s.wait_for(args[0], args[1], status=True):
                     failures.append("timed out waiting for the prompt status row")
@@ -1652,12 +1896,7 @@ def run(binary, name, scenario, workspace):
     if scenario.get("live_stream"):
         if not stream_done.wait(5):
             failures.append("stream fixture did not settle after completion or interruption")
-        events = []
-        for directory, _, files in os.walk(workspace):
-            for filename in files:
-                if filename.endswith(".jsonl"):
-                    with open(os.path.join(directory, filename)) as trace:
-                        events += [json.loads(line) for line in trace]
+        events = trace_events(workspace)
         traced_requests = [event["data"]["request_body"] for event in events if event.get("type") == "api.attempt.started"]
         traced_bodies = [event["data"]["response_body"] for event in events if event.get("type") == "api.attempt.finished" and "response_body" in event.get("data", {})]
         if len(stream_requests) != 2:
@@ -1675,6 +1914,32 @@ def run(binary, name, scenario, workspace):
                     failures.append("interrupted speculative text entered the next model request")
             elif json.dumps(stream_reply)[1:-1] not in accepted:
                 failures.append("next request did not contain the complete accepted streamed reply")
+    if scenario.get("exec_tail"):
+        call_id = "tail-cancel" if scenario.get("cancel_tail") else "tail"
+        outcomes = [event["data"]["outcome"] for event in trace_events(workspace)
+                    if event.get("type") == "tool.finished" and event["data"].get("call_id") == call_id]
+        if len(outcomes) != 1:
+            failures.append("expected exactly one traced exec ToolOutcome, got %d" % len(outcomes))
+        else:
+            outcome = outcomes[0]
+            if scenario.get("cancel_tail"):
+                expected = [("CANCEL transient output\n", "")]
+                steps = [outcome.get("data", {})]
+                if outcome.get("code") != "cancelled":
+                    failures.append("interrupted tail did not retain its cancelled ToolOutcome")
+            else:
+                expected = [(EXEC_TAIL_FIRST_STDOUT, "TAIL stderr partial-done\n"), ("CHAIN fresh output\n", "")]
+                steps = outcome.get("data", {}).get("steps", [])
+                if not outcome.get("ok"):
+                    failures.append("incremental command fixture did not finish successfully")
+            if len(steps) != len(expected):
+                failures.append("tail trace lost a command's ordinary result data")
+            for step, (stdout, stderr) in zip(steps, expected):
+                for stream, text in (("stdout", stdout), ("stderr", stderr)):
+                    if step.get(stream, "").encode() != text.encode():
+                        failures.append("transient tail changed the traced %s bytes" % stream)
+                    if step.get(stream + "_bytes_seen") != len(text.encode()) or step.get(stream + "_truncated"):
+                        failures.append("transient tail changed %s capture byte counts or truncation" % stream)
     if scenario.get("workspace_consent") == "deny":
         outcomes = {"first": [], "second": []}
         cache = os.path.join(workspace, "Library", "Caches") if sys.platform == "darwin" else os.path.join(workspace, ".cache")

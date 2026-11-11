@@ -124,6 +124,8 @@ fn drain(
     captured: &mut Captured,
     options: &CaptureOptions<'_>,
     incomplete: &mut bool,
+    stream: usize,
+    observer: &mut Option<&mut dyn FnMut(usize, &[u8])>,
 ) -> bool {
     use io::Read;
     let Some(pipe) = reader.as_mut() else {
@@ -137,7 +139,12 @@ fn drain(
                 *reader = None;
                 return false;
             }
-            Ok(n) => captured.push(&buffer[..n], options.limit, options.head_tail),
+            Ok(n) => {
+                captured.push(&buffer[..n], options.limit, options.head_tail);
+                if let Some(observer) = observer.as_mut() {
+                    observer(stream, &buffer[..n]);
+                }
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return false,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => {
@@ -156,8 +163,25 @@ fn drain(
 
 /// capture starts under the pipe lock and polls all I/O with bounded inherited-pipe waits.
 pub(crate) fn capture(
+    command: Command,
+    options: CaptureOptions<'_>,
+) -> Result<CaptureResult, CaptureError> {
+    capture_observed(command, options, None)
+}
+
+/// capture_with_output observes raw stdout (0) and stderr (1), with empty slices on polling ticks.
+pub(crate) fn capture_with_output(
+    command: Command,
+    options: CaptureOptions<'_>,
+    observer: &mut dyn FnMut(usize, &[u8]),
+) -> Result<CaptureResult, CaptureError> {
+    capture_observed(command, options, Some(observer))
+}
+
+fn capture_observed(
     mut command: Command,
     options: CaptureOptions<'_>,
+    mut observer: Option<&mut dyn FnMut(usize, &[u8])>,
 ) -> Result<CaptureResult, CaptureError> {
     use std::io::Write;
     use std::os::fd::AsRawFd;
@@ -233,7 +257,12 @@ pub(crate) fn capture(
                 &mut result.output[index],
                 &options,
                 &mut result.incomplete,
+                index,
+                &mut observer,
             );
+        }
+        if let Some(observer) = observer.as_mut() {
+            observer(0, &[]);
         }
         if input.is_empty() {
             stdin = None;
@@ -354,6 +383,85 @@ mod tests {
     }
 
     #[test]
+    fn capture_observer_sees_output_and_idle_ticks_before_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let release = dir.path().join("release");
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf ready; while [ ! -f \"$1\" ]; do /bin/sleep 0.01; done; printf done",
+            "sh",
+        ]);
+        command.arg(&release);
+        let mut ready = None;
+        let mut released = false;
+        let result =
+            capture_with_output(command, options(Streams::Stdout), &mut |stream, bytes| {
+                assert_eq!(stream, 0);
+                if !bytes.is_empty() && ready.is_none() {
+                    assert_eq!(bytes, b"ready");
+                    ready = Some(Instant::now());
+                }
+                if bytes.is_empty()
+                    && !released
+                    && ready
+                        .is_some_and(|time: Instant| time.elapsed() >= Duration::from_millis(100))
+                {
+                    std::fs::write(&release, b"continue").unwrap();
+                    released = true;
+                }
+            })
+            .unwrap();
+        assert!(released, "idle ticks must continue while the command waits");
+        assert!(result.status.unwrap().success());
+        assert!(!result.timed_out);
+        assert_eq!(result.output[0].head, b"readydon");
+        assert_eq!(result.output[0].seen, 9);
+    }
+
+    #[test]
+    fn capture_observer_preserves_raw_bytes_and_capture_limits() {
+        for streams in [Streams::Separate, Streams::Merged, Streams::Stdout] {
+            for head_tail in [false, true] {
+                let command = || {
+                    let mut command = Command::new("/bin/sh");
+                    command.args([
+                        "-c",
+                        "dd if=/dev/zero bs=65536 count=5 2>/dev/null; printf '\\377\\303\\251'; dd if=/dev/zero bs=65536 count=5 >&2 2>/dev/null; printf '\\376\\342\\202\\254' >&2",
+                    ]);
+                    command
+                };
+                let options = || {
+                    let mut options = self::options(streams);
+                    options.head_tail = head_tail;
+                    options.limit = Some(1025);
+                    options
+                };
+                let plain = capture(command(), options()).unwrap();
+                let mut observed = [Vec::new(), Vec::new()];
+                let result = capture_with_output(command(), options(), &mut |stream, bytes| {
+                    observed[stream].extend_from_slice(bytes);
+                })
+                .unwrap();
+                assert!(result.status.unwrap().success());
+                assert!(!result.timed_out && !result.incomplete);
+                for ((expected, actual), bytes) in
+                    plain.output.iter().zip(&result.output).zip(observed)
+                {
+                    assert_eq!(actual.head, expected.head);
+                    assert_eq!(actual.tail, expected.tail);
+                    assert_eq!(actual.seen, expected.seen);
+                    assert_eq!(actual.seen, bytes.len());
+                    if !bytes.is_empty() {
+                        assert!(std::str::from_utf8(&bytes).is_err());
+                        assert!(bytes.len() > 256 * 1024);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn capture_read_errors_preserve_retry_incomplete_and_eof_policies() {
         use std::os::fd::OwnedFd;
         let dir = tempfile::tempdir().unwrap();
@@ -374,7 +482,14 @@ mod tests {
             options.read_error = policy;
             let mut output_incomplete = false;
             assert_eq!(
-                drain(&mut reader, &mut captured, &options, &mut output_incomplete),
+                drain(
+                    &mut reader,
+                    &mut captured,
+                    &options,
+                    &mut output_incomplete,
+                    0,
+                    &mut None,
+                ),
                 retry
             );
             assert_eq!(reader.is_some(), open);
@@ -386,7 +501,9 @@ mod tests {
                     &mut reader,
                     &mut captured,
                     &options,
-                    &mut output_incomplete
+                    &mut output_incomplete,
+                    0,
+                    &mut None,
                 ));
                 assert!(
                     reader.is_some(),

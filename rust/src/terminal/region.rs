@@ -22,6 +22,7 @@ pub(super) struct Status {
     auto: bool,
     agents: usize,
     context: Option<f64>,
+    request: Option<String>,
 }
 
 impl Status {
@@ -87,6 +88,9 @@ impl Status {
             }
             parts.push(model);
         }
+        if let Some(request) = &self.request {
+            parts.push(request.clone());
+        }
         if self.agents > 0 {
             parts.push(crate::render::plural(self.agents as i64, "agent", "agents"));
         }
@@ -127,6 +131,7 @@ pub struct Region {
     pub(super) status: Status,
     pub(super) queued: bool,
     progress: Option<Progress>,
+    exec_lines: Vec<String>,
     stream_text: String,
     stream_rows: Vec<String>,
     stream_columns: usize,
@@ -157,23 +162,39 @@ struct Progress {
 
 impl Progress {
     fn text(&self, columns: usize, color: bool) -> String {
-        let frames: Vec<_> = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".chars().collect();
-        let mut text = format!("{} {}", frames[self.frame % frames.len()], self.label);
+        let frames = ['·', '∘', '°', '∘'];
+        let elapsed = self.started.elapsed();
+        let words = if self.label.starts_with("writing") {
+            [
+                "writing the next line",
+                "putting ideas on the page",
+                "bringing it together",
+            ]
+        } else {
+            [
+                "thinking through the mix",
+                "following the thread",
+                "testing the fit",
+            ]
+        };
+        let label = if self.output_tokens.is_some() {
+            words[(elapsed.as_secs() / 4) as usize % words.len()]
+        } else {
+            &self.label
+        };
+        let mut text = format!("{}⚗ {label}", frames[self.frame % frames.len()]);
+        let elapsed = if elapsed.as_secs() < 60 {
+            format!("{:.1}s", elapsed.as_secs_f64())
+        } else {
+            format!("{}m{:02}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
+        };
+        text.push_str(&format!(" · {elapsed}"));
         if let Some(tokens) = self.output_tokens {
             text.push_str(&format!(" · ~{tokens} output tokens"));
         }
-        let elapsed = self.started.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            let elapsed = if elapsed.as_secs() < 60 {
-                format!("{:.1}s", elapsed.as_secs_f64())
-            } else {
-                format!("{}m{:02}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
-            };
-            text.push_str(&format!(" · {elapsed}"));
-        }
         text = truncate(&text, columns.saturating_sub(1));
         if color {
-            format!("{DIM}{text}{RESET}")
+            format!("{TEAL}{text}{RESET}")
         } else {
             text
         }
@@ -203,6 +224,7 @@ impl Region {
             status: Status::default(),
             queued: false,
             progress: None,
+            exec_lines: Vec::new(),
             stream_text: String::new(),
             stream_rows: Vec::new(),
             stream_columns: 0,
@@ -338,6 +360,15 @@ impl Region {
                     above.push(progress.text(columns, self.color));
                 }
             }
+            let tail_limit = limit.saturating_sub(above.len()).min(self.exec_lines.len());
+            for line in &self.exec_lines[self.exec_lines.len() - tail_limit..] {
+                let line = truncate(line, columns.saturating_sub(5));
+                above.push(if self.color {
+                    format!("    {DIM}{line}{RESET}")
+                } else {
+                    format!("    {line}")
+                });
+            }
             row += above.len();
             above.extend(rows);
             rows = above;
@@ -415,6 +446,15 @@ impl Region {
         self.stream_text.clear();
         self.stream_rows.clear();
         self.stream_columns = 0;
+        self.exec_lines.clear();
+        self.status.request = label
+            .filter(|label| label.starts_with("thinking"))
+            .and_then(|label| {
+                label
+                    .split(" · ")
+                    .find(|part| part.starts_with("step ") || part.starts_with("attempt "))
+                    .map(str::to_owned)
+            });
         self.progress = label.map(|label| Progress {
             label: label.into(),
             started: Instant::now(),
@@ -422,6 +462,25 @@ impl Region {
             frame: 0,
             output_tokens: label.starts_with("thinking").then_some(0),
         });
+        self.repaint()
+    }
+
+    /// Exec progress replaces the current command or updates its display-only output tail.
+    pub(crate) fn exec_progress(
+        &mut self,
+        label: Option<&str>,
+        lines: &[String],
+    ) -> io::Result<()> {
+        if let Some(label) = label {
+            self.set_progress(Some(label))?;
+        }
+        self.exec_lines = lines
+            .iter()
+            .rev()
+            .take(5)
+            .map(|line| sanitize(line).replace('\n', "↵").replace('\t', "⇥"))
+            .collect();
+        self.exec_lines.reverse();
         self.repaint()
     }
 
@@ -557,13 +616,19 @@ impl Region {
             rows.push(self.rule());
             rows.push(self.status.row(width, self.color));
             if let Some(progress) = &self.progress {
-                rows.push(format!("  {}", progress.text(width - 2, self.color)));
+                rows.insert(0, progress.text(width, self.color));
             }
             if self.queued {
                 rows.push("  queued".into());
             }
         }
-        self.draw(rows, 1, 0, width, height)
+        self.draw(
+            rows,
+            1 + usize::from(self.progress.is_some() && width >= 20),
+            0,
+            width,
+            height,
+        )
     }
     /// Collapse removes the pane before exiting or handing the terminal to another program.
     pub(crate) fn collapse(&mut self) -> io::Result<()> {
@@ -776,7 +841,10 @@ mod tests {
             .unwrap();
         assert_eq!(region.visible[0], "First live line.");
         assert_eq!(region.visible[1], "Second live line.");
-        assert!(region.visible[2].contains("writing · model · step 1 · ~12 output tokens"));
+        assert!(region.visible[2].contains("writing the next line"));
+        assert!(region.visible[2].contains("~12 output tokens"));
+        assert!(!region.visible[2].contains("model"));
+        assert!(region.visible.last().unwrap().contains("step 1"));
         assert!(region.visible[3].starts_with('─'));
         assert_eq!(region.progress.as_ref().unwrap().started, started);
         assert_eq!(region.buffer, draft);
@@ -794,6 +862,40 @@ mod tests {
         assert!(!region.visible[0].contains("writing"));
         region.set_progress(None).unwrap();
         assert!(region.visible[0].starts_with('─'));
+    }
+
+    #[test]
+    fn exec_tail_is_bounded_safe_and_removed_without_touching_the_draft() {
+        let mut region = Region::new();
+        region.color = true;
+        let draft: Vec<_> = "next question".chars().collect();
+        region.input(&draft, 3, "", 40, 24).unwrap();
+        region.exec_progress(Some("running first"), &[]).unwrap();
+        let started = region.progress.as_ref().unwrap().started;
+        let mut lines: Vec<_> = (0..7).map(|i| format!("output {i}")).collect();
+        lines.push("\x1b[2J\r\t**literal**".into());
+        lines.push("界".repeat(100));
+        region.exec_progress(None, &lines).unwrap();
+        assert_eq!(region.exec_lines.len(), 5);
+        assert_eq!(region.progress.as_ref().unwrap().started, started);
+        assert!(region.visible[1].contains("output 4"));
+        assert!(region.visible[4].contains("\\x1b[2J\\x0d⇥**literal**"));
+        assert!(region.visible[4].contains(DIM));
+        assert!(region.visible[1..6].iter().all(|line| width(line) < 40));
+        assert!(region.visible[6].starts_with("\x1b[2m─"));
+        region.input(&draft, 3, "", 20, 8).unwrap();
+        assert!(region.visible.len() < 8);
+        assert!(region.visible.iter().all(|line| width(line) <= 20));
+        region.exec_progress(Some("running second"), &[]).unwrap();
+        assert!(region.exec_lines.is_empty());
+        region.set_progress(None).unwrap();
+        assert!(region
+            .visible
+            .iter()
+            .all(|line| !line.contains("output") && !line.contains('⚗')));
+        assert_eq!(region.buffer, draft);
+        assert_eq!(region.caret, 3);
+        assert!(!region.printed);
     }
 
     #[test]
@@ -834,21 +936,31 @@ mod tests {
     }
 
     #[test]
-    fn progress_reserves_caret_cell_and_uses_elapsed_only_after_one_second() {
+    fn progress_animates_rotates_words_and_reserves_the_last_cell() {
         let now = Instant::now();
         let mut progress = Progress {
-            label: "waiting for model · step 1".into(),
+            label: "thinking · model · step 1".into(),
             started: now,
             ticked: now,
             frame: 0,
-            output_tokens: None,
+            output_tokens: Some(12),
         };
-        assert_eq!(progress.text(80, false), "⠋ waiting for model · step 1");
-        assert_eq!(progress.text(10, false), "⠋ waitin…");
+        let first = progress.text(80, false);
+        assert!(first.starts_with("·⚗ thinking through the mix · 0.0s"));
+        assert!(!first.contains("model"));
+        assert!(!first.contains("step"));
+        assert_eq!(width(&progress.text(10, false)), 9);
+        progress.frame = 1;
+        assert!(progress.text(80, false).starts_with("∘⚗"));
         progress.started = now - Duration::from_millis(1500);
-        assert!(progress.text(80, true).ends_with(" · 1.5s\x1b[0m"));
+        assert!(progress.text(80, true).starts_with(TEAL));
+        assert!(progress
+            .text(80, true)
+            .ends_with(" · 1.5s · ~12 output tokens\x1b[0m"));
+        progress.started = now - Duration::from_secs(4);
+        assert!(progress.text(80, false).contains("following the thread"));
         progress.started = now - Duration::from_secs(65);
-        assert!(progress.text(80, false).ends_with(" · 1m05s"));
+        assert!(progress.text(80, false).contains(" · 1m05s"));
     }
 
     #[test]
