@@ -347,6 +347,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         model: String::new(),
         provider: String::new(),
         reasoning_effort: String::new(),
+        fast: false,
         auth_mode: String::new(),
         read_only: session.config["read_only"].as_bool().unwrap_or(false),
         plan: false,
@@ -1081,6 +1082,8 @@ fn update_metadata(session: &Session, snapshot: &mut SessionSnapshot) {
     snapshot.model = text(&session.config["model"]);
     snapshot.provider = text(&session.config["provider"]);
     snapshot.reasoning_effort = text(&session.config["reasoning_effort"]);
+    snapshot.fast =
+        session.config["fast"] == true && crate::catalog::supports_fast(&session.config);
     snapshot.auth_mode = text(&session.config["auth_mode"]);
     snapshot.plan = session.state["plan"].as_bool().unwrap_or(false);
     snapshot.auto = auto_info(session);
@@ -1216,6 +1219,15 @@ fn change_settings(session: &mut Session, change: SessionChange) -> Result<(), S
             };
             session.config["reasoning_effort"] = json!(name);
             crate::auto::pin(session);
+        }
+        SessionChange::SetFast { enabled } => {
+            if enabled && !crate::catalog::supports_fast(&session.config) {
+                return Err(format!(
+                    "fast mode is not supported for {}; model and settings unchanged",
+                    session.config["model"].as_str().unwrap_or("")
+                ));
+            }
+            session.config["fast"] = json!(enabled);
         }
         SessionChange::SetAuto { enabled } => crate::auto::set_enabled(session, enabled)?,
     }

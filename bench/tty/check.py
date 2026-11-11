@@ -120,6 +120,52 @@ EXEC_TAIL_FIRST_STDOUT = "".join(f"TAIL stdout {number}\n" for number in range(1
 #   ("show", label)             print the screen
 #   ("expect", check, *args)    see CHECKS below
 SCENARIOS = {
+    "chat-fast-service-tier": {
+        "fast": True,
+        "size": (28, 110),
+        "steps": [
+            ("wait_status", "  gpt-6.1-sol / medium", 5),
+            ("expect", "screen_lacks", "fast"),
+            ("type", "/status"), ("key", "enter"),
+            ("wait", "fast       off", 5),
+            ("type", "default service"), ("key", "enter"),
+            ("wait", "Fast fixture reply 1.", 5),
+            ("type", "/fa\t"), ("wait_regex", "^❯ /fast$", 5),
+            ("type", "on\t"), ("wait_regex", "^❯ /fast on$", 5),
+            ("key", "enter"), ("wait", "fast mode on (higher token rates)", 5),
+            ("wait_status", "fast · gpt-6.1-sol / medium", 5),
+            ("type", "/fast sideways"), ("key", "enter"),
+            ("wait", "usage: /fast [on|off]", 5),
+            ("type", "/status"), ("key", "enter"),
+            ("wait", "fast       on (higher token rates)", 5),
+            ("type", "priority service after invalid argument"), ("key", "enter"),
+            ("wait", "Fast fixture reply 2.", 5),
+            ("wait_status", "fast · gpt-6.1-sol / medium", 5),
+            ("show", "Fast keeps model/effort, discloses higher rates, and survives invalid arguments"),
+            ("type", "/fast of\t"), ("key", "enter"),
+            ("wait", "fast mode off", 5),
+            ("wait_status", "  gpt-6.1-sol / medium", 5),
+            ("type", "/fast on extra"), ("key", "enter"),
+            ("type", "ordinary service again"), ("key", "enter"),
+            ("wait", "Fast fixture reply 3.", 5),
+            ("type", "/fast"), ("key", "enter"),
+            ("wait_status", "fast · gpt-6.1-sol / medium", 5),
+            ("type", "/fast"), ("key", "enter"),
+            ("wait_status", "  gpt-6.1-sol / medium", 5),
+            ("show", "Off omits priority from the next request; bare /fast toggles both ways"),
+            ("type", "/fast on"), ("key", "enter"),
+            ("wait_status", "fast · gpt-6.1-sol / medium", 5),
+            ("type", "/model claude-haiku-5-5"), ("key", "enter"),
+            ("wait_status", "  claude-haiku-5-5", 5),
+            ("type", "/fast on"), ("key", "enter"),
+            ("wait", "fast mode is not supported for claude-haiku-5-5", 5),
+            ("type", "/status"), ("key", "enter"),
+            ("wait_status", "  claude-haiku-5-5", 5),
+            ("show", "Switching to an unsupported model disables Fast and rejects explicit enable"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+            ("expect", "all_count", "usage: /fast [on|off]", 2),
+        ],
+    },
     "chat-api-reset-next-turn": {
         "script": [reply("Source opening reply."), reply("Successor opening reply.")],
         "steps": [
@@ -1257,7 +1303,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False):
         self.rows, self.cols = size
         self.raw = bytearray()
         self.no_color = "NO_COLOR" in (extra_env or {})
@@ -1288,6 +1334,8 @@ class Session:
                 args += ["--recap", "--no-project-instructions", "--model", "gpt-6.1-sol"]
             elif retry:
                 args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6.1-luna"]
+            elif fast:
+                args += ["--model", "gpt-6.1-sol", "--reasoning-effort", "medium", "--no-project-instructions"]
             elif script_path is None:
                 args += ["--auto", "--no-project-instructions"]
             else:
@@ -1695,6 +1743,37 @@ def run(binary, name, scenario, workspace):
                          OPENAI_API_KEY="offline-fixture", ANTHROPIC_API_KEY="offline-fixture",
                          REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}",
                          REAGENT_ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}")
+    fast_requests = []
+    if scenario.get("fast"):
+        class FastHandler(http.server.BaseHTTPRequestHandler):
+            def setup(self):
+                # Accepted sockets need not inherit the listener's blocking mode on macOS.
+                self.request.setblocking(True)
+                super().setup()
+
+            def do_POST(self):
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                fast_requests.append(request)
+                text = f"Fast fixture reply {len(fast_requests)}."
+                response = {"id": "fast-fixture", "status": "completed", "model": "gpt-6.1-sol",
+                            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}],
+                            "usage": {"input_tokens": 11, "output_tokens": 3}}
+                body = json.dumps(response).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FastHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_env.update(API_PROXY_URL="", API_PROXY_PROVIDER="", OPENAI_API_KEY="offline-fixture", TYPESAFE_API_KEY="", REAGENT_MODEL="",
+                         ANTHROPIC_API_KEY="offline-fixture",
+                         REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+                         REAGENT_ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}")
     if scenario.get("api_compact"):
         class CompactHandler(http.server.BaseHTTPRequestHandler):
             requests = 0
@@ -1939,7 +2018,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False))
     try:
         for step in scenario["steps"]:
             kind, args = step[0], step[1:]
@@ -2050,6 +2129,14 @@ def run(binary, name, scenario, workspace):
         if server is not None:
             server.shutdown()
             server.server_close()
+    if scenario.get("fast"):
+        if len(fast_requests) != 3:
+            failures.append("Fast commands did not produce exactly three ordinary requests")
+        for request, tier in zip(fast_requests, [None, "priority", None]):
+            if request.get("service_tier") != tier or (tier is None and "service_tier" in request):
+                failures.append(f"Fast request service_tier differed: {request.get('service_tier')!r}, expected {tier!r}")
+            if request.get("model") != "gpt-6.1-sol" or request.get("reasoning", {}).get("effort") != "medium":
+                failures.append("Fast changed the model or reasoning effort")
     if scenario.get("live_stream"):
         if not stream_done.wait(5):
             failures.append("stream fixture did not settle after completion or interruption")

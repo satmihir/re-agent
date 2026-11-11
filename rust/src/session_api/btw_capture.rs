@@ -223,6 +223,7 @@ pub(super) fn prepare(
         "provider",
         "model",
         "reasoning_effort",
+        "fast",
         "auth_mode",
         "proxied",
         "model_retry_window",

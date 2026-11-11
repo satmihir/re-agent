@@ -8,6 +8,9 @@ const PROJECT_HEADING: &str = "\n# Project instructions (AGENTS.md)\n\n";
 /// build_context assembles an independent, ordered model request from session data.
 pub fn build_context(config: &Value, scope: Value, history: &[Value], tools: Value) -> Value {
     let mut req = json!({"scope": scope, "model":string(config,"model")});
+    if config["fast"] == true && crate::catalog::supports_fast(config) {
+        req["fast"] = true.into();
+    }
     let effort = string(config, "reasoning_effort");
     if !effort.is_empty() {
         req["reasoning_effort"] = effort.into();
@@ -164,6 +167,39 @@ mod tests {
         config["project_instructions"] = "changed".into();
         assert_eq!(instructions(&config), pinned);
         assert_eq!(prompt_project(&config), Some("original"));
+    }
+
+    #[test]
+    fn fast_requests_require_an_enabled_supported_model() {
+        for (provider, model, supported) in [
+            ("openai", "gpt-6.1-luna", false),
+            ("openai", "gpt-6.1-terra", true),
+            ("openai", "gpt-6.1-sol", true),
+            ("anthropic", "claude-opus-5-5", true),
+            ("anthropic", "claude-sonnet-5-5", false),
+            ("anthropic", "claude-haiku-5-5", false),
+            ("anthropic", "claude-opus-5-5-other", false),
+            ("openai", "unknown", false),
+            ("scripted", "gpt-6.1-sol", false),
+            ("scripted", "scripted", false),
+        ] {
+            let mut config = json!({"provider":provider,"model":model});
+            let plain = build_context(&config, json!({}), &[], json!([]));
+            assert!(plain.get("fast").is_none());
+            for fast in [json!(false), Value::Null, json!("true"), json!(1)] {
+                config["fast"] = fast;
+                assert_eq!(
+                    crate::types::json_bytes(&build_context(&config, json!({}), &[], json!([]))),
+                    crate::types::json_bytes(&plain)
+                );
+            }
+            config["fast"] = true.into();
+            let request = build_context(&config, json!({}), &[], json!([]));
+            assert_eq!(request.get("fast"), supported.then_some(&json!(true)));
+            if !supported {
+                assert_eq!(request, plain);
+            }
+        }
     }
 
     #[test]

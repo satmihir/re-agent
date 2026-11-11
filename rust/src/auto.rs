@@ -254,6 +254,9 @@ fn stage(session: &Session, route: &Value) -> Result<Candidate, String> {
     config["provider"] = catalog::model_info(text(route, "model"))["provider"].clone();
     config["model"] = route["model"].clone();
     config["reasoning_effort"] = route["reasoning_effort"].clone();
+    if config["fast"] == true && !catalog::supports_fast(&config) {
+        config["fast"] = json!(false);
+    }
     let proxied = config["provider"] == "openai"
         && !std::env::var("API_PROXY_URL")
             .unwrap_or_default()
