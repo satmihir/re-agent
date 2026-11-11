@@ -2075,7 +2075,7 @@ mod boundary_tests {
         session.config["model"] = json!("gpt-6.1-sol");
         session.config["scripted"] = json!("");
         session.config["checkpoint_enabled"] = json!(true);
-        crate::checkpoint::save(&session, "terminal", "").unwrap();
+        crate::checkpoint::save(&mut session, "terminal", "").unwrap();
         let id = string(&session.state["session_id"]);
         crate::checkpoint::close(id);
         let restored = crate::checkpoint::load(id).unwrap();

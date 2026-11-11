@@ -310,7 +310,7 @@ pub(crate) fn open_resolved(
             .join("\n");
         (!notice.is_empty()).then_some(notice)
     } else {
-        crate::checkpoint::save(&owner.session, "idle", "")
+        crate::checkpoint::save(&mut owner.session, "idle", "")
             .map_err(|e| error("persistence_failure", e))?;
         None
     };

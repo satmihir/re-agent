@@ -782,6 +782,9 @@ fn pty_model_picker_keeps_the_region_and_accepts_the_next_turn() {
     pty.wait(b"current");
     let start = pty.raw.len();
     pty.send(b"\r");
+    // The picker repaints before the model control releases and reacquires raw input.
+    pty.wait(b"switched to ");
+    pty.wait(b"\x1b[6n");
     pty.wait("❯ ".as_bytes());
     assert!(!pty.raw[start..]
         .windows(6)
