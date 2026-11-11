@@ -154,7 +154,7 @@ fn sigint_cancels_stalled_run_and_chat_accepts_the_next_turn() {
             }
         );
         if mode == "chat" {
-            assert!(stderr.contains("✓ completed"), "{stderr}");
+            assert!(stderr.contains("0 tool calls"), "{stderr}");
         }
     }
 }
@@ -559,9 +559,11 @@ fn fresh_model_announces_session_before_switch_and_accepts_the_next_turn() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(output.status.success(), "{stderr}");
     let switch = stderr.find("switched to gpt-6.1-luna").unwrap();
-    let announcement = stderr.find(" · resume: reagent chat --resume ").unwrap();
+    let announcement = stderr.rfind(" · resume: reagent chat --resume ").unwrap();
     assert!(announcement < switch, "{stderr}");
-    assert_eq!(stderr.matches("✓ completed").count(), 2, "{stderr}");
+    let summaries = stderr.lines().filter(|line| line.starts_with("✓ ")).count();
+    assert_eq!(summaries, 2, "{stderr}");
+    assert!(stderr[..announcement].contains("0 tool calls"), "{stderr}");
 }
 
 #[test]
@@ -614,7 +616,7 @@ fn checkpoint_publication_failure_stops_chat_before_reply_recap_or_next_request(
         "{stderr}"
     );
     assert!(!stderr.contains("persistence_error ·"), "{stderr}");
-    assert!(!stderr.contains("✓ completed"), "{stderr}");
+    assert!(!stderr.contains("✓ "), "{stderr}");
     assert!(output.stdout.is_empty());
     assert_eq!(
         listener.accept().unwrap_err().kind(),
@@ -1212,14 +1214,14 @@ open(path,'wb').write(b'\t \n' if mode=='empty' else b'edited \xff text\nline2\n
                 }
                 let output = String::from_utf8_lossy(&pty.raw);
                 assert!(
-                    output.contains("completed"),
+                    output.contains("0 tool calls"),
                     "pipe exposed a reply before its terminal summary: {output}"
                 );
                 assert!(
                     output.ends_with("\x1b[22;3H\x1b[?2026l"),
                     "pipe exposed a reply without a completed prompt frame: {output}"
                 );
-                let summary = output.find("completed").unwrap();
+                let summary = output.find("0 tool calls").unwrap();
                 let caret = output[..summary].rfind("0% of context").unwrap();
                 assert!(
                     !output[caret..summary].contains("\x1b[?2026l"),
@@ -1282,15 +1284,15 @@ fn pty_retry_notice_separates_the_redirected_reply_before_the_summary() {
     drop(failed);
     let (mut stream, body) = pty.request(&listener);
     respond(&mut stream, body["stream"].as_bool().unwrap_or(false));
-    pty.wait(b"completed");
+    pty.wait(b"0 tool calls");
     let note = pty
         .raw
         .windows(b"model attempt 1 failed".len())
         .position(|bytes| bytes == b"model attempt 1 failed")
         .unwrap();
     let summary = pty.raw[note..]
-        .windows(b"completed".len())
-        .position(|bytes| bytes == b"completed")
+        .windows(b"0 tool calls".len())
+        .position(|bytes| bytes == b"0 tool calls")
         .unwrap()
         + note;
     assert!(

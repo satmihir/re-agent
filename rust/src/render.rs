@@ -454,100 +454,71 @@ fn header_line(line: &str) {
         eprintln!("{line}")
     }
 }
-fn welcome(cfg: &Value, columns: usize) -> String {
-    let art = [
-        "      ●      ",
-        "  ▗▄▖   ▗▄▖  ",
-        "   █  B  █   ",
-        "   █ P   █   ",
-        "  ▟▘     ▝▙  ",
-        " ▟▘LLLLLLL▝▙ ",
-        "▐▌LLLL>LLLL▐▌",
-        "▝▙▄▄▄▄▄▄▄▄▄▟▘",
-    ];
-    let shades = [0, 0, 17, 18, 19, 20, 56, 57, 57, 93, 93, 0, 0];
-    let bubble = "\x1b[38;5;99m";
-    let teal = "\x1b[1;38;5;86m";
-    let room = columns - 17;
-    let dim = |s: &str| format!("{DIM}{}{RESET}", truncate(s, room));
+fn welcome(cfg: &Value, columns: usize, styled: bool) -> String {
+    let room = columns.saturating_sub(1);
+    let safe = |s: &str| sanitize(s).replace('\n', "↵").replace('\t', "⇥");
     let (model, provider, effort) = model_presentation(cfg);
-    let name = sanitize(&model);
-    let line = if provider.is_empty() {
-        name.clone()
+    let mut rows = vec![if provider.is_empty() {
+        format!("re:agent · {}", safe(&model))
     } else {
-        format!("{name} · {} · {effort}", sanitize(&provider))
-    };
-    let line = truncate(&line, room);
-    let model_line = if line.len() > name.len() && line.starts_with(&name) {
-        format!("{BOLD}{name}{RESET}{DIM}{}{RESET}", &line[name.len()..])
+        format!(
+            "re:agent · {} · {} · {}",
+            safe(&model),
+            safe(&provider),
+            safe(&effort)
+        )
+    }];
+    let workspace = safe(&short_path(text(cfg, "workspace")));
+    rows.push(truncate(&format!("workspace {workspace}"), room));
+    rows.push(if yes(cfg, "plan") {
+        format!("{} · plan mode: exec and file changes refused", mode(cfg))
+    } else if yes(cfg, "read_only") {
+        "read only".into()
     } else {
-        format!("{BOLD}{line}{RESET}")
-    };
-    let mut mode = mode(cfg).to_string();
-    if yes(cfg, "plan") {
-        mode.push_str(" · plan mode");
-    }
-    let mode =
-        truncate(&mode, room).replacen("plan mode", &format!("{teal}plan mode\x1b[22;39m{DIM}"), 1);
-    let session = if text(cfg, "provider") != "scripted" && !text(cfg, "session_id").is_empty() {
-        dim(&format!("session ID: {}", text(cfg, "session_id")))
-    } else {
-        String::new()
-    };
-    let via = if yes(cfg, "proxied") {
-        dim(&format!(
+        "! exec: commands run as you; read, write, and network".into()
+    });
+    if yes(cfg, "proxied") {
+        rows.push(format!(
             "requests go to {} (API_PROXY_URL)",
-            sanitize(&crate::transport::redacted(
+            safe(&crate::transport::redacted(
                 &std::env::var("API_PROXY_URL").unwrap_or_default()
             ))
-        ))
-    } else {
-        String::new()
-    };
-    let loaded = cfg["project_instructions"]
-        .as_str()
-        .map(|s| {
-            dim(&format!(
-                "AGENTS.md loaded ({:.1} KB)",
-                s.len() as f64 / 1000.
-            ))
-        })
-        .unwrap_or_default();
-    let details = [
-        session,
-        format!("{BOLD}re{RESET}{bubble}{BOLD}:{RESET}{BOLD}agent{RESET}"),
-        model_line,
-        truncate(&sanitize(&short_path(text(cfg, "workspace"))), room),
-        format!("{DIM}{mode}{RESET}"),
-        via,
-        format!("/help{DIM} commands · {RESET}!cmd{DIM} shell · {RESET}Ctrl-D{DIM} exit{RESET}"),
-        loaded,
-    ];
+        ));
+    }
+    let id = safe(text(cfg, "session_id"));
+    if yes(cfg, "checkpoint_enabled") && !id.is_empty() {
+        let resume = format!("session ID: {id} · resume: reagent chat --resume {id}");
+        rows.push(if room == 0 || width(&resume) <= room {
+            resume
+        } else {
+            format!("session ID: {id} · resume: --resume {id}")
+        });
+    }
+    rows.push("/help commands · Ctrl-D exit".into());
     let mut out = String::new();
-    for (row, detail) in art.iter().zip(details) {
-        for (col, c) in row.chars().enumerate() {
-            match c {
-                '●' => out.push_str(&format!("{bubble}●{RESET}")),
-                'B' => out.push_str(&format!("\x1b[38;5;63m•{RESET}")),
-                'P' => out.push_str(&format!("{bubble}•{RESET}")),
-                'L' => out.push_str(&format!("\x1b[48;5;{}m {RESET}", shades[col])),
-                '>' => out.push_str(&format!("\x1b[48;5;{}m{teal}❯{RESET}", shades[col])),
-                _ => out.push(c),
+    for (index, row) in rows.iter().enumerate() {
+        // Paths are shortened, not wrapped; disclosures retain their complete text.
+        let lines = if index == 1 {
+            vec![row.clone()]
+        } else {
+            wrap("", "", row, room)
+        };
+        for line in lines {
+            if styled {
+                out.push_str(&format!("{DIM}{line}{RESET}\n"));
+            } else {
+                out.push_str(&line);
+                out.push('\n');
             }
         }
-        if !detail.is_empty() {
-            out.push_str("   ");
-            out.push_str(&detail);
-        }
-        out.push('\n');
     }
     out
 }
 
 /// Header presents a run's model, workspace, and authority.
 pub fn header(cfg: &Value, chat: bool) {
-    if chat && styled(2) && columns(2) >= 72 {
-        eprint!("{}", welcome(cfg, columns(2)));
+    if chat {
+        eprint!("{}", welcome(cfg, columns(2), styled(2)));
         return;
     }
     let (model, provider, effort) = model_presentation(cfg);
@@ -561,23 +532,12 @@ pub fn header(cfg: &Value, chat: bool) {
     if yes(cfg, "plan") {
         mode.push_str(" · plan mode")
     }
-    let prefix = if chat {
-        "re:agent chat · "
-    } else {
-        "re:agent · "
-    };
-    let suffix = if chat {
-        details
-    } else {
-        format!("{details} · {mode} · {workspace}")
-    };
+    let prefix = "re:agent · ";
+    let suffix = format!("{details} · {mode} · {workspace}");
     if styled(2) {
         eprintln!("{DIM}{prefix}{RESET}{BOLD}{model}{RESET}{DIM}{suffix}{RESET}")
     } else {
         eprintln!("{prefix}{model}{suffix}")
-    }
-    if chat && !text(cfg, "session_id").is_empty() && text(cfg, "provider") != "scripted" {
-        header_line(&format!("session ID: {}", text(cfg, "session_id")))
     }
     if yes(cfg, "proxied") {
         header_line(&format!(
@@ -585,34 +545,10 @@ pub fn header(cfg: &Value, chat: bool) {
             crate::transport::redacted(&std::env::var("API_PROXY_URL").unwrap_or_default())
         ))
     }
-    if chat {
-        let limit = |key| {
-            let n = number(cfg, key);
-            if n == 0 {
-                "unlimited".into()
-            } else {
-                n.to_string()
-            }
-        };
-        header_line(&format!(
-            "workspace {workspace} · {mode} · {} steps, {} tool calls per turn",
-            limit("max_steps"),
-            limit("max_tool_calls")
-        ));
-        if let Some(s) = cfg["project_instructions"].as_str() {
-            header_line(&format!(
-                "AGENTS.md loaded ({:.1} KB)",
-                s.len() as f64 / 1000.
-            ))
-        }
-    }
     if yes(cfg, "plan") {
         header_line("! plan mode: exec and file changes are refused while plan mode is on")
     } else if !yes(cfg, "read_only") {
         header_line(&format!("! exec mode: commands run as you, in {workspace}, and can read, write, and use the network"))
-    }
-    if chat {
-        header_line("/help for commands · Ctrl-D to exit")
     }
 }
 /// Model started shows the active request without committing a transcript line.
@@ -804,6 +740,113 @@ pub fn blocked_advice(status: &str) -> &'static str {
     }
 }
 
+/// Run_details retains detailed last-Run accounting for the chat status command.
+pub(crate) fn run_details(result: &Value) -> String {
+    let mut out = format!(
+        "last run   {} · {} · {} · {}",
+        text(result, "status"),
+        plural(number(result, "steps"), "step", "steps"),
+        plural(number(result, "tool_calls"), "tool call", "tool calls"),
+        usage(&result["usage"])
+    );
+    if !result["tree_cost"].is_null() {
+        out.push_str(&format!("\ntree cost  {}", usage(&result["tree_cost"])));
+    }
+    if !result["router_usage"].is_null() {
+        out.push_str(&format!("\n{}", router_usage_line(&result["router_usage"])));
+    }
+    out
+}
+
+fn token_total(usage: &Value) -> String {
+    let total = number(usage, "input_tokens").checked_add(number(usage, "output_tokens"));
+    let mut out = match (yes(usage, "known"), total) {
+        (true, Some(total)) => format!("{} tokens", count(total)),
+        _ => "tokens unknown".into(),
+    };
+    let unreported = number(usage, "unreported_attempts");
+    if unreported > 0 {
+        out.push_str(&format!(
+            " (incomplete; {})",
+            plural(unreported, "unreported retry", "unreported retries")
+        ));
+    }
+    out
+}
+
+fn turn_summary(
+    result: &Value,
+    elapsed: Duration,
+    state: &Value,
+    chat: bool,
+    styled: bool,
+) -> String {
+    let status = text(result, "status");
+    let elapsed = if elapsed.as_secs() < 60 {
+        format!("{:.1}s", elapsed.as_secs_f64())
+    } else {
+        format!("{}m{:02}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
+    };
+    if chat && status == "completed" {
+        let mut line = format!(
+            "✓ {elapsed} · {} · {}",
+            plural(number(result, "tool_calls"), "tool call", "tool calls"),
+            token_total(&result["usage"])
+        );
+        let tree = &result["tree_cost"];
+        // Enabling delegation alone creates tree_cost, even without any workers.
+        let agents_ran = yes(&state["_display"], "agents_ran")
+            || [
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+                "unreported_attempts",
+            ]
+            .iter()
+            .any(|key| tree[*key] != result["usage"][*key]);
+        if !tree.is_null() && agents_ran {
+            line.push_str(&format!(" · tree {}", token_total(tree)));
+        }
+        return if styled {
+            format!("\n{DIM}{line}{RESET}\n")
+        } else {
+            format!("{line}\n")
+        };
+    }
+    let (mark, color) = match status {
+        "completed" => ("✓", "\x1b[32m"),
+        "cancelled" => ("–", DIM),
+        "effect_unknown" => ("!", "\x1b[33m"),
+        _ => ("✗", "\x1b[31m"),
+    };
+    let suffix = format!(
+        " {status} · {} · {} · {} · {elapsed}",
+        plural(number(result, "steps"), "step", "steps"),
+        plural(number(result, "tool_calls"), "tool call", "tool calls"),
+        usage(&result["usage"])
+    );
+    let mut out = if styled {
+        format!("\n{color}{mark}{RESET}{DIM}{suffix}{RESET}\n")
+    } else {
+        format!("{mark}{suffix}\n")
+    };
+    if !result["tree_cost"].is_null() {
+        let cost = &result["tree_cost"];
+        out.push_str(&format!(
+            "  tree cost: {} input · {} output tokens{}\n",
+            count(number(cost, "input_tokens")),
+            count(number(cost, "output_tokens")),
+            if !yes(cost, "known") || number(cost, "unreported_attempts") > 0 {
+                " (incomplete)"
+            } else {
+                ""
+            }
+        ));
+    }
+    out
+}
+
 /// Result prints a reply to stdout and its factual run summary to stderr.
 pub fn result(result: &Value, elapsed: Duration, cfg: &Value, state: &Value, chat: bool) {
     result_in_region(result, elapsed, cfg, state, chat, None);
@@ -847,42 +890,10 @@ pub fn result_in_region(
         )
     }
     let status = text(result, "status");
-    let (mark, color) = match status {
-        "completed" => ("✓", "\x1b[32m"),
-        "cancelled" => ("–", DIM),
-        "effect_unknown" => ("!", "\x1b[33m"),
-        _ => ("✗", "\x1b[31m"),
-    };
-    let elapsed = if elapsed.as_secs() < 60 {
-        format!("{:.1}s", elapsed.as_secs_f64())
-    } else {
-        format!("{}m{:02}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
-    };
-    let suffix = format!(
-        " {status} · {} · {} · {} · {elapsed}",
-        plural(number(result, "steps"), "step", "steps"),
-        plural(number(result, "tool_calls"), "tool call", "tool calls"),
-        usage(&result["usage"])
-    );
-    if styled(2) {
-        eprintln!("\n{color}{mark}{RESET}{DIM}{suffix}{RESET}")
-    } else {
-        eprintln!("{mark}{suffix}")
+    eprint!("{}", turn_summary(result, elapsed, state, chat, styled(2)));
+    if !chat || status != "completed" || yes(cfg, "recap") {
+        eprint!("{}", activity::browsing_summary(state, styled(2)));
     }
-    if !result["tree_cost"].is_null() {
-        let c = &result["tree_cost"];
-        eprintln!(
-            "  tree cost: {} input · {} output tokens{}",
-            count(number(c, "input_tokens")),
-            count(number(c, "output_tokens")),
-            if !yes(c, "known") || number(c, "unreported_attempts") > 0 {
-                " (incomplete)"
-            } else {
-                ""
-            }
-        )
-    }
-    eprint!("{}", activity::browsing_summary(state, styled(2)));
     if !text(result, "reason").is_empty() {
         let reason = if text(result, "reason") == "no_followup_step" {
             "the step budget ran out"
@@ -891,23 +902,29 @@ pub fn result_in_region(
         };
         eprintln!("  {}", sanitize(reason))
     }
-    if yes(cfg, "recap") || status != "completed" {
-        for effect in result["effects"].as_array().into_iter().flatten() {
-            if !text(effect, "agent_id").is_empty() {
-                let description = if text(effect, "path").is_empty() {
-                    text(effect, "summary").to_string()
-                } else {
-                    format!("{} {}", text(effect, "operation"), text(effect, "path"))
-                };
-                eprintln!(
-                    "  agent {}: {} ({}) [{}]",
-                    sanitize(text(effect, "agent_id")),
-                    sanitize(&description),
-                    text(effect, "effect"),
-                    sanitize(text(effect, "workspace"))
-                );
-            }
+    for effect in result["effects"].as_array().into_iter().flatten() {
+        let unknown = text(effect, "effect") == "unknown";
+        if !yes(cfg, "recap") && status == "completed" && !unknown {
+            continue;
         }
+        let description = if text(effect, "path").is_empty() {
+            text(effect, "summary").to_string()
+        } else {
+            format!("{} {}", text(effect, "operation"), text(effect, "path"))
+        };
+        if !text(effect, "agent_id").is_empty() {
+            eprintln!(
+                "  agent {}: {} ({}) [{}]",
+                sanitize(text(effect, "agent_id")),
+                sanitize(&description),
+                text(effect, "effect"),
+                sanitize(text(effect, "workspace"))
+            );
+        } else if unknown && status == "completed" && !yes(cfg, "recap") {
+            eprintln!("  ! {} (effect unknown)", sanitize(&description));
+        }
+    }
+    if yes(cfg, "recap") || status != "completed" {
         for line in state["_display"]["recap"]
             .as_array()
             .into_iter()
@@ -945,7 +962,14 @@ pub fn result_in_region(
             }
         )
     }
-    eprint!("{}", router_usage_note(&result["router_usage"], styled(2)));
+    let router = &result["router_usage"];
+    if !chat
+        || status != "completed"
+        || !yes(router, "known")
+        || number(router, "unreported_attempts") > 0
+    {
+        eprint!("{}", router_usage_note(router, styled(2)));
+    }
     if chat && text(state, "blocked").is_empty() && yes(result, "resumable") {
         let line = if status == "cancelled" {
             "  interrupted; inspect unknown effects before continuing"
@@ -1084,22 +1108,147 @@ mod tests {
         );
     }
     #[test]
-    fn welcome_keeps_eight_rows_and_fits_session_details_beside_flask() {
-        let cfg = serde_json::json!({"model":"gpt-6-luna", "provider":"openai", "auth_mode":"key", "reasoning_effort":"low", "workspace":"/work/repo", "session_id":"session", "plan":true, "project_instructions":"frozen"});
-        for columns in [72, 80, 100] {
-            let out = welcome(&cfg, columns);
-            let rows: Vec<_> = out.lines().collect();
-            assert_eq!(rows.len(), 8);
-            assert!(rows.iter().all(|row| width(row) < columns));
-            assert!(rows[0].contains("session ID: session"));
-            assert!(rows[2].contains("gpt-6-luna"));
-            assert!(rows[4].contains("\x1b[1;38;5;86mplan mode\x1b[22;39m"));
-            assert!(rows[6].contains("/help"));
-            assert!(rows[7].contains("AGENTS.md loaded"));
+    fn welcome_is_short_and_bounds_paths_without_hiding_auth_or_authority() {
+        let mut cfg = serde_json::json!({"model":"gpt-6-luna", "provider":"openai", "auth_mode":"key", "reasoning_effort":"low", "workspace":"/work/a-very-long-workspace-name-that-must-not-wrap/repo", "session_id":"0123456789abcdef", "checkpoint_enabled":true});
+        for styled in [false, true] {
+            for columns in [40, 72, 80, 100] {
+                let out = welcome(&cfg, columns, styled);
+                let rows: Vec<_> = out.lines().collect();
+                assert!(rows.iter().all(|row| width(row) < columns), "{out}");
+                assert!(rows.len() <= if columns >= 72 { 5 } else { 8 }, "{out}");
+                assert_eq!(
+                    rows.iter().filter(|row| row.contains("workspace ")).count(),
+                    1,
+                    "{out}"
+                );
+                let plain = welcome(&cfg, columns, false)
+                    .lines()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert!(plain.contains("API key"), "{out}");
+                assert!(out.contains("commands run as you"), "{out}");
+                assert_eq!(out.matches("--resume").count(), 1, "{out}");
+                assert!(out.contains("/help"), "{out}");
+                assert!(!out.contains("AGENTS.md loaded"));
+            }
         }
-        let scripted = welcome(&serde_json::json!({"provider":"scripted"}), 80);
+        cfg["checkpoint_enabled"] = serde_json::json!(false);
+        cfg["read_only"] = serde_json::json!(true);
+        cfg["plan"] = serde_json::json!(true);
+        let out = welcome(&cfg, 72, false);
+        assert!(out.contains("read only · plan mode: exec and file changes refused"));
+        assert!(!out.contains("resume"));
+        let scripted = welcome(&serde_json::json!({"provider":"scripted"}), 80, false);
         assert!(!scripted.contains("session ID:"));
-        assert_eq!(scripted.lines().count(), 8);
+        assert_eq!(scripted.lines().count(), 4);
+    }
+
+    #[test]
+    fn completed_chat_summary_is_compact_but_run_errors_recap_and_unknown_usage_remain_visible() {
+        const CHILD: &str = "REAGENT_TEST_TURN_SUMMARY";
+        if let Ok(scenario) = std::env::var(CHILD) {
+            let mut result = serde_json::json!({"status":"completed", "steps":3, "tool_calls":2, "reply":"reply", "usage":{"known":true,"input_tokens":1200,"cached_input_tokens":700,"output_tokens":300,"reasoning_tokens":100,"unreported_attempts":0}});
+            let mut state =
+                serde_json::json!({"_display":{"recap":["changed file"],"reads":["a"]}});
+            let mut cfg = serde_json::json!({});
+            match scenario.as_str() {
+                "cancelled" => result["status"] = serde_json::json!("cancelled"),
+                "incomplete" => {
+                    result["usage"]["known"] = serde_json::json!(false);
+                    result["usage"]["unreported_attempts"] = serde_json::json!(2);
+                }
+                "unused_agents" => {
+                    result["tree_cost"] = result["usage"].clone();
+                    state["_display"]["agents"] = serde_json::json!({"t1":"previous turn"});
+                }
+                "historical_unknown_agent" => {
+                    result["tree_cost"] = result["usage"].clone();
+                    result["tree_cost"]["known"] = serde_json::json!(false);
+                }
+                "overflow" => {
+                    result["usage"]["input_tokens"] = serde_json::json!(i64::MAX);
+                    result["usage"]["output_tokens"] = serde_json::json!(1);
+                }
+                "zero_cost_agents" => {
+                    result["tree_cost"] = result["usage"].clone();
+                    state["_display"]["agents_ran"] = serde_json::json!(true);
+                }
+                "agents" => {
+                    result["tree_cost"] = result["usage"].clone();
+                    result["tree_cost"]["input_tokens"] = serde_json::json!(2200);
+                }
+                "recap" => cfg["recap"] = serde_json::json!(true),
+                "unknown_effect" => {
+                    result["effects"] =
+                        serde_json::json!([{"effect":"unknown","summary":"command may have run"}])
+                }
+                "status" => {
+                    eprintln!("{}", run_details(&result));
+                    return;
+                }
+                _ => {}
+            }
+            state["blocked"] = serde_json::json!("");
+            result_in_region(
+                &result,
+                Duration::from_millis(1250),
+                &cfg,
+                &state,
+                scenario != "run",
+                None,
+            );
+            return;
+        }
+        for scenario in [
+            "completed",
+            "unused_agents",
+            "historical_unknown_agent",
+            "overflow",
+            "agents",
+            "zero_cost_agents",
+            "incomplete",
+            "cancelled",
+            "run",
+            "recap",
+            "unknown_effect",
+            "status",
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "render::tests::completed_chat_summary_is_compact_but_run_errors_recap_and_unknown_usage_remain_visible", "--nocapture"])
+                .env(CHILD, scenario).output().unwrap();
+            assert!(output.status.success());
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            match scenario {
+                "completed" | "unused_agents" | "historical_unknown_agent" => {
+                    assert_eq!(stderr, "✓ 1.2s · 2 tool calls · 1.5k tokens\n")
+                }
+                "agents" => assert_eq!(
+                    stderr,
+                    "✓ 1.2s · 2 tool calls · 1.5k tokens · tree 2.5k tokens\n"
+                ),
+                "zero_cost_agents" => assert_eq!(
+                    stderr,
+                    "✓ 1.2s · 2 tool calls · 1.5k tokens · tree 1.5k tokens\n"
+                ),
+                "overflow" => assert_eq!(stderr, "✓ 1.2s · 2 tool calls · tokens unknown\n"),
+                "incomplete" => assert_eq!(
+                    stderr,
+                    "✓ 1.2s · 2 tool calls · tokens unknown (incomplete; 2 unreported retries)\n"
+                ),
+                "recap" => assert!(stderr.contains("changed file"), "{stderr}"),
+                "unknown_effect" => assert!(stderr.contains("command may have run (effect unknown)"), "{stderr}"),
+                "status" => assert_eq!(stderr, "last run   completed · 3 steps · 2 tool calls · 1.2k in (700 cached) · 300 out\n"),
+                _ => {
+                    assert!(
+                        stderr.contains(
+                            "3 steps · 2 tool calls · 1.2k in (700 cached) · 300 out · 1.2s"
+                        ),
+                        "{stderr}"
+                    );
+                    assert!(stderr.contains("trace: not recorded"), "{stderr}");
+                }
+            }
+        }
     }
 
     #[test]

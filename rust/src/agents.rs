@@ -1219,7 +1219,7 @@ pub(crate) fn display_snapshot_for(
     )
 }
 
-/// Notices drains root-child completion and delivery observations in publication order.
+/// Notices drains root-child completion observations in publication order.
 pub fn notices(s: &Session) -> Vec<String> {
     if s.config["agents"] != true || parent(s) != "root" {
         return vec![];
@@ -1273,7 +1273,6 @@ pub fn deliver(s: &mut Session) -> bool {
     let shared = tree(s);
     let mut t = shared.tree.lock().unwrap();
     let mut delivered = false;
-    let mut notices = Vec::new();
     for id in children(&t, parent(s)) {
         let n = t.nodes.get_mut(&id).unwrap();
         let results = std::mem::take(&mut n.results);
@@ -1318,13 +1317,6 @@ pub fn deliver(s: &mut Session) -> bool {
             s.history.push(json!({"kind":"user","user":user}));
             let step = s.state["steps"].as_u64().unwrap_or(0);
             s.trace.write("agent.result", step as usize, result);
-            if parent(s) == "root" {
-                notices.push(format!(
-                    "{} {} results delivered · step {step}",
-                    id,
-                    text(&n.record["name"])
-                ));
-            }
             let mut receipt = json!({"id":id,"state":"delivered","delivery_run_id":s.state["run_id"],"delivery_step":step,"message":format!("already delivered at step {step}")});
             if let Some(name) = n.record.get("name") {
                 receipt["name"] = name.clone();
@@ -1360,7 +1352,6 @@ pub fn deliver(s: &mut Session) -> bool {
             t.nodes.remove(&id);
         }
     }
-    t.notices.extend(notices);
     delivered
 }
 fn summarize_effects(records: &Value) -> Value {
@@ -2422,11 +2413,11 @@ mod tests {
     }
 
     #[test]
-    fn child_exec_is_private_but_parent_notices_surround_wait_activity() {
+    fn child_exec_is_private_and_one_completion_notice_precedes_wait_activity() {
         const CHILD: &str = "REAGENT_CHILD_DISPLAY_TEST";
         if std::env::var_os(CHILD).is_none() {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "agents::tests::child_exec_is_private_but_parent_notices_surround_wait_activity", "--nocapture"])
+                .args(["--exact", "agents::tests::child_exec_is_private_and_one_completion_notice_precedes_wait_activity", "--nocapture"])
                 .env(CHILD,"1").env("NO_COLOR","1")
                 .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
             let deadline = Instant::now() + Duration::from_secs(15);
@@ -2446,8 +2437,11 @@ mod tests {
                 .find("t1 worker finished · completed · 2 steps")
                 .unwrap();
             let activity = stderr.find("✓ wait").unwrap();
-            let delivered = stderr.find("t1 worker results delivered · step 1").unwrap();
-            assert!(finished < activity && activity < delivered, "{stderr}");
+            assert!(finished < activity, "{stderr}");
+            assert_eq!(stderr.matches("worker finished").count(), 1, "{stderr}");
+            assert!(!stderr.contains("results delivered"), "{stderr}");
+            assert!(stderr.contains("✓ wait worker"), "{stderr}");
+            assert!(!stderr.contains("ids=["), "{stderr}");
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -3018,13 +3012,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(delivered, vec![json!("t1"), json!("t2")]);
-        assert_eq!(
-            notices(&session),
-            vec![
-                "t1 a results delivered · step 0",
-                "t2 b results delivered · step 0"
-            ]
-        );
+        assert!(notices(&session).is_empty());
         assert!(!deliver(&mut session));
         assert!(notices(&session).is_empty());
         stop(&session, true);
@@ -3219,16 +3207,13 @@ mod tests {
             assert_eq!(snapshot(&session).1["total_cost"], total);
             assert_eq!(
                 notices(&session),
-                vec![
-                    format!(
-                        "t1 worker finished · completed · 1 steps · {} tokens",
-                        crate::render::count(
-                            total["input_tokens"].as_i64().unwrap()
-                                + total["output_tokens"].as_i64().unwrap()
-                        )
-                    ),
-                    "t1 worker results delivered · step 0".to_string(),
-                ]
+                vec![format!(
+                    "t1 worker finished · completed · 1 steps · {} tokens",
+                    crate::render::count(
+                        total["input_tokens"].as_i64().unwrap()
+                            + total["output_tokens"].as_i64().unwrap()
+                    )
+                ),]
             );
             assert!(notices(&session).is_empty());
         }

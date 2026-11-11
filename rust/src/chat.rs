@@ -109,7 +109,7 @@ fn presentation(snapshot: &SessionSnapshot, recap: bool) -> (Value, Value) {
     (
         json!({"provider":snapshot.provider,"model":snapshot.model,"reasoning_effort":(!snapshot.reasoning_effort.is_empty()).then_some(&snapshot.reasoning_effort),
         "auth_mode":snapshot.auth_mode,"proxied":snapshot.auth_mode == "proxy","workspace":snapshot.workspace,
-        "read_only":snapshot.read_only,"plan":snapshot.plan,"session_id":snapshot.session.session_id,
+        "read_only":snapshot.read_only,"plan":snapshot.plan,"session_id":snapshot.session.session_id,"checkpoint_enabled":snapshot.checkpoint_enabled,
         "context_window_tokens":snapshot.context_window_override,"max_steps":snapshot.max_steps,"max_tool_calls":snapshot.max_tool_calls,"recap":recap}),
         json!({"plan":snapshot.plan,"blocked":snapshot.blocked,"auto_enabled":snapshot.auto.enabled,
         "last_request":snapshot.last_request,"usage":snapshot.usage}),
@@ -120,6 +120,7 @@ struct Chat {
     api: SessionApi,
     input: Input,
     recap: bool,
+    last_run: Option<session_api::RunRef>,
 }
 
 impl Chat {
@@ -290,6 +291,7 @@ impl Chat {
         }
         if command.replacement_session.is_some() {
             self.api = self.api.get_replacement()?;
+            self.last_run = None;
             self.input.bind_workspace_consent(&self.api)?;
             self.resume_hint();
         }
@@ -337,6 +339,7 @@ impl Chat {
         self.wait(&admitted, before.event_cursor, &flag)?;
         render::model_finished(self.input.region().as_ref());
         let (mut result, display) = self.api.cli_result(run)?;
+        self.last_run = Some(run.clone());
         if self.input.consent_capacity_exhausted {
             result["resumable"] = json!(false);
         }
@@ -675,6 +678,22 @@ impl Chat {
             render::plural(snapshot.ordinary_user_turns as i64, "turn", "turns"),
             render::usage(&serde_json::to_value(&snapshot.usage).unwrap())
         ));
+        if let Some(run) = &self.last_run {
+            let (result, _) = self.api.cli_result(run)?;
+            self.say(&render::run_details(&result));
+        }
+        let limit = |n: u64| {
+            if n == 0 {
+                "unlimited".into()
+            } else {
+                n.to_string()
+            }
+        };
+        self.say(&format!(
+            "limits     {} steps · {} tool calls per turn",
+            limit(snapshot.max_steps),
+            limit(snapshot.max_tool_calls)
+        ));
         if snapshot.auto.fallback.is_some() {
             self.say(&format!(
                 "auto       {} · fallback {} / {} · {} router attempts",
@@ -908,7 +927,12 @@ pub fn run(mut cfg: Value) -> i32 {
             return 2;
         }
     };
-    let mut chat = Chat { api, input, recap };
+    let mut chat = Chat {
+        api,
+        input,
+        recap,
+        last_run: None,
+    };
     let snapshot = match chat.refresh() {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -926,12 +950,6 @@ pub fn run(mut cfg: Value) -> i32 {
             chat.failure(&error);
             return 2;
         }
-    }
-    if snapshot.checkpoint_enabled {
-        chat.say(&format!(
-            "resume: reagent chat --resume {}",
-            snapshot.session.session_id
-        ));
     }
     if let Err(error) = chat.input.bind_workspace_consent(&chat.api) {
         chat.failure(&error);
