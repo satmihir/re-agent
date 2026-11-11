@@ -135,6 +135,7 @@ pub struct Region {
     pub(super) initial_row: usize,
     pub(super) status: Status,
     pub(super) queued: bool,
+    pub(super) command_selection: Option<usize>,
     progress: Option<Progress>,
     exec_lines: Vec<String>,
     stream_text: String,
@@ -228,6 +229,7 @@ impl Region {
             initial_row: 0,
             status: Status::default(),
             queued: false,
+            command_selection: None,
             progress: None,
             exec_lines: Vec::new(),
             stream_text: String::new(),
@@ -327,6 +329,24 @@ impl Region {
             rows.extend(part);
             (rows, row, col)
         };
+        if let Some(selected) = self.command_selection {
+            let choices = super::command_choices(&buffer.iter().collect::<String>());
+            let selected = selected.min(choices.len().saturating_sub(1));
+            let limit = height.saturating_sub(rows.len() + 6).min(6);
+            let low = selected
+                .saturating_sub(limit / 2)
+                .min(choices.len().saturating_sub(limit));
+            rows.extend(
+                choices
+                    .iter()
+                    .enumerate()
+                    .skip(low)
+                    .take(limit)
+                    .map(|(index, choice)| {
+                        super::choice_row(choice, index, selected, columns, self.color)
+                    }),
+            );
+        }
         if columns >= 20 {
             rows.insert(0, self.rule());
             rows.push(self.rule());
