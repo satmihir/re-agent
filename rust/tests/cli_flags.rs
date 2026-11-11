@@ -268,7 +268,12 @@ fn chat_saves_and_resumes_the_in_run_compaction_setting() {
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            let session = std::fs::read_dir(root.path().join("cache/reagent/sessions"))
+            let sessions = root.path().join(if cfg!(target_os = "macos") {
+                "Library/Caches/reagent/sessions"
+            } else {
+                "cache/reagent/sessions"
+            });
+            let session = std::fs::read_dir(sessions)
                 .unwrap()
                 .next()
                 .unwrap()
