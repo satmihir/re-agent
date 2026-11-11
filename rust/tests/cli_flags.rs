@@ -202,6 +202,89 @@ fn default_model_and_effort_preview_and_explicit_overrides() {
 }
 
 #[test]
+fn in_run_compaction_is_default_and_can_be_disabled() {
+    for (flags, enabled) in [
+        (vec![], true),
+        (vec!["--in-run-compact=false"], false),
+        (vec!["--in-run-compact"], true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("responses.json");
+        let trace = root.path().join("trace.jsonl");
+        std::fs::write(
+            &script,
+            r#"[{"blocks":[{"kind":"text","text":"offline reply"}]}]"#,
+        )
+        .unwrap();
+        let output = reagent(root.path())
+            .args(["run", "--scripted"])
+            .arg(script)
+            .arg("--trace-file")
+            .arg(&trace)
+            .args(&flags)
+            .arg("task")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"offline reply\n");
+        let trace = std::fs::read_to_string(trace).unwrap();
+        let started: serde_json::Value =
+            serde_json::from_str(trace.lines().next().unwrap()).unwrap();
+        assert_eq!(started["type"], "run.started");
+        assert_eq!(started["data"]["in_run_compact"], enabled);
+    }
+}
+
+#[test]
+fn chat_saves_and_resumes_the_in_run_compaction_setting() {
+    for (flags, enabled) in [
+        (vec![], true),
+        (vec!["--in-run-compact=false"], false),
+        (vec!["--in-run-compact"], true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("input");
+        std::fs::write(&input, "/plan\n/exit\n").unwrap();
+        let mut id = String::new();
+        for resume in [false, true] {
+            let mut command = reagent(root.path());
+            command
+                .env("OPENAI_API_KEY", "offline-key")
+                .env("REAGENT_OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+                .arg("chat")
+                .stdin(std::fs::File::open(&input).unwrap());
+            if resume {
+                command.args(["--resume", &id]);
+            } else {
+                command.args(&flags);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let session = std::fs::read_dir(root.path().join("cache/reagent/sessions"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            id = session.file_name().unwrap().to_str().unwrap().into();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(session.join("checkpoint.json")).unwrap())
+                    .unwrap();
+            assert_eq!(saved["state"]["in_run_compact"], enabled);
+            assert_eq!(saved["state"]["plan"], !resume);
+        }
+    }
+}
+
+#[test]
 fn context_gc_is_default_and_can_be_disabled() {
     for (flags, enabled) in [
         (vec![], true),
