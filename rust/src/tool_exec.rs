@@ -5,7 +5,7 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     fs,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
@@ -85,7 +85,18 @@ pub(crate) fn attributed(mut value: Value, root: &Path) -> Value {
     value
 }
 
+/// execute runs a foreground command without transient terminal output.
 pub fn execute(workspace: &mut Workspace, config: &Value, args: &Value) -> Result<Value, String> {
+    execute_in_region(workspace, config, args, None)
+}
+
+/// execute_in_region runs commands with an optional display-only incremental output tail.
+pub fn execute_in_region(
+    workspace: &mut Workspace,
+    config: &Value,
+    args: &Value,
+    region: Option<&crate::terminal::RegionHandle>,
+) -> Result<Value, String> {
     if let Err(v) = keys(args, &["argv", "then", "cwd", "timeout_ms"]) {
         return Ok(v);
     }
@@ -178,6 +189,7 @@ pub fn execute(workspace: &mut Workspace, config: &Value, args: &Value) -> Resul
             LIMIT,
             &cancellation,
             config,
+            region,
         );
     }
     let budget = (LIMIT - 1024) / commands.len();
@@ -196,6 +208,7 @@ pub fn execute(workspace: &mut Workspace, config: &Value, args: &Value) -> Resul
             budget,
             &cancellation,
             config,
+            region,
         )?;
         steps.push(step["data"].clone());
         truncated |= step["truncated"].as_bool().unwrap_or(false);
@@ -247,6 +260,74 @@ fn os_failure(e: &std::io::Error) -> Value {
         std::io::ErrorKind::NotFound => fail("not_found", "no such path in the workspace"),
         std::io::ErrorKind::PermissionDenied => fail("permission_denied", "path is not readable"),
         _ => fail("io_error", stable(e)),
+    }
+}
+
+#[derive(Default)]
+struct ExecTail {
+    lines: VecDeque<ExecTailLine>,
+    dirty: bool,
+}
+
+struct ExecTailLine {
+    stream: usize,
+    bytes: Vec<u8>,
+    complete: bool,
+}
+
+impl ExecTail {
+    fn push(&mut self, stream: usize, bytes: &[u8]) {
+        self.dirty |= !bytes.is_empty();
+        for part in bytes.split_inclusive(|byte| *byte == b'\n') {
+            let index = self
+                .lines
+                .iter()
+                .rposition(|line| line.stream == stream && !line.complete);
+            let index = index.unwrap_or_else(|| {
+                self.lines.push_back(ExecTailLine {
+                    stream,
+                    bytes: Vec::new(),
+                    complete: false,
+                });
+                self.lines.len() - 1
+            });
+            let line = &mut self.lines[index];
+            line.complete = part.last() == Some(&b'\n');
+            let part = if line.complete {
+                &part[..part.len() - 1]
+            } else {
+                part
+            };
+            line.bytes.extend_from_slice(part);
+            let excess = line.bytes.len().saturating_sub(4096);
+            line.bytes.drain(..excess);
+            while self.lines.len() > 5 {
+                self.lines.pop_front();
+            }
+        }
+    }
+
+    fn lines(&self) -> Vec<String> {
+        self.lines
+            .iter()
+            .map(|line| {
+                let mut end = line.bytes.len();
+                if !line.complete {
+                    // Keep a split UTF-8 code point pending until its next read rather than flashing �.
+                    for start in (end.saturating_sub(4)..end).rev() {
+                        if line.bytes[start] & 0xc0 != 0x80 {
+                            if std::str::from_utf8(&line.bytes[start..])
+                                .is_err_and(|error| error.error_len().is_none())
+                            {
+                                end = start;
+                            }
+                            break;
+                        }
+                    }
+                }
+                String::from_utf8_lossy(&line.bytes[..end]).into_owned()
+            })
+            .collect()
     }
 }
 
@@ -493,7 +574,14 @@ fn run(
     budget: usize,
     cancellation: &AtomicBool,
     config: &Value,
+    region: Option<&crate::terminal::RegionHandle>,
 ) -> Result<Value, String> {
+    if region.is_some() {
+        crate::render::tool_started(
+            region,
+            &json!({"name":"exec","arguments":json!({"argv":argv,"cwd":cwd}).to_string()}),
+        );
+    }
     let (resolved, lookup_error) = executable(&argv[0]);
     // A bare relative lookup result must not trigger Rust's second PATH search.
     let launch = if resolved.contains('/') {
@@ -558,22 +646,37 @@ fn run(
             root,
         ));
     }
-    let captured = match crate::process::capture(
-        command,
-        crate::process::CaptureOptions {
-            streams: crate::process::Streams::Separate,
-            limit: Some(LIMIT),
-            head_tail: true,
-            read_error: crate::process::CaptureReadError::Incomplete,
-            input: None,
-            deadline: crate::process::CaptureDeadline::At(started + Duration::from_millis(timeout)),
-            cancellation: Some(cancellation),
-            terminate: Some(terminate_tree),
-            deadline_after_exit: false,
-            kill_group_on_incomplete: true,
-            eof_timeout: Duration::from_secs(1),
-        },
-    ) {
+    let options = crate::process::CaptureOptions {
+        streams: crate::process::Streams::Separate,
+        limit: Some(LIMIT),
+        head_tail: true,
+        read_error: crate::process::CaptureReadError::Incomplete,
+        input: None,
+        deadline: crate::process::CaptureDeadline::At(started + Duration::from_millis(timeout)),
+        cancellation: Some(cancellation),
+        terminate: Some(terminate_tree),
+        deadline_after_exit: false,
+        kill_group_on_incomplete: true,
+        eof_timeout: Duration::from_secs(1),
+    };
+    let captured = if let Some(region) = region {
+        let mut tail = ExecTail::default();
+        let mut updated = Instant::now();
+        crate::process::capture_with_output(command, options, &mut |stream, bytes| {
+            tail.push(stream, bytes);
+            if tail.dirty && updated.elapsed() >= Duration::from_millis(100) {
+                // Terminal backpressure must not hold up process deadlines or cancellation.
+                if let Ok(mut region) = region.try_lock() {
+                    region.set_exec_lines(&tail.lines());
+                    tail.dirty = false;
+                }
+                updated = Instant::now();
+            }
+        })
+    } else {
+        crate::process::capture(command, options)
+    };
+    let captured = match captured {
         Ok(c) => c,
         Err(crate::process::CaptureError::Wait(e)) => {
             return Err(format!("wait for command: {}", stable(&e)))
@@ -859,6 +962,85 @@ pub(crate) fn terminate_tree(pid: i32) -> std::io::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn exec_region_observer_preserves_results_and_chain_stopping() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let region = std::sync::Arc::new(Mutex::new(crate::terminal::Region::new()));
+        let noisy = json!(["/bin/sh", "-c", "dd if=/dev/zero bs=65536 count=5 2>/dev/null; printf '\\377\\303\\251'; printf 'stderr\\n' >&2"]);
+        for args in [
+            json!({"argv":noisy,"cwd":"."}),
+            json!({"argv":noisy,"then":[["/bin/sh","-c","printf second; exit 3"],["/bin/sh","-c","touch forbidden"]],"cwd":"."}),
+        ] {
+            let mut plain = execute(&mut workspace, &json!({}), &args).unwrap();
+            let mut displayed =
+                execute_in_region(&mut workspace, &json!({}), &args, Some(&region)).unwrap();
+            for value in [&mut plain, &mut displayed] {
+                if let Some(steps) = value["data"]["steps"].as_array_mut() {
+                    for step in steps {
+                        step.as_object_mut().unwrap().remove("duration_ms");
+                    }
+                } else {
+                    value["data"].as_object_mut().unwrap().remove("duration_ms");
+                }
+            }
+            assert_eq!(displayed, plain);
+            assert!(!dir.path().join("forbidden").exists());
+        }
+    }
+
+    #[test]
+    fn exec_cancellation_does_not_wait_for_the_display_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_owned();
+        let region = std::sync::Arc::new(Mutex::new(crate::terminal::Region::new()));
+        let display = region.clone();
+        let config = json!({"session_id":crate::types::new_id()});
+        let execution = config.clone();
+        let worker = thread::spawn(move || {
+            let mut workspace = Workspace::open(root.to_str().unwrap()).unwrap();
+            execute_in_region(
+                &mut workspace,
+                &execution,
+                &json!({"argv":["/bin/sh","-c",
+                    "touch ready; while [ ! -f release ]; do sleep 0.01; done; printf first; sleep 0.2; touch emitting; while :; do printf 'next\\n'; sleep 0.01; done"],"cwd":"."}),
+                Some(&display),
+            ).unwrap()
+        });
+        let setup = Instant::now() + Duration::from_secs(5);
+        while !dir.path().join("ready").exists() && Instant::now() < setup {
+            thread::sleep(Duration::from_millis(2));
+        }
+        if !dir.path().join("ready").exists() {
+            crate::cancellation::cancel(&config);
+            let result = worker.join().unwrap();
+            panic!("command did not reach its readiness marker: {result}");
+        }
+        let held = region.lock().unwrap();
+        fs::write(dir.path().join("release"), "").unwrap();
+        let setup = Instant::now() + Duration::from_secs(5);
+        while !dir.path().join("emitting").exists() && Instant::now() < setup {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let emitting = dir.path().join("emitting").exists();
+        crate::cancellation::cancel(&config);
+        let completion = Instant::now() + Duration::from_secs(3);
+        while !worker.is_finished() && Instant::now() < completion {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let stopped_while_locked = worker.is_finished();
+        drop(held);
+        let result = worker.join().unwrap();
+        assert!(emitting, "command did not start emitting: {result}");
+        assert!(
+            stopped_while_locked,
+            "capture waited for the display lock: {result}"
+        );
+        assert_eq!(result["code"], "cancelled");
+        assert_eq!(result["effect"], "unknown");
+        assert!(result["data"]["stdout_bytes_seen"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
     fn exec_argument_failures_use_owned_field_contracts() {
         let d = tempfile::tempdir().unwrap();
         let mut w = Workspace::open(d.path().to_str().unwrap()).unwrap();
@@ -1110,6 +1292,7 @@ time.sleep(30)"#,
                 LIMIT,
                 &AtomicBool::new(false),
                 &json!({}),
+                None,
             )
             .unwrap();
             assert_exec_pids_stopped(

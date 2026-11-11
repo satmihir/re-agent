@@ -472,11 +472,23 @@ pub fn decode_arguments(arguments: &str, schema: &Value) -> Result<Value, Value>
     Ok(normalize(raw.get().as_bytes(), schema, "", Value::Null))
 }
 
+/// execute runs a tool without transient terminal output.
 pub fn execute(
     state: &mut ToolState,
     config: &Value,
     name: &str,
     arguments: &str,
+) -> Result<Value, String> {
+    execute_in_region(state, config, name, arguments, None)
+}
+
+/// execute_in_region runs a tool with optional display-only exec progress.
+pub fn execute_in_region(
+    state: &mut ToolState,
+    config: &Value,
+    name: &str,
+    arguments: &str,
+    region: Option<&crate::terminal::RegionHandle>,
 ) -> Result<Value, String> {
     if config["tool_free"] == true {
         return Ok(fail("permission_denied", "BTW Runs have no tools"));
@@ -524,7 +536,7 @@ pub fn execute(
         Err(bad) => return Ok(bad),
     };
     match name {
-        "exec" => crate::tool_exec::execute(&mut state.workspace, config, &args),
+        "exec" => crate::tool_exec::execute_in_region(&mut state.workspace, config, &args, region),
         "git_inspect" => crate::tool_git::inspect(&mut state.workspace, config, &args),
         "git_do" => crate::tool_git::git_do(&mut state.workspace, config, &args),
         "request_workspace_access" | "switch_workspace" => {

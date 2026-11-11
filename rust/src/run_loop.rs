@@ -495,11 +495,14 @@ impl Session {
                 {
                     result
                 } else {
-                    tools::execute(
+                    tools::execute_in_region(
                         &mut self.tools,
                         &execution_config,
                         name,
                         string(&call["arguments"]),
+                        self.region
+                            .as_ref()
+                            .filter(|_| flag(&self.config["_display"])),
                     )
                 };
                 self.agent_notices();
