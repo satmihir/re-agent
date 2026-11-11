@@ -1,3 +1,4 @@
+use super::palette::{ACCENT, ERROR, EXEC, MUTED, SUCCESS, WARNING};
 use super::{
     columns, display, number, plural, sanitize, styled, text, truncate, width, yes, DIM, RESET,
 };
@@ -458,9 +459,9 @@ fn activity_text(
         agent_target(name, a.as_ref(), outcome, state).unwrap_or_else(|| target(call, a.as_ref()));
     let mut target = original_target.clone();
     let (mut mark, mut color) = if yes(outcome, "ok") {
-        ("✓", "\x1b[32m")
+        ("✓", SUCCESS)
     } else {
-        ("✗", "\x1b[31m")
+        ("✗", ERROR)
     };
     let code = text(outcome, "code");
     let mut result = String::new();
@@ -552,18 +553,18 @@ fn activity_text(
                     match code {
                         "timeout" => {
                             mark = "!";
-                            color = "\x1b[33m";
+                            color = WARNING;
                             result = format!("timed out after {}; effects unknown", elapsed(ms));
                         }
                         "cancelled" => {
                             mark = "!";
-                            color = "\x1b[33m";
+                            color = WARNING;
                             result = "cancelled; effects unknown".into();
                         }
                         _ => {
                             if let Some(signal) = last["signal"].as_str() {
                                 mark = "✗";
-                                color = "\x1b[31m";
+                                color = ERROR;
                                 result = format!("signal: {} in {}", sanitize(signal), elapsed(ms));
                             } else if let Some(exit) = last["exit_code"].as_i64() {
                                 result = format!("exit {exit} in {}", elapsed(ms));
@@ -630,7 +631,16 @@ fn activity_text(
         }
     }
     let mut out = if styled {
-        format!("  {color}{mark}{RESET} {} {target}", sanitize(name))
+        let kind = match name {
+            "read_file" | "list_files" | "search_text" | "git_inspect" | "recall" => MUTED,
+            "write_file" | "edit_file" | "delete_file" => ACCENT,
+            "exec" => EXEC,
+            _ => "",
+        };
+        format!(
+            "  {color}{mark}{RESET} {kind}{}{RESET} {target}",
+            sanitize(name)
+        )
     } else {
         format!("{prefix}{target}")
     };
@@ -652,9 +662,9 @@ fn activity_text(
             },
         );
         let color = if p.starts_with("- ") {
-            "\x1b[31m"
+            ERROR
         } else if p.starts_with("+ ") {
-            "\x1b[32m"
+            SUCCESS
         } else {
             ""
         };
@@ -687,7 +697,7 @@ pub(super) fn browsing_summary(state: &Value, styled: bool) -> String {
         return String::new();
     }
     if styled {
-        format!("  \x1b[32m✓{RESET}{DIM} {}{RESET}\n", parts.join(" · "))
+        format!("  {SUCCESS}✓{RESET}{DIM} {}{RESET}\n", parts.join(" · "))
     } else {
         format!("  ✓ {}\n", parts.join(" · "))
     }
@@ -696,6 +706,38 @@ pub(super) fn browsing_summary(state: &Value, styled: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tool_kind_colours_preserve_plain_rows_and_widths() {
+        let ansi = regex::Regex::new("\x1b\\[[0-9;]*m").unwrap();
+        for (name, colour) in [
+            ("read_file", MUTED),
+            ("list_files", MUTED),
+            ("search_text", MUTED),
+            ("git_inspect", MUTED),
+            ("recall", MUTED),
+            ("write_file", ACCENT),
+            ("edit_file", ACCENT),
+            ("delete_file", ACCENT),
+            ("exec", EXEC),
+            ("spawn", ""),
+        ] {
+            for columns in [24, 80] {
+                let call = json!({"name":name,"arguments":r#"{"path":"long/path/to/a/file","argv":["printf","hello"]}"#});
+                let outcome = json!({"ok":false,"code":"denied","message":"not allowed"});
+                let styled = activity_text(&call, &outcome, &mut json!({}), true, columns);
+                let plain = activity_text(&call, &outcome, &mut json!({}), false, columns);
+                assert!(
+                    styled.contains(&format!("{colour}{name}{RESET}")),
+                    "{styled:?}"
+                );
+                assert!(styled.contains(&format!("{ERROR}✗{RESET}")));
+                assert_eq!(ansi.replace_all(&styled, ""), plain);
+                assert!(!plain.contains('\x1b'));
+                assert!(width(styled.trim_end()) <= columns, "{styled:?}");
+            }
+        }
+    }
+
     #[test]
     fn agent_activity_uses_named_rows_and_remembers_names_across_turns() {
         let mut state = json!({});

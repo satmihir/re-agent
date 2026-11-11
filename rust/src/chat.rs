@@ -100,10 +100,13 @@ fn plan_switch(on: bool, region: Option<&RegionHandle>) {
         "plan mode off"
     };
     let label = if render::styled(2) {
-        format!(
-            "{}{label}\x1b[0m",
-            if on { "\x1b[1;38;5;86m" } else { "\x1b[2m" }
-        )
+        use render::palette::{ACCENT, BOLD, DIM, RESET};
+        let style = if on {
+            format!("{BOLD}{ACCENT}")
+        } else {
+            DIM.into()
+        };
+        format!("{style}{label}{RESET}")
     } else {
         label.into()
     };
@@ -1164,7 +1167,7 @@ fn effort_name(effort: &session_api::ReasoningEffort) -> &str {
 
 fn dim(line: &str) -> String {
     if render::styled(2) {
-        format!("\x1b[2m{line}\x1b[0m")
+        format!("{}{line}{}", render::palette::DIM, render::palette::RESET)
     } else {
         line.into()
     }
