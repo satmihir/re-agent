@@ -1,4 +1,15 @@
 pub(super) fn unified(old: &[u8], new: &[u8], old_name: &str, new_name: &str) -> Option<String> {
+    unified_context(old, new, old_name, new_name, 3)
+}
+
+/// unified_context shares the bounded line diff with terminal previews.
+pub(crate) fn unified_context(
+    old: &[u8],
+    new: &[u8],
+    old_name: &str,
+    new_name: &str,
+    context: usize,
+) -> Option<String> {
     if old.len() > 1 << 20 || new.len() > 1 << 20 {
         return None;
     }
@@ -19,8 +30,8 @@ pub(super) fn unified(old: &[u8], new: &[u8], old_name: &str, new_name: &str) ->
         if *e == b' ' {
             continue;
         }
-        let start = i.saturating_sub(3);
-        let end = (i + 4).min(edits.len());
+        let start = i.saturating_sub(context);
+        let end = (i + context + 1).min(edits.len());
         if let Some(h) = hunks.last_mut() {
             if start <= h.1 {
                 h.1 = end;

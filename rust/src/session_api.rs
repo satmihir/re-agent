@@ -1139,6 +1139,9 @@ pub(crate) fn publish_request(session: &Session, request: &Value) {
 }
 
 fn publish_observations(session: &Session, activity: &str, applied: bool, request: Option<&Value>) {
+    if activity == "model" {
+        crate::agents::publish_activity(&session.config, "thinking");
+    }
     let Some(observer) = &session.api else {
         return;
     };

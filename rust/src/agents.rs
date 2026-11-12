@@ -20,6 +20,17 @@ struct Node {
     cancelled: bool,
 }
 
+/// AgentRow is an owned presentation snapshot of one working agent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentRow {
+    /// Label identifies the agent by ID and optional name.
+    pub label: String,
+    /// Activity names its current tool or model phase.
+    pub activity: String,
+    /// Started measures elapsed time for the current task.
+    pub started: Instant,
+}
+
 #[derive(Default)]
 struct Tree {
     next: usize,
@@ -27,10 +38,12 @@ struct Tree {
     archive: BTreeMap<String, Value>,
     accounting_complete: bool,
     notices: Vec<String>,
+    activity: BTreeMap<String, AgentRow>,
 }
 
 struct Shared {
     tree: Mutex<Tree>,
+    file_changes: Mutex<Value>,
     changed: Condvar,
     retired: AtomicBool,
 }
@@ -59,11 +72,40 @@ fn tree_for(config: &Value, session_id: &str) -> Arc<Shared> {
                     accounting_complete: true,
                     ..Tree::default()
                 }),
+                file_changes: Mutex::new(json!({"_display":{}})),
                 changed: Condvar::new(),
                 retired: AtomicBool::new(false),
             })
         })
         .clone()
+}
+
+/// Begin_file_changes resets the presentation ledger only for a displayed root Run.
+pub(crate) fn begin_file_changes(s: &Session) {
+    if s.config["_display"] == true && s.config["agents"] == true && parent(s) == "root" {
+        *tree(s).file_changes.lock().unwrap() = json!({"_display":{}});
+    }
+}
+
+/// Publish_file_change merges shared publication order without locking the agent tree.
+pub(crate) fn publish_file_change(config: &Value, change: Value) {
+    if config["agents"] != true {
+        return;
+    }
+    let shared = tree_for(config, text(&config["session_id"]));
+    crate::file_diff::accept(&mut shared.file_changes.lock().unwrap(), vec![change]);
+}
+
+/// Sync_file_changes copies the bounded ledger without exposing child transcript content.
+pub(crate) fn sync_file_changes(s: &mut Session) {
+    if s.config["_display"] != true || s.config["agents"] != true || parent(s) != "root" {
+        return;
+    }
+    let shared = tree(s);
+    let changes = shared.file_changes.lock().unwrap();
+    for key in ["files", "files_omitted"] {
+        s.state["_display"][key] = changes["_display"][key].clone();
+    }
 }
 
 /// Retire releases a root's old tree once its remaining workers have stopped.
@@ -429,6 +471,7 @@ pub(crate) fn policy(config: &Value) -> &'static str {
 fn child_config(s: &Session, a: &Value, authority: &str) -> Value {
     let mut c = s.config.clone();
     c["agent"] = json!(true);
+    c["_capture_file_changes"] = json!(crate::file_diff::capturing(&s.config));
     c["_display"] = json!(false);
     c["_chat"] = json!(false);
     // Child snapshots never run worktree probes, even with write authority.
@@ -689,6 +732,16 @@ fn start(shared: &Arc<Shared>, t: &mut Tree, id: &str) {
         .provider
         .set_cancellation(n.cancellation.as_ref().unwrap().clone());
     n.record["state"] = json!("running");
+    t.activity.insert(
+        id.into(),
+        AgentRow {
+            label: format!("{id} {}", text(&n.record["name"]))
+                .trim_end()
+                .into(),
+            activity: "thinking".into(),
+            started: Instant::now(),
+        },
+    );
     let id = id.to_string();
     let shared = shared.clone();
     std::thread::spawn(move || loop {
@@ -720,20 +773,29 @@ fn start(shared: &Arc<Shared>, t: &mut Tree, id: &str) {
         n.record["steps"] = session.state["steps"].clone();
         if n.record["parent_id"] == "root" {
             let mut cost = n.record["cost"].clone();
+            let name = text(&n.record["name"]);
+            let agent = if name.is_empty() {
+                id.clone()
+            } else {
+                format!("{id} {name}")
+            };
             let label = format!(
-                "{} {} finished · {} · {} steps",
-                id,
-                text(&n.record["name"]),
+                "{agent} finished · {} · {}",
                 text(&result["status"]),
-                result["steps"]
+                crate::render::plural(result["steps"].as_i64().unwrap_or(0), "step", "steps")
             );
             for record in descendants(&t, &id) {
                 crate::types::usage_add(&mut cost, &record["cost"]);
             }
             let tokens = cost["input_tokens"].as_i64().unwrap_or(0)
                 + cost["output_tokens"].as_i64().unwrap_or(0);
-            t.notices
-                .push(format!("{label} · {} tokens", crate::render::count(tokens)));
+            let mut notice = format!("{label} · {} tokens", crate::render::count(tokens));
+            let headline = text(&result["reply"]).lines().next().unwrap_or("").trim();
+            if !headline.is_empty() {
+                notice.push_str(" · ");
+                notice.push_str(headline);
+            }
+            t.notices.push(notice);
         }
         let n = t.nodes.get_mut(&id).unwrap();
         let blocked = !text(&session.state["blocked"]).is_empty();
@@ -744,6 +806,10 @@ fn start(shared: &Arc<Shared>, t: &mut Tree, id: &str) {
             crate::cancellation::begin(&session.config);
             prompt = next.clone();
             n.record["task"] = json!(next);
+            if let Some(row) = t.activity.get_mut(&id) {
+                row.activity = "thinking".into();
+                row.started = Instant::now();
+            }
             shared.changed.notify_all();
             drop(t);
             continue;
@@ -757,6 +823,7 @@ fn start(shared: &Arc<Shared>, t: &mut Tree, id: &str) {
             "idle"
         });
         n.session = Some(session);
+        t.activity.remove(&id);
         shared.changed.notify_all();
         drop(t);
         prune(&shared);
@@ -1156,21 +1223,16 @@ fn refresh_display(s: &Session, targets: Option<&[String]>) {
         return;
     }
     if let Some(targets) = targets {
-        let (count, label, notices) = display_snapshot(s, targets);
-        crate::render::agents_refreshed(s.region.as_ref(), count, Some(&label), &notices);
+        let (count, label, notices, rows) = display_snapshot(s, targets);
+        crate::render::agents_refreshed(s.region.as_ref(), count, Some(&label), &notices, &rows);
         return;
     }
     // Dispatch refreshes counts only; notices retain their established boundary ordering.
     let shared = tree(s);
-    let count = shared
-        .tree
-        .lock()
-        .unwrap()
-        .nodes
-        .values()
-        .filter(|node| node.working)
-        .count();
-    crate::render::agents_refreshed(s.region.as_ref(), count, None, &[]);
+    let t = shared.tree.lock().unwrap();
+    let rows = working_rows(&t);
+    drop(t);
+    crate::render::agents_refreshed(s.region.as_ref(), rows.len(), None, &[], &rows);
 }
 
 fn finish_wait_display(s: &Session, targets: &[String]) {
@@ -1181,7 +1243,10 @@ fn finish_wait_display(s: &Session, targets: &[String]) {
 }
 
 /// Display_snapshot copies active counts and direct-child wait labels and drains notices.
-pub(crate) fn display_snapshot(s: &Session, targets: &[String]) -> (usize, String, Vec<String>) {
+pub(crate) fn display_snapshot(
+    s: &Session,
+    targets: &[String],
+) -> (usize, String, Vec<String>, Vec<AgentRow>) {
     display_snapshot_for(&s.config, text(&s.state["session_id"]), targets)
 }
 
@@ -1190,14 +1255,14 @@ pub(crate) fn display_snapshot_for(
     config: &Value,
     session_id: &str,
     targets: &[String],
-) -> (usize, String, Vec<String>) {
+) -> (usize, String, Vec<String>, Vec<AgentRow>) {
     if config["agents"] != true {
-        return (0, "waiting on ".into(), vec![]);
+        return (0, "waiting on ".into(), vec![], vec![]);
     }
     let parent = config["agent_id"].as_str().unwrap_or("root");
     let shared = tree_for(config, session_id);
     let mut t = shared.tree.lock().unwrap();
-    let running = t.nodes.values().filter(|node| node.working).count();
+    let rows = working_rows(&t);
     let mut labels = Vec::new();
     for target in targets {
         let id = lookup(&t, parent, target, "").or_else(|_| lookup(&t, parent, "", target));
@@ -1216,10 +1281,42 @@ pub(crate) fn display_snapshot_for(
         }
     }
     (
-        running,
+        rows.len(),
         format!("waiting on {}", labels.join(", ")),
         std::mem::take(&mut t.notices),
+        rows,
     )
+}
+
+fn working_rows(t: &Tree) -> Vec<AgentRow> {
+    t.nodes
+        .iter()
+        .filter(|(_, node)| node.working)
+        .map(|(id, node)| {
+            t.activity.get(id).cloned().unwrap_or_else(|| AgentRow {
+                label: format!("{id} {}", text(&node.record["name"]))
+                    .trim_end()
+                    .into(),
+                activity: "thinking".into(),
+                started: Instant::now(),
+            })
+        })
+        .collect()
+}
+
+/// Publish_activity updates a working child's presentation without borrowing its Session.
+pub(crate) fn publish_activity(config: &Value, activity: &str) {
+    let Some(id) = config["agent_id"].as_str().filter(|id| *id != "root") else {
+        return;
+    };
+    if config["agents"] != true {
+        return;
+    }
+    let shared = tree_for(config, text(&config["session_id"]));
+    let mut t = shared.tree.lock().unwrap();
+    if let Some(row) = t.activity.get_mut(id) {
+        row.activity = activity.into();
+    }
 }
 
 /// Notices drains root-child completion observations in publication order.
@@ -2044,7 +2141,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert!(dir.path().join("ready-2").exists());
-        let (running, label, notices) = display_snapshot(&session, &targets);
+        let (running, label, notices, _) = display_snapshot(&session, &targets);
         assert_eq!(running, 1);
         assert_eq!(label, "waiting on t1 worker (step 2)");
         assert!(notices.is_empty());
@@ -2416,11 +2513,49 @@ mod tests {
     }
 
     #[test]
-    fn child_exec_is_private_and_one_completion_notice_precedes_wait_activity() {
+    fn child_file_publications_reach_the_root_diff_without_entering_its_model_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_script = dir.path().join("root.json");
+        let child_script = dir.path().join("child.json");
+        let call = |id: &str, name: &str, args: Value| json!({"blocks":[{"kind":"tool_call","call":{"call_id":id,"name":name,"arguments":crate::types::json_string(&args)}}]});
+        std::fs::write(&root_script, crate::types::json_string(&json!([
+            call("spawn", "spawn", json!({"task":"write","name":"writer","authority":"write","context":{"brief":"write"}})),
+            call("wait", "wait", json!({"ids":["writer"]})),
+            {"blocks":[{"kind":"text","text":"done"}]}
+        ]))).unwrap();
+        std::fs::write(&child_script, crate::types::json_string(&json!([
+            call("write", "write_file", json!({"path":"child.txt","content":"PRIVATE_FILE_BYTES\nsecond\n"})),
+            {"blocks":[{"kind":"text","text":"Written."}]}
+        ]))).unwrap();
+        let mut session = Session::new(json!({"provider":"scripted","model":"scripted","scripted":root_script,"workspace":dir.path(),"trace_dir":dir.path(),"agents":true,"_display":true})).unwrap();
+        session.config["scripted"] = json!(child_script);
+        let result = session.submit("delegate");
+        assert_eq!(result["status"], "completed", "{result}");
+        assert_eq!(
+            crate::file_diff::totals(&session.state, false),
+            "  1 file changed · +2 −0\n"
+        );
+        assert!(crate::file_diff::full(&session.state, false, 100).contains("+ PRIVATE_FILE_BYTES"));
+        let trace = std::fs::read_to_string(result["trace_path"].as_str().unwrap()).unwrap();
+        for event in trace
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        {
+            if event["type"] == "model.requested" {
+                assert!(!crate::types::json_string(&event).contains("PRIVATE_FILE_BYTES"));
+            }
+        }
+        begin_file_changes(&session);
+        sync_file_changes(&mut session);
+        assert_eq!(crate::file_diff::totals(&session.state, false), "");
+    }
+
+    #[test]
+    fn child_exec_is_private_and_one_completion_notice_replaces_wait_activity() {
         const CHILD: &str = "REAGENT_CHILD_DISPLAY_TEST";
         if std::env::var_os(CHILD).is_none() {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "agents::tests::child_exec_is_private_and_one_completion_notice_precedes_wait_activity", "--nocapture"])
+                .args(["--exact", "agents::tests::child_exec_is_private_and_one_completion_notice_replaces_wait_activity", "--nocapture"])
                 .env(CHILD,"1").env("NO_COLOR","1")
                 .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
             let deadline = Instant::now() + Duration::from_secs(15);
@@ -2433,17 +2568,18 @@ mod tests {
             let output = child.wait_with_output().unwrap();
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(output.status.success(), "{stderr}");
-            assert!(!stderr.contains("CHILD_PRIVATE"), "{stderr}");
+            assert!(!stderr.contains("CHILD_PRIVATE_EXEC_OUTPUT"), "{stderr}");
+            assert!(!stderr.contains("CHILD_PRIVATE_PROGRESS"), "{stderr}");
             assert!(!stderr.contains("exec"), "{stderr}");
             assert!(!String::from_utf8_lossy(&output.stdout).contains("CHILD_PRIVATE"));
-            let finished = stderr
-                .find("t1 worker finished · completed · 2 steps")
-                .unwrap();
-            let activity = stderr.find("✓ wait").unwrap();
-            assert!(finished < activity, "{stderr}");
+            assert!(
+                stderr.contains("t1 worker finished · completed · 2 steps"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("CHILD_PRIVATE_REPLY"), "{stderr}");
             assert_eq!(stderr.matches("worker finished").count(), 1, "{stderr}");
             assert!(!stderr.contains("results delivered"), "{stderr}");
-            assert!(stderr.contains("✓ wait worker"), "{stderr}");
+            assert!(!stderr.contains("✓ wait"), "{stderr}");
             assert!(!stderr.contains("ids=["), "{stderr}");
             return;
         }
@@ -2885,6 +3021,52 @@ mod tests {
     }
 
     #[test]
+    fn child_activity_is_published_without_an_api_observer_and_removed_when_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let session =
+            Session::new(json!({"provider":"openai", "workspace":dir.path(), "agents":true}))
+                .unwrap();
+        let shared = tree(&session);
+        let started = Instant::now();
+        {
+            let mut t = shared.tree.lock().unwrap();
+            let mut node = stopped_node("t1", "root");
+            node.working = true;
+            t.nodes.insert("t1".into(), node);
+            t.activity.insert(
+                "t1".into(),
+                AgentRow {
+                    label: "t1 worker".into(),
+                    activity: "exec".into(),
+                    started,
+                },
+            );
+        }
+        let mut config = session.config.clone();
+        config["agent_id"] = json!("t1");
+        config["agent_tree_id"] = session.state["session_id"].clone();
+        let child = Session::new(config).unwrap();
+        assert!(child.api.is_none());
+        crate::session_api::publish(&child, "model", false);
+        let rows = display_snapshot(&session, &[]).3;
+        assert_eq!(rows[0].activity, "thinking");
+        assert_eq!(rows[0].started, started);
+        publish_activity(&child.config, "writing");
+        assert_eq!(display_snapshot(&session, &[]).3[0].activity, "writing");
+        publish_activity(&child.config, "read_file");
+        assert_eq!(display_snapshot(&session, &[]).3[0].activity, "read_file");
+        shared
+            .tree
+            .lock()
+            .unwrap()
+            .nodes
+            .get_mut("t1")
+            .unwrap()
+            .working = false;
+        assert!(display_snapshot(&session, &[]).3.is_empty());
+    }
+
+    #[test]
     fn display_snapshot_counts_all_workers_and_resolves_only_direct_targets() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::new(
@@ -2927,7 +3109,7 @@ mod tests {
         ]
         .map(String::from);
         let snapshot = display_snapshot(&session, &targets);
-        assert_eq!(snapshot,(4,"waiting on t1 worker (step 7), t1 worker (step 7), t6 reused (step 4), t7 (step 2), t8 stopping (step 8)".into(),vec!["second finished".into(),"first finished".into()]));
+        assert_eq!((snapshot.0, snapshot.1, snapshot.2),(4,"waiting on t1 worker (step 7), t1 worker (step 7), t6 reused (step 4), t7 (step 2), t8 stopping (step 8)".into(),vec!["second finished".into(),"first finished".into()]));
         assert!(notices(&session).is_empty());
         shared
             .tree
@@ -2936,13 +3118,16 @@ mod tests {
             .notices
             .push("new notice".into());
         assert_eq!(notices(&session), vec!["new notice"]);
+        let snapshot = display_snapshot(&session, &[]);
         assert_eq!(
-            display_snapshot(&session, &[]),
+            (snapshot.0, snapshot.1, snapshot.2),
             (4, "waiting on ".into(), vec![])
         );
+        assert_eq!(snapshot.3.len(), 4);
         session.config["agent_id"] = json!("t1");
+        let snapshot = display_snapshot(&session, &["leaf".into(), "worker".into()]);
         assert_eq!(
-            display_snapshot(&session, &["leaf".into(), "worker".into()]),
+            (snapshot.0, snapshot.1, snapshot.2),
             (4, "waiting on t2 leaf (step 3)".into(), vec![])
         );
         let mut t = shared.tree.lock().unwrap();
@@ -2952,7 +3137,7 @@ mod tests {
         session.config["agents"] = json!(false);
         assert_eq!(
             display_snapshot(&session, &targets),
-            (0, "waiting on ".into(), vec![])
+            (0, "waiting on ".into(), vec![], vec![])
         );
         assert_eq!(
             shared.tree.lock().unwrap().notices,
@@ -3151,6 +3336,86 @@ mod tests {
     }
 
     #[test]
+    fn completion_notice_headlines_keep_the_first_line_and_escape_controls() {
+        const CHILD: &str = "REAGENT_AGENT_HEADLINE_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "agents::tests::completion_notice_headlines_keep_the_first_line_and_escape_controls", "--nocapture"])
+                .env(CHILD, "1").env("NO_COLOR", "1").output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stderr}");
+            assert!(
+                stderr.contains("t1 finished · completed · 1 step"),
+                "{stderr}"
+            );
+            assert!(stderr.contains(" · \\x1b[2J\\x0d⇥headline"), "{stderr}");
+            assert!(!stderr.contains("PRIVATE SECOND LINE"), "{stderr}");
+            assert!(!stderr.contains(['\x1b', '\r', '\t']), "{stderr}");
+            return;
+        }
+        for (name, reply, headline) in [
+            (
+                "",
+                "  public headline  \nPRIVATE SECOND LINE",
+                "public headline",
+            ),
+            (
+                "worker",
+                "\x1b[2J\r\theadline\nPRIVATE SECOND LINE",
+                "\x1b[2J\r\theadline",
+            ),
+            ("worker", "\nPRIVATE SECOND LINE", ""),
+            ("", "single line", "single line"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("script.json");
+            std::fs::write(
+                &script,
+                crate::types::json_string(&json!([
+                    {"blocks":[{"kind":"text","text":reply}]}
+                ])),
+            )
+            .unwrap();
+            let mut session = Session::new(json!({"provider":"scripted","model":"scripted","scripted":script,"workspace":dir.path(),"trace_dir":dir.path(),"agents":true})).unwrap();
+            let mut arguments = json!({"task":"report", "context":{"brief":"test"}});
+            if !name.is_empty() {
+                arguments["name"] = json!(name);
+            }
+            assert_eq!(
+                execute(
+                    &mut session,
+                    "spawn",
+                    &crate::types::json_string(&arguments)
+                )
+                .unwrap()
+                .unwrap()["ok"],
+                true
+            );
+            assert_eq!(
+                execute(&mut session, "wait", r#"{"ids":["t1"],"timeout":5}"#)
+                    .unwrap()
+                    .unwrap()["data"]["timed_out"],
+                false
+            );
+            let notices = notices(&session);
+            assert_eq!(notices.len(), 1);
+            let agent = if name.is_empty() { "t1" } else { "t1 worker" };
+            assert_eq!(
+                notices[0],
+                format!(
+                    "{agent} finished · completed · 1 step · 0 tokens{}",
+                    if headline.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {headline}")
+                    }
+                )
+            );
+            crate::render::agents_refreshed(None, 0, None, &notices, &[]);
+        }
+    }
+
+    #[test]
     fn child_cost_is_metered_once_across_send_delivery_and_dismissal() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("script.json");
@@ -3212,11 +3477,12 @@ mod tests {
             assert_eq!(
                 notices(&session),
                 vec![format!(
-                    "t1 worker finished · completed · 1 steps · {} tokens",
+                    "t1 worker finished · completed · 1 step · {} tokens · {}",
                     crate::render::count(
                         total["input_tokens"].as_i64().unwrap()
                             + total["output_tokens"].as_i64().unwrap()
-                    )
+                    ),
+                    if index == 0 { "first" } else { "second" }
                 ),]
             );
             assert!(notices(&session).is_empty());

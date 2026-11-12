@@ -12,6 +12,7 @@ pub mod compact;
 pub mod context;
 pub mod context_gc;
 pub mod errors;
+mod file_diff;
 pub(crate) mod friction;
 pub(crate) mod friction_export;
 pub mod jev;

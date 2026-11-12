@@ -13,6 +13,7 @@ pub fn execute(
     name: &str,
     args: &Value,
 ) -> Result<Value, Value> {
+    ws.file_previews.clear();
     match name {
         "read_file" => read_file(ws, config, args),
         "list_files" => list_files(ws, args),
@@ -440,10 +441,14 @@ fn write_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value,
     }
     let abs = ws.resolve(path(args))?;
     let mut created = vec![];
+    let mut old_content = None;
     let (operation, before, mode) = match fs::symlink_metadata(&abs) {
         Ok(info) => {
             file_target(&info)?;
             let snap = ws.check_digest(&abs, expected)?;
+            if crate::file_diff::capturing(config) {
+                old_content = Some(snap.content);
+            }
             ("overwrite", Some(snap.sha256), info.permissions().mode())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -478,6 +483,15 @@ fn write_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value,
         return Err(e);
     }
     let sha = digest(content.as_bytes());
+    crate::file_diff::capture(
+        ws,
+        config,
+        &abs,
+        before.as_deref(),
+        Some(&sha),
+        old_content.as_deref(),
+        Some(content.as_bytes()),
+    );
     let mut data = json!({"operation":operation,"path":ws.relative(&abs),"before_sha256":before,"after_sha256":sha,"size_bytes":content.len()});
     if !created.is_empty() {
         data["created_dirs"] = json!(created.iter().map(|p| ws.relative(p)).collect::<Vec<_>>());
@@ -737,6 +751,15 @@ fn edit_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value, 
     }
     publish(&abs, after.as_bytes(), info.permissions().mode(), false)?;
     let sha = digest(after.as_bytes());
+    crate::file_diff::capture(
+        ws,
+        config,
+        &abs,
+        Some(&snap.sha256),
+        Some(&sha),
+        Some(&snap.content),
+        Some(after.as_bytes()),
+    );
     let mut data = json!({"operation":"update","path":ws.relative(&abs),"changed":true,"before_sha256":snap.sha256,"after_sha256":sha,"size_bytes":after.len()});
     let count: usize = counts.iter().sum();
     if count > 0 {
@@ -863,6 +886,7 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
         let mut problem = None;
         let mut failed = String::new();
         for (p, old) in plan.into_iter().rev() {
+            let mut old_content = None;
             let result = (|| {
                 #[cfg(test)]
                 deletion_checkpoint(config, "remove");
@@ -880,6 +904,18 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
                 {
                     return Err(fail("stale_file", "path changed after preflight"));
                 }
+                if crate::file_diff::capturing(config)
+                    && current.is_file()
+                    && current.len() <= MAX_FILE_BYTES as u64
+                {
+                    old_content = fs::File::open(&p).ok().and_then(|file| {
+                        let mut bytes = Vec::new();
+                        file.take((MAX_FILE_BYTES + 1) as u64)
+                            .read_to_end(&mut bytes)
+                            .ok()?;
+                        (bytes.len() <= MAX_FILE_BYTES).then_some(bytes)
+                    });
+                }
                 if current.is_dir() {
                     fs::remove_dir(&p)
                 } else {
@@ -891,6 +927,18 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
                 problem = Some(e);
                 failed = ws.relative(&p);
                 break;
+            }
+            if !old.is_dir() {
+                let before = old_content.as_deref().map(digest);
+                crate::file_diff::capture(
+                    ws,
+                    config,
+                    &p,
+                    Some(before.as_deref().unwrap_or("uncaptured")),
+                    None,
+                    old_content.as_deref(),
+                    None,
+                );
             }
             ws.seen
                 .retain(|seen, _| seen != &p && !(old.is_dir() && seen.starts_with(&p)));
@@ -922,6 +970,7 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
         return Ok(out);
     }
     file_target(&info)?;
+    let mut old_content = None;
     let before = if let Some(expected) = expected {
         let mut hasher = sha2::Sha256::new();
         use sha2::Digest;
@@ -931,6 +980,8 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
             return Err(fail("stale_file", "path changed while preparing deletion"));
         }
         let mut buffer = [0u8; 65536];
+        let mut captured = Vec::new();
+        let mut captured_complete = true;
         loop {
             #[cfg(test)]
             deletion_checkpoint(config, "hash");
@@ -942,12 +993,24 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
                 break;
             }
             hasher.update(&buffer[..n]);
+            if crate::file_diff::capturing(config) && captured.len() + n <= MAX_FILE_BYTES {
+                captured.extend_from_slice(&buffer[..n]);
+            } else {
+                captured_complete = false;
+            }
         }
         let before = format!("{:x}", hasher.finalize());
         ws.compare_digest(&abs, expected, &before)?;
+        if crate::file_diff::capturing(config) && captured_complete {
+            old_content = Some(captured);
+        }
         before
     } else {
-        ws.check_digest(&abs, None)?.sha256
+        let snap = ws.check_digest(&abs, None)?;
+        if crate::file_diff::capturing(config) {
+            old_content = Some(snap.content);
+        }
+        snap.sha256
     };
     #[cfg(test)]
     deletion_checkpoint(config, "before_remove");
@@ -969,6 +1032,15 @@ fn delete_file(ws: &mut Workspace, config: &Value, args: &Value) -> Result<Value
     let canonical = fs::canonicalize(&abs).map_err(os_outcome)?;
     ws.check_root()?;
     fs::remove_file(&abs).map_err(os_outcome)?;
+    crate::file_diff::capture(
+        ws,
+        config,
+        &canonical,
+        Some(&before),
+        None,
+        old_content.as_deref(),
+        None,
+    );
     ws.seen.remove(&canonical);
     Ok(workspace_outcome(
         ws,

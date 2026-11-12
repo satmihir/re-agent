@@ -69,6 +69,7 @@ pub(crate) const COMMANDS: &[(&str, &str, &str)] = &[
         "review this branch and uncommitted changes (default medium)",
     ),
     ("/trace", "", "path of the last turn or compaction trace"),
+    ("/diff", "", "full file-tool diff from the last turn"),
     (
         "/reset",
         "",
@@ -769,6 +770,18 @@ impl Chat {
         match command {
             "" => {}
             "/help" => self.say(&help()),
+            "/diff" => {
+                if let Some(run) = &self.last_run {
+                    let (_, display) = self.api.cli_result(run)?;
+                    self.say(&crate::file_diff::full(
+                        &display,
+                        render::styled(2),
+                        render::columns(2),
+                    ));
+                } else {
+                    self.say("No file changes in the last turn.");
+                }
+            }
             "/plan" => {
                 let on = !arg.is_empty() || !self.refresh()?.plan;
                 if self

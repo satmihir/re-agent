@@ -129,6 +129,7 @@ impl Session {
         self.state["compact_failures"] = json!(0);
         self.state["compact_retry_after"] = json!(0);
         crate::auto::begin_run(self);
+        crate::agents::begin_file_changes(self);
         self.open_trace(&run_id);
         self.state["agent_cost_start"] = crate::agents::snapshot(self).1["total_cost"].clone();
         let prefix = context::build_context(
@@ -487,6 +488,7 @@ impl Session {
                 if flag(&self.config["_display"]) {
                     crate::render::tool_started(self.region.as_ref(), call);
                 }
+                crate::agents::publish_activity(&self.config, name);
                 crate::session_api::publish(self, "tool", false);
                 let outcome = if name == "recall" {
                     Ok(crate::context_gc::recall(self, string(&call["arguments"])))
@@ -660,13 +662,13 @@ impl Session {
         delivered
     }
 
-    fn agent_notices(&self) {
+    fn agent_notices(&mut self) {
         if !flag(&self.config["_display"]) {
             return;
         }
-        for notice in crate::agents::notices(self) {
-            crate::terminal::output(self.region.as_ref(), 2, &format!("  ↳ {notice}\n"));
-        }
+        crate::agents::sync_file_changes(self);
+        let (count, _, notices, rows) = crate::agents::display_snapshot(self, &[]);
+        crate::render::agents_refreshed(self.region.as_ref(), count, None, &notices, &rows);
     }
 
     pub(crate) fn open_trace(&mut self, run_id: &str) {
@@ -699,9 +701,9 @@ impl Session {
             let worker = poll.then(|| {
                 scope.spawn(|| {
                     while !stopped.load(std::sync::atomic::Ordering::Acquire) {
-                        let (count, _, notices) =
+                        let (count, _, notices, rows) =
                             crate::agents::display_snapshot_for(config, session_id, &[]);
-                        crate::render::agents_refreshed(region, count, None, &notices);
+                        crate::render::agents_refreshed(region, count, None, &notices, &rows);
                         std::thread::park_timeout(std::time::Duration::from_millis(100));
                     }
                 })
@@ -838,7 +840,10 @@ impl Session {
             result.clone(),
         );
         self.history.push(json!({"kind":"tool","tool":result}));
+        let previews = std::mem::take(&mut self.tools.workspace.file_previews);
         if flag(&self.config["_display"]) {
+            crate::file_diff::accept(&mut self.state, previews);
+            crate::agents::sync_file_changes(self);
             crate::render::tool_finished_in_region(
                 call,
                 &outcome,
@@ -3157,6 +3162,71 @@ mod boundary_tests {
             assert!(!dir.path().join("y").exists());
         }
     }
+    #[test]
+    fn file_previews_leave_tool_trace_and_followup_request_bytes_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let call = |id: &str, name: &str, arguments: Value| {
+            let arguments = types::json_string(&arguments);
+            json!({"blocks":[{"kind":"tool_call","call":{"call_id":id,"name":name,"arguments":arguments}}],"native":{"provider":"openai.responses","items":[{"type":"function_call","call_id":id,"name":name,"arguments":arguments}]}})
+        };
+        let responses = json!([
+            call("r", "read_file", json!({"path":"f"})),
+            call("e", "edit_file", json!({"path":"f","edits":[{"old_text":"one","new_text":"ONE"},{"old_text":"two","new_text":"TWO"}]})),
+            call("w", "write_file", json!({"path":"created","content":"new\n"})),
+            {"blocks":[{"kind":"text","text":"done"}]}
+        ]);
+        let mut observed = Vec::new();
+        for display in [false, true] {
+            std::fs::write(dir.path().join("f"), "one\ntwo\n").unwrap();
+            if dir.path().join("created").exists() {
+                std::fs::remove_file(dir.path().join("created")).unwrap();
+            }
+            let mut session = scripted(
+                &dir,
+                responses.clone(),
+                json!({"_display":display,"session_id":"2662672662672662"}),
+            );
+            let result = session.submit("task");
+            assert_eq!(result["status"], "completed", "{result}");
+            let events: Vec<Value> = std::fs::read_to_string(string(&result["trace_path"]))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let mut bytes = Vec::new();
+            for event in events {
+                if event["type"] == "tool.finished" {
+                    bytes.push(types::json_string(&event["data"]));
+                }
+                if event["type"] == "model.requested" {
+                    let mut request = event["data"].clone();
+                    request["scope"]["run_id"] = json!("same-run");
+                    bytes.push(types::json_string(&request));
+                    let mut config = session.config.clone();
+                    config["provider"] = json!("openai");
+                    config["model"] = json!("test");
+                    bytes.push(types::json_string(
+                        &crate::provider::encode_request(&config, &request).unwrap(),
+                    ));
+                }
+            }
+            assert_eq!(session.state["_display"]["files"].is_array(), display);
+            if display {
+                assert_eq!(
+                    crate::file_diff::totals(&session.state, false),
+                    "  2 files changed · +3 −2\n"
+                );
+                crate::render::begin_turn(&mut session.state);
+                assert_eq!(
+                    crate::file_diff::full(&session.state, false, 120),
+                    "No file changes in the last turn."
+                );
+            }
+            observed.push(bytes);
+        }
+        assert_eq!(observed[0], observed[1]);
+    }
+
     #[test]
     fn recording_outcome_preserves_explicit_workspace_and_data_order() {
         let dir = tempfile::tempdir().unwrap();

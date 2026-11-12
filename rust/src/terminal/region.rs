@@ -135,6 +135,7 @@ pub struct Region {
     pub(super) queued: bool,
     pub(super) command_selection: Option<usize>,
     progress: Option<Progress>,
+    agents: Vec<crate::agents::AgentRow>,
     exec_lines: Vec<String>,
     stream_text: String,
     stream_rows: Vec<String>,
@@ -241,6 +242,7 @@ impl Region {
             queued: false,
             command_selection: None,
             progress: None,
+            agents: Vec::new(),
             exec_lines: Vec::new(),
             stream_text: String::new(),
             stream_rows: Vec::new(),
@@ -289,8 +291,8 @@ impl Region {
         self.status.prompt(self.color)
     }
 
-    fn rule(&self) -> String {
-        let rule = "─".repeat(self.width);
+    fn rule(&self, columns: usize) -> String {
+        let rule = "─".repeat(columns);
         if self.color {
             format!("{DIM}{rule}{RESET}")
         } else {
@@ -313,7 +315,6 @@ impl Region {
         if columns < 2 || height < 2 {
             return Ok(());
         }
-        self.width = columns;
         let prompt = self.prompt();
         let (mut rows, mut row, col) = if prefix.is_empty() {
             layout(buffer, caret, &prompt, columns)
@@ -358,8 +359,8 @@ impl Region {
             );
         }
         if columns >= 20 {
-            rows.insert(0, self.rule());
-            rows.push(self.rule());
+            rows.insert(0, self.rule(columns));
+            rows.push(self.rule(columns));
             rows.push(self.status.row(columns, self.color));
             if self.stream_columns != columns || self.stream_color != self.color {
                 #[cfg(test)]
@@ -387,7 +388,12 @@ impl Region {
             }
             // Copy only visible cached rows on draft, spinner, and height-only redraws.
             let limit = height.saturating_sub(rows.len() + 2);
-            let preview_limit = limit.saturating_sub(usize::from(self.progress.is_some()));
+            let agent_rows = self.agent_rows(
+                columns,
+                (height / 3).min(limit.saturating_sub(usize::from(self.progress.is_some()))),
+            );
+            let preview_limit =
+                limit.saturating_sub(usize::from(self.progress.is_some()) + agent_rows.len());
             let start = self.stream_rows.len().saturating_sub(preview_limit);
             let mut above = self.stream_rows[start..].to_vec();
             if limit > 0 {
@@ -395,7 +401,9 @@ impl Region {
                     above.push(progress.text(columns, self.color));
                 }
             }
-            let tail_limit = limit.saturating_sub(above.len()).min(self.exec_lines.len());
+            let tail_limit = limit
+                .saturating_sub(above.len() + agent_rows.len())
+                .min(self.exec_lines.len());
             for line in &self.exec_lines[self.exec_lines.len() - tail_limit..] {
                 let line = truncate(line, columns.saturating_sub(5));
                 above.push(if self.color {
@@ -404,6 +412,7 @@ impl Region {
                     format!("    {line}")
                 });
             }
+            above.extend(agent_rows);
             row += above.len();
             above.extend(rows);
             rows = above;
@@ -426,6 +435,7 @@ impl Region {
         if columns < 2 || height < 2 {
             return Ok(());
         }
+        let resized = self.active && (self.width != columns || self.height != height);
         self.width = columns;
         self.height = height;
         if rows.len() >= height {
@@ -434,7 +444,8 @@ impl Region {
             row = row.saturating_sub(cut);
         }
         let mut out = String::new();
-        let mut top = self.top;
+        // Resize can shift or reflow the old pane; never scroll its transient rows into history.
+        let mut top = if resized { 1 } else { self.top };
         if !self.active {
             if self.initial_row > 0
                 && self
@@ -548,13 +559,50 @@ impl Region {
         self.repaint()
     }
 
-    /// Refresh agents updates counts and a wait label without restarting its clock.
+    fn agent_rows(&self, columns: usize, limit: usize) -> Vec<String> {
+        let count = self.agents.len();
+        if count == 0 || limit == 0 {
+            return vec![];
+        }
+        let shown = if count > limit { limit - 1 } else { count };
+        let mut rows = Vec::new();
+        for agent in self.agents.iter().take(shown) {
+            let label = sanitize(&agent.label).replace('\n', "↵").replace('\t', "⇥");
+            let activity = sanitize(&agent.activity)
+                .replace('\n', "↵")
+                .replace('\t', "⇥");
+            let elapsed = agent.started.elapsed().as_secs();
+            let elapsed = if elapsed < 60 {
+                format!("{elapsed}s")
+            } else {
+                format!("{}m{:02}s", elapsed / 60, elapsed % 60)
+            };
+            rows.push(format!("  {label} · {activity} · {elapsed}"));
+        }
+        if shown < count {
+            rows.push(format!("  +{} more", count - shown));
+        }
+        rows.into_iter()
+            .map(|row| {
+                let row = truncate(&row, columns.saturating_sub(1));
+                if self.color {
+                    format!("{DIM}{row}{RESET}")
+                } else {
+                    row
+                }
+            })
+            .collect()
+    }
+
+    /// Refresh agents replaces live rows and a wait label without restarting its clock.
     pub(crate) fn refresh_agents(
         &mut self,
         count: usize,
         wait_label: Option<&str>,
+        rows: &[crate::agents::AgentRow],
     ) -> io::Result<()> {
         self.status.agents = count;
+        self.agents = rows.to_vec();
         if let Some(label) = wait_label {
             if let Some(progress) = &mut self.progress {
                 progress.label = label.to_owned();
@@ -637,9 +685,8 @@ impl Region {
         let mut rows = vec![header.to_owned()];
         rows.extend(options);
         if width >= 20 {
-            self.width = width;
-            rows.insert(0, self.rule());
-            rows.push(self.rule());
+            rows.insert(0, self.rule(width));
+            rows.push(self.rule(width));
             rows.push(self.status.row(width, self.color));
             if let Some(progress) = &self.progress {
                 rows.insert(0, progress.text(width, self.color));
@@ -799,6 +846,54 @@ mod tests {
         region.input(&['c'], 1, "", 60, 24).unwrap();
         region.submit("next submission").unwrap();
         assert!(!region.active);
+    }
+
+    #[test]
+    fn resize_reanchors_live_rows_before_repainting_and_the_next_submission_works() {
+        for color in [false, true] {
+            let mut region = Region::new();
+            region.color = color;
+            let draft: Vec<_> = "next question".chars().collect();
+            region.input(&draft, 3, "", 80, 24).unwrap();
+            let agents = [crate::agents::AgentRow {
+                label: "t1 research".into(),
+                activity: "thinking".into(),
+                started: Instant::now(),
+            }];
+            region
+                .refresh_agents(1, Some("waiting on t1 research (step 1)"), &agents)
+                .unwrap();
+            assert!(region.top > 1);
+            for (columns, height) in [(64, 12), (80, 24), (60, 24), (60, 30)] {
+                let printed = region.printed;
+                region.input(&draft, 3, "", columns, height).unwrap();
+                assert_eq!(
+                    region.top, 1,
+                    "resize must erase the old pane, not scroll it"
+                );
+                assert!(region.visible[1].contains("t1 research · thinking ·"));
+                assert_eq!(region.buffer, draft);
+                assert_eq!(region.caret, 3);
+                assert_eq!(region.printed, printed);
+                region.insert_bytes(b"ordinary output").unwrap();
+                assert!(region.top > 1);
+            }
+            region
+                .picker("Pick one", vec!["choice".into()], 50, 20)
+                .unwrap();
+            assert_eq!(region.top, 1);
+            region.input(&draft, 3, "", 50, 20).unwrap();
+            region.refresh_agents(0, None, &[]).unwrap();
+            region.set_progress(None).unwrap();
+            assert!(region
+                .visible
+                .iter()
+                .all(|row| !row.contains("t1 research")));
+            region.insert_bytes(b"completed reply").unwrap();
+            region.submit("next submission").unwrap();
+            assert!(!region.active);
+            assert!(region.visible[0].contains("next submission"));
+        }
     }
 
     #[test]
@@ -1113,6 +1208,54 @@ mod tests {
     }
 
     #[test]
+    fn working_agent_rows_are_bounded_safe_live_and_removed() {
+        let mut region = Region::new();
+        region.color = false;
+        region.input(&[], 0, "", 100, 24).unwrap();
+        let started = Instant::now() - Duration::from_secs(65);
+        let mut rows: Vec<_> = (1..=10)
+            .map(|id| crate::agents::AgentRow {
+                label: format!("t{id} worker"),
+                activity: "thinking".into(),
+                started,
+            })
+            .collect();
+        rows[0].label = "t1 worker\n\t\x1b[2J\r".into();
+        region.refresh_agents(10, None, &rows).unwrap();
+        assert_eq!(
+            region
+                .visible
+                .iter()
+                .filter(|row| row.contains(" · thinking · "))
+                .count(),
+            7
+        );
+        assert!(region.visible[0].contains("t1 worker↵⇥\\x1b[2J\\x0d"));
+        assert!(region.visible[0].contains("1m05s"));
+        assert!(region.visible[7].contains("+3 more"));
+        assert!(!region.visible[0].contains('\x1b'));
+        assert!(!region.printed);
+        rows.truncate(1);
+        rows[0].activity = "exec".into();
+        region.refresh_agents(1, None, &rows).unwrap();
+        assert!(region.visible[0].contains(" · exec · "));
+        assert!(!region
+            .visible
+            .iter()
+            .any(|row| row.contains("thinking") || row.contains("more")));
+        assert_eq!(region.agents[0].started, started);
+        region.color = true;
+        region.input(&[], 0, "", 30, 9).unwrap();
+        assert!(region.visible[0].contains(DIM));
+        assert!(width(&region.visible[0]) < 30);
+        assert!(region.visible.iter().all(|row| width(row) <= 30));
+        region.refresh_agents(0, None, &[]).unwrap();
+        assert!(region.agents.is_empty());
+        assert!(region.visible[0].contains('─'));
+        assert!(!region.printed);
+    }
+
+    #[test]
     fn agent_refresh_preserves_clocks_drafts_and_progress_when_no_wait_label_is_supplied() {
         let mut region = Region::new();
         region.color = false;
@@ -1135,6 +1278,7 @@ mod tests {
             2,
             Some("waiting on t1 worker (step 2)"),
             &[],
+            &[],
         );
         {
             let region = handle.lock().unwrap();
@@ -1148,7 +1292,7 @@ mod tests {
             assert_eq!(region.buffer.iter().collect::<String>(), "draft text");
             assert_eq!(region.caret, 3);
         }
-        crate::render::agents_refreshed(Some(&handle), 1, None, &[]);
+        crate::render::agents_refreshed(Some(&handle), 1, None, &[], &[]);
         {
             let mut region = handle.lock().unwrap();
             assert_eq!(region.status.row(80, false), "  model · 1 agent · auto");
@@ -1161,7 +1305,7 @@ mod tests {
                 .update(&serde_json::json!({"model":"next"}), &Value::Null);
             assert_eq!(region.status.row(80, false), "  next · 1 agent");
         }
-        crate::render::agents_refreshed(Some(&handle), 0, None, &[]);
+        crate::render::agents_refreshed(Some(&handle), 0, None, &[], &[]);
         let region = handle.lock().unwrap();
         assert_eq!(region.status.row(80, false), "  next");
         assert_eq!(region.progress.as_ref().unwrap().started, started);

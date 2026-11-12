@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 #[path = "git/diff.rs"]
-mod diff;
+pub(crate) mod diff;
 #[path = "git/recipes.rs"]
 mod recipes;
 #[path = "git/worktree.rs"]

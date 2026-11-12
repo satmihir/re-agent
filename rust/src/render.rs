@@ -756,16 +756,22 @@ pub fn agents_refreshed(
     count: usize,
     wait_label: Option<&str>,
     notices: &[String],
+    rows: &[crate::agents::AgentRow],
 ) {
     if let Some(region) = region {
         let label = wait_label.map(|label| sanitize(label).replace('\n', "↵").replace('\t', "⇥"));
         let _ = region
             .lock()
             .unwrap()
-            .refresh_agents(count, label.as_deref());
+            .refresh_agents(count, label.as_deref(), rows);
     }
     for notice in notices {
         let notice = sanitize(notice).replace('\n', "↵").replace('\t', "⇥");
+        let notice = if region.is_some() {
+            truncate(&notice, columns(2).saturating_sub(5))
+        } else {
+            notice
+        };
         crate::terminal::output(region, 2, &format!("  ↳ {notice}\n"));
     }
 }
@@ -1023,6 +1029,70 @@ fn turn_summary(
     out
 }
 
+fn agent_effect_summary(result: &Value, state: &Value, recap: bool) -> String {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut agents = BTreeMap::<&str, (BTreeSet<(&str, &str)>, i64, i64)>::new();
+    let mut out = String::new();
+    for effect in result["effects"].as_array().into_iter().flatten() {
+        let id = text(effect, "agent_id");
+        if id.is_empty() {
+            continue;
+        }
+        let label = activity::agent_label(id, state);
+        if text(effect, "effect") == "unknown" {
+            let description = if text(effect, "path").is_empty() {
+                text(effect, "summary").to_string()
+            } else {
+                format!(
+                    "{} {}",
+                    text(effect, "operation"),
+                    short_path(text(effect, "path"))
+                )
+            };
+            out.push_str(&format!(
+                "  ! {label}: {} (effect unknown) [{}]\n",
+                sanitize(&description).replace('\n', "↵").replace('\t', "⇥"),
+                sanitize(&short_path(text(effect, "workspace")))
+                    .replace('\n', "↵")
+                    .replace('\t', "⇥")
+            ));
+            continue;
+        }
+        if !recap {
+            continue;
+        }
+        let (files, commands, omitted) = agents.entry(id).or_default();
+        if !text(effect, "path").is_empty() {
+            files.insert((text(effect, "workspace"), text(effect, "path")));
+        } else if number(effect, "omitted_paths") > 0 {
+            *omitted += number(effect, "omitted_paths");
+        } else {
+            *commands += 1;
+        }
+    }
+    for (id, (files, commands, omitted)) in agents {
+        let mut parts = Vec::new();
+        if !files.is_empty() {
+            parts.push(format!(
+                "{} changed",
+                plural(files.len() as i64, "file", "files")
+            ));
+        }
+        if commands > 0 {
+            parts.push(plural(commands, "operation", "operations"));
+        }
+        if omitted > 0 {
+            parts.push(format!("{omitted} additional paths omitted"));
+        }
+        out.push_str(&format!(
+            "  {}: {}\n",
+            activity::agent_label(id, state),
+            parts.join(" · ")
+        ));
+    }
+    out
+}
+
 /// Result prints a reply to stdout and its factual run summary to stderr.
 pub fn result(result: &Value, elapsed: Duration, cfg: &Value, state: &Value, chat: bool) {
     result_in_region(result, elapsed, cfg, state, chat, None);
@@ -1067,6 +1137,7 @@ pub fn result_in_region(
     }
     let status = text(result, "status");
     eprint!("{}", turn_summary(result, elapsed, state, chat, styled(2)));
+    eprint!("{}", crate::file_diff::totals(state, styled(2)));
     if !chat || status != "completed" || yes(cfg, "recap") {
         eprint!("{}", activity::browsing_summary(state, styled(2)));
     }
@@ -1078,7 +1149,14 @@ pub fn result_in_region(
         };
         eprintln!("  {}", sanitize(reason))
     }
+    eprint!(
+        "{}",
+        agent_effect_summary(result, state, yes(cfg, "recap") || status != "completed")
+    );
     for effect in result["effects"].as_array().into_iter().flatten() {
+        if !text(effect, "agent_id").is_empty() {
+            continue;
+        }
         let unknown = text(effect, "effect") == "unknown";
         if !yes(cfg, "recap") && status == "completed" && !unknown {
             continue;
@@ -1088,15 +1166,7 @@ pub fn result_in_region(
         } else {
             format!("{} {}", text(effect, "operation"), text(effect, "path"))
         };
-        if !text(effect, "agent_id").is_empty() {
-            eprintln!(
-                "  agent {}: {} ({}) [{}]",
-                sanitize(text(effect, "agent_id")),
-                sanitize(&description),
-                text(effect, "effect"),
-                sanitize(text(effect, "workspace"))
-            );
-        } else if unknown && status == "completed" && !yes(cfg, "recap") {
+        if unknown && status == "completed" && !yes(cfg, "recap") {
             eprintln!("  ! {} (effect unknown)", sanitize(&description));
         }
     }
@@ -1479,6 +1549,35 @@ mod tests {
         }
     }
     #[test]
+    fn agent_recap_counts_distinct_files_and_keeps_uncertain_effects_explicit() {
+        use serde_json::json;
+        let state = json!({"_display":{"agents":{"t1":"writer"}}});
+        let result = json!({"effects":[
+            {"agent_id":"t1","workspace":"/repo","path":"a","effect":"applied"},
+            {"agent_id":"t1","workspace":"/repo","path":"a","effect":"applied"},
+            {"agent_id":"t1","workspace":"/repo","path":"b","effect":"applied"},
+            {"agent_id":"t1","workspace":"/repo","effect":"applied","omitted_paths":3},
+            {"agent_id":"t2","workspace":"/repo","effect":"applied","summary":"check"},
+            {"agent_id":"t1","workspace":"/repo","effect":"unknown","summary":"exec timed out\ninspect"},
+            {"workspace":"/repo","path":"root","effect":"applied"}
+        ]});
+        let recap = agent_effect_summary(&result, &state, true);
+        assert!(
+            recap.contains("writer: 2 files changed · 3 additional paths omitted\n"),
+            "{recap}"
+        );
+        assert!(recap.contains("t2: 1 operation\n"), "{recap}");
+        assert!(
+            recap.contains("! writer: exec timed out↵inspect (effect unknown) [/repo]"),
+            "{recap}"
+        );
+        assert_eq!(recap.lines().count(), 3);
+        let quiet = agent_effect_summary(&result, &state, false);
+        assert_eq!(quiet.lines().count(), 1);
+        assert!(quiet.contains("effect unknown"));
+    }
+
+    #[test]
     fn agent_notices_are_single_safe_lines_without_wait_labels_in_plain_output() {
         const CHILD: &str = "REAGENT_TEST_AGENT_NOTICES";
         if std::env::var_os(CHILD).is_some() {
@@ -1487,6 +1586,11 @@ mod tests {
                 2,
                 Some("waiting on t1 worker (step 3)"),
                 &["t1 worker finished · completed\nnew\ttext".into()],
+                &[crate::agents::AgentRow {
+                    label: "hidden agent".into(),
+                    activity: "thinking".into(),
+                    started: std::time::Instant::now(),
+                }],
             );
             return;
         }

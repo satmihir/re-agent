@@ -17,6 +17,8 @@ pub struct Workspace {
     pub root: PathBuf,
     pub seen: HashMap<PathBuf, String>,
     pub(crate) publish_mu: Arc<Mutex<()>>,
+    /// file_previews holds publication snapshots outside tool outcomes and checkpoints.
+    pub(crate) file_previews: Vec<Value>,
     digests: HashMap<PathBuf, HashSet<String>>,
     identity: (u64, u64),
 }
@@ -92,6 +94,7 @@ impl Workspace {
             root,
             seen: HashMap::new(),
             publish_mu: Arc::new(Mutex::new(())),
+            file_previews: vec![],
             digests: HashMap::new(),
             identity: (0, 0),
         }
@@ -107,6 +110,7 @@ impl Workspace {
             root,
             seen: HashMap::new(),
             publish_mu: Arc::new(Mutex::new(())),
+            file_previews: vec![],
             digests: HashMap::new(),
             identity: (info.dev(), info.ino()),
         })
