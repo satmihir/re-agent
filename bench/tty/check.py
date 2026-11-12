@@ -733,6 +733,40 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "file-diffs-line-endings-and-deletions": {
+        "size": (48, 110),
+        "script": [
+            tool("", "crlf", "write_file", {"path": "crlf.txt", "content": "same\r\n"}),
+            tool("", "child-a", "write_file", {"path": "deleted/a.txt", "content": "child a\n"}),
+            tool("", "child-b", "write_file", {"path": "deleted/b.txt", "content": "child b\n"}),
+            reply("Diff fixtures ready."),
+            tool("", "normalize", "edit_file", {"path": "crlf.txt", "old_text": "same\r\n", "new_text": "same\n"}),
+            tool("", "delete", "delete_file", {"path": "deleted", "recursive": True}),
+            reply("Line endings and deletions complete."),
+        ],
+        "steps": [
+            ("wait_status", "scripted", 5),
+            ("type", "prepare fixtures"), ("key", "enter"),
+            ("wait", "Diff fixtures ready.", 8),
+            ("wait_status", "scripted", 5),
+            ("type", "normalize and remove fixtures"), ("key", "enter"),
+            ("wait", "Line endings and deletions complete.", 8),
+            ("wait_status", "scripted", 5),
+            ("show", "CRLF-only changes expose the carriage return; recursive deletions name both children"),
+            ("expect", "all_lines", ["- same\\x0d", "+ same", "- child a", "- child b", "3 files changed · +1 −3"]),
+            ("expect", "all_count", "deleted/a.txt", 2),
+            ("expect", "all_count", "deleted/b.txt", 2),
+            ("type", "/diff"), ("key", "enter"),
+            ("wait_check", "all_count", "- child a", 2),
+            ("wait_status", "scripted", 5),
+            ("show", "The next /diff retains the line-ending change and both deleted files"),
+            ("expect", "all_count", "- same\\x0d", 2),
+            ("expect", "all_count", "- child a", 2),
+            ("expect", "all_count", "- child b", 2),
+            ("expect", "file_diff_style"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "agents-live-wait": {
         "agents": True,
         "agents_progress": True,
@@ -1635,6 +1669,7 @@ SCENARIOS = {
 }
 
 SCENARIOS["file-diffs-no-color"] = {**SCENARIOS["file-diffs"], "no_color": True}
+SCENARIOS["file-diffs-line-endings-and-deletions-no-color"] = {**SCENARIOS["file-diffs-line-endings-and-deletions"], "no_color": True}
 SCENARIOS["agents-live-wait-no-color"] = {**SCENARIOS["agents-live-wait"], "no_color": True}
 SCENARIOS["markdown-replies-no-color"] = {**SCENARIOS["markdown-replies"], "no_color": True}
 SCENARIOS["colour-palette-no-color"] = {**SCENARIOS["colour-palette"], "no_color": True}

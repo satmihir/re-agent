@@ -630,7 +630,12 @@ fn activity_text(
     }
     out.push('\n');
     if matches!(name, "write_file" | "edit_file" | "delete_file") {
-        out += &crate::file_diff::preview(&state["_display"]["file_change"], styled, columns, 12);
+        out += &crate::file_diff::tool_previews(
+            state,
+            styled,
+            columns,
+            yes(&outcome["data"], "recursive"),
+        );
     }
     state["_display"]["printed"] = json!(true);
     out
@@ -967,7 +972,7 @@ mod tests {
     fn effects_commands_and_previews_keep_activity_order() {
         let mut state = json!({});
         begin_turn(&mut state);
-        state["_display"]["file_change"] = json!({"old":"a\n","new":"b\n"});
+        state["_display"]["file_changes"] = json!([{"old":"a\n","new":"b\n"}]);
         let call = json!({"name":"edit_file","arguments":"{\"path\":\"f\",\"old_text\":\"a\\n\",\"new_text\":\"b\\n\"}"});
         assert_eq!(
             activity_text(

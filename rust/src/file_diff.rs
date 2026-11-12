@@ -71,14 +71,14 @@ pub(crate) fn accept(state: &mut Value, changes: Vec<Value>) {
     if !state["_display"].is_object() {
         crate::render::begin_turn(state);
     }
-    state["_display"]["file_change"] = Value::Null;
+    state["_display"]["file_changes"] = json!([]);
     if changes.is_empty() {
         return;
     }
     if !state["_display"]["files"].is_array() {
         state["_display"]["files"] = json!([]);
     }
-    let immediate = changes.last().cloned().unwrap_or(Value::Null);
+    let immediate = Value::Array(changes.clone());
     let display = &mut state["_display"];
     let files = display["files"].as_array_mut().unwrap();
     let mut omitted = false;
@@ -123,7 +123,7 @@ pub(crate) fn accept(state: &mut Value, changes: Vec<Value>) {
     if omitted {
         display["files_omitted"] = json!(true);
     }
-    display["file_change"] = immediate;
+    display["file_changes"] = immediate;
 }
 
 fn patch(change: &Value) -> Option<String> {
@@ -140,7 +140,7 @@ fn counts(change: &Value) -> Option<(usize, usize)> {
     let patch = patch(change)?;
     let mut added = 0;
     let mut removed = 0;
-    for line in patch.lines().skip(2) {
+    for line in patch.split_terminator('\n').skip(2) {
         added += usize::from(line.starts_with('+'));
         removed += usize::from(line.starts_with('-'));
     }
@@ -217,7 +217,7 @@ pub(crate) fn preview(change: &Value, styled: bool, columns: usize, limit: usize
     };
     let mut rows = Vec::new();
     let (mut old, mut new) = (0, 0);
-    for line in patch.lines().skip(2) {
+    for line in patch.split_terminator('\n').skip(2) {
         if line.starts_with("@@ ") {
             let mut fields = line.split_whitespace();
             fields.next();
@@ -292,6 +292,54 @@ pub(crate) fn preview(change: &Value, styled: bool, columns: usize, limit: usize
     out
 }
 
+/// tool_previews shares a row budget across a tool's published files, naming recursive children.
+pub(crate) fn tool_previews(
+    state: &Value,
+    styled: bool,
+    columns: usize,
+    recursive: bool,
+) -> String {
+    let changes = state["_display"]["file_changes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let files: Vec<_> = changes.iter().filter(|f| !yes(f, "omitted")).collect();
+    let labels = recursive || files.len() > 1;
+    let (mut remaining, mut shown_files) = (12usize, 0);
+    let mut out = String::new();
+    for file in &files {
+        if remaining <= usize::from(labels) {
+            break;
+        }
+        if labels {
+            let label = sanitize(text(file, "path"))
+                .replace('\n', "↵")
+                .replace('\t', "⇥");
+            let budget = if columns == 0 {
+                160
+            } else {
+                columns.saturating_sub(6).max(1)
+            };
+            out += &format!("      {}\n", truncate(&label, budget));
+            remaining -= 1;
+        }
+        let shown = preview(file, styled, columns, remaining);
+        remaining = remaining.saturating_sub(shown.lines().count());
+        out += &shown;
+        shown_files += 1;
+    }
+    if shown_files < files.len() {
+        out += &format!(
+            "      … {} more files (use /diff)\n",
+            files.len() - shown_files
+        );
+    }
+    if changes.iter().any(|f| yes(f, "omitted")) {
+        out += "      … additional file changes not captured\n";
+    }
+    out
+}
+
 /// full renders this opening's last turn using the same hunks without the preview cap.
 pub(crate) fn full(state: &Value, styled: bool, columns: usize) -> String {
     let files = state["_display"]["files"]
@@ -360,7 +408,7 @@ mod tests {
             json!({"path":"f","content":"replacement\n"}),
         );
         assert_eq!(
-            state["_display"]["file_change"]["old"],
+            state["_display"]["file_changes"][0]["old"],
             "header\nONE\ncontext\nTWO\nfooter\n"
         );
         assert!(full(&state, false, 120).contains("1 file changed · +1 −5"));
@@ -425,6 +473,58 @@ mod tests {
     }
 
     #[test]
+    fn recursive_deletions_name_children_and_share_one_preview_budget() {
+        for (files, lines) in [(1, 1), (2, 1), (4, 5)] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("root");
+            std::fs::create_dir_all(root.join("deleted")).unwrap();
+            let alias = dir.path().join("alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            for i in 0..files {
+                std::fs::write(
+                    root.join(format!("deleted/{i}.txt")),
+                    format!("child {i}\n").repeat(lines),
+                )
+                .unwrap();
+            }
+            let mut ws = Workspace::open(alias.to_str().unwrap()).unwrap();
+            let mut state = json!({"_display":{}});
+            tool(
+                &mut ws,
+                &mut state,
+                "delete_file",
+                json!({"path":"deleted","recursive":true}),
+            );
+            let full = full(&state, false, 80);
+            for i in 0..files {
+                assert!(full.contains(&format!("deleted/{i}.txt")), "{full}");
+                assert!(full.contains(&format!("- child {i}")), "{full}");
+            }
+            for styled in [false, true] {
+                let shown = tool_previews(&state, styled, 80, true);
+                assert!(shown.lines().count() <= 14, "{shown}");
+                if files <= 2 {
+                    for i in 0..files {
+                        let path = shown.find(&format!("deleted/{i}.txt")).unwrap();
+                        let content = shown.find(&format!("- child {i}")).unwrap();
+                        assert!(path < content, "{shown}");
+                    }
+                    assert!(!shown.contains("more files"), "{shown}");
+                } else {
+                    assert!(shown.contains("… 2 more files (use /diff)"), "{shown}");
+                }
+            }
+            tool(&mut ws, &mut state, "list_files", json!({"path":"."}));
+            assert!(tool_previews(&state, false, 80, false).is_empty());
+        }
+        let mut state = json!({"_display":{}});
+        accept(&mut state, vec![json!({"omitted":true})]);
+        assert!(
+            tool_previews(&state, false, 80, true).contains("additional file changes not captured")
+        );
+    }
+
+    #[test]
     fn repeated_edits_are_net_and_create_delete_or_revert_disappear() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f"), "a\n").unwrap();
@@ -465,6 +565,38 @@ mod tests {
             json!({"path":"empty","content":""}),
         );
         assert_eq!(totals(&state, false), "  1 file changed · +0 −0\n");
+    }
+
+    #[test]
+    fn line_ending_edits_keep_carriage_returns_visible_in_previews_and_full_diffs() {
+        for (old, new, removed, added) in [
+            ("x\r\n", "x\n", "- x\\x0d", "+ x"),
+            ("x\n", "x\r\n", "- x", "+ x\\x0d"),
+            ("x\r", "x\n", "- x\\x0d", "+ x"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("f"), old).unwrap();
+            let mut ws = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+            let mut state = json!({"_display":{}});
+            tool(&mut ws, &mut state, "read_file", json!({"path":"f"}));
+            tool(
+                &mut ws,
+                &mut state,
+                "edit_file",
+                json!({"path":"f","old_text":old,"new_text":new}),
+            );
+            assert_eq!(totals(&state, false), "  1 file changed · +1 −1\n");
+            for styled in [false, true] {
+                for shown in [
+                    tool_previews(&state, styled, 80, false),
+                    full(&state, styled, 80),
+                ] {
+                    assert!(shown.contains(removed), "{shown}");
+                    assert!(shown.contains(added), "{shown}");
+                    assert!(!shown.contains('\r'), "{shown}");
+                }
+            }
+        }
     }
 
     #[test]
