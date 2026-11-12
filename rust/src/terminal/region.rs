@@ -560,6 +560,13 @@ impl Region {
     }
 
     fn agent_rows(&self, columns: usize, limit: usize) -> Vec<String> {
+        let shorten = |text: &str, cells| {
+            if cells == 0 {
+                String::new()
+            } else {
+                truncate(text, cells)
+            }
+        };
         let count = self.agents.len();
         if count == 0 || limit == 0 {
             return vec![];
@@ -577,14 +584,26 @@ impl Region {
             } else {
                 format!("{}m{:02}s", elapsed / 60, elapsed % 60)
             };
-            rows.push(format!("  {label} · {activity} · {elapsed}"));
+            let available = columns.saturating_sub(3);
+            let activity = shorten(&activity, available.saturating_sub(width(&elapsed) + 3));
+            let suffix = if activity.is_empty() {
+                elapsed
+            } else {
+                format!("{activity} · {elapsed}")
+            };
+            let label = shorten(&label, available.saturating_sub(width(&suffix) + 3));
+            rows.push(if label.is_empty() {
+                format!("  {suffix}")
+            } else {
+                format!("  {label} · {suffix}")
+            });
         }
         if shown < count {
             rows.push(format!("  +{} more", count - shown));
         }
         rows.into_iter()
             .map(|row| {
-                let row = truncate(&row, columns.saturating_sub(1));
+                let row = shorten(&row, columns.saturating_sub(1));
                 if self.color {
                     format!("{DIM}{row}{RESET}")
                 } else {
@@ -1253,6 +1272,46 @@ mod tests {
         assert!(region.agents.is_empty());
         assert!(region.visible[0].contains('─'));
         assert!(!region.printed);
+    }
+
+    #[test]
+    fn long_agent_labels_leave_activity_and_elapsed_visible_after_narrow_resize() {
+        for color in [false, true] {
+            let mut region = Region::new();
+            region.color = color;
+            region
+                .refresh_agents(
+                    1,
+                    None,
+                    &[crate::agents::AgentRow {
+                        label: format!("t1 {}\n\t\x1b[2J", "界worker".repeat(30)),
+                        activity: "thinking".into(),
+                        started: Instant::now() - Duration::from_secs(65),
+                    }],
+                )
+                .unwrap();
+            for columns in [80, 30, 24, 20, 12, 8, 4, 1, 0] {
+                region.input(&[], 0, "", columns, 24).unwrap();
+                let rows = region.agent_rows(columns, 1);
+                let row = &rows[0];
+                assert!(
+                    width(row) <= columns.saturating_sub(1),
+                    "{columns}: {row:?}"
+                );
+                if columns >= 8 {
+                    assert!(row.contains("1m05s"), "{columns}: {row:?}");
+                }
+                if columns >= 22 {
+                    assert!(row.contains("thinking · 1m05s"), "{columns}: {row:?}");
+                }
+                if columns >= 30 {
+                    assert!(row.contains("t1 "), "{columns}: {row:?}");
+                    assert!(row.contains('…'), "{columns}: {row:?}");
+                }
+                assert!(!row.contains('\n') && !row.contains('\t'));
+                assert!(!row.contains("\x1b[2J"));
+            }
+        }
     }
 
     #[test]

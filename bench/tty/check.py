@@ -61,6 +61,7 @@ def tool(text, call_id, name, arguments):
 
 
 LONG_REPLY = "\n".join("reply line %02d of a long answer" % i for i in range(1, 41))
+LONG_AGENT_NAME = "long-worker-" + "a" * 48
 
 EXEC_TAIL_SCRIPT = """import json
 import os
@@ -82,8 +83,13 @@ if sys.argv[1] == "second":
     print("CHAIN fresh output", flush=True)
     wait("tail-finish")
 elif sys.argv[1] == "queue":
+    pathlib.Path("queue-started").touch()
     print("QUEUE gate ready", flush=True)
     wait("queue-finish")
+elif sys.argv[1] == "agent":
+    pathlib.Path("child-started").touch()
+    print("PRIVATE CHILD EXEC", flush=True)
+    wait("child-finish")
 elif sys.argv[1] == "cancel":
     print("CANCEL transient output", flush=True)
     wait("tail-finish")
@@ -808,6 +814,57 @@ SCENARIOS = {
             ("expect", "all_lack", ["t1 research · thinking ·", "t1 research · wait ·", "t2 nested · thinking ·"]),
             ("expect", "all_lack", ["✓ wait", "✓ dismiss", "t2 nested finished", "PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
             ("expect", "status_row_last"),
+        ],
+    },
+    "agents-during-parent-exec": {
+        "agents": True, "agents_tool": True, "queue_gate": True, "recap": False,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 8),
+            ("type", "delegate while running a parent tool"), ("key", "enter"),
+            ("wait", "QUEUE gate ready", 8),
+            ("wait_regex", r"t1 long-worker-.*… · thinking · [0-9]+s", 8),
+            ("show", "Long agent label preserves live activity while the parent exec is held"),
+            ("release", "advance"),
+            ("wait_regex", r"t1 long-worker-.* · exec · [1-9][0-9]*s", 8),
+            ("resize", 12, 36), ("wait_check", "resize_painted"),
+            ("wait_regex", r"t1 long-worker-.*… · exec · [0-9]+s", 5),
+            ("type", "draft stays"),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "screen_has", "draft stays"),
+            ("expect", "status_row_last"),
+            ("show", "Narrow resize retains the child tool, clock and editable draft"),
+            ("release_file", "child-finish"),
+            ("wait", "↳ t1 long-worker-", 8),
+            ("wait_absent", " · exec · ", 5),
+            ("expect", "screen_has", "QUEUE gate ready"),
+            ("expect", "screen_has", "draft stays"),
+            ("expect", "agent_notice_once"),
+            ("expect", "all_lack", ["PRIVATE CHILD EXEC", "PRIVATE CHILD REPLY", "Parent tool completed."]),
+            ("show", "Child completion arrives once before the parent exec is released"),
+            ("resize", 24, 80), ("wait_check", "resize_painted"),
+            ("release_file", "queue-finish"),
+            ("wait", "Parent tool completed.", 8),
+            ("wait_status", "gpt-6.1-sol", 8),
+            ("key", "ctrl-u"), ("type", "next turn"), ("key", "enter"),
+            ("wait", "Next turn works.", 8),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "agent_notice_once"),
+            ("expect", "status_row_last"),
+        ],
+    },
+    "agents-run-notice-width": {
+        "agents": True, "agents_tool": True, "queue_gate": True,
+        "size": (24, 40), "run_prompt": "delegate while running a parent tool",
+        "steps": [
+            ("wait_check", "fixture_started", "queue-started"),
+            ("release", "advance"),
+            ("wait_check", "fixture_started", "child-started"),
+            ("release_file", "child-finish"),
+            ("wait", "↳ t1 long-worker-", 8),
+            ("expect", "agent_notice_width"),
+            ("show", "Run mode also bounds the completion notice on a narrow terminal"),
+            ("release_file", "queue-finish"),
+            ("exit", 0, "Parent tool completed.", 8),
         ],
     },
     "agents-write-recap": {
@@ -1671,6 +1728,7 @@ SCENARIOS = {
 SCENARIOS["file-diffs-no-color"] = {**SCENARIOS["file-diffs"], "no_color": True}
 SCENARIOS["file-diffs-line-endings-and-deletions-no-color"] = {**SCENARIOS["file-diffs-line-endings-and-deletions"], "no_color": True}
 SCENARIOS["agents-live-wait-no-color"] = {**SCENARIOS["agents-live-wait"], "no_color": True}
+SCENARIOS["agents-during-parent-exec-no-color"] = {**SCENARIOS["agents-during-parent-exec"], "no_color": True}
 SCENARIOS["markdown-replies-no-color"] = {**SCENARIOS["markdown-replies"], "no_color": True}
 SCENARIOS["colour-palette-no-color"] = {**SCENARIOS["colour-palette"], "no_color": True}
 SCENARIOS["lively-indicator-no-color"] = {**SCENARIOS["lively-indicator"], "no_color": True}
@@ -1701,7 +1759,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None, startup_argv=None):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None, startup_argv=None, recap=True):
         self.workspace, self.home = workspace, home or workspace
         self.rows, self.cols = size
         self.raw = bytearray()
@@ -1733,7 +1791,9 @@ class Session:
             elif context_gc:
                 args += ["--context-gc", "--no-project-instructions", "--model", "gpt-6.1-sol"]
             elif agents:
-                args += ["--recap", "--no-project-instructions", "--model", "gpt-6.1-sol"]
+                args += ["--no-project-instructions", "--model", "gpt-6.1-sol"]
+                if recap:
+                    args.append("--recap")
             elif retry:
                 args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6.1-luna"]
             elif fast:
@@ -2100,7 +2160,29 @@ def check_palette(s):
     return None
 
 
+def check_fixture_started(s, name):
+    return None if os.path.exists(os.path.join(s.workspace, name)) else "fixture has not started: " + name
+
+
+def check_agent_notice_once(s):
+    raw = s.raw.decode("utf-8", "replace")
+    if s.no_color and re.search(r"\x1b\[[0-9;]*m", raw):
+        return "NO_COLOR emitted text styling"
+    count = raw.count("↳ t1 long-worker-")
+    return None if count == 1 else "agent notice appeared %d times in terminal output" % count
+
+
+def check_agent_notice_width(s):
+    notices = re.findall(r"  ↳ t1 long-worker-[^\r\n]*", s.raw.decode("utf-8", "replace"))
+    if len(notices) != 1 or len(notices[0]) >= s.cols or not notices[0].endswith("…"):
+        return "run-mode agent notice is not one bounded line: %r" % notices
+    return None
+
+
 CHECKS = {
+    "fixture_started": check_fixture_started,
+    "agent_notice_width": check_agent_notice_width,
+    "agent_notice_once": check_agent_notice_once,
     "palette": check_palette,
     "markdown_links": check_markdown_links,
     "region_after_output": check_region_after_output,
@@ -2436,7 +2518,16 @@ def run(binary, name, scenario, workspace):
                     with self.lock:
                         type(self).child_requests += 1
                         child_number = type(self).child_requests
-                    if scenario.get("agents_progress"):
+                    if scenario.get("agents_tool"):
+                        if child_number == 1:
+                            if not gates["advance"].wait(30):
+                                failures.append("child model was not released during the parent exec")
+                            output = [{"type": "function_call", "call_id": "child-exec", "name": "exec",
+                                       "arguments": json.dumps({"argv": [sys.executable, "tty-tail.py", "agent"], "cwd": "."})}]
+                        else:
+                            output = [{"type": "message", "status": "completed", "content": [
+                                {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                    elif scenario.get("agents_progress"):
                         decoded = json.loads(request)
                         texts = [part.get("text", "") for item in decoded.get("input", [])
                                  for part in item.get("content", []) if isinstance(part, dict)]
@@ -2478,6 +2569,10 @@ def run(binary, name, scenario, workspace):
                     if scenario.get("agents_progress"):
                         calls = [("spawn", {"task": "research task", "context": {"brief": "independent"}, "name": "research"}),
                                  ("wait", {"ids": ["research"]})] if number == 1 else []
+                    if scenario.get("agents_tool"):
+                        calls = [("spawn", {"task": "hold a child tool", "context": {"brief": "independent"},
+                                            "name": LONG_AGENT_NAME, "authority": "write"}),
+                                 ("exec", {"argv": [sys.executable, "tty-tail.py", "queue"], "cwd": "."})] if number == 1 else []
                     if scenario.get("agents_retirement"):
                         calls = {
                             1: [("spawn", {"task": "temporary task", "context": {"brief": "independent"}, "name": "temporary"}),
@@ -2522,6 +2617,8 @@ def run(binary, name, scenario, workspace):
                             text = "Named task retired after delivery."
                         if scenario.get("agents_write"):
                             text = "Agent changed a file."
+                        if scenario.get("agents_tool"):
+                            text = "Parent tool completed." if number == 2 else "Next turn works."
                         if scenario.get("context_gc"):
                             text = "GC turn complete." if number == 17 else "Next turn works."
                         if scenario.get("chatgpt"):
@@ -2605,7 +2702,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False), startup_argv=scenario.get("startup_argv"))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False), startup_argv=scenario.get("startup_argv"), recap=scenario.get("recap", True))
     try:
         for index, step in enumerate(scenario["steps"]):
             kind, args = step[0], step[1:]

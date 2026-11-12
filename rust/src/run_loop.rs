@@ -3,16 +3,52 @@ use crate::{context, provider, tools, types};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
-struct DisplayPoller<'a> {
-    stopped: &'a std::sync::atomic::AtomicBool,
-    thread: std::thread::Thread,
+struct DisplayPoller {
+    stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
-impl Drop for DisplayPoller<'_> {
+impl DisplayPoller {
+    fn start(
+        config: &Value,
+        session_id: &str,
+        region: Option<&crate::terminal::RegionHandle>,
+    ) -> Option<Self> {
+        if !flag(&config["_display"])
+            || !flag(&config["agents"])
+            || config["agent_id"].as_str().unwrap_or("root") != "root"
+        {
+            return None;
+        }
+        // Own the display inputs so a tool can mutably borrow the Session while we poll.
+        let config = config.clone();
+        let session_id = session_id.to_owned();
+        let region = region.cloned();
+        let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = stopped.clone();
+        let worker = std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::Acquire) {
+                let (count, _, notices, rows) =
+                    crate::agents::display_snapshot_for(&config, &session_id, &[]);
+                crate::render::agents_refreshed(region.as_ref(), count, None, &notices, &rows);
+                std::thread::park_timeout(std::time::Duration::from_millis(100));
+            }
+        });
+        Some(Self {
+            stopped,
+            worker: Some(worker),
+        })
+    }
+}
+
+impl Drop for DisplayPoller {
     fn drop(&mut self) {
         self.stopped
             .store(true, std::sync::atomic::Ordering::Release);
-        self.thread.unpark();
+        if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
+            let _ = worker.join();
+        }
     }
 }
 
@@ -490,6 +526,16 @@ impl Session {
                 }
                 crate::agents::publish_activity(&self.config, name);
                 crate::session_api::publish(self, "tool", false);
+                // Wait already refreshes its target label and rows together.
+                let poller = if name == "wait" {
+                    None
+                } else {
+                    DisplayPoller::start(
+                        &self.config,
+                        string(&self.state["session_id"]),
+                        self.region.as_ref(),
+                    )
+                };
                 let outcome = if name == "recall" {
                     Ok(crate::context_gc::recall(self, string(&call["arguments"])))
                 } else if let Some(result) =
@@ -507,6 +553,7 @@ impl Session {
                             .filter(|_| flag(&self.config["_display"])),
                     )
                 };
+                drop(poller);
                 self.agent_notices();
                 let outcome = match outcome {
                     Ok(outcome) => outcome,
@@ -690,43 +737,18 @@ impl Session {
 
     pub(crate) fn generate(&mut self, request: &Value) -> Result<Value, types::ModelError> {
         let display = flag(&self.config["_display"]);
-        let poll = display
-            && flag(&self.config["agents"])
-            && self.config["agent_id"].as_str().unwrap_or("root") == "root";
-        let config = &self.config;
-        let session_id = string(&self.state["session_id"]);
         let region = if display { self.region.as_ref() } else { None };
-        let stopped = std::sync::atomic::AtomicBool::new(false);
-        let response = std::thread::scope(|scope| {
-            let worker = poll.then(|| {
-                scope.spawn(|| {
-                    while !stopped.load(std::sync::atomic::Ordering::Acquire) {
-                        let (count, _, notices, rows) =
-                            crate::agents::display_snapshot_for(config, session_id, &[]);
-                        crate::render::agents_refreshed(region, count, None, &notices, &rows);
-                        std::thread::park_timeout(std::time::Duration::from_millis(100));
-                    }
-                })
+        let poller = DisplayPoller::start(&self.config, string(&self.state["session_id"]), region);
+        let response = self
+            .provider
+            .generate_displayed(request, &mut self.trace, region)
+            .map_err(|mut error| {
+                if error.status == "cancelled" && error.message == "context canceled" {
+                    error.message = "cancelled during a model request".into();
+                }
+                error
             });
-            let guard = worker.as_ref().map(|worker| DisplayPoller {
-                stopped: &stopped,
-                thread: worker.thread().clone(),
-            });
-            let result = self
-                .provider
-                .generate_displayed(request, &mut self.trace, region);
-            drop(guard);
-            if let Some(worker) = worker {
-                worker.join().unwrap();
-            }
-            result
-        })
-        .map_err(|mut error| {
-            if error.status == "cancelled" && error.message == "context canceled" {
-                error.message = "cancelled during a model request".into();
-            }
-            error
-        });
+        drop(poller);
         if response.is_ok() {
             self.add_usage(&self.provider.retry_usage());
         }
