@@ -152,7 +152,11 @@ impl Live {
             footer.push_str(" · effects unknown; inspect before continuing");
         }
         let footer = if render::styled(2) {
-            format!("\x1b[2m{footer}\x1b[0m\n")
+            format!(
+                "{}{footer}{}\n",
+                render::palette::DIM,
+                render::palette::RESET
+            )
         } else {
             footer
         };

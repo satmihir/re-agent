@@ -595,7 +595,11 @@ pub(crate) fn collect(session: &mut Session) -> bool {
             crate::render::count(freed_tokens.ceil() as i64)
         );
         let note = if crate::render::styled(2) {
-            format!("\x1b[2m{note}\x1b[0m\n")
+            format!(
+                "{}{note}{}\n",
+                crate::render::palette::DIM,
+                crate::render::palette::RESET
+            )
         } else {
             format!("{note}\n")
         };

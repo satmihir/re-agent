@@ -8,10 +8,8 @@ pub use activity::{
     begin_turn, progress_text, progress_text_in_region, tool_finished, tool_finished_in_region,
 };
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const CODE: &str = "\x1b[36m";
+pub(crate) mod palette;
+use palette::{ACCENT, BOLD, DIM, ERROR, EXEC, ITALIC, RESET, SUCCESS, WARNING};
 
 /// Sanitize makes terminal controls visible without altering newlines or tabs.
 pub fn sanitize(text: &str) -> String {
@@ -62,11 +60,11 @@ fn spans(text: &str) -> String {
     let mut out = String::new();
     for (i, p) in parts.iter().enumerate() {
         if i % 2 == 1 && i != parts.len() - 1 {
-            out.push_str(&format!("{CODE}{p}{RESET}"));
+            out.push_str(&format!("{ACCENT}{p}{RESET}"));
             continue;
         }
         let bold = BOLD_SPAN.replace_all(p, format!("{BOLD}${{1}}{RESET}"));
-        out.push_str(&ITALIC_SPAN.replace_all(&bold, format!("\x1b[3m${{1}}{RESET}")));
+        out.push_str(&ITALIC_SPAN.replace_all(&bold, format!("{ITALIC}${{1}}{RESET}")));
     }
     out
 }
@@ -81,7 +79,10 @@ fn line(text: &str) -> (String, String, String) {
         return (
             indent.into(),
             indent.into(),
-            format!("{BOLD}{}{RESET}", spans(content[level..].trim())),
+            format!(
+                "{BOLD}{ACCENT}{}{RESET}",
+                spans(content[level..].trim()).replace(RESET, &format!("{RESET}{BOLD}{ACCENT}"))
+            ),
         );
     }
     if RULE.is_match(content) {
@@ -260,7 +261,7 @@ pub fn markdown(text: &str, columns: usize) -> String {
             continue;
         }
         if fence {
-            rendered.push(format!("{CODE}{l}{RESET}"));
+            rendered.push(format!("{ACCENT}{l}{RESET}"));
             i += 1;
             continue;
         }
@@ -510,9 +511,6 @@ fn welcome(cfg: &Value, columns: usize, styled: bool) -> String {
         "▐▌LLLL>LLLL▐▌",
         "▝▙▄▄▄▄▄▄▄▄▄▟▘",
     ];
-    let shades = [0, 0, 17, 18, 19, 20, 56, 57, 57, 93, 93, 0, 0];
-    let bubble = "\x1b[38;5;99m";
-    let teal = "\x1b[1;38;5;86m";
     let mut details = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         // Paths are shortened, not wrapped; disclosures retain their complete text.
@@ -523,12 +521,14 @@ fn welcome(cfg: &Value, columns: usize, styled: bool) -> String {
         };
         for line in lines {
             details.push(if illustrated && index == 1 {
-                format!("{BOLD}re{bubble}:{RESET}{BOLD}agent{RESET}")
+                format!("{BOLD}re{EXEC}:{RESET}{BOLD}agent{RESET}")
             } else if illustrated && index == 2 {
                 format!("{BOLD}{line}{RESET}")
             } else if styled {
-                format!("{DIM}{line}{RESET}")
-                    .replace("plan mode", &format!("{teal}plan mode\x1b[22;39m{DIM}"))
+                format!("{DIM}{line}{RESET}").replace(
+                    "plan mode",
+                    &format!("{RESET}{BOLD}{ACCENT}plan mode{RESET}{DIM}"),
+                )
             } else {
                 line
             });
@@ -545,12 +545,15 @@ fn welcome(cfg: &Value, columns: usize, styled: bool) -> String {
             {
                 match c {
                     '●' | 'P' => out.push_str(&format!(
-                        "{bubble}{}{RESET}",
+                        "{EXEC}{}{RESET}",
                         if c == '●' { '●' } else { '•' }
                     )),
-                    'B' => out.push_str(&format!("\x1b[38;5;63m•{RESET}")),
-                    'L' => out.push_str(&format!("\x1b[48;5;{}m {RESET}", shades[col])),
-                    '>' => out.push_str(&format!("\x1b[48;5;{}m{teal}❯{RESET}", shades[col])),
+                    'B' => out.push_str(&format!("{EXEC}•{RESET}")),
+                    'L' => out.push_str(&format!("{} {RESET}", palette::FLASK_LIQUID[col])),
+                    '>' => out.push_str(&format!(
+                        "{}{BOLD}{ACCENT}❯{RESET}",
+                        palette::FLASK_LIQUID[col]
+                    )),
                     _ => out.push(c),
                 }
             }
@@ -867,10 +870,10 @@ fn turn_summary(
         };
     }
     let (mark, color) = match status {
-        "completed" => ("✓", "\x1b[32m"),
+        "completed" => ("✓", SUCCESS),
         "cancelled" => ("–", DIM),
-        "effect_unknown" => ("!", "\x1b[33m"),
-        _ => ("✗", "\x1b[31m"),
+        "effect_unknown" => ("!", WARNING),
+        _ => ("✗", ERROR),
     };
     let suffix = format!(
         " {status} · {} · {} · {} · {elapsed}",
@@ -1066,10 +1069,10 @@ mod tests {
         use sha2::{Digest, Sha256};
 
         let rendered = display(&large_markdown_reply(), true, 80);
-        assert_eq!(rendered.len(), 56_576);
+        assert_eq!(rendered.len(), 58_176);
         assert_eq!(
             format!("{:x}", Sha256::digest(rendered.as_bytes())),
-            "da447308ac32d089bb11e0b80f30c9f35e375f308b92812ff6f8241efd200568"
+            "8a019b2fc36808a7d432977b068de165a00f54bf21408f5669c1fa91803513d0"
         );
     }
 
@@ -1385,12 +1388,25 @@ mod tests {
         assert_eq!(
             markdown("# title\n```rs\n**literal**\n```", 80),
             format!(
-                "{BOLD}title{RESET}\n{DIM}```rs{RESET}\n{CODE}**literal**{RESET}\n{DIM}```{RESET}"
+                "{BOLD}{ACCENT}title{RESET}\n{DIM}```rs{RESET}\n{ACCENT}**literal**{RESET}\n{DIM}```{RESET}"
             )
         );
         assert_eq!(width("a\x1b[31m界e\u{301}"), 4);
         assert_eq!(truncate("界界", 3), "界…")
     }
+    #[test]
+    fn headings_restore_the_accent_after_inline_styles_and_wraps() {
+        let heading = display("## **one** two three", true, 7);
+        assert!(heading.starts_with(&format!("{BOLD}{ACCENT}")));
+        assert!(heading.contains(&format!("one{RESET}{BOLD}{ACCENT} two")));
+        assert!(heading.contains(&format!("\n{BOLD}{ACCENT}three")));
+        assert!(heading.lines().all(|row| width(row) <= 7));
+        assert_eq!(
+            display("## **one** two three", false, 7),
+            "## **one** two three"
+        );
+    }
+
     #[test]
     fn wraps_open_styles() {
         assert_eq!(

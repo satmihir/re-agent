@@ -1,3 +1,4 @@
+use crate::render::palette::{ACCENT, BOLD, DIM, RESET};
 use crate::render::{columns, display, sanitize, styled, truncate, width};
 #[cfg(test)]
 use serde_json::Value;
@@ -512,7 +513,7 @@ impl Input {
             let columns = region.lock().unwrap().width;
             let rule = "─".repeat(columns);
             let rule = if styled(2) {
-                format!("\x1b[2m{rule}\x1b[0m")
+                format!("{DIM}{rule}{RESET}")
             } else {
                 rule
             };
@@ -613,15 +614,15 @@ impl Input {
                     let style = if !crate::render::styled(2) {
                         ""
                     } else if option.disabled {
-                        "\x1b[2m"
+                        DIM
                     } else if i == cursor {
-                        "\x1b[36m\x1b[1m"
+                        &format!("{BOLD}{ACCENT}")
                     } else {
                         ""
                     };
                     eprint!(
                         "\x1b[2K{style}{row}{}\r\n",
-                        if style.is_empty() { "" } else { "\x1b[0m" }
+                        if style.is_empty() { "" } else { RESET }
                     );
                 }
                 io::stderr().flush()?;
@@ -1555,10 +1556,10 @@ fn choice_row(
         return row;
     }
     if option.disabled {
-        return format!("\x1b[2m{row}\x1b[0m");
+        return format!("{DIM}{row}{RESET}");
     }
     if index == selected {
-        return format!("\x1b[36m\x1b[1m{row}\x1b[0m");
+        return format!("{BOLD}{ACCENT}{row}{RESET}");
     }
     row
 }

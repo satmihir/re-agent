@@ -993,6 +993,25 @@ SCENARIOS = {
             ("key", "ctrl-d"), ("exit", 0, "", 5),
         ],
     },
+    "colour-palette": {
+        "size": (32, 80),
+        "script": [tool("", "palette-read", "read_file", {"path": "missing.txt"}),
+                   tool("", "palette-write", "write_file", {"path": "palette.txt", "content": "palette sample\n"}),
+                   tool("", "palette-exec", "exec", {"argv": ["printf", "palette command"], "cwd": "."}),
+                   reply("## Palette sample\nReady for the next turn.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "Show the palette."), ("key", "enter"),
+            ("wait", "Ready for the next turn.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "palette"),
+            ("expect", "all_lines", ["❯ Show the palette.", "Ready for the next turn."]),
+            ("show", "Shared palette: submitted message, heading, read/write/exec rows"),
+            ("type", "next draft"), ("wait", "❯ next draft", 5),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "markdown-progress": {
         "size": (32, 48),
         "script": [tool("## Progress check\n"
@@ -1528,6 +1547,7 @@ SCENARIOS = {
     },
 }
 
+SCENARIOS["colour-palette-no-color"] = {**SCENARIOS["colour-palette"], "no_color": True}
 SCENARIOS["lively-indicator-no-color"] = {**SCENARIOS["lively-indicator"], "no_color": True}
 SCENARIOS["fresh-prompt-symlinked-root"] = {**SCENARIOS["fresh-prompt"], "symlink_workspace": True}
 for name, options in [("fresh-prompt-no-color", {"no_color": True}),
@@ -1857,7 +1877,7 @@ def check_indicator(s, phrase):
 
 def check_indicator_style(s):
     raw = s.raw.decode("utf-8", "replace")
-    styled_indicator = re.search(r"\x1b\[1;38;5;86m[·∘°]⚗ ", raw)
+    styled_indicator = re.search(r"\x1b\[1m\x1b\[38;5;86m[·∘°]⚗ ", raw)
     if s.no_color:
         if re.search(r"\x1b\[[0-9;]*m[·∘°]⚗ ", raw):
             return "NO_COLOR indicator still has ANSI styling"
@@ -1892,7 +1912,26 @@ def check_exec_result_row(s):
     return None if len(rows) == 1 else "expected one ordinary exec result row, got %r" % rows
 
 
+def check_palette(s):
+    raw = s.raw.decode("utf-8", "replace")
+    if s.no_color:
+        if re.search(r"\x1b\[[0-9;]*m", raw):
+            return "NO_COLOR emitted text styling"
+        return None if "## Palette sample" in raw else "plain Markdown heading changed"
+    for styled in ["\x1b[38;5;252;48;5;236m❯ Show the palette.\x1b[0m",
+                   "\x1b[1m\x1b[38;5;86mPalette sample\x1b[0m",
+                   "\x1b[38;5;245mread_file\x1b[0m",
+                   "\x1b[38;5;86mwrite_file\x1b[0m",
+                   "\x1b[38;5;99mexec\x1b[0m",
+                   "\x1b[38;5;174m✗\x1b[0m",
+                   "\x1b[38;5;114m✓\x1b[0m"]:
+        if styled not in raw:
+            return "missing palette role: %r" % styled
+    return None
+
+
 CHECKS = {
+    "palette": check_palette,
     "region_after_output": check_region_after_output,
     "input_at_top": check_input_at_top,
     "status_row_last": check_status_row_last,

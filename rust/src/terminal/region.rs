@@ -5,9 +5,7 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const RESET: &str = "\x1b[0m";
-const DIM: &str = "\x1b[2m";
-const TEAL: &str = "\x1b[1;38;5;86m";
+use crate::render::palette::{ACCENT, BOLD, DIM, RESET, SUBMITTED};
 
 /// RegionHandle shares the active terminal pane between input and presentation.
 pub type RegionHandle = Arc<Mutex<Region>>;
@@ -66,7 +64,7 @@ impl Status {
 
     fn prompt(&self, color: bool) -> String {
         let prompt = if self.plan && color {
-            format!("{TEAL}❯{RESET} ")
+            format!("{BOLD}{ACCENT}❯{RESET} ")
         } else {
             "❯ ".into()
         };
@@ -113,7 +111,7 @@ impl Status {
             }
             row.push_str(join);
             if part == "plan mode" && color {
-                row.push_str(&format!("{TEAL}{part}{RESET}"));
+                row.push_str(&format!("{BOLD}{ACCENT}{part}{RESET}"));
             } else {
                 row.push_str(part);
             }
@@ -212,7 +210,7 @@ impl Progress {
         }
         text = truncate(&text, columns.saturating_sub(1));
         if color {
-            format!("{TEAL}{text}{RESET}")
+            format!("{BOLD}{ACCENT}{text}{RESET}")
         } else {
             text
         }
@@ -616,7 +614,7 @@ impl Region {
         }
         if self.color {
             for row in &mut rows {
-                *row = format!("{DIM}{row}{RESET}");
+                *row = format!("{SUBMITTED}{row}{RESET}");
             }
         }
         self.draw(rows, 0, 0, self.width, self.height)?;
@@ -826,12 +824,12 @@ mod tests {
         );
         region.stream_progress(true, 1000, Some(&text)).unwrap();
         let layouts = region.stream_layouts;
-        assert!(region.stream_rows[1].contains("\x1b[36m**literal** code line"));
+        assert!(region.stream_rows[1].contains(&format!("{ACCENT}**literal** code line")));
         assert!(region
             .stream_rows
             .last()
             .unwrap()
-            .contains("\x1b[1moutside"));
+            .contains(&format!("{BOLD}{ACCENT}outside")));
         assert!(region.visible.len() < 24);
         region.stream_progress(true, 1001, None).unwrap();
         region.progress.as_mut().unwrap().ticked = Instant::now() - Duration::from_millis(101);
@@ -867,7 +865,7 @@ mod tests {
                 assert_eq!(
                     row,
                     &if color {
-                        format!("{DIM}{expected}{RESET}")
+                        format!("{SUBMITTED}{expected}{RESET}")
                     } else {
                         expected.into()
                     }
@@ -1011,7 +1009,9 @@ mod tests {
         progress.frame = 1;
         assert!(progress.text(80, false).starts_with("∘⚗"));
         progress.started = now - Duration::from_millis(1500);
-        assert!(progress.text(80, true).starts_with(TEAL));
+        assert!(progress
+            .text(80, true)
+            .starts_with(&format!("{BOLD}{ACCENT}")));
         assert!(progress
             .text(80, true)
             .ends_with(" · 1.5s · ~12 output tokens\x1b[0m"));
@@ -1043,7 +1043,10 @@ mod tests {
                     for color in [false, true] {
                         let row = progress.text(columns, color);
                         let plain = if color {
-                            row.strip_prefix(TEAL).unwrap().strip_suffix(RESET).unwrap()
+                            row.strip_prefix(&format!("{BOLD}{ACCENT}"))
+                                .unwrap()
+                                .strip_suffix(RESET)
+                                .unwrap()
                         } else {
                             &row
                         };
@@ -1188,6 +1191,9 @@ mod tests {
         assert_eq!(status.row(5, false), "  pl…");
         status.blocked = true;
         assert_eq!(status.prompt(false), "(blocked) ❯ ");
-        assert_eq!(status.prompt(true), format!("(blocked) {TEAL}❯{RESET} "));
+        assert_eq!(
+            status.prompt(true),
+            format!("(blocked) {BOLD}{ACCENT}❯{RESET} ")
+        );
     }
 }
