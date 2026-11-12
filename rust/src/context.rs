@@ -130,12 +130,26 @@ mod tests {
     fn embedded_prompts_match_reference_bytes() {
         assert_eq!(
             format!("{:x}", Sha256::digest(DEFAULT_INSTRUCTIONS.as_bytes())),
-            "082f7dc21ba98cbd3c6402a38000da659250a1bc90502e38ea3f3137005e90bb"
+            "46cb59b3ac18dc03c6e3ba3125b95a8c0f10e4e3f4072d8b69eb815fcd44f462"
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(AGENT_INSTRUCTIONS.as_bytes())),
             "b1bb5ab8f5ab36008461cae3559402d2a59ae8598264217d97b979255aa140be"
         );
+    }
+
+    #[test]
+    fn us_english_rule_reaches_root_and_agent_requests_across_providers() {
+        for provider in ["openai", "anthropic"] {
+            for agent in [false, true] {
+                let config = json!({"provider":provider,"model":"example","agent":agent});
+                let request = build_context(&config, json!({}), &[], json!([]));
+                let instructions = request["instructions"].as_str().unwrap();
+                assert!(instructions.contains(
+                    "Use US English spelling (for example, color, behavior, and generalize) in responses and prose you write. Preserve quoted text and existing identifiers."
+                ));
+            }
+        }
     }
 
     #[test]
