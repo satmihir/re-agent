@@ -47,6 +47,18 @@ class TerminalTest(unittest.TestCase):
         t.feed("aaaaa\r\nbbbbb\r\nccccc\x1b[2;3H\x1b[J")
         self.assertEqual(t.screen(), ["aaaaa", "bb", ""])
 
+    def test_hyperlinks_do_not_draw_urls_even_when_the_sequence_is_split(self):
+        for end in ["\x07", "\x1b\\"]:
+            text = "\x1b]8;;https://example.invalid/long/path" + end + "\x1b[4mDocs\x1b[24m\x1b]8;;" + end + " plain"
+            for chunks in [[text], list(text)]:
+                with self.subTest(end=end, chunks=len(chunks)):
+                    t = Terminal(2, 12)
+                    for chunk in chunks:
+                        t.feed(chunk)
+                    self.assertEqual(t.screen(), ["Docs plain", ""])
+                    self.assertEqual((t.row, t.col), (0, 10))
+                    self.assertFalse(t.unhandled)
+
     def test_split_sequences_wait_for_the_rest(self):
         t = Terminal(2, 10)
         t.feed("\x1b[2")

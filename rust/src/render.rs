@@ -9,7 +9,11 @@ pub use activity::{
 };
 
 pub(crate) mod palette;
-use palette::{ACCENT, BOLD, DIM, ERROR, EXEC, ITALIC, RESET, SUCCESS, WARNING};
+use palette::{
+    ACCENT, BOLD, DIM, ERROR, EXEC, ITALIC, RESET, SUCCESS, UNDERLINE, UNDERLINE_OFF, WARNING,
+};
+
+const LINK_CLOSE: &str = "\x1b]8;;\x1b\\";
 
 /// Sanitize makes terminal controls visible without altering newlines or tabs.
 pub fn sanitize(text: &str) -> String {
@@ -50,12 +54,7 @@ pub fn display(text: &str, styled: bool, columns: usize) -> String {
 }
 fn spans(text: &str) -> String {
     static LINKS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)").unwrap());
-    static BOLD_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
-    static ITALIC_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*([^*]+)\*").unwrap());
-    let text = LINKS
-        .replace_all(text, format!("${{1}}{DIM} (${{2}}){RESET}"))
-        .into_owned();
+        LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)\s\x00-\x1f\x7f-\x9f]+)\)").unwrap());
     let parts: Vec<_> = text.split('`').collect();
     let mut out = String::new();
     for (i, p) in parts.iter().enumerate() {
@@ -63,11 +62,33 @@ fn spans(text: &str) -> String {
             out.push_str(&format!("{ACCENT}{p}{RESET}"));
             continue;
         }
-        let bold = BOLD_SPAN.replace_all(p, format!("{BOLD}${{1}}{RESET}"));
-        out.push_str(&ITALIC_SPAN.replace_all(&bold, format!("{ITALIC}${{1}}{RESET}")));
+        // Keep opaque destinations out of emphasis matching, including bold around a link.
+        let mut links = Vec::new();
+        let marked = LINKS.replace_all(p, |link: &regex::Captures<'_>| {
+            links.push(format!(
+                "\x1b]8;;{}\x1b\\{UNDERLINE}{}{UNDERLINE_OFF}{LINK_CLOSE}",
+                &link[2],
+                emphasis(&link[1]).replace(RESET, &format!("{RESET}{UNDERLINE}"))
+            ));
+            format!("\x1b]8;;{}\x1b\\", links.len() - 1)
+        });
+        let mut styled = emphasis(&marked);
+        for (i, link) in links.iter().enumerate() {
+            styled = styled.replace(&format!("\x1b]8;;{i}\x1b\\"), link);
+        }
+        out.push_str(&styled);
     }
     out
 }
+fn emphasis(text: &str) -> String {
+    static BOLD_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
+    static ITALIC_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*([^*]+)\*").unwrap());
+    let bold = BOLD_SPAN.replace_all(text, format!("{BOLD}${{1}}{RESET}"));
+    ITALIC_SPAN
+        .replace_all(&bold, format!("{ITALIC}${{1}}{RESET}"))
+        .into_owned()
+}
+
 fn line(text: &str) -> (String, String, String) {
     static RULE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(-{3,}|\*{3,}|_{3,})$").unwrap());
     static BULLET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-*+][ \t]+").unwrap());
@@ -115,7 +136,6 @@ fn line(text: &str) -> (String, String, String) {
 }
 /// Wrap preserves styled words while fitting subsequent rows to a hanging prefix.
 pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<String> {
-    static ANSI_STYLE: LazyLock<Regex> = LazyLock::new(|| Regex::new("\x1b\\[[0-9;]*m").unwrap());
     if columns == 0 || width(&format!("{first}{body}")) <= columns {
         return vec![format!("{first}{body}")];
     }
@@ -124,17 +144,21 @@ pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<S
     let mut cells = width(first);
     let mut words = 0;
     let mut open = String::new();
+    let mut link = String::new();
     for word in body.split(' ') {
         if word.is_empty() && words == 0 && !rows.is_empty() {
             continue;
         }
         let w = width(word);
         if words > 0 && cells + 1 + w > columns {
+            if !link.is_empty() {
+                row.push_str(LINK_CLOSE);
+            }
             if !open.is_empty() {
                 row.push_str(RESET)
             }
             rows.push(row);
-            row = format!("{hang}{open}");
+            row = format!("{hang}{open}{link}");
             cells = width(hang);
             words = 0
         }
@@ -145,12 +169,24 @@ pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<S
         row.push_str(word);
         cells += w;
         words += 1;
-        for seq in ANSI_STYLE.find_iter(word) {
-            if seq.as_str() == RESET {
-                open.clear()
-            } else {
-                open.push_str(seq.as_str())
+        let mut rest = word;
+        while !rest.is_empty() {
+            if let Some(seq) = terminal_sequence(rest) {
+                if seq.starts_with("\x1b]8;;") {
+                    link = if seq == LINK_CLOSE {
+                        String::new()
+                    } else {
+                        seq.into()
+                    };
+                } else if seq == RESET {
+                    open.clear();
+                } else if seq.ends_with('m') {
+                    open.push_str(seq);
+                }
+                rest = &rest[seq.len()..];
+                continue;
             }
+            rest = &rest[rest.chars().next().unwrap().len_utf8()..];
         }
     }
     rows.push(row);
@@ -244,24 +280,70 @@ fn table(lines: &[&str], columns: usize) -> Vec<String> {
     }
     out
 }
-/// Markdown renders the reference terminal subset, including fences and tables.
+fn code_rows(text: &str, indent: &str, color: &str, columns: usize) -> Vec<String> {
+    let prefix = format!("{indent}{DIM}│{RESET} ");
+    let room = if columns == 0 {
+        usize::MAX
+    } else {
+        columns.saturating_sub(width(&prefix)).max(1)
+    };
+    let mut rows = Vec::new();
+    let mut body = String::new();
+    let mut cells = 0;
+    for c in text.replace('\t', "    ").chars() {
+        let w = rune_width(c);
+        if cells > 0 && cells + w > room {
+            rows.push(format!("{prefix}{color}{body}{RESET}"));
+            body.clear();
+            cells = 0;
+        }
+        body.push(c);
+        cells += w;
+    }
+    rows.push(format!("{prefix}{color}{body}{RESET}"));
+    rows
+}
+
+/// Markdown renders terminal headings, framed code blocks, hyperlinks and tables.
 pub fn markdown(text: &str, columns: usize) -> String {
     static TABLE_SEPARATOR: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$").unwrap());
     let lines: Vec<_> = text.split('\n').collect();
     let mut rendered = Vec::new();
-    let mut fence = false;
+    let mut fence = None;
     let mut i = 0;
     while i < lines.len() {
         let l = lines[i];
-        if l.trim().starts_with("```") {
-            fence = !fence;
-            rendered.push(format!("{DIM}{l}{RESET}"));
+        let trimmed = l.trim();
+        let ticks = trimmed.bytes().take_while(|b| *b == b'`').count();
+        if let Some((length, language, indent)) = fence {
+            if ticks >= length && trimmed[ticks..].is_empty() {
+                fence = None;
+            } else {
+                let color = match language {
+                    "diff" if l.starts_with('+') => SUCCESS,
+                    "diff" if l.starts_with('-') => ERROR,
+                    "diff" => "",
+                    _ => ACCENT,
+                };
+                rendered.extend(code_rows(l, indent, color, columns));
+            }
             i += 1;
             continue;
         }
-        if fence {
-            rendered.push(format!("{ACCENT}{l}{RESET}"));
+        if ticks >= 3 {
+            let language = trimmed[ticks..].trim();
+            let indent = &l[..l.len() - l.trim_start().len()];
+            fence = Some((ticks, language, indent));
+            if !language.is_empty() {
+                let room = columns.saturating_sub(width(indent) + 2);
+                let label = if columns > 0 && room == 0 {
+                    String::new()
+                } else {
+                    truncate(language, room)
+                };
+                rendered.push(format!("{indent}{DIM}│ {label}{RESET}"));
+            }
             i += 1;
             continue;
         }
@@ -315,21 +397,36 @@ pub(crate) fn rune_width(c: char) -> usize {
         1
     }
 }
-/// Width ignores ANSI CSI sequences while measuring terminal cells.
-pub fn width(text: &str) -> usize {
-    let mut chars = text.chars().peekable();
-    let mut n = 0;
-    while let Some(c) = chars.next() {
-        if c == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next();
-            for c in chars.by_ref() {
-                if ('@'..='~').contains(&c) {
-                    break;
-                }
+fn terminal_sequence(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    if bytes.starts_with(b"\x1b[") {
+        let end = bytes[2..].iter().position(|b| (b'@'..=b'~').contains(b))? + 3;
+        return Some(&text[..end]);
+    }
+    if bytes.starts_with(b"\x1b]") {
+        for i in 2..bytes.len() {
+            if bytes[i] == 7 {
+                return Some(&text[..i + 1]);
             }
+            if bytes[i..].starts_with(b"\x1b\\") {
+                return Some(&text[..i + 2]);
+            }
+        }
+    }
+    None
+}
+
+/// Width ignores terminal styles and hyperlinks while measuring terminal cells.
+pub fn width(mut text: &str) -> usize {
+    let mut n = 0;
+    while !text.is_empty() {
+        if let Some(seq) = terminal_sequence(text) {
+            text = &text[seq.len()..];
             continue;
         }
-        n += rune_width(c)
+        let c = text.chars().next().unwrap();
+        text = &text[c.len_utf8()..];
+        n += rune_width(c);
     }
     n
 }
@@ -340,14 +437,38 @@ pub fn truncate(text: &str, cells: usize) -> String {
     }
     let mut out = String::new();
     let mut n = 0;
-    for c in text.chars() {
+    let mut rest = text;
+    let mut linked = false;
+    let mut styled = false;
+    while !rest.is_empty() {
+        if let Some(seq) = terminal_sequence(rest) {
+            linked = if seq.starts_with("\x1b]8;;") {
+                seq != LINK_CLOSE
+            } else {
+                linked
+            };
+            if seq.starts_with("\x1b[") && seq.ends_with('m') {
+                styled = seq != RESET;
+            }
+            out.push_str(seq);
+            rest = &rest[seq.len()..];
+            continue;
+        }
+        let c = rest.chars().next().unwrap();
         if n + rune_width(c) > cells - 1 {
             break;
         }
+        rest = &rest[c.len_utf8()..];
         n += rune_width(c);
         out.push(c)
     }
     out.push('…');
+    if linked {
+        out.push_str(LINK_CLOSE);
+    }
+    if styled {
+        out.push_str(RESET);
+    }
     out
 }
 /// Count formats token totals as compact decimal counts.
@@ -1069,10 +1190,10 @@ mod tests {
         use sha2::{Digest, Sha256};
 
         let rendered = display(&large_markdown_reply(), true, 80);
-        assert_eq!(rendered.len(), 58_176);
+        assert_eq!(rendered.len(), 59_840);
         assert_eq!(
             format!("{:x}", Sha256::digest(rendered.as_bytes())),
-            "8a019b2fc36808a7d432977b068de165a00f54bf21408f5669c1fa91803513d0"
+            "825357f99c418419a3bc03c7b0af0cf51d2fc985ac97aa2e6cb775fd88563cb7"
         );
     }
 
@@ -1388,7 +1509,7 @@ mod tests {
         assert_eq!(
             markdown("# title\n```rs\n**literal**\n```", 80),
             format!(
-                "{BOLD}{ACCENT}title{RESET}\n{DIM}```rs{RESET}\n{ACCENT}**literal**{RESET}\n{DIM}```{RESET}"
+                "{BOLD}{ACCENT}title{RESET}\n{DIM}│ rs{RESET}\n{DIM}│{RESET} {ACCENT}**literal**{RESET}"
             )
         );
         assert_eq!(width("a\x1b[31m界e\u{301}"), 4);
@@ -1404,6 +1525,70 @@ mod tests {
         assert_eq!(
             display("## **one** two three", false, 7),
             "## **one** two three"
+        );
+    }
+
+    #[test]
+    fn code_blocks_hide_fences_keep_whitespace_and_colour_diff_lines() {
+        for (source, expected) in [
+            ("```rust\n  let x = 1;\n```", format!("{DIM}│ rust{RESET}\n{DIM}│{RESET} {ACCENT}  let x = 1;{RESET}")),
+            ("```\n**literal**\n```", format!("{DIM}│{RESET} {ACCENT}**literal**{RESET}")),
+            ("```diff\n same\n-old\n+new\n```", format!("{DIM}│ diff{RESET}\n{DIM}│{RESET}  same{RESET}\n{DIM}│{RESET} {ERROR}-old{RESET}\n{DIM}│{RESET} {SUCCESS}+new{RESET}")),
+            ("````text\n```\n````", format!("{DIM}│ text{RESET}\n{DIM}│{RESET} {ACCENT}```{RESET}")),
+        ] {
+            assert_eq!(display(source, true, 80), expected);
+            assert_eq!(display(source, false, 80), source);
+        }
+        let wrapped = display("```rs\n  界界界  x\tend\n```", true, 10);
+        assert!(wrapped.lines().all(|row| width(row) <= 10), "{wrapped:?}");
+        assert_eq!(wrapped.lines().count(), 4);
+        assert!(!wrapped.contains('\t'));
+    }
+
+    #[test]
+    fn hyperlinks_keep_destinations_out_of_visible_text_and_plain_output_unchanged() {
+        let url = "https://example.invalid/a*b?next=c*d";
+        let source = format!("[read **these** docs]({url})");
+        let linked = display(&source, true, 80);
+        assert_eq!(linked, format!("\x1b]8;;{url}\x1b\\{UNDERLINE}read {BOLD}these{RESET}{UNDERLINE} docs{UNDERLINE_OFF}{LINK_CLOSE}"));
+        assert_eq!(width(&linked), 15);
+        assert_eq!(display(&source, false, 10), source);
+        let outer_bold = display(&format!("**read [docs]({url}) now**"), true, 80);
+        assert!(outer_bold.starts_with(&format!("{BOLD}read \x1b]8;;{url}\x1b\\")));
+        assert!(outer_bold.ends_with(&format!("{LINK_CLOSE} now{RESET}")));
+        assert!(!outer_bold.contains("**"));
+        let code = display(&format!("`[docs]({url})`"), true, 80);
+        assert!(!code.contains("\x1b]"));
+        assert!(code.contains(&format!("[docs]({url})")));
+        let injected = display(
+            "[label](https://example.invalid/\x1b]8;;evil\x07)",
+            true,
+            80,
+        );
+        assert!(!injected.contains("evil\x07"));
+    }
+
+    #[test]
+    fn wrapped_and_truncated_hyperlinks_close_before_leaving_each_row() {
+        let source = "[one two three](https://example.invalid/docs) outside";
+        let rendered = display(source, true, 7);
+        let open = "\x1b]8;;https://example.invalid/docs\x1b\\";
+        assert!(
+            rendered.starts_with(&format!(
+                "{open}{UNDERLINE}one two{LINK_CLOSE}{RESET}\n{UNDERLINE}{open}three"
+            )),
+            "{rendered:?}"
+        );
+        for row in rendered.lines() {
+            assert_eq!(row.matches(open).count(), row.matches(LINK_CLOSE).count());
+            assert!(width(row) <= 7);
+        }
+        let clipped = truncate(&display(source, true, 80), 6);
+        assert_eq!(width(&clipped), 6);
+        assert!(clipped.ends_with(&format!("…{LINK_CLOSE}{RESET}")));
+        assert_eq!(
+            width("\x1b]8;;https://example.invalid\x07界e\u{301}\x1b]8;;\x07"),
+            3
         );
     }
 

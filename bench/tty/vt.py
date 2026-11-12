@@ -6,7 +6,7 @@ the harness shows up as a wrong screen here:
 
 - printable text with deferred wrap at the last column
 - CR, LF (scrolling at the bottom of the scroll region), BS
-- CSI A B C D G H f J K r m, ESC M, and DSR 6 (cursor position report)
+- CSI A B C D G H f J K r m, ESC M, OSC 8 hyperlinks, and DSR 6 (cursor position report)
 - lines scrolled off the top of a region that starts at row 1 go to scrollback
 
 Anything else is recorded in `unhandled` so a check can report it.
@@ -111,6 +111,15 @@ class Terminal:
                         continue
                     self._csi(m.group(1), m.group(2), m.group(3))
                     i = m.end()
+                    continue
+                if data[i + 1] == "]":
+                    end = re.search(r"\x07|\x1b\\", data[i + 2:])
+                    if not end:
+                        break
+                    payload = data[i + 2:i + 2 + end.start()]
+                    if not payload.startswith("8;"):
+                        self.unhandled.add("OSC " + payload.split(";", 1)[0])
+                    i += 2 + end.end()
                     continue
                 if data[i + 1] == "M":  # reverse index
                     self.pending_wrap = False
