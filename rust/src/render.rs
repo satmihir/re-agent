@@ -766,13 +766,16 @@ pub fn agents_refreshed(
             .refresh_agents(count, label.as_deref(), rows);
     }
     for notice in notices {
-        let notice = sanitize(notice).replace('\n', "↵").replace('\t', "⇥");
-        let notice = if region.is_some() {
-            truncate(&notice, columns(2).saturating_sub(5))
-        } else {
-            notice
+        let notice = format!(
+            "  ↳ {}",
+            sanitize(notice).replace('\n', "↵").replace('\t', "⇥")
+        );
+        let notice = match columns(2) {
+            0 => notice,
+            1 => String::new(),
+            columns => truncate(&notice, columns - 1),
         };
-        crate::terminal::output(region, 2, &format!("  ↳ {notice}\n"));
+        crate::terminal::output(region, 2, &format!("{notice}\n"));
     }
 }
 
@@ -1585,7 +1588,10 @@ mod tests {
                 None,
                 2,
                 Some("waiting on t1 worker (step 3)"),
-                &["t1 worker finished · completed\nnew\ttext".into()],
+                &[format!(
+                    "t1 worker finished · completed\nnew\ttext\x1b[2J{}",
+                    "long".repeat(80)
+                )],
                 &[crate::agents::AgentRow {
                     label: "hidden agent".into(),
                     activity: "thinking".into(),
@@ -1601,7 +1607,10 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
-            "  ↳ t1 worker finished · completed↵new⇥text\n"
+            format!(
+                "  ↳ t1 worker finished · completed↵new⇥text\\x1b[2J{}\n",
+                "long".repeat(80)
+            )
         );
     }
     #[test]

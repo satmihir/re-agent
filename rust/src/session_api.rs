@@ -1626,6 +1626,12 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         let prepared = observations::prepare_current(session, &shared);
         let mut state = shared.state.lock().unwrap();
         observations::install(&mut state, prepared);
+        // The CLI revisits only its latest turn; receipts retain results, not old file snapshots.
+        for command in &mut state.commands {
+            if let Some(message) = command.work.message_mut() {
+                message.display = Value::Null;
+            }
+        }
         let command = &mut state.commands[index];
         if command.info.state == CommandState::Pending {
             command.info.state = CommandState::NotApplied;
@@ -1676,6 +1682,60 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_latest_turn_retains_cli_file_snapshots_without_losing_receipts() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        let mut responses = Vec::new();
+        for (path, content) in [("first.txt", "first\n"), ("second.txt", "second\n")] {
+            responses.push(json!({"blocks":[{"kind":"tool_call","call":{
+                "call_id":path,"name":"write_file",
+                "arguments":crate::types::json_string(&json!({"path":path,"content":content}))
+            }}]}));
+            responses.push(json!({"blocks":[{"kind":"text","text":"Written."}]}));
+        }
+        responses.push(json!({"blocks":[{"kind":"text","text":"No changes."}]}));
+        std::fs::write(&script, crate::types::json_string(&json!(responses))).unwrap();
+        let api = open_resolved(
+            json!({"workspace":root.path(),"provider":"scripted","scripted":script,
+                "_display":true,"checkpoint_enabled":false,"agents":false}),
+            None,
+        )
+        .unwrap();
+        let mut previous = Vec::new();
+        for (id, path) in [
+            ("first", "first.txt"),
+            ("second", "second.txt"),
+            ("third", ""),
+        ] {
+            let admitted = api.send_message(id, b"task", PlanMode::Keep).unwrap();
+            let run = admitted.run.as_ref().unwrap();
+            assert_eq!(
+                api.wait_run(run).unwrap().result.unwrap().status,
+                "completed"
+            );
+            let (result, display) = api.cli_result(run).unwrap();
+            let diff = crate::file_diff::full(&display, false, 80);
+            if path.is_empty() {
+                assert_eq!(diff, "No file changes in the last turn.");
+            } else {
+                assert!(diff.contains(path), "{diff}");
+                assert!(diff.contains("@@ -0,0 +1 @@"), "{diff}");
+            }
+            for (old_run, old_result) in &previous {
+                let (retained_result, old_display) = api.cli_result(old_run).unwrap();
+                assert_eq!(&retained_result, old_result);
+                assert!(old_display["_display"].is_null());
+                assert!(api.get_run(old_run).unwrap().result.is_some());
+            }
+            let retried = api.send_message(id, b"task", PlanMode::Keep).unwrap();
+            assert_eq!(retried.run.as_ref(), Some(run));
+            assert_eq!(retried.state, CommandState::Applied);
+            previous.push((run.clone(), result));
+        }
+        api.close().unwrap();
+    }
 
     #[test]
     fn long_control_cancellation_storage_is_released_with_the_owner_and_handles() {
