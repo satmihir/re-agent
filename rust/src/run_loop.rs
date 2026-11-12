@@ -3172,12 +3172,20 @@ mod boundary_tests {
         let responses = json!([
             call("r", "read_file", json!({"path":"f"})),
             call("e", "edit_file", json!({"path":"f","edits":[{"old_text":"one","new_text":"ONE"},{"old_text":"two","new_text":"TWO"}]})),
+            call("eol", "edit_file", json!({"path":"f","edits":[{"old_text":"\r\n","new_text":"\n","replace_all":true}]})),
+            call("overwrite", "write_file", json!({"path":"f","content":"ONE\nLAST\n"})),
             call("w", "write_file", json!({"path":"created","content":"new\n"})),
+            call("ra", "read_file", json!({"path":"deleted/a"})),
+            call("rb", "read_file", json!({"path":"deleted/b"})),
+            call("delete", "delete_file", json!({"path":"deleted","recursive":true})),
             {"blocks":[{"kind":"text","text":"done"}]}
         ]);
         let mut observed = Vec::new();
         for display in [false, true] {
-            std::fs::write(dir.path().join("f"), "one\ntwo\n").unwrap();
+            std::fs::write(dir.path().join("f"), "one\r\ntwo\r\n").unwrap();
+            std::fs::create_dir(dir.path().join("deleted")).unwrap();
+            std::fs::write(dir.path().join("deleted/a"), "first\n").unwrap();
+            std::fs::write(dir.path().join("deleted/b"), "second\n").unwrap();
             if dir.path().join("created").exists() {
                 std::fs::remove_file(dir.path().join("created")).unwrap();
             }
@@ -3196,6 +3204,7 @@ mod boundary_tests {
             let mut bytes = Vec::new();
             for event in events {
                 if event["type"] == "tool.finished" {
+                    assert_eq!(event["data"]["outcome"]["ok"], true, "{event}");
                     bytes.push(types::json_string(&event["data"]));
                 }
                 if event["type"] == "model.requested" {
@@ -3214,7 +3223,7 @@ mod boundary_tests {
             if display {
                 assert_eq!(
                     crate::file_diff::totals(&session.state, false),
-                    "  2 files changed · +3 −2\n"
+                    "  4 files changed · +3 −4\n"
                 );
                 crate::render::begin_turn(&mut session.state);
                 assert_eq!(
