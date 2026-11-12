@@ -24,6 +24,10 @@ pub(crate) const ERROR: &str = "\x1b[38;5;174m";
 pub(crate) const MUTED: &str = "\x1b[38;5;245m";
 /// Exec distinguishes commands and the flask's bubbles from file tools.
 pub(crate) const EXEC: &str = "\x1b[38;5;99m";
+/// Diff added pairs readable text with a soft green background.
+pub(crate) const DIFF_ADDED: &str = "\x1b[38;5;252;48;5;22m";
+/// Diff removed pairs readable text with a soft red background.
+pub(crate) const DIFF_REMOVED: &str = "\x1b[38;5;252;48;5;52m";
 /// Submitted pairs a neutral background with readable text on light and dark terminals.
 pub(crate) const SUBMITTED: &str = "\x1b[38;5;252;48;5;236m";
 

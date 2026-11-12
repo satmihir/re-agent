@@ -367,6 +367,11 @@ impl Transport {
                         let preview_region =
                             region.filter(|_| self.config["_display"] == true && status == 200);
                         let mut preview = stream::Preview::new(preview_region);
+                        preview.agent = (status == 200
+                            && self.config["agent_id"]
+                                .as_str()
+                                .is_some_and(|id| id != "root"))
+                        .then_some(&self.config);
                         let read = (|| -> std::io::Result<()> {
                             let mut chunk = [0; 8192];
                             loop {

@@ -697,26 +697,82 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "file-diffs": {
+        "file_diffs": True,
+        "size": (48, 110),
+        "script": [
+            tool("Inspecting both files.", "read-alpha", "read_file", {"path": "alpha.txt"}),
+            tool("", "read-beta", "read_file", {"path": "beta.txt"}),
+            tool("", "single", "edit_file", {"path": "alpha.txt", "old_text": "old", "new_text": "new"}),
+            tool("", "multi", "edit_file", {"path": "alpha.txt", "edits": [
+                {"old_text": "header", "new_text": "HEADER"}, {"old_text": "tail", "new_text": "TAIL"}]}),
+            tool("", "overwrite", "write_file", {"path": "beta.txt", "content": "replacement\nmore\n"}),
+            tool("", "create", "write_file", {"path": "gamma.txt", "content": "".join(f"new line {n}\n" for n in range(1, 21))}),
+            reply("File changes complete."), reply("Next turn without edits."),
+        ],
+        "steps": [
+            ("wait_status", "scripted", 5),
+            ("type", "change the files"), ("key", "enter"),
+            ("wait", "File changes complete.", 8),
+            ("wait_status", "scripted", 5),
+            ("show", "Numbered single-edit, multi-edit, overwrite and new-file previews"),
+            ("expect", "all_lines", ["@@ -1,4 +1,4 @@", "- old", "+ new", "+ HEADER", "+ TAIL", "- first", "+ replacement", "more lines", "3 files changed · +25 −5"]),
+            ("type", "/diff"), ("key", "enter"),
+            ("wait", "+ new line 20", 5),
+            ("show", "Full last-turn diff includes both edited files and the uncapped new file"),
+            ("expect", "all_lines", ["alpha.txt", "beta.txt", "gamma.txt", "+ new line 20"]),
+            ("expect", "file_diff_style"),
+            ("wait_status", "scripted", 5),
+            ("expect", "status_row_last"),
+            ("type", "next turn"), ("key", "enter"),
+            ("wait", "Next turn without edits.", 5),
+            ("wait_status", "scripted", 5),
+            ("type", "/diff"), ("key", "enter"),
+            ("wait", "No file changes in the last turn.", 5),
+            ("wait_status", "scripted", 5),
+            ("expect", "status_row_last"),
+        ],
+    },
     "agents-live-wait": {
         "agents": True,
         "agents_progress": True,
         "steps": [
             ("idle", 0.5), ("type", "delegate research"), ("key", "enter"),
             ("wait", "waiting on t1 research (step 1)", 8),
+            ("wait", "t1 research · thinking ·", 8),
+            ("show", "One running agent with its current model phase"),
+            ("expect", "all_lines", ['spawn (read) research: "research task"']),
             ("release", "advance"),
             ("wait", "waiting on t1 research (step 3)", 8),
             ("wait_status", "2 agents", 8),
             ("wait_regex", r"waiting on t1 research \(step 3\) · [0-9]+(?:\.[0-9]+s|m[0-9]+s)", 8),
-            ("show", "live wait, nested count and elapsed clock"),
+            ("wait", "t1 research · wait ·", 8),
+            ("wait", "t2 nested · thinking ·", 8),
+            ("show", "Live rows change to wait and nested thinking, with elapsed clocks"),
             ("expect", "screen_has", "2 agents"),
+            ("expect", "screen_has", "t1 research · wait ·"),
+            ("expect", "screen_has", "t2 nested · thinking ·"),
+            ("resize", 12, 64),
+            ("wait_check", "resize_painted"),
+            ("wait", "t2 nested · thinking ·", 5),
+            ("wait_status", "2 agents", 5),
+            ("expect", "status_row_last"),
+            ("show", "Live agent rows fit a shorter terminal without displacing input"),
+            ("resize", 24, 80),
+            ("wait_check", "resize_painted"),
+            ("wait", "t2 nested · thinking ·", 5),
             ("release", "finish"),
             ("wait", "t1 research finished", 8),
             ("wait", "tree 105 tokens", 8),
+            ("wait", "1 agent check", 8),
             ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "one agent completion notice and readable rows"),
-            ("expect", "all_lines", ['spawn (read) research: "research task"', 'wait research', 't1 research finished · completed']),
+            ("expect", "all_lines", ['t1 research finished · completed', 'Checks complete.', '1 agent check']),
             ("expect", "all_count", "t1 research finished", 1),
-            ("expect", "all_lack", ["t2 nested finished", "PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
+            ("expect", "screen_lacks", "t1 research ·"),
+            ("expect", "screen_lacks", "t2 nested ·"),
+            ("expect", "all_lack", ["t1 research · thinking ·", "t1 research · wait ·", "t2 nested · thinking ·"]),
+            ("expect", "all_lack", ["✓ wait", "✓ dismiss", "t2 nested finished", "PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
             ("expect", "status_row_last"),
         ],
     },
@@ -725,12 +781,20 @@ SCENARIOS = {
         "agents_write": True,
         "steps": [
             ("idle", 0.5), ("type", "delegate a file change"), ("key", "enter"),
-            ("wait", "agent t1: create agent.txt", 8),
+            ("wait", "writer: 1 file changed", 8),
             ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "writing agent effects in the root recap"),
             ("expect", "screen_has", "Agent changed a file."),
-            ("expect", "screen_has", "agent t1: create agent.txt (applied)"),
+            ("expect", "screen_has", "writer: 1 file changed"),
+            ("expect", "screen_has", "Checks complete."),
+            ("expect", "screen_has", "1 file changed · +1 −0"),
+            ("expect", "all_lack", ["✓ wait", "✓ dismiss", "agent t1: create"]),
+            ("type", "/diff"), ("key", "enter"),
+            ("wait", "+ written by an agent", 5),
+            ("show", "The last-turn diff also includes private child file-tool publications"),
+            ("expect", "screen_has", "agent.txt"),
             ("expect", "all_lack", ["PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
+            ("wait_status", "gpt-6.1-sol / high", 5),
             ("expect", "status_row_last"),
         ],
     },
@@ -755,6 +819,7 @@ SCENARIOS = {
             ("wait_status", "gpt-6.1-sol / high", 8),
             ("show", "parallel agents and tree token cost"),
             ("expect", "screen_has", "tree 75 tokens"),
+            ("expect", "all_lack", ["t2  finished", "1 steps", "✓ wait", "✓ dismiss"]),
             ("expect", "all_lack", ["PRIVATE CHILD REPLY", "results delivered", "map[", "ids=[", "context="]),
             ("expect", "status_row_last"),
             ("type", "ask my tests agent again"), ("key", "enter"),
@@ -1399,7 +1464,7 @@ SCENARIOS = {
             ("expect", "markdown_links"),
             ("show", "Code, links and an open diff block while the reply is still arriving"),
             ("type", "next draft"), ("wait", "❯ next draft", 5),
-            ("resize", 32, 48), ("wait", "+new", 5),
+            ("resize", 32, 48), ("wait_check", "resize_painted"), ("wait", "+new", 5),
             ("expect", "markdown_links"),
             ("release", "finish"), ("wait", "Final tail.", 5),
             ("wait_status", "gpt-6.1-sol", 5),
@@ -1569,6 +1634,8 @@ SCENARIOS = {
     },
 }
 
+SCENARIOS["file-diffs-no-color"] = {**SCENARIOS["file-diffs"], "no_color": True}
+SCENARIOS["agents-live-wait-no-color"] = {**SCENARIOS["agents-live-wait"], "no_color": True}
 SCENARIOS["markdown-replies-no-color"] = {**SCENARIOS["markdown-replies"], "no_color": True}
 SCENARIOS["colour-palette-no-color"] = {**SCENARIOS["colour-palette"], "no_color": True}
 SCENARIOS["lively-indicator-no-color"] = {**SCENARIOS["lively-indicator"], "no_color": True}
@@ -1686,6 +1753,7 @@ class Session:
         return drawn()
 
     def resize(self, rows, cols):
+        self.resize_mark = len(self.raw)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         os.kill(self.pid, signal.SIGWINCH)
         self.term = self.term.resized(rows, cols)
@@ -1898,6 +1966,26 @@ def check_indicator(s, phrase):
     return None
 
 
+def check_resize_painted(s):
+    screen = s.term.screen()
+    rules = region_rows(screen) or []
+    painted = s.raw[getattr(s, "resize_mark", len(s.raw)):].decode("utf-8", "replace")
+    new_rule = re.search("─{%d}(?:\\x1b\\[0m)?\\r?\\n" % s.cols, painted)
+    if new_rule and len(rules) >= 2 and s.term.row == rules[-2] + 1 and len(screen[rules[-1]]) == s.cols:
+        return None
+    return "resized input frame has not been repainted yet"
+
+
+def check_file_diff_style(s):
+    raw = s.raw.decode("utf-8", "replace")
+    if s.no_color:
+        return "NO_COLOR emitted diff styling" if re.search(r"\x1b\[[0-9;]*m", raw) else None
+    for sequence in ["\x1b[38;5;252;48;5;22m", "\x1b[38;5;252;48;5;52m"]:
+        if sequence not in raw:
+            return "missing diff background role: %r" % sequence
+    return None
+
+
 def check_indicator_style(s):
     raw = s.raw.decode("utf-8", "replace")
     styled_indicator = re.search(r"\x1b\[1m\x1b\[38;5;86m[·∘°]⚗ ", raw)
@@ -2001,6 +2089,8 @@ CHECKS = {
     "submitted_unframed": check_submitted_unframed,
     "no_adjacent_rules": check_no_adjacent_rules,
     "indicator": check_indicator,
+    "resize_painted": check_resize_painted,
+    "file_diff_style": check_file_diff_style,
     "indicator_style": check_indicator_style,
     "exec_tail": check_exec_tail,
     "fresh_exec_clock": check_fresh_exec_clock,
@@ -2042,6 +2132,10 @@ def run(binary, name, scenario, workspace):
     failures = []
     script_path = None
     consent_root = tempfile.TemporaryDirectory(prefix="reagent-tty-consent-") if scenario.get("workspace_consent") else None
+    if scenario.get("file_diffs"):
+        for path, content in [("alpha.txt", "header\nold\nmiddle\ntail\n"), ("beta.txt", "first\nsecond\n")]:
+            with open(os.path.join(workspace, path), "w", encoding="utf-8") as fixture:
+                fixture.write(content)
     if scenario.get("slow_read"):
         with open(os.path.join(workspace, "dense.txt"), "w") as dense:
             dense.write("x\n" * 500000)
@@ -2315,7 +2409,7 @@ def run(binary, name, scenario, workspace):
                         if nested:
                             gates["finish"].wait(20)
                             output = [{"type": "message", "status": "completed", "content": [
-                                {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                                {"type": "output_text", "text": "Checks complete.\nPRIVATE CHILD REPLY"}]}]
                         elif child_number == 1:
                             gates["advance"].wait(20)
                             output = [{"type": "function_call", "call_id": "nested-spawn", "name": "spawn",
@@ -2328,13 +2422,13 @@ def run(binary, name, scenario, workspace):
                                        "arguments": json.dumps({"ids": ["nested"]})}]
                         else:
                             output = [{"type": "message", "status": "completed", "content": [
-                                {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                                {"type": "output_text", "text": "Checks complete.\nPRIVATE CHILD REPLY"}]}]
                     elif scenario.get("agents_write") and child_number == 1:
                         output = [{"type": "function_call", "call_id": "child-create", "name": "write_file",
                                    "arguments": json.dumps({"path": "agent.txt", "content": "written by an agent"})}]
                     else:
                         output = [{"type": "message", "status": "completed", "content": [
-                            {"type": "output_text", "text": "PRIVATE CHILD REPLY"}]}]
+                            {"type": "output_text", "text": "Checks complete.\nPRIVATE CHILD REPLY"}]}]
                 else:
                     with self.lock:
                         type(self).root_requests += 1

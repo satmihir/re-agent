@@ -10,7 +10,7 @@ pub fn begin_turn(state: &mut Value) {
         .as_object()
         .cloned()
         .unwrap_or_default();
-    state["_display"] = json!({"printed":false,"reads":[],"searches":0,"listings":0,"recap":[],"agents":agents,"agents_ran":false});
+    state["_display"] = json!({"printed":false,"reads":[],"searches":0,"listings":0,"housekeeping":0,"recap":[],"agents":agents,"agents_ran":false});
 }
 
 /// Tool finished displays one outcome immediately and accumulates browsing and effects.
@@ -294,7 +294,8 @@ fn remember_agents(name: &str, outcome: &Value, state: &mut Value) {
     }
 }
 
-fn agent_label(id: &str, state: &Value) -> String {
+/// Agent label resolves a display name without changing the stored roster.
+pub(super) fn agent_label(id: &str, state: &Value) -> String {
     let name = state["_display"]["agents"][id].as_str().or_else(|| {
         ["agent_roster", "agent_receipts"].iter().find_map(|key| {
             state[*key]
@@ -435,6 +436,11 @@ fn activity_text(
             state["_display"]["agents_ran"] = json!(true);
         }
         match name {
+            "wait" | "dismiss" | "threads" | "reset" if !yes(&outcome["data"], "timed_out") => {
+                state["_display"]["housekeeping"] =
+                    json!(number(&state["_display"], "housekeeping") + 1);
+                return String::new();
+            }
             "read_file" if a.is_some() => {
                 let key = json!([outcome["workspace"], text(a.as_ref().unwrap(), "path")]);
                 let reads = state["_display"]["reads"].as_array_mut().unwrap();
@@ -465,7 +471,6 @@ fn activity_text(
     };
     let code = text(outcome, "code");
     let mut result = String::new();
-    let mut previews = Vec::new();
     if code == "not_executed" {
         mark = "–";
         color = DIM;
@@ -496,39 +501,11 @@ fn activity_text(
                     _ => {}
                 },
                 "edit_file" => {
-                    if let Some(a) = a.as_ref() {
-                        if !yes(data, "changed") {
-                            result = "no change".into();
-                        } else if a.get("edits").is_some() || a.get("append_text").is_some() {
-                            result = edit_summary(data);
-                        } else {
-                            let mut old: Vec<_> = text(a, "old_text").split('\n').collect();
-                            let mut new: Vec<_> = text(a, "new_text").split('\n').collect();
-                            while !old.is_empty() && !new.is_empty() && old.first() == new.first() {
-                                old.remove(0);
-                                new.remove(0);
-                            }
-                            while !old.is_empty() && !new.is_empty() && old.last() == new.last() {
-                                old.pop();
-                                new.pop();
-                            }
-                            result = format!("+{} -{}", new.len(), old.len());
-                            for (sign, lines) in [("-", old), ("+", new)] {
-                                for s in lines.iter().take(6) {
-                                    previews.push(format!(
-                                        "{sign} {}",
-                                        sanitize(&s.replace('\t', "    "))
-                                    ));
-                                }
-                                if lines.len() > 6 {
-                                    previews.push(format!(
-                                        "… {}",
-                                        plural((lines.len() - 6) as i64, "more line", "more lines")
-                                    ));
-                                }
-                            }
-                        }
-                    }
+                    result = if yes(data, "changed") {
+                        edit_summary(data)
+                    } else {
+                        "no change".into()
+                    };
                 }
                 "exec" if a.is_some() && (data.is_object() || data.is_null()) => {
                     let steps = data["steps"].as_array();
@@ -652,27 +629,8 @@ fn activity_text(
         });
     }
     out.push('\n');
-    for p in previews {
-        let p = truncate(
-            &p,
-            if columns == 0 {
-                160
-            } else {
-                columns.saturating_sub(6).max(1)
-            },
-        );
-        let color = if p.starts_with("- ") {
-            ERROR
-        } else if p.starts_with("+ ") {
-            SUCCESS
-        } else {
-            ""
-        };
-        out.push_str(&if styled && !color.is_empty() {
-            format!("      {color}{p}{RESET}\n")
-        } else {
-            format!("      {p}\n")
-        });
+    if matches!(name, "write_file" | "edit_file" | "delete_file") {
+        out += &crate::file_diff::preview(&state["_display"]["file_change"], styled, columns, 12);
     }
     state["_display"]["printed"] = json!(true);
     out
@@ -688,6 +646,7 @@ pub(super) fn browsing_summary(state: &Value, styled: bool) -> String {
     for (key, one, many) in [
         ("searches", "search", "searches"),
         ("listings", "listing", "listings"),
+        ("housekeeping", "agent check", "agent checks"),
     ] {
         if number(d, key) > 0 {
             parts.push(plural(number(d, key), one, many));
@@ -764,7 +723,7 @@ mod tests {
                 "wait",
                 json!({"ids":["t1","t2"]}),
                 json!({"statuses":[{"id":"t1","name":"research"},{"id":"t2"}]}),
-                "  ✓ wait research, t2\n",
+                "",
             ),
             (
                 "cancel",
@@ -776,7 +735,7 @@ mod tests {
                 "dismiss",
                 json!({"name":"research"}),
                 json!({"action":"dismiss","id":"","name":"research"}),
-                "  ✓ dismiss research\n",
+                "",
             ),
         ] {
             let call = json!({"name":name,"arguments":arguments.to_string()});
@@ -797,8 +756,14 @@ mod tests {
         let original = state.clone();
         let call = json!({"name":"wait","arguments":r#"{"ids":["t1","t2","t3"]}"#});
         assert_eq!(
-            activity_text(&call, &json!({"ok":true}), &mut state, false, 0),
-            "  ✓ wait research, review, t3\n"
+            activity_text(
+                &call,
+                &json!({"ok":true,"data":{"timed_out":true}}),
+                &mut state,
+                false,
+                0
+            ),
+            "  ✓ wait research, review, t3 → timed out; agents still running\n"
         );
         for data in [
             json!([{"id":"t3","name":"tests"}]),
@@ -812,8 +777,14 @@ mod tests {
                 0,
             );
             assert_eq!(
-                activity_text(&call, &json!({"ok":true}), &mut state, false, 0),
-                "  ✓ wait research, review, tests\n"
+                activity_text(
+                    &call,
+                    &json!({"ok":true,"data":{"timed_out":true}}),
+                    &mut state,
+                    false,
+                    0
+                ),
+                "  ✓ wait research, review, tests → timed out; agents still running\n"
             );
         }
         assert_eq!(state["agent_roster"], original["agent_roster"]);
@@ -882,6 +853,39 @@ mod tests {
             assert!(row.contains('…'), "{row}");
             assert!(width(row.trim_end()) <= if columns == 0 { 170 } else { columns });
         }
+    }
+
+    #[test]
+    fn successful_agent_housekeeping_is_counted_but_failures_and_timeouts_stay_visible() {
+        let mut state = json!({});
+        for name in ["wait", "dismiss", "threads", "reset"] {
+            let call = json!({"name":name,"arguments":r#"{"ids":["t1"],"id":"t1"}"#});
+            assert_eq!(
+                activity_text(&call, &json!({"ok":true}), &mut state, false, 80),
+                ""
+            );
+            assert!(activity_text(
+                &call,
+                &json!({"ok":false,"code":"denied"}),
+                &mut state,
+                false,
+                80
+            )
+            .contains(name));
+        }
+        assert_eq!(browsing_summary(&state, false), "  ✓ 4 agent checks\n");
+        let call = json!({"name":"wait","arguments":r#"{"ids":["t1"]}"#});
+        assert!(activity_text(
+            &call,
+            &json!({"ok":true,"data":{"timed_out":true}}),
+            &mut state,
+            false,
+            80
+        )
+        .contains("timed out"));
+        assert_eq!(browsing_summary(&state, false), "  ✓ 4 agent checks\n");
+        begin_turn(&mut state);
+        assert_eq!(browsing_summary(&state, false), "");
     }
 
     #[test]
@@ -962,16 +966,18 @@ mod tests {
     #[test]
     fn effects_commands_and_previews_keep_activity_order() {
         let mut state = json!({});
+        begin_turn(&mut state);
+        state["_display"]["file_change"] = json!({"old":"a\n","new":"b\n"});
         let call = json!({"name":"edit_file","arguments":"{\"path\":\"f\",\"old_text\":\"a\\n\",\"new_text\":\"b\\n\"}"});
         assert_eq!(
             activity_text(
                 &call,
-                &json!({"ok":true,"effect":"applied","data":{"changed":true}}),
+                &json!({"ok":true,"effect":"applied","data":{"changed":true,"edits":1}}),
                 &mut state,
                 false,
                 0
             ),
-            "  ✓ edit_file f → +1 -1\n      - a\n      + b\n"
+            "  ✓ edit_file f → 1 edit\n      @@ -1 +1 @@\n         1      - a\n              1 + b\n"
         );
         assert_eq!(state["_display"]["recap"], json!(["changed f"]));
         let call = json!({"name":"exec","arguments":"{\"argv\":[\"sleep\",\"30\"]}"});

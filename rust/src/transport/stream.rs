@@ -70,6 +70,7 @@ pub(super) fn contains_credentials(raw: &[u8], secrets: &[String], endpoint: &st
 /// Preview retains speculative stream text only for the active terminal region.
 pub(super) struct Preview<'a> {
     region: Option<&'a RegionHandle>,
+    pub(super) agent: Option<&'a Value>,
     pending: Vec<u8>,
     data: Vec<u8>,
     lines: VecDeque<String>,
@@ -90,6 +91,7 @@ impl<'a> Preview<'a> {
     pub(super) fn new(region: Option<&'a RegionHandle>) -> Self {
         Self {
             region,
+            agent: None,
             pending: Vec::new(),
             data: Vec::new(),
             lines: VecDeque::new(),
@@ -108,9 +110,10 @@ impl<'a> Preview<'a> {
 
     /// Push publishes newly completed lines while keeping provisional parsing bounded.
     pub(super) fn push(&mut self, bytes: &[u8], secrets: &[String], endpoint: &str) {
-        if self.region.is_none() {
+        if self.region.is_none() && self.agent.is_none() {
             return;
         }
+        let was_writing = self.writing;
         let mut changed = false;
         for part in bytes.split_inclusive(|b| *b == b'\n') {
             if self.pending.len().saturating_add(part.len()) > EVENT_BYTES {
@@ -148,7 +151,15 @@ impl<'a> Preview<'a> {
                 }
             }
         }
-        if changed {
+        if self.writing != was_writing {
+            if let Some(config) = self.agent {
+                crate::agents::publish_activity(
+                    config,
+                    if self.writing { "writing" } else { "thinking" },
+                );
+            }
+        }
+        if changed && self.region.is_some() {
             let text = self.text_changed.then(|| {
                 let mut text = if self.fence_before && !self.lines.is_empty() {
                     String::from("```\n")
@@ -186,7 +197,7 @@ impl<'a> Preview<'a> {
     }
 
     fn append(&mut self, delta: &str, secrets: &[String], endpoint: &str) {
-        if self.text_disabled {
+        if self.text_disabled || self.region.is_none() {
             return;
         }
         for part in delta.split_inclusive('\n') {
@@ -311,6 +322,18 @@ mod tests {
     fn push_text(preview: &mut Preview<'_>, text: &str, secrets: &[String]) {
         let event = serde_json::json!({"type":"response.output_text.delta", "delta":text});
         preview.push(format!("data: {event}\n\n").as_bytes(), secrets, "");
+    }
+
+    #[test]
+    fn private_agent_stream_observes_writing_without_retaining_reply_text() {
+        let config = serde_json::json!({"agent_id":"t1", "agents":false});
+        let mut preview = Preview::new(None);
+        preview.agent = Some(&config);
+        push_text(&mut preview, "private reply\n", &[]);
+        assert!(preview.writing);
+        assert!(preview.lines.is_empty());
+        assert!(preview.line.is_empty());
+        assert_eq!(preview.retained_bytes, 0);
     }
 
     #[test]
