@@ -1034,8 +1034,8 @@ SCENARIOS = {
             ("show", "Markdown progress while the tool runs"),
             ("expect", "all_lines", ["Progress check", "I am checking the parser and its tests before",
                                      "making any changes to the display.", "• Read parser.go",
-                                     "• Inspect display.go", "ready := true"]),
-            ("expect", "all_lack", ["## Progress check", "**parser.go**", "`display.go`"]),
+                                     "• Inspect display.go", "│ go", "│ ready := true"]),
+            ("expect", "all_lack", ["## Progress check", "**parser.go**", "`display.go`", "```"]),
             ("expect", "screen_has", "❯ follow-up"),
             ("wait", "Finished checking.", 8),
             ("wait_status", "scripted / low", 5),
@@ -1389,6 +1389,28 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "markdown-replies": {
+        "size": (32, 80), "live_stream": "openai", "agents": True, "markdown_stream": True,
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "stream code and links"), ("key", "enter"),
+            ("wait", "Distilling thoughts…", 5), ("release", "advance"),
+            ("wait", "+new", 5),
+            ("expect", "markdown_links"),
+            ("show", "Code, links and an open diff block while the reply is still arriving"),
+            ("type", "next draft"), ("wait", "❯ next draft", 5),
+            ("resize", 32, 48), ("wait", "+new", 5),
+            ("expect", "markdown_links"),
+            ("release", "finish"), ("wait", "Final tail.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "markdown_links"),
+            ("expect", "line_count", "First live line.", 1),
+            ("show", "Completed blocks and hyperlinks retain the editable draft"),
+            ("key", "enter"), ("wait", "Follow-up after stream.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "live-anthropic-reply": {
         "live_stream": "anthropic", "anthropic": True,
         "steps": [
@@ -1547,6 +1569,7 @@ SCENARIOS = {
     },
 }
 
+SCENARIOS["markdown-replies-no-color"] = {**SCENARIOS["markdown-replies"], "no_color": True}
 SCENARIOS["colour-palette-no-color"] = {**SCENARIOS["colour-palette"], "no_color": True}
 SCENARIOS["lively-indicator-no-color"] = {**SCENARIOS["lively-indicator"], "no_color": True}
 SCENARIOS["fresh-prompt-symlinked-root"] = {**SCENARIOS["fresh-prompt"], "symlink_workspace": True}
@@ -1912,6 +1935,30 @@ def check_exec_result_row(s):
     return None if len(rows) == 1 else "expected one ordinary exec result row, got %r" % rows
 
 
+def check_markdown_links(s):
+    raw = s.raw.decode("utf-8", "replace")
+    text = "\n".join(s.term.text())
+    if s.no_color:
+        if re.search(r"\x1b\[[0-9;]*m|\x1b\]8;", raw):
+            return "NO_COLOR emitted Markdown styling or hyperlinks"
+        for literal in ["```rust", "```diff", "[Docs](https://example.invalid/docs)"]:
+            if literal not in text:
+                return "plain Markdown changed: " + literal
+        return None
+    if "```" in text or "https://example.invalid" in text:
+        return "styled reply still shows fences or hyperlink destination"
+    for row in ["│ rust", "│ let ready = true;", "Docs", "│ diff", "│ -old", "│ +new"]:
+        if row not in text:
+            return "missing rendered Markdown: " + row
+    for sequence in ["\x1b]8;;https://example.invalid/docs\x1b\\\x1b[4mDocs\x1b[24m\x1b]8;;\x1b\\",
+                     "\x1b[38;5;174m-old\x1b[0m", "\x1b[38;5;114m+new\x1b[0m"]:
+        if sequence not in raw:
+            return "missing hyperlink or diff style: %r" % sequence
+    if s.term.unhandled:
+        return "unhandled terminal sequences: %r" % s.term.unhandled
+    return None
+
+
 def check_palette(s):
     raw = s.raw.decode("utf-8", "replace")
     if s.no_color:
@@ -1932,6 +1979,7 @@ def check_palette(s):
 
 CHECKS = {
     "palette": check_palette,
+    "markdown_links": check_markdown_links,
     "region_after_output": check_region_after_output,
     "input_at_top": check_input_at_top,
     "status_row_last": check_status_row_last,
@@ -2013,6 +2061,10 @@ def run(binary, name, scenario, workspace):
     stream_done = threading.Event()
     preview_parts = ["First live line.\n"]
     stream_tail = "Second live line.\nFinal tail."
+    if scenario.get("markdown_stream"):
+        preview_parts = ["First live line.\n```rust\n", "let ready = true;\n",
+                         "```\n[Docs](https://example.invalid/docs)\n```diff\n", "-old\n", "+new\n"]
+        stream_tail = "```\nFinal tail."
     if scenario.get("large_stream"):
         preview_parts = ["PREVIEW FIRST LINE\n```rust\n"]
         for start in range(0, 2048, 128):

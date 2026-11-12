@@ -812,6 +812,43 @@ mod tests {
     }
 
     #[test]
+    fn streamed_code_and_links_keep_their_context_until_the_fence_closes() {
+        let mut region = Region::new();
+        region.color = true;
+        let draft: Vec<_> = "next question".chars().collect();
+        region.input(&draft, 3, "", 48, 24).unwrap();
+        for text in ["```diff\n", "```diff\n-old\n", "```diff\n-old\n+new\n"] {
+            region.stream_progress(true, 10, Some(text)).unwrap();
+            assert!(region.stream_rows[0].contains("│ diff"));
+            assert!(!region.stream_rows.iter().any(|row| row.contains("```")));
+            assert_eq!(region.buffer, draft);
+            assert_eq!(region.caret, 3);
+        }
+        assert!(region.stream_rows[1].contains(crate::render::palette::ERROR));
+        assert!(region.stream_rows[2].contains(crate::render::palette::SUCCESS));
+        region
+            .stream_progress(
+                true,
+                20,
+                Some("```diff\n-old\n+new\n```\n[Docs](https://example.invalid/docs)"),
+            )
+            .unwrap();
+        assert!(region
+            .stream_rows
+            .last()
+            .unwrap()
+            .contains("\x1b]8;;https://example.invalid/docs"));
+        region.input(&draft, 3, "", 30, 24).unwrap();
+        assert!(region
+            .stream_rows
+            .iter()
+            .all(|row| crate::render::width(row) <= 29));
+        region.clear_stream().unwrap();
+        assert!(region.stream_rows.is_empty());
+        assert_eq!(region.buffer, draft);
+    }
+
+    #[test]
     fn preview_layout_is_reused_for_drafts_ticks_and_height_only_resizes() {
         let mut region = Region::new();
         region.color = true;

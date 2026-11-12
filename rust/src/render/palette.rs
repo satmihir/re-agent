@@ -8,6 +8,10 @@ pub(crate) const BOLD: &str = "\x1b[1m";
 pub(crate) const DIM: &str = "\x1b[2m";
 /// Italic emphasizes inline Markdown text.
 pub(crate) const ITALIC: &str = "\x1b[3m";
+/// Underline identifies terminal hyperlinks.
+pub(crate) const UNDERLINE: &str = "\x1b[4m";
+/// Underline off ends link emphasis without resetting surrounding styles.
+pub(crate) const UNDERLINE_OFF: &str = "\x1b[24m";
 /// Accent ties headings, writes and selections to the flask's teal prompt.
 pub(crate) const ACCENT: &str = "\x1b[38;5;86m";
 /// Success marks completed work and added lines.
