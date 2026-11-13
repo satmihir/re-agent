@@ -30,6 +30,10 @@ pub(crate) fn build(
         "omitted_native_items":native,
         "previews":[]
     });
+    if crate::image_context::has_images(history) {
+        state["image_context"] =
+            json!("Historical image metadata only; pixels are not supplied to the router.");
+    }
     let mut critical = vec![false; entries.len()];
     let mut has_user = false;
     let mut last_assistant = entries.len();
@@ -338,6 +342,18 @@ mod tests {
 
     fn state(packet: &Value) -> Value {
         serde_json::from_str(packet["state"].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn image_history_is_explicitly_metadata_only_for_routing() {
+        let mut entry = user("inspect this image");
+        entry["user"]["images"] = json!([{"sha256":"a".repeat(64),"mime_type":"image/png","width":1,"height":1,"size_bytes":64}]);
+        let packet = build(&config(), &[entry], false, &routes()).unwrap();
+        assert!(state(&packet)["image_context"]
+            .as_str()
+            .unwrap()
+            .contains("pixels are not supplied"));
+        assert!(!packet["state"].as_str().unwrap().contains("data:image"));
     }
 
     #[test]

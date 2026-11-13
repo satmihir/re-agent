@@ -157,10 +157,31 @@ pub(crate) fn handoff(history: &[Value]) -> Result<Value, String> {
         .find(|e| e["user"].is_object() && text(&e["user"], "source").is_empty())
         .map(|e| text(&e["user"], "plan"))
         .unwrap_or("");
-    Ok(
-        json!({"text":format!("{PREAMBLE}{}",types::json_string(&json!(records))),"plan":plan,"entries":history.len(),"native_items":native}),
-    )
+    let images = crate::image_context::references(history);
+    let mut handoff = json!({"text":format!("{PREAMBLE}{}",types::json_string(&json!(records))),"plan":plan,"entries":history.len(),"native_items":native});
+    if !images.is_empty() {
+        handoff["images"] = json!(images);
+    }
+    Ok(handoff)
 }
+/// Projected_user preserves admitted references while labeling text-only image history.
+pub(crate) fn projected_user(config: &Value, handoff: &Value) -> Value {
+    let mut user = json!({"text":handoff["text"]});
+    if handoff["images"]
+        .as_array()
+        .is_some_and(|images| !images.is_empty())
+    {
+        user["images"] = handoff["images"].clone();
+        if config["provider"] != "openai" {
+            user["text"] = json!(format!(
+                "{}\nHistorical image metadata only; pixels are not supplied to this model.",
+                text(handoff, "text")
+            ));
+        }
+    }
+    user
+}
+
 /// Stage validates and measures a destination handoff without changing the Session.
 pub(crate) fn stage(
     config: &Value,
@@ -179,7 +200,7 @@ fn stage_measured(
     let projected = if handoff.is_null() {
         vec![]
     } else {
-        let mut user = json!({"text":handoff["text"]});
+        let mut user = projected_user(config, &handoff);
         if !text(&handoff, "plan").is_empty() {
             user["plan"] = handoff["plan"].clone();
         }
@@ -203,7 +224,7 @@ fn stage_measured(
                     .into(),
             ));
         }
-        if (size as f64 * rate).ceil() + 16000. > window as f64 {
+        if crate::image_context::estimate(&body, rate).saturating_add(16000) > window as usize {
             return Err((size, "handoff exceeds the estimated destination window allowance; use /compact then retry /model, or use fresh to discard history".into()));
         }
     }
@@ -259,6 +280,26 @@ pub(crate) fn stage_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn image_handoffs_retain_structural_references_through_text_only_destinations() {
+        let preview = json!({"sha256":"a".repeat(64),"mime_type":"image/png","width":1,"height":1,"size_bytes":64});
+        let history =
+            vec![json!({"kind":"user","user":{"text":"historical image","images":[preview]}})];
+        let admitted = handoff(&history).unwrap();
+        assert_eq!(admitted["images"], json!([preview]));
+        let user = projected_user(&json!({"provider":"anthropic"}), &admitted);
+        assert!(text(&user, "text").contains("pixels are not supplied"));
+        assert_eq!(user["images"], admitted["images"]);
+        let returned = handoff(&[json!({"kind":"user","user":user})]).unwrap();
+        let user = projected_user(&config(), &returned);
+        assert_eq!(user["images"], admitted["images"]);
+        assert!(
+            handoff(&[json!({"kind":"user","user":{"text":types::json_string(&preview)}})])
+                .unwrap()["images"]
+                .is_null()
+        );
+    }
+
     #[test]
     fn handoff_drops_native_and_preserves_trust() {
         let h = vec![

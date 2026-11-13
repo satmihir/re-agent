@@ -85,11 +85,13 @@ fn args(call: &Value) -> Option<Value> {
     }
     let fields: &[&str] = match text(call, "name") {
         "read_file"
+        | "view_image"
         | "list_files"
         | "write_file"
         | "delete_file"
         | "switch_workspace"
         | "request_workspace_access" => &["path"],
+        "generate_image" => &["output_path"],
         "edit_file" => &["path", "expected_sha256", "old_text", "new_text"],
         "search_text" => &["path", "query"],
         "report_friction" => &["category", "summary"],
@@ -215,6 +217,8 @@ fn command(a: &Value) -> String {
 pub(super) fn progress_label(call: &Value) -> Option<String> {
     let verb = match text(call, "name") {
         "read_file" => "reading",
+        "view_image" => "viewing",
+        "generate_image" => "generating image",
         "list_files" => "listing",
         "search_text" => "searching",
         "exec" => "running",
@@ -242,12 +246,14 @@ fn target(call: &Value, a: Option<&Value>) -> String {
     if let Some(a) = a {
         match text(call, "name") {
             "read_file"
+            | "view_image"
             | "list_files"
             | "edit_file"
             | "write_file"
             | "delete_file"
             | "switch_workspace"
             | "request_workspace_access" => return sanitize(text(a, "path")),
+            "generate_image" => return sanitize(text(a, "output_path")),
             "search_text" => {
                 let delimiter = if yes(a, "regex") { "/" } else { "\"" };
                 return format!(
@@ -485,6 +491,14 @@ fn activity_text(
         if yes(outcome, "ok") || name == "exec" {
             let data = &outcome["data"];
             match name {
+                "view_image" | "generate_image" => {
+                    result = format!("{} × {}", number(data, "width"), number(data, "height"));
+                    if data["preview"]["width"] != data["width"]
+                        || data["preview"]["height"] != data["height"]
+                    {
+                        result.push_str("; preview resized");
+                    }
+                }
                 "write_file" => match text(data, "operation") {
                     "create" => {
                         let n = number(data, "size_bytes");
@@ -580,6 +594,16 @@ fn activity_text(
             }
         }
     }
+    if name == "generate_image" && text(outcome, "effect") == "unknown" {
+        mark = "!";
+        color = WARNING;
+        result = if text(&outcome["data"], "remote_generation") == "completed" {
+            "artifact publication uncertain; inspect before continuing"
+        } else {
+            "remote effects unknown; do not retry automatically"
+        }
+        .into();
+    }
     let effect = recap(call, outcome, &original_target, a.as_ref());
     if !effect.is_empty() {
         state["_display"]["recap"]
@@ -609,8 +633,9 @@ fn activity_text(
     }
     let mut out = if styled {
         let kind = match name {
-            "read_file" | "list_files" | "search_text" | "git_inspect" | "recall" => MUTED,
-            "write_file" | "edit_file" | "delete_file" => ACCENT,
+            "read_file" | "view_image" | "list_files" | "search_text" | "git_inspect"
+            | "recall" => MUTED,
+            "write_file" | "edit_file" | "delete_file" | "generate_image" => ACCENT,
             "exec" => EXEC,
             _ => "",
         };

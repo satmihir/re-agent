@@ -298,7 +298,7 @@ impl Transport {
                 }
                 #[cfg(test)]
                 self.secret_counts.push(secrets.len());
-                self.event(&mut trace,"api.attempt.started",step,json!({"attempt":attempt,"endpoint":redact(&redacted(&endpoint),&secrets,&endpoint),"request_body":crate::raw::string(&redact_bytes(&bytes,&secrets,&endpoint)),"request_sha256":format!("{:x}",Sha256::digest(&bytes))}));
+                self.event(&mut trace,"api.attempt.started",step,json!({"attempt":attempt,"endpoint":redact(&redacted(&endpoint),&secrets,&endpoint),"request_body":crate::raw::string(&redact_bytes(&trace_body(&bytes),&secrets,&endpoint)),"request_sha256":format!("{:x}",Sha256::digest(&bytes))}));
                 let sent = Instant::now();
                 if self.client.is_none() {
                     self.client = Some(client().map_err(|m| error("provider_error", &m))?);
@@ -412,7 +412,7 @@ impl Transport {
                         match read {
                             Ok(_) => {
                                 let replaced = std::str::from_utf8(&raw).is_err();
-                                let text = trace_utf8(&raw);
+                                let text = trace_utf8(&trace_body(&raw));
                                 self.event(&mut trace,"api.attempt.finished",step,json!({"attempt":attempt,"http_status":status,"request_id":redact(&id,&secrets,&endpoint),"duration_ms":sent.elapsed().as_millis()as u64,"response_body":text,"body_utf8_replaced":replaced}));
                                 if chatgpt
                                     && status == 401
@@ -603,6 +603,23 @@ impl Transport {
         }
     }
 }
+fn trace_body(raw: &[u8]) -> Vec<u8> {
+    if let Ok(value) = crate::provider::decode_json(raw) {
+        let redacted = crate::image_context::redact(&value);
+        if redacted != value {
+            return crate::types::json_bytes(&redacted);
+        }
+        return raw.to_vec();
+    }
+    // SSE and malformed responses can still contain complete or partial data URLs.
+    let text = String::from_utf8_lossy(raw);
+    let redacted = crate::image_context::redact_text(&text);
+    if redacted == text {
+        return raw.to_vec();
+    }
+    redacted.into_bytes()
+}
+
 fn merge_secrets(secrets: &mut Vec<String>, additions: Vec<String>) {
     for secret in additions {
         if !secrets.contains(&secret) {
@@ -723,6 +740,68 @@ pub fn chatgpt_error(code: &str, param: &str, usage: Value) -> Option<ModelError
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn image_payloads_reach_http_unchanged_but_not_request_or_response_traces() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        for streamed in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/responses", listener.local_addr().unwrap());
+            let body = json!({"model":"test","input":[{"type":"input_image","image_url":"data:image/png;base64,REQUESTPIXELS==","detail":"high"}]});
+            let expected = crate::types::json_bytes(&body);
+            let response = if streamed {
+                b"data: {\"image_url\":\"data:image/png;base64,RESPONSEPIXELS==\"}\n\n".to_vec()
+            } else {
+                br#"{"image_url":"data:image/png;base64,RESPONSEPIXELS=="}"#.to_vec()
+            };
+            let reply = response.clone();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut headers = Vec::new();
+                let mut byte = [0; 1];
+                while !headers.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).unwrap();
+                    headers.push(byte[0]);
+                }
+                let headers = String::from_utf8(headers).unwrap().to_lowercase();
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap();
+                let mut actual = vec![0; length];
+                socket.read_exact(&mut actual).unwrap();
+                assert_eq!(actual, expected);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply.len()
+                )
+                .unwrap();
+                socket.write_all(&reply).unwrap();
+            });
+            let mut transport = Transport::new(&json!({"provider":"openai"}));
+            let (_, actual) = transport
+                .call_endpoint(&json!({}), &body, &endpoint)
+                .unwrap();
+            server.join().unwrap();
+            assert_eq!(actual, response);
+            let events = json_string(&json!(transport.events));
+            assert!(!events.contains("REQUESTPIXELS"));
+            assert!(!events.contains("RESPONSEPIXELS"));
+            assert!(events.contains("image payload omitted"));
+            assert!(events.contains("payload_sha256"));
+        }
+    }
+
     #[test]
     fn native_response_bytes_survive_next_http_request() {
         use std::io::Write;

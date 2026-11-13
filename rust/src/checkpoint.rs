@@ -234,9 +234,12 @@ fn user(value: &mut Value, decode: bool) -> Result<(), String> {
             value["text_bytes"] = json!(STANDARD.encode(bytes));
         }
     }
-    for key in ["workspace", "roster"] {
+    for key in ["workspace", "roster", "images"] {
         if let Some(v) = value.get_mut(key) {
             raw(v, decode)?;
+            if key == "images" && decode {
+                *v = crate::raw::parse(v)?;
+            }
         }
     }
     if !decode {
@@ -250,6 +253,7 @@ fn user(value: &mut Value, decode: bool) -> Result<(), String> {
                 "plan",
                 "attribution",
                 "text_bytes",
+                "images",
             ],
         );
     }
@@ -743,7 +747,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             compacted_plan:string blocked:string last_trace:string last_request:usage \
             tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt",
         "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
-        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string",
+        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string images:raw",
         "user_attribution" => "request_id:string target:run_ref kind:string boundary_step:int",
         "run_ref" => "session:session_ref run_id:string",
         "session_ref" => "session_id:string instance_id:string",
@@ -762,7 +766,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
         "summary" => "text:string replaced_entries:int model:string",
         "gc" => "dropped:map:drop paths:map:string last_pass:int inherited:map:outcome",
         "drop" => "reason:string step:int placeholder:string",
-        "handoff" => "text:string plan:string entries:int native_items:int",
+        "handoff" => "text:string plan:string entries:int native_items:int images:[]raw",
         "prompt" => "text:string project:string",
         "thread" => "id:string parent_id:string kind:string name:string state:string task:string steps:int \
             cost:usage trace_path:string authority:string context_mode:string effects_unknown:bool",
@@ -1153,6 +1157,61 @@ mod tests {
             private(&root.path().join("missing"), false).unwrap_err(),
             "inspect session directory: path does not exist"
         );
+    }
+
+    #[test]
+    fn interrupted_image_generation_is_unknown_and_never_restarted_on_restore() {
+        let root = tempfile::tempdir().unwrap();
+        let config = json!({"workspace":root.path(),"provider":"openai","model":"gpt-6.1-sol","checkpoint_enabled":false});
+        let mut source = crate::runtime::Session::new(config.clone()).unwrap();
+        source.history = vec![json!({"kind":"assistant","assistant":{"blocks":[
+            {"kind":"tool_call","call":{"call_id":"flight","name":"generate_image","arguments":r#"{"prompt":"create","output_path":"flight.png"}"#}},
+            {"kind":"tool_call","call":{"call_id":"queued","name":"generate_image","arguments":r#"{"prompt":"create","output_path":"queued.png"}"#}}
+        ]}})];
+        source.state["seen_calls"] = json!({"flight":true,"queued":true});
+        let cp = state(&source, "tool", "flight");
+        let id = cp["id"].as_str().unwrap();
+        let restored = restored(id, parse(id, &envelope(&cp).unwrap()).unwrap());
+        let mut session = crate::runtime::Session::new(config).unwrap();
+        session.history = restored["history"].as_array().unwrap().clone();
+        session.state = restored["state"].clone();
+        let message = recover(&mut session).unwrap();
+        assert!(message.contains("unknown effects"));
+        assert!(message.contains("no pending model request or tool was restarted"));
+        assert_eq!(session.history.len(), 3);
+        let flight = &session.history[1]["tool"];
+        assert_eq!(flight["name"], "generate_image");
+        assert_eq!(flight["outcome"]["code"], "recovery_effect_unknown");
+        assert_eq!(flight["outcome"]["effect"], "unknown");
+        assert_eq!(
+            session.history[2]["tool"]["outcome"]["code"],
+            "not_executed"
+        );
+        assert_eq!(session.history[2]["tool"]["outcome"]["effect"], "none");
+        assert!(!root.path().join("flight.png").exists());
+        assert!(!root.path().join("queued.png").exists());
+        assert!(recover(&mut session).unwrap().is_empty());
+        assert_eq!(session.history.len(), 3);
+    }
+
+    #[test]
+    fn image_history_and_handoff_roundtrip_without_opening_the_blob_store() {
+        let preview = json!({"sha256":"a".repeat(64),"mime_type":"image/png","width":1,"height":1,"size_bytes":64});
+        let mut original = cp();
+        original["history"][0]["user"]["images"] = json!([preview]);
+        original["handoff"] = json!({"text":"prior image","entries":1,"images":[preview]});
+        let bytes = envelope(&original).unwrap();
+        let decoded = parse("0123456789abcdef", &bytes).unwrap();
+        assert_eq!(decoded["history"][0]["user"]["images"], json!([preview]));
+        assert_eq!(decoded["handoff"]["images"], json!([preview]));
+        assert_eq!(
+            crate::image_context::references(decoded["history"].as_array().unwrap()),
+            vec![preview]
+        );
+        assert_eq!(envelope(&decoded).unwrap(), bytes);
+        assert!(!String::from_utf8(envelope(&cp()).unwrap())
+            .unwrap()
+            .contains("\"images\""));
     }
 
     #[test]

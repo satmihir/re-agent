@@ -1,5 +1,6 @@
 use crate::run_loop::{
-    admission_bytes, admission_rate, flag, number, scope, string, tool_calls, window,
+    admission_bytes, admission_rate, admission_tokens, flag, number, scope, string, tool_calls,
+    window,
 };
 use crate::runtime::Session;
 use crate::{context, tools, types};
@@ -26,11 +27,31 @@ pub fn history(accepted: &[Value], dropped: &Value) -> Vec<Value> {
         if drop.is_object(){
             let old=&entry["tool"]["outcome"];
             let mut outcome=json!({"workspace":old["workspace"],"ok":true,"code":"context_gc","message":drop["placeholder"],"data":null,"truncated":false,"effect":old["effect"]});
+            if !crate::image_context::tool_references(&entry["tool"]).is_empty() {
+                outcome["data"] = image_metadata(&entry["tool"], "retired from active context; use recall");
+            }
             if string(&old["workspace"]).is_empty(){outcome.as_object_mut().unwrap().shift_remove("workspace");}
             entry["tool"]["outcome"]=outcome;
         }
         entry
     }).collect()
+}
+
+/// Image_metadata removes an admitted preview while preserving provenance and generation effects.
+pub(crate) fn image_metadata(result: &Value, message: &str) -> Value {
+    let mut data = crate::raw::parse(&result["outcome"]["data"]).unwrap_or(Value::Null);
+    if result["name"] == "recall" {
+        let mut original = crate::raw::parse(&data["data"]).unwrap_or(Value::Null);
+        if let Some(fields) = original.as_object_mut() {
+            fields.shift_remove("preview");
+            fields.insert("pixels".into(), json!(message));
+        }
+        data["data"] = original;
+    } else if let Some(fields) = data.as_object_mut() {
+        fields.shift_remove("preview");
+        fields.insert("pixels".into(), json!(message));
+    }
+    data
 }
 
 /// Record_path binds file identity at execution time rather than resolving old aliases.
@@ -188,6 +209,8 @@ fn results(accepted: &[Value], paths: &Value) -> (Vec<ResultRecord>, i64, bool) 
                     &json!({"Workspace":result["outcome"]["workspace"],"Argv":args["argv"],"Then":args["then"],"Cwd":args["cwd"]}),
                 );
             }
+            "view_image" | "generate_image" | "recall"
+                if !crate::image_context::tool_references(result).is_empty() => {}
             "edit_file" | "write_file" | "delete_file" => {
                 if record.path.is_empty() || string(&result["outcome"]["effect"]) != "applied" {
                     continue;
@@ -215,7 +238,7 @@ fn drop_record(record: &ResultRecord, reason: &str, step: i64) -> Value {
             string(&read["sha256"])
         )
     } else {
-        "exec".into()
+        string(&record.result["name"]).to_owned()
     };
     json!({"reason":reason,"step":step,"placeholder":format!("[dropped: {target} · {reason} at step {step} · recall {}]",string(&record.result["call_id"]))})
 }
@@ -229,6 +252,10 @@ fn candidates(
     for (i, old) in records.iter().enumerate() {
         let id = string(&old.result["call_id"]);
         if !session.state["gc_state"]["dropped"][id].is_null() || old.step > steps - 3 {
+            continue;
+        }
+        if !crate::image_context::tool_references(&old.result).is_empty() {
+            drops.insert(id.to_owned(), drop_record(old, "aged image", steps));
             continue;
         }
         let mut reason = "";
@@ -438,8 +465,82 @@ fn net_saving(freed_tokens: f64, rebuild_tokens: f64, remaining: i64, write_pric
     }
 }
 
-/// Collect commits a GC view only when token savings justify rebuilding the cache.
+fn gc_view(session: &Session, accepted: &[Value], dropped: &Value) -> Option<(Vec<Value>, Value)> {
+    let mut view = history(accepted, dropped);
+    let mut handoff = session.state["handoff"].clone();
+    if handoff.is_object() {
+        let count = number(&handoff["entries"]) as usize;
+        handoff = crate::chat::model_switch::handoff(view.get(..count)?).ok()?;
+        if !handoff.is_object() {
+            return None;
+        }
+        let mut user = crate::chat::model_switch::projected_user(&session.config, &handoff);
+        if !string(&handoff["plan"]).is_empty() {
+            user["plan"] = handoff["plan"].clone();
+        }
+        view = std::iter::once(json!({"kind":"user","user":user}))
+            .chain(view.into_iter().skip(count))
+            .collect();
+    }
+    Some((view, handoff))
+}
+
+fn preview_count(history: &[Value]) -> usize {
+    history
+        .iter()
+        .map(|entry| crate::image_context::entry_references(entry).len())
+        .sum()
+}
+
+fn retire_preview_overflow(session: &mut Session) -> bool {
+    if !flag(&session.config["context_gc"]) || session.config["provider"] != "openai" {
+        return false;
+    }
+    let before = preview_count(&session.request_history());
+    if before <= crate::image_context::MAX_PREVIEWS {
+        return false;
+    }
+    let (records, steps, settled) = results(&session.history, &session.state["gc_state"]["paths"]);
+    if !settled {
+        return false;
+    }
+    let eligible = candidates(session, &records, steps);
+    let mut merged = session.state["gc_state"]["dropped"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let mut dropped = Vec::new();
+    for record in &records {
+        let id = string(&record.result["call_id"]);
+        if !eligible.contains_key(id)
+            || crate::image_context::tool_references(&record.result).is_empty()
+        {
+            continue;
+        }
+        let drop = drop_record(record, "image preview limit", steps);
+        merged.insert(id.into(), drop);
+        dropped.push(json!({"call_id":id,"reason":"image preview limit","step":steps}));
+        let Some((view, handoff)) = gc_view(session, &session.history, &json!(merged)) else {
+            return false;
+        };
+        let after = preview_count(&view);
+        if after > crate::image_context::MAX_PREVIEWS {
+            continue;
+        }
+        session.state["gc_state"]["dropped"] = json!(merged);
+        session.state["gc_state"]["last_pass"] = json!(steps);
+        session.state["handoff"] = handoff;
+        session.trace.write("context.gc", number(&session.state["steps"]) as usize, json!({"trigger":"image_preview_limit","dropped":dropped,"previews_before":before,"previews_after":after,"estimated_tokens_freed":(before-after)*crate::image_context::TOKENS_PER_PREVIEW}));
+        return true;
+    }
+    false
+}
+
+/// Collect retires over-limit eligible previews before encoding, then considers cache savings.
 pub(crate) fn collect(session: &mut Session) -> bool {
+    if retire_preview_overflow(session) {
+        return true;
+    }
     let win = window(&session.config);
     let last = &session.state["last_request"];
     if !flag(&session.config["context_gc"])
@@ -476,28 +577,9 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     if let Some(reference) = &reference {
         accepted.push(reference.clone());
     }
-    let mut view = history(&accepted, &json!(merged));
-    let mut handoff = session.state["handoff"].clone();
-    if handoff.is_object() {
-        let count = number(&handoff["entries"]) as usize;
-        let Some(prefix) = view.get(..count) else {
-            return false;
-        };
-        let Ok(rebuilt) = crate::chat::model_switch::handoff(prefix) else {
-            return false;
-        };
-        if !rebuilt.is_object() {
-            return false;
-        }
-        handoff = rebuilt;
-        let mut user = json!({"text":handoff["text"]});
-        if !string(&handoff["plan"]).is_empty() {
-            user["plan"] = handoff["plan"].clone();
-        }
-        view = std::iter::once(json!({"kind":"user","user":user}))
-            .chain(view.into_iter().skip(count))
-            .collect();
-    }
+    let Some((view, handoff)) = gc_view(session, &accepted, &json!(merged)) else {
+        return false;
+    };
     let after = context::build_context(
         &session.config,
         scope("", "", 0),
@@ -509,8 +591,31 @@ pub(crate) fn collect(session: &mut Session) -> bool {
     };
     let freed = old_bytes as i64 - new_bytes as i64;
     let rate = session.state["tokens_per_byte"].as_f64().unwrap_or(0.0);
-    let freed_tokens = freed as f64 * rate;
-    if rate <= 0.0 || freed <= 0 || freed_tokens < (number(&last["input_tokens"]) as f64) * 0.15 {
+    let images = crate::image_context::has_images(
+        before["history"].as_array().map_or(&[][..], Vec::as_slice),
+    );
+    let accounting_rate = if images {
+        admission_rate(session)
+    } else {
+        rate
+    };
+    let (old_tokens, new_tokens) = if images {
+        let Ok(old) = admission_tokens(&session.config, &before, accounting_rate) else {
+            return false;
+        };
+        let Ok(new) = admission_tokens(&session.config, &after, accounting_rate) else {
+            return false;
+        };
+        (old as f64, new as f64)
+    } else {
+        (old_bytes as f64 * rate, new_bytes as f64 * rate)
+    };
+    let freed_tokens = old_tokens - new_tokens;
+    let image_pressure = images && old_tokens >= win as f64 * 0.36;
+    if accounting_rate <= 0.0
+        || freed_tokens <= 0.0
+        || (!image_pressure && freed_tokens < (number(&last["input_tokens"]) as f64) * 0.15)
+    {
         return false;
     }
     let Ok(old_body) = crate::provider::encode_request(&session.config, &before) else {
@@ -533,7 +638,11 @@ pub(crate) fn collect(session: &mut Session) -> bool {
             .map(|v| types::json_bytes(v).len())
             .unwrap_or(0);
     let rebuild_bytes = new_bytes.saturating_sub(fixed_bytes);
-    let rebuild_tokens = rebuild_bytes as f64 * rate;
+    let rebuild_tokens = if images {
+        (new_tokens - fixed_bytes as f64 * accounting_rate).max(0.0)
+    } else {
+        rebuild_bytes as f64 * rate
+    };
     let remaining = number(&session.state["gc_requests"]).clamp(16, 48);
     let write_price = if string(&session.config["provider"]) == "anthropic" {
         1.25
@@ -552,12 +661,18 @@ pub(crate) fn collect(session: &mut Session) -> bool {
             && !flag(&session.state["compact_off"])
             && steps >= number(&session.state["compact_retry_after"])
             && (max_steps <= 0 || steps + 2 <= max_steps)
-            && (old_bytes as f64 * admission).ceil() >= 0.9 * threshold
-            && (new_bytes as f64 * admission).ceil() < threshold;
-        if !near {
+            && admission_tokens(&session.config, &before, admission)
+                .is_ok_and(|n| n as f64 >= 0.9 * threshold)
+            && admission_tokens(&session.config, &after, admission)
+                .is_ok_and(|n| (n as f64) < threshold);
+        if !near && !image_pressure {
             return false;
         }
-        trigger = "near_compaction";
+        trigger = if image_pressure {
+            "image_pressure"
+        } else {
+            "near_compaction"
+        };
     }
     let mut break_entry = session.history.len();
     let mut ordered = Vec::new();
@@ -651,6 +766,200 @@ pub fn recall(session: &Session, arguments: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ninth_image_retires_the_oldest_eligible_preview_before_request_encoding() {
+        let root = tempfile::tempdir().unwrap();
+        for switched in [false, true] {
+            let mut session = Session::new(json!({"workspace":root.path(),"provider":"openai","model":"gpt-6.1-sol","context_gc":true})).unwrap();
+            for index in 0..9 {
+                let id = format!("image-{index}");
+                let call = json!({"call_id":id,"name":"generate_image","arguments":"{}"});
+                let preview = json!({"sha256":format!("{index:064x}"),"mime_type":"image/png","width":1,"height":1,"size_bytes":64});
+                session.history.push(json!({"kind":"assistant","assistant":{"blocks":[{"kind":"tool_call","call":call}],"native":{"provider":"openai.responses","items":[{"type":"function_call","call_id":id,"name":"generate_image","arguments":"{}"}]}}}));
+                session.history.push(json!({"kind":"tool","tool":{"call_id":id,"name":"generate_image","outcome":tools::outcome(true,"ok","",json!({"path":format!("{index}.png"),"artifact_published":true,"model":"image model","preview":preview}),"applied")}}));
+            }
+            if switched {
+                session.state["handoff"] =
+                    crate::chat::model_switch::handoff(&session.history).unwrap();
+            }
+            let request = context::build_context(
+                &session.config,
+                scope("", "", 0),
+                &session.request_history(),
+                tools::specs(&session.config),
+            );
+            assert!(crate::provider::encode_request(&session.config, &request)
+                .unwrap_err()
+                .contains("9 active image previews"));
+            assert!(collect(&mut session));
+            let view = session.request_history();
+            assert_eq!(preview_count(&view), 8);
+            assert_eq!(
+                session.state["gc_state"]["dropped"]
+                    .as_object()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                session.state["gc_state"]["dropped"]["image-0"]["reason"],
+                "image preview limit"
+            );
+            let original_view = history(&session.history, &session.state["gc_state"]["dropped"]);
+            let retained = &original_view[1]["tool"]["outcome"];
+            assert_eq!(retained["effect"], "applied");
+            assert_eq!(retained["data"]["path"], "0.png");
+            assert_eq!(retained["data"]["artifact_published"], true);
+            assert_eq!(retained["data"]["model"], "image model");
+            assert!(retained["data"]["preview"].is_null());
+            assert!(recall(&session, r#"{"id":"image-0"}"#)["data"]["data"]["preview"].is_object());
+            let next = context::build_context(
+                &session.config,
+                scope("", "", 0),
+                &view,
+                tools::specs(&session.config),
+            );
+            crate::provider::encode_request(&session.config, &next).unwrap();
+            assert!(!collect(&mut session));
+        }
+    }
+
+    #[test]
+    fn image_gc_uses_preview_tokens_without_training_a_text_ratio() {
+        const CHILD: &str = "REAGENT_IMAGE_GC_CACHE";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "context_gc::tests::image_gc_uses_preview_tokens_without_training_a_text_ratio",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("HOME", root.path())
+                .env("XDG_CACHE_HOME", root.path().join("cache"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut pixels = vec![0u8; 256 * 256 * 4];
+        let mut seed = 1u32;
+        for pixel in &mut pixels {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            *pixel = seed as u8;
+        }
+        let mut bytes = Vec::new();
+        image::ImageEncoder::write_image(
+            image::codecs::png::PngEncoder::new(&mut bytes),
+            &pixels,
+            256,
+            256,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
+        let preview = crate::images::store(&crate::images::prepare(&bytes).unwrap()).unwrap();
+        for switched in [false, true] {
+            let mut session = Session::new(json!({"workspace":root.path(),"provider":"openai","model":"gpt-6.1-sol","context_gc":true,"no_project_instructions":true,"context_window_tokens":30000})).unwrap();
+            session.history = vec![
+                json!({"kind":"assistant","assistant":{"blocks":[{"kind":"tool_call","call":{"call_id":"image","name":"view_image","arguments":"{}"}}]}}),
+                json!({"kind":"tool","tool":{"call_id":"image","name":"view_image","outcome":tools::outcome(true,"ok","",json!({"path":"original.png","preview":preview}),"none")}}),
+            ];
+            for _ in 1..16 {
+                session
+                    .history
+                    .push(json!({"kind":"assistant","assistant":{"blocks":[]}}));
+            }
+            for entry in &mut session.history {
+                if entry["assistant"].is_object() {
+                    entry["assistant"]["native"] = json!({"provider":"openai.responses","items":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"settled"}]}]});
+                }
+            }
+            session.history[0]["assistant"]["native"]["items"] = json!([{"type":"function_call","call_id":"image","name":"view_image","arguments":"{}"}]);
+            if switched {
+                session.state["handoff"] =
+                    crate::chat::model_switch::handoff(&session.history).unwrap();
+            }
+            session.state["last_request"] = json!({"known":true,"input_tokens":14000});
+            let request = context::build_context(
+                &session.config,
+                scope("", "", 0),
+                &session.request_history(),
+                tools::specs(&session.config),
+            );
+            let wire = admission_bytes(&session.config, &request).unwrap();
+            assert!(admission_tokens(&session.config, &request, 0.5).unwrap() < wire / 4);
+            assert!(collect(&mut session));
+            assert!(session.state["gc_state"]["dropped"]["image"].is_object());
+            assert!(!crate::image_context::has_images(
+                &session.request_history()
+            ));
+            assert_eq!(session.state["tokens_per_byte"], 0.0);
+            assert_eq!(
+                crate::images::load(&preview).unwrap(),
+                crate::images::prepare(&bytes).unwrap().preview
+            );
+            assert_eq!(
+                recall(&session, r#"{"id":"image"}"#)["data"]["data"]["preview"],
+                preview
+            );
+        }
+    }
+
+    #[test]
+    fn aged_image_previews_are_collectible_and_recall_preserves_generation_effects() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::new(json!({"workspace":root.path(),"provider":"openai","model":"gpt-6.1-sol","context_gc":true})).unwrap();
+        let preview = json!({"sha256":"a".repeat(64),"mime_type":"image/png","width":1,"height":1,"size_bytes":64});
+        let original = tools::outcome(
+            true,
+            "ok",
+            "",
+            json!({"path":"artifact.png","sha256":"b".repeat(64),"model":"image model","preview":preview}),
+            "applied",
+        );
+        session.history = vec![
+            json!({"kind":"assistant","assistant":{"blocks":[{"kind":"tool_call","call":{"call_id":"image","name":"generate_image","arguments":"{}"}}]}}),
+            json!({"kind":"tool","tool":{"call_id":"image","name":"generate_image","outcome":original}}),
+        ];
+        for _ in 0..3 {
+            session
+                .history
+                .push(json!({"kind":"assistant","assistant":{"blocks":[]}}));
+        }
+        let (records, steps, settled) = results(&session.history, &Value::Null);
+        assert!(settled);
+        let drops = candidates(&session, &records, steps);
+        assert!(drops.contains_key("image"));
+        session.state["gc_state"]["dropped"] = json!(drops);
+        let projected = session.request_history();
+        assert!(crate::image_context::references(&projected).is_empty());
+        assert_eq!(projected[1]["tool"]["outcome"]["effect"], "applied");
+        assert_eq!(
+            projected[1]["tool"]["outcome"]["data"]["path"],
+            "artifact.png"
+        );
+        assert_eq!(
+            projected[1]["tool"]["outcome"]["data"]["model"],
+            "image model"
+        );
+        let recalled = recall(&session, r#"{"id":"image"}"#);
+        assert_eq!(recalled["effect"], "none");
+        assert_eq!(recalled["data"], original);
+        assert_eq!(
+            crate::image_context::tool_references(&json!({"name":"recall","outcome":recalled})),
+            vec![preview]
+        );
+    }
 
     #[test]
     fn recall_hashes_a_grown_file_completely_and_preserves_the_observation() {
