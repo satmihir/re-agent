@@ -67,7 +67,7 @@ pub fn models() -> Value {
             "low",
             "low",
             "frontier reasoning",
-            272_000,
+            1_050_000,
         ),
     ];
     Value::Array(entries.iter().map(|(id,provider,efforts,effort,verbosity,note,window)| {
@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(astra["provider"], "openai");
         assert_eq!(astra["effort"], "low");
         assert_eq!(astra["verbosity"], "low");
-        assert_eq!(astra["context_window"], 272_000);
+        assert_eq!(astra["context_window"], 1_050_000);
         assert_eq!(
             astra["efforts"],
             json!(["low", "medium", "high", "xhigh", "max"])
@@ -346,8 +346,8 @@ mod tests {
         for (model, cap, want) in [
             ("gpt-6.1-luna", 2_000_000, 1_050_000),
             ("gpt-6.1-luna", 500, 500),
-            ("gpt-6-astra", 0, 272_000),
-            ("gpt-6-astra", 2_000_000, 272_000),
+            ("gpt-6-astra", 0, 1_050_000),
+            ("gpt-6-astra", 2_000_000, 1_050_000),
             ("gpt-6-astra", 500, 500),
             ("unlisted", 500, 500),
             ("gpt-5.6-luna", 0, 0),
