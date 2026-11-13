@@ -615,6 +615,41 @@ fn fresh_switch_reuses_replacement_ownership_with_new_counters_and_both_checkpoi
 }
 
 #[test]
+fn astra_carries_large_sol_history_and_accepts_the_next_request() {
+    let Some(root) = isolated(
+        "astra_carries_large_sol_history_and_accepts_the_next_request",
+        vec![(200, openai_text()), (200, openai_text())],
+    ) else {
+        return;
+    };
+    let api = live(&root, false, false);
+    assert_eq!(run(&api, "source").result.unwrap().status, "completed");
+    let identity = api.get_snapshot().unwrap().session;
+    let (path, _, mut saved) = checkpoint(&api);
+    api.close().unwrap();
+    let payload = "retained context ".repeat(60_000);
+    saved["state"]["history"][0]["user"]["text"] = json!(payload);
+    saved["state"]["tokens_per_byte"] = json!(0.3);
+    rewrite_checkpoint(&path, &mut saved);
+    let api = resume_session(&identity.session_id).unwrap();
+    let identity = api.get_snapshot().unwrap().session;
+    applied(&api, "astra", switch("gpt-6-astra", HistoryMode::Carry));
+    let selected = api.get_snapshot().unwrap();
+    assert_eq!(selected.session, identity);
+    assert_eq!(selected.context_window_tokens, Some(1_050_000));
+    assert_eq!(selected.reasoning_effort, "low");
+    let (_, _, after) = checkpoint(&api);
+    assert_eq!(after["state"]["history"], saved["state"]["history"]);
+    let audit = switch_trace(&api, "model.switch.finished");
+    assert!(audit[1]["data"]["request_bytes"].as_u64().unwrap() > 900_000);
+    assert_eq!(run(&api, "follow-up").result.unwrap().status, "completed");
+    let body = request(&root, 1);
+    assert_eq!(body["model"], "gpt-6-astra");
+    assert!(body.to_string().contains(&payload));
+    api.close().unwrap();
+}
+
+#[test]
 fn carry_uses_collected_history_and_refuses_unknown_effects_or_destination_window_overflow() {
     let Some(root) = isolated(
         "carry_uses_collected_history_and_refuses_unknown_effects_or_destination_window_overflow",
