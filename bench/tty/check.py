@@ -344,6 +344,47 @@ SCENARIOS = {
             ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
     },
+    "chat-api-workspace-noise": {
+        "workspace_consent": "noise",
+        "agents": True,
+        "size": (28, 100),
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "request consent"), ("key", "enter"),
+            ("wait", "Workspace consent", 5),
+            ("refresh_picker",),
+            ("type", "\x1b[I\x1b[O\x1b[12;34R"),
+            ("type", "y1q\t"), ("paste", "yes\nallow\n"),
+            ("expect", "screen_has", "❯ 2  Deny"),
+            ("expect", "screen_lacks", "Approved workspace selected."),
+            ("show", "Terminal responses, typing and pasted text leave approval pending at Deny"),
+            ("key", "up"), ("key", "enter"),
+            ("wait", "Approved workspace selected.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "follow up"), ("key", "enter"),
+            ("wait", "Follow-up after approval works.", 5),
+            ("show", "Explicit approval permits switching workspaces and the next chat turn"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
+    "chat-api-workspace-small-terminal": {
+        "workspace_consent": "small",
+        "script": [tool("Cannot display approval.", "access", "request_workspace_access", {"path": "__CONSENT__"}),
+                   reply("Must not fabricate a human denial.")],
+        "size": (6, 100),
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "request consent"), ("key", "enter"),
+            ("wait", "workspace approval could not be displayed", 5),
+            ("wait", "cancelled", 5),
+            ("resize", 28, 100),
+            ("wait_status", "scripted / low", 5),
+            ("expect", "screen_lacks", "workspace access was not approved"),
+            ("expect", "screen_lacks", "Must not fabricate a human denial."),
+            ("show", "An undersized terminal reports unavailable approval and cancels, rather than recording Deny"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "chat-api-workspace-capacity": {
         "workspace_consent": "capacity",
         "script": [tool("Human request at receipt capacity.", "capacity", "request_workspace_access", {"path": "__CONSENT__"}),
@@ -2588,6 +2629,12 @@ def run(binary, name, scenario, workspace):
                         calls = [("spawn", {"task": "create a file", "context": {"brief": "independent"},
                                             "name": "writer", "authority": "write"}),
                                  ("wait", {"ids": ["writer"]})] if number == 1 else []
+                    if scenario.get("workspace_consent") == "noise":
+                        calls = {1: [("request_workspace_access", {"path": consent_root.name})],
+                                 2: [("switch_workspace", {"path": consent_root.name})]}.get(number, [])
+                        for item in json.loads(request).get("input", []):
+                            if item.get("type") == "function_call_output" and not json.loads(item["output"]).get("ok"):
+                                failures.append("approval/switch tool failed: %s" % item["output"])
                     if scenario.get("chatgpt"):
                         calls = []
                         if self.headers.get("Authorization") != "Bearer tty-access" or not self.headers.get("session_id"):
@@ -2625,6 +2672,8 @@ def run(binary, name, scenario, workspace):
                             text = "ChatGPT reply." if number == 1 else "Next ChatGPT turn."
                         if scenario.get("context_status"):
                             text = "Status turn complete."
+                        if scenario.get("workspace_consent") == "noise":
+                            text = "Approved workspace selected." if number == 3 else "Follow-up after approval works."
                         output = [{"type": "message", "status": "completed", "content": [
                             {"type": "output_text", "text": text}]}]
                 input_tokens = 120000 if scenario.get("context_gc") else 10
@@ -2743,6 +2792,17 @@ def run(binary, name, scenario, workspace):
                     time.sleep(0.02)
                 else:
                     failures.append("noisy exec did not terminate while PTY reads were stalled")
+            elif kind == "refresh_picker":
+                mark = len(s.raw)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    s.pump(0.05)
+                    if b"\x1b[?2026h" in s.raw[mark:]:
+                        if not any("Workspace consent" in row for row in s.term.screen()):
+                            failures.append("background refresh erased the approval picker")
+                        break
+                else:
+                    failures.append("no background display refresh observed during approval")
             elif kind == "animate":
                 initial = indicator_line(s)
                 deadline = time.monotonic() + args[0]
@@ -2933,6 +2993,11 @@ def run(binary, name, scenario, workspace):
                 failures.append("stalled terminal changed the exec output bytes")
             if data.get("stdout_bytes_seen") != len(stdout.encode()) or data.get("stdout_truncated") or data.get("stderr_bytes_seen") != 0 or data.get("stderr_truncated") or data.get("encoding_replaced"):
                 failures.append("stalled terminal changed exec capture counts, truncation or encoding")
+    if scenario.get("workspace_consent") == "small":
+        outcomes = [event["data"]["outcome"] for event in trace_events(workspace)
+                    if event.get("type") == "tool.finished" and event["data"].get("call_id") == "access"]
+        if len(outcomes) != 1 or outcomes[0].get("ok") or outcomes[0].get("message") == "workspace access was not approved":
+            failures.append("unavailable approval fabricated a human answer or lost its ToolOutcome: %r" % outcomes)
     if scenario.get("workspace_consent") == "deny":
         outcomes = {"first": [], "second": []}
         cache = os.path.join(workspace, "Library", "Caches") if sys.platform == "darwin" else os.path.join(workspace, ".cache")

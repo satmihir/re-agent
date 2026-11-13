@@ -108,6 +108,14 @@ pub enum Submission {
     Interrupted,
     Eof,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickerMode {
+    Menu,
+    Plan,
+    Consent,
+}
+
 impl Input {
     /// New selects raw input only for a terminal stdin.
     pub fn new() -> Self {
@@ -214,14 +222,20 @@ impl Input {
                 "Workspace consent",
                 &options,
                 1,
-                false,
+                PickerMode::Consent,
                 "deny",
-                true,
                 Some(&withdrawn),
             )
         })();
+        let selection = match result {
+            Ok(Selection::NotInteractive) => Err(io::Error::other("workspace approval could not be displayed; enlarge the terminal or preapprove the path with --allow-workspace PATH")),
+            result => result,
+        }
+        .inspect_err(|error| {
+            output(self.region.as_ref(), 2, &format!("workspace approval unavailable: {error}; no human decision was recorded; cancelling this Run\n"));
+        })?;
         if !withdrawn() {
-            let decision = if matches!(result, Ok(Selection::Chosen(0))) {
+            let decision = if matches!(selection, Selection::Chosen(0)) {
                 WorkspaceDecision::Allow
             } else {
                 WorkspaceDecision::Deny
@@ -259,9 +273,8 @@ impl Input {
         title: &str,
         options: &[Choice],
         current: usize,
-        shortcuts: bool,
+        mode: PickerMode,
         cancel_label: &str,
-        fresh: bool,
         cancelled: Option<&dyn Fn() -> bool>,
     ) -> io::Result<Selection> {
         let (width, height) = self.size()?;
@@ -305,9 +318,6 @@ impl Input {
             region.lock().unwrap().picker(&header, rows, width, height)
         };
         draw(selected)?;
-        if fresh {
-            self.discard_input()?;
-        }
         let result = (|| loop {
             if cancelled.is_some_and(|withdrawn| withdrawn()) {
                 return Ok(Selection::Cancelled);
@@ -337,14 +347,18 @@ impl Input {
                 continue;
             };
             match key {
-                Key::Name("up") | Key::Text('k') if shortcuts || key == Key::Name("up") => {
+                Key::Name("up") | Key::Text('k')
+                    if mode == PickerMode::Menu || key == Key::Name("up") =>
+                {
                     if let Some(index) = (0..selected).rev().find(|index| !options[*index].disabled)
                     {
                         selected = index;
                         draw(selected)?;
                     }
                 }
-                Key::Name("down") | Key::Text('j') if shortcuts || key == Key::Name("down") => {
+                Key::Name("down") | Key::Text('j')
+                    if mode == PickerMode::Menu || key == Key::Name("down") =>
+                {
                     if let Some(index) =
                         (selected + 1..options.len()).find(|index| !options[*index].disabled)
                     {
@@ -354,14 +368,14 @@ impl Input {
                 }
                 Key::Name("enter") => return Ok(Selection::Chosen(selected)),
                 Key::Name("escape" | "interrupt" | "eof") => return Ok(Selection::Cancelled),
-                Key::Text('q') if shortcuts => return Ok(Selection::Cancelled),
-                Key::Text(c @ '1'..='9') if shortcuts => {
+                Key::Text('q') if mode == PickerMode::Menu => return Ok(Selection::Cancelled),
+                Key::Text(c @ '1'..='9') if mode == PickerMode::Menu => {
                     let index = c as usize - '1' as usize;
                     if index < options.len() && !options[index].disabled {
                         return Ok(Selection::Chosen(index));
                     }
                 }
-                _ if !shortcuts => return Ok(Selection::Cancelled),
+                _ if mode == PickerMode::Plan => return Ok(Selection::Cancelled),
                 _ => {}
             }
         })();
@@ -469,7 +483,7 @@ impl Input {
         options: &[Choice],
         current: usize,
     ) -> io::Result<Selection> {
-        self.choose_options(title, options, current, true, "", false, None)
+        self.choose_options(title, options, current, PickerMode::Menu, "", None)
     }
     /// Choose plan discards turn type-ahead and requires an explicit highlighted choice.
     pub(crate) fn choose_plan(&mut self) -> io::Result<Selection> {
@@ -501,9 +515,8 @@ impl Input {
             "Plan ready",
             &options,
             2,
-            false,
+            PickerMode::Plan,
             "keep planning",
-            false,
             None,
         )
     }
@@ -533,24 +546,15 @@ impl Input {
         title: &str,
         options: &[Choice],
         current: usize,
-        shortcuts: bool,
+        mode: PickerMode,
         cancel_label: &str,
-        fresh: bool,
         cancelled: Option<&dyn Fn() -> bool>,
     ) -> io::Result<Selection> {
-        if fresh {
+        if mode == PickerMode::Consent {
             self.discard_input()?;
         }
         if self.region.is_some() {
-            return self.choose_region(
-                title,
-                options,
-                current,
-                shortcuts,
-                cancel_label,
-                fresh,
-                cancelled,
-            );
+            return self.choose_region(title, options, current, mode, cancel_label, cancelled);
         }
         self.raw.take();
         let mut size: libc::winsize = unsafe { std::mem::zeroed() };
@@ -629,12 +633,12 @@ impl Input {
                 redraw = true;
                 let key = read_key(&mut self.reader, &mut self.decoder, cancelled)?;
                 match key.as_str() {
-                    "up" | "text:k" if shortcuts || key == "up" => {
+                    "up" | "text:k" if mode == PickerMode::Menu || key == "up" => {
                         if let Some(next) = (0..cursor).rev().find(|i| !options[*i].disabled) {
                             cursor = next
                         }
                     }
-                    "down" | "text:j" if shortcuts || key == "down" => {
+                    "down" | "text:j" if mode == PickerMode::Menu || key == "down" => {
                         if let Some(next) =
                             (cursor + 1..options.len()).find(|i| !options[*i].disabled)
                         {
@@ -642,11 +646,10 @@ impl Input {
                         }
                     }
                     "enter" => return Ok(Selection::Chosen(cursor)),
-                    "escape" | "interrupt" | "eof" | "text:q" => return Ok(Selection::Cancelled),
-                    _ => {
-                        if !shortcuts {
-                            return Ok(Selection::Cancelled);
-                        }
+                    "escape" | "interrupt" | "eof" => return Ok(Selection::Cancelled),
+                    "text:q" if mode == PickerMode::Menu => return Ok(Selection::Cancelled),
+                    _ if mode == PickerMode::Plan => return Ok(Selection::Cancelled),
+                    _ if mode == PickerMode::Menu => {
                         if let Some(number) = key
                             .strip_prefix("text:")
                             .and_then(|s| s.parse::<usize>().ok())
@@ -659,6 +662,7 @@ impl Input {
                             }
                         }
                     }
+                    _ => {}
                 }
             }
         })();

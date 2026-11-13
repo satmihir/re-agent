@@ -144,6 +144,7 @@ pub struct Region {
     #[cfg(test)]
     stream_layouts: usize,
     buffer: Vec<char>,
+    picker: Option<(String, Vec<String>)>,
     caret: usize,
     prefix: String,
     top: usize,
@@ -251,6 +252,7 @@ impl Region {
             #[cfg(test)]
             stream_layouts: 0,
             buffer: Vec::new(),
+            picker: None,
             caret: 0,
             prefix: String::new(),
             top: 0,
@@ -309,6 +311,7 @@ impl Region {
         columns: usize,
         height: usize,
     ) -> io::Result<()> {
+        self.picker = None;
         self.buffer = buffer.to_vec();
         self.caret = caret;
         self.prefix = prefix.to_string();
@@ -642,6 +645,9 @@ impl Region {
         if !self.active {
             return Ok(());
         }
+        if let Some((header, options)) = self.picker.clone() {
+            return self.picker(&header, options, self.width, self.height);
+        }
         self.input(
             &self.buffer.clone(),
             self.caret,
@@ -701,6 +707,8 @@ impl Region {
         width: usize,
         height: usize,
     ) -> io::Result<()> {
+        // Background agent/status updates must repaint the picker, not the hidden editor.
+        self.picker = Some((header.to_owned(), options.clone()));
         let mut rows = vec![header.to_owned()];
         rows.extend(options);
         if width >= 20 {
@@ -724,6 +732,7 @@ impl Region {
     }
     /// Collapse removes the pane before exiting or handing the terminal to another program.
     pub(crate) fn collapse(&mut self) -> io::Result<()> {
+        self.picker = None;
         if self.active {
             emit(&format!("\x1b[?2026h\x1b[{};1H\x1b[J\x1b[?2026l", self.top))?;
         }
@@ -913,6 +922,50 @@ mod tests {
             assert!(!region.active);
             assert!(region.visible[0].contains("next submission"));
         }
+    }
+
+    #[test]
+    fn background_refresh_preserves_the_picker_until_editor_input_resumes() {
+        let mut region = Region::new();
+        let draft: Vec<_> = "next question".chars().collect();
+        region.input(&draft, 3, "", 80, 24).unwrap();
+        region
+            .picker(
+                "Workspace consent",
+                vec!["Allow".into(), "❯ Deny".into()],
+                80,
+                24,
+            )
+            .unwrap();
+        region.refresh_agents(0, None, &[]).unwrap();
+        region.set_progress(Some("working")).unwrap();
+        region
+            .refresh_status(&serde_json::json!({"model": "updated"}), &Value::Null)
+            .unwrap();
+        region.insert_bytes(b"background output\n").unwrap();
+        assert!(region
+            .visible
+            .iter()
+            .any(|row| row.contains("Workspace consent")));
+        assert!(region.visible.iter().any(|row| row.contains("❯ Deny")));
+        assert!(!region
+            .visible
+            .iter()
+            .any(|row| row.contains("next question")));
+        assert_eq!(region.buffer, draft);
+        assert_eq!(region.caret, 3);
+
+        region.input(&draft, 3, "", 80, 24).unwrap();
+        region.refresh_agents(0, None, &[]).unwrap();
+        assert!(region
+            .visible
+            .iter()
+            .any(|row| row.contains("❯ next question")));
+        assert!(!region
+            .visible
+            .iter()
+            .any(|row| row.contains("Workspace consent")));
+        assert!(region.visible.iter().any(|row| row.contains("updated")));
     }
 
     #[test]

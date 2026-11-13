@@ -703,7 +703,7 @@ fn chat_compacts_before_the_next_turn_at_eighty_percent() {
 fn pty_workspace_consent_discards_typeahead_and_requires_fresh_non_numeric_keys() {
     for (keys, allowed) in [
         (b"\r".as_slice(), false),
-        (b"1".as_slice(), false),
+        (b"1\r".as_slice(), false),
         (b"\x1b[A\r".as_slice(), true),
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -742,7 +742,8 @@ fn pty_workspace_consent_discards_typeahead_and_requires_fresh_non_numeric_keys(
             "{screen}"
         );
         assert!(screen.contains("Location: \""), "{screen}");
-        std::thread::sleep(Duration::from_millis(70));
+        pty.wait(b"\x1b[?2026l");
+        pty.wait(b"\x1b[?2026l");
         assert!(listener.accept().is_err(), "typeahead answered consent");
         pty.send(keys);
         let (mut stream, body) = pty.request(&listener);
