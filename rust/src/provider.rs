@@ -82,6 +82,37 @@ pub fn validate_environment() -> Result<(), String> {
     Ok(())
 }
 
+/// Selects OpenAI inference auth without requiring credentials for an unused route.
+pub(crate) fn openai_auth_mode(config: &Value) -> Result<&'static str, String> {
+    let mut choice = s(config, "openai_auth").to_owned();
+    if choice.is_empty() {
+        choice = std::env::var("REAGENT_OPENAI_AUTH").unwrap_or_default();
+    }
+    if choice.is_empty() {
+        choice = "auto".into();
+    }
+    if !matches!(choice.as_str(), "auto" | "key" | "chatgpt") {
+        return Err("--openai-auth must be auto, key or chatgpt".into());
+    }
+    let proxied = !std::env::var("API_PROXY_URL")
+        .unwrap_or_default()
+        .is_empty();
+    if choice == "chatgpt" {
+        if proxied {
+            return Err("ChatGPT auth cannot be combined with API_PROXY_URL".into());
+        }
+        return Ok("chatgpt");
+    }
+    if proxied {
+        return Ok("proxy");
+    }
+    if choice == "auto" && crate::auth::usable() {
+        return Ok("chatgpt");
+    }
+    Ok("key")
+}
+
+/// Resolves the model, provider, and inference authentication for a Session.
 pub fn configure(config: &mut Value) -> Result<(), String> {
     let scripted = !s(config, "scripted").is_empty();
     let mut model = s(config, "model").to_owned();
@@ -155,34 +186,11 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
     }
     let proxied = provider == "openai" && !endpoint.is_empty();
     config["proxied"] = json!(proxied);
-    let mut choice = s(config, "openai_auth").to_string();
-    if choice.is_empty() {
-        choice = std::env::var("REAGENT_OPENAI_AUTH").unwrap_or_default();
-    }
-    if choice.is_empty() {
-        choice = "auto".into();
-    }
-    if !matches!(choice.as_str(), "auto" | "key" | "chatgpt") {
-        return Err("--openai-auth must be auto, key or chatgpt".into());
-    }
+    let mode = openai_auth_mode(config)?;
     let preview = config["show_context"].as_bool().unwrap_or(false);
-    let key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
-    let plan = crate::auth::usable();
-    let mode = if choice == "chatgpt" {
-        if !endpoint.is_empty() {
-            return Err("ChatGPT auth cannot be combined with API_PROXY_URL".into());
-        }
-        if !plan && !preview {
-            return Err("no usable ChatGPT plan login; run reagent login and grant plan usage, or use --openai-auth key".into());
-        }
-        "chatgpt"
-    } else if proxied {
-        "proxy"
-    } else if choice == "auto" && key.is_empty() && plan {
-        "chatgpt"
-    } else {
-        "key"
-    };
+    if mode == "chatgpt" && !preview && !crate::auth::usable() {
+        return Err("no usable ChatGPT plan login; run reagent login and grant plan usage, or use --openai-auth key".into());
+    }
     config["auth_mode"] = json!(if scripted {
         ""
     } else if provider == "anthropic" {
