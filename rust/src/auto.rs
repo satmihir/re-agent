@@ -100,22 +100,7 @@ pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
         session.state["auto_openai_auth"] = if text(&session.config, "provider") == "openai" {
             session.config["auth_mode"].clone()
         } else {
-            let choice = session.config["openai_auth"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| std::env::var("REAGENT_OPENAI_AUTH").unwrap_or_default());
-            json!(if choice == "chatgpt"
-                || ((choice.is_empty() || choice == "auto")
-                    && std::env::var("OPENAI_API_KEY")
-                        .unwrap_or_default()
-                        .is_empty()
-                    && crate::auth::usable())
-            {
-                "chatgpt"
-            } else {
-                "key"
-            })
+            json!(provider::openai_auth_mode(&session.config)?)
         };
     }
     let saved_model = session.state["auto_fallback_model"]

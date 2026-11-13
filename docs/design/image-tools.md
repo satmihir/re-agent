@@ -1,6 +1,7 @@
 # OpenAI image generation and viewing
 
-Status: proposed design; not implemented.
+Status: image tools are proposed, not implemented. ChatGPT-first inference
+selection is implemented; the separate image-generation key route below is not.
 
 ## Goal
 
@@ -13,22 +14,41 @@ or composition from explicit reference images. It does not add image tools to
 Anthropic Sessions, terminal image rendering, remote image URL fetching, masks,
 batches, animation, or an attachment framework.
 
-## Decisions still required
+## Authentication decisions and remaining gates
 
-Before implementation:
+The user approved this policy and the `image` crate (PNG, JPEG, WebP):
 
-- Choose the first generation authentication route: API key, ChatGPT login, or
-  the user's proxy. API-key support is the recommendation unless another route
-  is required for daily use.
-- Approve the `image` crate with narrowly enabled PNG, JPEG, and WebP support.
-  No dependency has been approved or added by this design.
-- Verify the selected backend's image model, generation and editing request
-  formats, response format, entitlement requirements, and structured image-input
-  support. Codex source is evidence of its own backend contract, not proof that
-  the same requests work with re:agent's authentication.
+- Prefer a usable ChatGPT login for OpenAI inference in automatic auth mode,
+  including child Sessions, summaries, BTW, model switches, and Auto destinations.
+  Explicit auth choices and configured proxies retain their existing behavior.
+  Anthropic and TypeSafe retain their own credentials; ChatGPT login does not
+  authenticate either service.
+- Use `OPENAI_API_KEY` only for the separate Images API generation/editing call
+  when ordinary inference is using ChatGPT. Do not change Session inference auth
+  or resend a failed plan request with the API key. Image generation has separate
+  API billing, which the tool description must make clear.
+- A missing image key must not prevent startup, inference, or viewing. Keep the
+  generation tool discoverable when otherwise permitted. At execution, return
+  `credentials_required`, `effect: none`, before HTTP or file publication, asking
+  the user to create an OpenAI API key and set `OPENAI_API_KEY` in the environment
+  that launches re:agent, then restart/resume. Never ask them to paste it in chat.
+  The model should relay this politely and continue without repeated attempts.
+- Do not send ChatGPT OAuth tokens to image endpoints, fall back to another
+  credential after a generation failure, or derive image URLs from a Responses
+  proxy URL. Provider selection alone is not a capability check.
 
-Do not silently switch credentials, billing routes, or endpoints when a route
-cannot generate images. Provider selection alone is not a capability check.
+A live probe on 2026-11-13 made one request to
+`https://api.openai.com/v1/images/generations`, using the saved ChatGPT OAuth token
+and `gpt-image-2.5-flare`. It returned HTTP 401,
+`hardened_oauth_rule_missing`: "This ChatPass credential is not authorized for the
+requested operation." No retries, API-key fallback, or artifact publication
+occurred. This establishes rejection of that credential/operation, not a blanket
+claim about all ChatGPT integrations.
+
+Before image-tool implementation, verify the API-key backend's image model,
+generation and editing request/response formats, and structured image-input
+support. The dependency is approved but not added by the auth-selection change.
+Codex source is evidence of its own contract, not proof that it applies here.
 
 ## Tool contracts
 
@@ -107,12 +127,15 @@ may be inherited by a read-only child without granting new filesystem authority.
 Use a separate generation request path through the existing low-level HTTP
 client. The model adapter encodes model requests; it does not execute tools.
 
-- API key: use the verified Images API generation/editing contract.
-- ChatGPT: enable only after verifying its endpoint, authentication, and account
-  entitlements. A usable conversational login is not sufficient evidence.
-- Proxy: require an explicitly supported image endpoint. `API_PROXY_URL` is a
-  complete Responses endpoint; do not construct an image endpoint by replacing
-  its path.
+- API key: the only initial generation/editing route. Read `OPENAI_API_KEY` at
+  tool execution, not as a requirement for an ordinary ChatGPT-backed Session.
+  Use the verified Images API contract and the trusted OpenAI API base; the image
+  request authenticates with the key, not the Session's OAuth headers.
+- ChatGPT: remains the preferred ordinary OpenAI inference route. Its OAuth token
+  is never submitted for generation/editing in this implementation.
+- Proxy: inference proxy behavior is unchanged. `API_PROXY_URL` is a complete
+  Responses endpoint, not an image destination. Image calls use the explicit
+  API-key route independently; do not append to or replace the proxy path.
 
 Do not reuse the inference retry loop or its streaming assumptions. Submit each
 ToolCall once. Never automatically repeat generation after a timeout, connection
@@ -335,8 +358,9 @@ Do not add a new crate, vendor SDK, general attachment framework, or speculative
 backend abstraction. Reuse the existing HTTP and publication primitives where
 their semantics fit; do not broaden text-file limits to accommodate images.
 
-The overview is not changed by this design-only document because the described
-runtime behavior has not changed.
+The overview describes the implemented ChatGPT-first inference default. Do not
+claim image tools or the missing-key ToolOutcome are implemented until their
+handlers and full continuation tests land.
 
 ## Verification plan
 
@@ -379,7 +403,8 @@ Relevant current implementation anchors:
 
 - `rust/src/tools.rs:136–179`: tool-spec cache has no image capability key;
   `219–244`: child allowlist and read-only filtering.
-- `rust/src/provider.rs:134–192`: proxy endpoint and key/ChatGPT/proxy auth choice.
+- `rust/src/provider.rs:85–112,163–217`: shared ChatGPT-first inference auth
+  selection, proxy endpoint validation, and credential availability checks.
 - `rust/src/openai.rs:101–112`: tool outcomes currently become JSON strings;
   `148–155`: serialized request-size enforcement.
 - `rust/src/run_loop.rs:795–884`: outcome envelope, effect records, trace/history

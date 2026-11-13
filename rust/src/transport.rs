@@ -240,7 +240,7 @@ impl Transport {
     ) -> Result<(u16, Vec<u8>), ModelError> {
         let provider = s(&self.config, "provider").to_owned();
         let proxied = self.config["proxied"].as_bool().unwrap_or(false);
-        let chatgpt = s(&self.config, "auth_mode") == "chatgpt";
+        let chatgpt = provider == "openai" && s(&self.config, "auth_mode") == "chatgpt";
         let stream = body["stream"] == true || (provider != "anthropic" && (proxied || chatgpt));
         let bytes = crate::types::json_bytes(body);
         let step = request["scope"]["step"].as_u64().unwrap_or(1) as usize;

@@ -613,6 +613,17 @@ fn spawn(s: &mut Session, a: &Value) -> Value {
     }
     // Admission collects Git evidence; unrelated children must remain able to stop.
     let mut c = child_config(s, a, authority);
+    if text(&c["provider"]) != text(&s.config["provider"]) && text(&c["scripted"]).is_empty() {
+        c["auth_mode"] = if c["provider"] == "openai" {
+            match crate::provider::openai_auth_mode(&c) {
+                Ok(mode) => json!(mode),
+                Err(error) => return fail("spawn_denied", &error),
+            }
+        } else {
+            json!("key")
+        };
+        c["proxied"] = json!(c["auth_mode"] == "proxy");
+    }
     let (history, prompt, mode) = match context::prepare(s, &mut c, a, authority) {
         Ok(v) => v,
         Err(e) => return fail("spawn_denied", &e),
