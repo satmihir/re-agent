@@ -188,7 +188,8 @@ fn open_at(directory: &File, name: &str, flags: i32, mode: u32) -> io::Result<Fi
             directory.as_raw_fd(),
             name.as_ptr(),
             flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            mode as libc::mode_t,
+            // C variadic arguments need integer promotion; macOS mode_t is u16.
+            mode as libc::c_uint,
         )
     };
     if fd < 0 {
