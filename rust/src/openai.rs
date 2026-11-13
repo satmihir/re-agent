@@ -1,6 +1,7 @@
 use crate::provider::raw_tokens;
 use crate::provider::{array, error, s};
 use crate::types::{json_bytes, json_string, usage_zero, ModelError};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -68,7 +69,7 @@ pub fn cache_key(req: &Value) -> String {
                 .cloned()
                 .unwrap_or(json!(""));
             let mut ordered = json!({"text":text});
-            for key in ["roster", "source", "plan"] {
+            for key in ["roster", "source", "plan", "images"] {
                 if let Some(value) = user
                     .get(key)
                     .filter(|v| !v.is_null() && v.as_str() != Some(""))
@@ -99,18 +100,59 @@ pub(crate) fn encode_live_request(req: &Value, proxied: bool) -> Result<Value, S
 }
 
 fn encode(req: &Value, proxied: bool, stream: bool) -> Result<Value, String> {
+    let model = s(req, "model");
+    let preview_count: usize = array(req, "history")
+        .iter()
+        .map(|entry| crate::image_context::entry_references(entry).len())
+        .sum();
+    if preview_count > 0
+        && !crate::catalog::supports_images(&json!({"provider":"openai","model":model}))
+    {
+        return Err(format!("model {model:?} does not have a known image-input capability; switch to a supported OpenAI model or use a metadata-only handoff"));
+    }
+    if preview_count > crate::image_context::MAX_PREVIEWS {
+        return Err(format!("request has {preview_count} active image previews, over the {} preview limit; retire older previews with context GC or start a new run", crate::image_context::MAX_PREVIEWS));
+    }
     let mut input = Vec::new();
+    let mut previews = Vec::new();
     for entry in array(req, "history") {
-        match s(entry,"kind") {
+        match s(entry, "kind") {
             "assistant" => {
-                let native=&entry["assistant"]["native"];
-                if s(native,"provider")!="openai.responses" {return Err(format!("assistant turn carries {:?} items, which this adapter cannot continue from",s(native,"provider")));}
-                if array(native,"items").is_empty(){ return Err("assistant turn carries no provider items to continue from".into()); }
-                input.extend(array(native,"items").iter().cloned());
+                let native = &entry["assistant"]["native"];
+                if s(native, "provider") != "openai.responses" {
+                    return Err(format!("assistant turn carries {:?} items, which this adapter cannot continue from",s(native,"provider")));
+                }
+                if array(native, "items").is_empty() {
+                    return Err("assistant turn carries no provider items to continue from".into());
+                }
+                input.extend(array(native, "items").iter().cloned());
             }
-            "tool"=>input.push(json!({"type":"function_call_output","call_id":s(&entry["tool"],"call_id"),"output":json_string(&entry["tool"]["outcome"])})),
-            "user"|"summary"|"shell"=>input.push(json!({"role":"user","content":entry_texts(entry).into_iter().map(|text|json!({"type":"input_text","text":text})).collect::<Vec<_>>()})),
-            _=>{}
+            "tool" => {
+                let references = crate::image_context::tool_references(&entry["tool"]);
+                let text = json_string(&entry["tool"]["outcome"]);
+                let mut output = json!(text);
+                if !references.is_empty() {
+                    let mut parts = vec![json!({"type":"input_text","text":text})];
+                    append_previews(&mut parts, references, input.len(), "output", &mut previews)?;
+                    output = json!(parts);
+                }
+                input.push(json!({"type":"function_call_output","call_id":s(&entry["tool"],"call_id"),"output":output}));
+            }
+            "user" | "summary" | "shell" => {
+                let mut content: Vec<_> = entry_texts(entry)
+                    .into_iter()
+                    .map(|text| json!({"type":"input_text","text":text}))
+                    .collect();
+                append_previews(
+                    &mut content,
+                    crate::image_context::entry_references(entry),
+                    input.len(),
+                    "content",
+                    &mut previews,
+                )?;
+                input.push(json!({"role":"user","content":content}));
+            }
+            _ => {}
         }
     }
     let tools:Vec<Value>=array(req,"tools").iter().map(|t|json!({"type":"function","name":s(t,"name"),"description":s(t,"description"),"parameters":t["input_schema"],"strict":false})).collect();
@@ -141,12 +183,64 @@ fn encode(req: &Value, proxied: bool, stream: bool) -> Result<Value, String> {
     if req["max_output_tokens"].as_i64().unwrap_or(0) != 0 {
         body["max_output_tokens"] = req["max_output_tokens"].clone();
     }
+    if previews.is_empty() {
+        check_size(&body)?;
+        return Ok(body);
+    }
+    let projected_bytes = json_bytes(&body).len().saturating_add(
+        previews
+            .iter()
+            .map(|(_, _, _, preview)| {
+                let size = preview["size_bytes"].as_u64().unwrap_or(0) as usize;
+                "data:image/png;base64,".len() + size.div_ceil(3) * 4
+            })
+            .sum::<usize>(),
+    );
+    check_byte_size(projected_bytes)?;
+    for (item, field, part, preview) in previews {
+        let pixels = crate::images::load(&preview).and_then(|bytes| {
+            if bytes.len() > crate::image_context::MAX_PREVIEW_BYTES {
+                return Err("stored preview exceeds the 512 KiB limit".into());
+            }
+            Ok(bytes)
+        });
+        body["input"][item][field][part] = match pixels {
+            Ok(bytes) => {
+                json!({"type":"input_image","image_url":format!("data:image/png;base64,{}",STANDARD.encode(bytes)),"detail":"high"})
+            }
+            Err(message) => {
+                json!({"type":"input_text","text":format!("[image pixels unavailable: preview {}; {}. View the current workspace file again for a new observation.]",s(&preview,"sha256"),message)})
+            }
+        };
+    }
     check_size(&body)?;
     Ok(body)
 }
 
+fn append_previews(
+    parts: &mut Vec<Value>,
+    references: Vec<Value>,
+    item: usize,
+    field: &'static str,
+    previews: &mut Vec<(usize, &'static str, usize, Value)>,
+) -> Result<(), String> {
+    for preview in references {
+        if preview["size_bytes"].as_u64().unwrap_or(0)
+            > crate::image_context::MAX_PREVIEW_BYTES as u64
+        {
+            return Err("image preview exceeds the 512 KiB limit; view the source again to prepare a bounded preview".into());
+        }
+        previews.push((item, field, parts.len(), preview));
+        parts.push(json!({"type":"input_image","image_url":"","detail":"high"}));
+    }
+    Ok(())
+}
+
 pub fn check_size(body: &Value) -> Result<(), String> {
-    let len = json_bytes(body).len();
+    check_byte_size(json_bytes(body).len())
+}
+
+fn check_byte_size(len: usize) -> Result<(), String> {
     if len > MAX_REQUEST_BYTES {
         return Err(format!(
             "request is {} bytes, over the {} byte limit; narrow the task or start a new run",
@@ -488,6 +582,179 @@ pub fn transient(raw: &[u8], chatgpt_only: bool) -> (String, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn missing_preview() -> Value {
+        json!({"sha256":"not-a-valid-stored-hash","mime_type":"image/png","width":1,"height":1,"size_bytes":1})
+    }
+
+    fn image_tool(name: &str, preview: &Value) -> Value {
+        json!({"kind":"tool","tool":{"name":name,"call_id":"image","outcome":{"ok":true,"code":"ok","data":{"path":"image.png","preview":preview}}}})
+    }
+
+    #[test]
+    fn only_image_tools_and_one_recall_wrapper_project_pixels_or_unavailable_diagnostics() {
+        let preview = missing_preview();
+        let image = image_tool("view_image", &preview);
+        let recall = json!({"kind":"tool","tool":{"name":"recall","call_id":"recall-image","outcome":{"ok":true,"code":"ok","data":image["tool"]["outcome"]}}});
+        for entry in [
+            image.clone(),
+            image_tool("generate_image", &preview),
+            recall.clone(),
+        ] {
+            let body =
+                encode_request(&json!({"model":"gpt-6.1-sol","history":[entry]}), false).unwrap();
+            let output = &body["input"][0]["output"];
+            assert_eq!(output[0]["type"], "input_text");
+            assert_eq!(output[1]["type"], "input_text");
+            assert!(s(&output[1], "text").contains("pixels unavailable"));
+            assert!(s(&output[1], "text").contains(s(&preview, "sha256")));
+        }
+        let nested = json!({"kind":"tool","tool":{"name":"recall","call_id":"nested","outcome":{"ok":true,"code":"ok","data":recall["tool"]["outcome"]}}});
+        let mut gc = image.clone();
+        gc["tool"]["outcome"]["code"] = json!("context_gc");
+        for entry in [
+            image_tool("exec", &preview),
+            image_tool("read_file", &preview),
+            nested,
+            gc,
+        ] {
+            let outcome = json_string(&entry["tool"]["outcome"]);
+            let body =
+                encode_request(&json!({"model":"gpt-6.1-sol","history":[entry]}), false).unwrap();
+            assert_eq!(body["input"][0]["output"], outcome);
+        }
+        let body = encode_request(&json!({"model":"gpt-6.1-sol","history":[{"kind":"user","user":{"text":json_string(&image),"images":[preview]}}]}), false).unwrap();
+        assert!(s(&body["input"][0]["content"][1], "text").contains("pixels unavailable"));
+    }
+
+    #[test]
+    fn immutable_previews_encode_as_real_pixels_and_missing_blobs_do_not_brick_history() {
+        const CHILD: &str = "REAGENT_TEST_OPENAI_IMAGES";
+        if std::env::var_os(CHILD).is_none() {
+            let temporary = tempfile::tempdir().unwrap();
+            let home = temporary.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let alias = temporary.path().join("linked-home");
+            std::os::unix::fs::symlink(&home, &alias).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "openai::tests::immutable_previews_encode_as_real_pixels_and_missing_blobs_do_not_brick_history"])
+                .env(CHILD, "1")
+                .env("HOME", &alias)
+                .env("XDG_CACHE_HOME", alias.join("cache"))
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use image::ImageEncoder;
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &[255, 0, 0, 255, 0, 255, 0, 255],
+                2,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let prepared = crate::images::prepare(&png).unwrap();
+        let preview = crate::images::store(&prepared).unwrap();
+        let image = image_tool("view_image", &preview);
+        let recall = json!({"kind":"tool","tool":{"name":"recall","call_id":"recall","outcome":{"ok":true,"code":"ok","data":image["tool"]["outcome"]}}});
+        let user = json!({"kind":"user","user":{"text":"admitted handoff","images":[preview]}});
+        for entry in [
+            image.clone(),
+            image_tool("generate_image", &preview),
+            recall,
+            user,
+        ] {
+            let request = json!({"model":"gpt-6.1-sol","history":[entry]});
+            assert!(!json_string(&request).contains("data:image"));
+            for proxied in [false, true] {
+                let body = encode_live_request(&request, proxied).unwrap();
+                let field = if s(&request["history"][0], "kind") == "tool" {
+                    "output"
+                } else {
+                    "content"
+                };
+                let content = &body["input"][0][field];
+                assert_eq!(content[0]["type"], "input_text");
+                assert_eq!(content[1]["type"], "input_image");
+                assert_eq!(content[1]["detail"], "high");
+                let bytes = STANDARD
+                    .decode(
+                        s(&content[1], "image_url")
+                            .strip_prefix("data:image/png;base64,")
+                            .unwrap(),
+                    )
+                    .unwrap();
+                assert_eq!(bytes, prepared.preview);
+                assert_eq!(
+                    image::load_from_memory(&bytes)
+                        .unwrap()
+                        .into_rgba8()
+                        .as_raw(),
+                    &[255, 0, 0, 255, 0, 255, 0, 255]
+                );
+                assert_eq!(
+                    crate::image_context::estimate(&body, 0.0),
+                    crate::image_context::TOKENS_PER_PREVIEW
+                );
+                assert!(!json_string(&crate::image_context::redact(&body))
+                    .contains(s(&content[1], "image_url")));
+            }
+        }
+        let path = crate::cache::directory()
+            .unwrap()
+            .join("reagent/images")
+            .join(format!("{}.png", s(&preview, "sha256")));
+        for corrupt in [true, false] {
+            if corrupt {
+                std::fs::write(&path, b"corrupt").unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+            let body =
+                encode_request(&json!({"model":"gpt-6.1-sol","history":[image]}), false).unwrap();
+            assert_eq!(body["input"][0]["output"][1]["type"], "input_text");
+            assert!(s(&body["input"][0]["output"][1], "text").contains("pixels unavailable"));
+        }
+    }
+
+    #[test]
+    fn image_limits_fail_before_loading_or_allocating_data_urls() {
+        let preview = missing_preview();
+        assert!(encode_request(
+            &json!({"model":"unknown-model","history":[image_tool("view_image", &preview)]}),
+            false
+        )
+        .unwrap_err()
+        .contains("image-input capability"));
+        assert!(encode_request(&json!({"model":"unknown-model","history":[]}), false).is_ok());
+        let history =
+            vec![image_tool("view_image", &preview); crate::image_context::MAX_PREVIEWS + 1];
+        assert!(
+            encode_request(&json!({"model":"gpt-6.1-sol","history":history}), false)
+                .unwrap_err()
+                .contains("preview limit")
+        );
+        let mut oversized = preview.clone();
+        oversized["size_bytes"] = json!(crate::image_context::MAX_PREVIEW_BYTES + 1);
+        assert!(encode_request(
+            &json!({"model":"gpt-6.1-sol","history":[image_tool("view_image", &oversized)]}),
+            false
+        )
+        .unwrap_err()
+        .contains("512 KiB"));
+        oversized["size_bytes"] = json!(crate::image_context::MAX_PREVIEW_BYTES);
+        let request = json!({"model":"gpt-6.1-sol","instructions":"x".repeat(MAX_REQUEST_BYTES - 1000),"history":[image_tool("view_image", &oversized)]});
+        assert!(encode_request(&request, false)
+            .unwrap_err()
+            .contains("byte limit"));
+    }
+
     #[test]
     fn fast_requests_select_priority_without_changing_default_bytes_or_cache_key() {
         for (live, proxied) in [(false, false), (false, true), (true, false), (true, true)] {

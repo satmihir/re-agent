@@ -225,7 +225,7 @@ fn validate(config: &Value, history: &[Value], rate: f64) -> Result<usize, Strin
                     .into(),
             );
         }
-        if (size as f64 * rate).ceil() + 16000. > window as f64 {
+        if crate::image_context::estimate(&body, rate).saturating_add(16000) > window as usize {
             return Err("handoff exceeds the estimated destination window allowance; use /compact then retry /model, or use fresh to discard history".into());
         }
     }
@@ -476,8 +476,13 @@ pub(crate) fn route_next(session: &mut Session) -> Result<(), String> {
                 ] {
                     metadata[destination] = packet[source].clone();
                 }
+                let state = if crate::image_context::has_images(&session.history) {
+                    format!("Historical image references in this routing packet are metadata only; no image pixels are supplied.\n{}", text(&packet, "state"))
+                } else {
+                    text(&packet, "state").to_owned()
+                };
                 let (decision, error) = crate::jev::decide_cancelable(
-                    text(&packet, "state"),
+                    &state,
                     &routes,
                     crate::cancellation::token(&session.config),
                 );

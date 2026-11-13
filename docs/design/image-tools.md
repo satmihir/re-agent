@@ -1,7 +1,8 @@
 # OpenAI image generation and viewing
 
-Status: image tools are proposed, not implemented. ChatGPT-first inference
-selection is implemented; the separate image-generation key route below is not.
+Status: implemented with offline boundary tests. API-key generation/editing and
+OpenAI multimodal input have not been live-verified; ChatGPT-first inference
+remains separate from image billing.
 
 ## Goal
 
@@ -45,10 +46,12 @@ requested operation." No retries, API-key fallback, or artifact publication
 occurred. This establishes rejection of that credential/operation, not a blanket
 claim about all ChatGPT integrations.
 
-Before image-tool implementation, verify the API-key backend's image model,
-generation and editing request/response formats, and structured image-input
-support. The dependency is approved but not added by the auth-selection change.
-Codex source is evidence of its own contract, not proof that it applies here.
+The implementation uses the documented public Images API contract with
+`gpt-image-2.5-flare`, JSON generation, multipart editing, and PNG output. The
+approved dependency is `image` 0.25.10 with PNG, JPEG, and WebP enabled. Local HTTP
+fixtures verify those shapes and structured image continuation; they do not
+establish live model/account access. Codex source is evidence of its own contract,
+not proof that it applies here.
 
 ## Tool contracts
 
@@ -169,10 +172,10 @@ Proposed initial local limits, subject to validation against the selected backen
 | --- | --- |
 | Input formats | PNG, JPEG, WebP; reject animation |
 | Compressed input | 20 MiB per image |
-| Decoded image | 40 megapixels, with a decoder allocation limit |
+| Decoded image | 40 megapixels; 128 MiB decoded/decoder allocation limits |
 | References | At most four, plus an aggregate request-byte limit |
 | Preview dimensions | At most 2,048 pixels on the longest side |
-| Preview bytes | Separate bounded encoded size; finalize with encoder tests |
+| Preview bytes | 512 KiB PNG, iteratively resized if needed |
 | Output | One validated PNG, with bounded response and decoded sizes |
 
 Check contents rather than extensions. Apply orientation consistently and strip
@@ -181,8 +184,11 @@ unsupported, or oversized images before remote submission where possible. Limit
 both dimensions and allocation: compressed size alone does not prevent a decoder
 from exhausting memory.
 
-The precise aggregate and preview-byte constants are implementation gates, not
-unbounded defaults. Account for base64 expansion before allocating a full request.
+At most eight previews are projected per request, with an 8,192-token allowance
+per image and the existing 10 MiB full wire cap. Image requests do not train the
+text-byte token ratio. Account for base64 expansion before allocating a full
+request. Decoder allocation limits are best-effort library limits, not a hard
+process-memory ceiling.
 
 ## Accepted outcomes and image encoding
 
@@ -358,9 +364,9 @@ Do not add a new crate, vendor SDK, general attachment framework, or speculative
 backend abstraction. Reuse the existing HTTP and publication primitives where
 their semantics fit; do not broaden text-file limits to accommodate images.
 
-The overview describes the implemented ChatGPT-first inference default. Do not
-claim image tools or the missing-key ToolOutcome are implemented until their
-handlers and full continuation tests land.
+The overview describes the implemented tools and inference defaults. Terminal
+coverage exercises viewing, real structured continuation, and missing image-key
+guidance; API-key generation/editing use offline HTTP fixtures, not paid calls.
 
 ## Verification plan
 
@@ -399,7 +405,7 @@ route; offline fixtures do not establish live backend compatibility.
 ## Source basis
 
 The proposal was prepared against the Astra context-window correction branch.
-Relevant current implementation anchors:
+Relevant pre-implementation source anchors (line numbers move as implementation lands):
 
 - `rust/src/tools.rs:136–179`: tool-spec cache has no image capability key;
   `219–244`: child allowlist and read-only filtering.
@@ -417,6 +423,7 @@ Relevant current implementation anchors:
 - `rust/src/cli/model_switch.rs:149–186` and
   `rust/src/agents/context.rs:50–108`: text handoffs versus native history copies.
 
-These are implementation observations, not evidence that any image endpoint or
-multimodal wire contract has been live-tested. No image implementation or live
-provider check accompanies this document.
+These were implementation observations, not evidence of live compatibility.
+The image implementation now accompanies this document, with offline validation.
+The only live image probe remains the OAuth rejection recorded above; no successful
+paid generation/editing or live multimodal continuation is claimed.

@@ -142,6 +142,7 @@ struct SpecConfig {
     agent: bool,
     agents: bool,
     read_only: bool,
+    images: bool,
 }
 
 static SPECS: LazyLock<Mutex<HashMap<SpecConfig, Arc<Value>>>> =
@@ -169,6 +170,7 @@ fn cached_specs(config: &Value) -> Arc<Value> {
         agent: enabled("agent"),
         agents: enabled("agents"),
         read_only: enabled("read_only"),
+        images: crate::catalog::supports_images(config),
     };
     // The normalized key bounds this cache independently of session IDs and paths.
     SPECS
@@ -187,6 +189,10 @@ fn build_specs(config: &Value) -> Value {
         specs
     });
     let mut specs = BASE.clone();
+    if crate::catalog::supports_images(config) {
+        specs.push(json!({"name":"view_image","description":"View a local PNG, JPEG, or still WebP image as pixels. Returns an immutable, bounded preview and original file metadata; reports resizing. Paths stay inside the workspace. Viewing does not grant text-edit authorization.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/view_image.json")).unwrap(),"effect":"read"}));
+        specs.push(json!({"name":"generate_image","description":"Generate one PNG, or edit/compose from explicit local reference images. Saves a new output_path in an existing directory and returns a model-visible preview. Uses OPENAI_API_KEY with separate API billing, never ChatGPT plan credentials or the Responses proxy. If missing, politely ask the user to configure the launch environment and restart/resume; never request secrets in chat. Never automatically repeat a generation after uncertain effects or a failed save. Unavailable in read-only or plan mode.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/generate_image.json")).unwrap(),"effect":"write"}));
+    }
     if !config["report_friction"].as_bool().unwrap_or(false) {
         specs.retain(|s| s["name"] != "report_friction");
     }
@@ -226,6 +232,8 @@ fn build_specs(config: &Value) -> Value {
                         | "search_text"
                         | "git_inspect"
                         | "recall"
+                        | "view_image"
+                        | "generate_image"
                         | "report_friction"
                         | "edit_file"
                         | "write_file"
@@ -497,7 +505,7 @@ pub fn execute_in_region(
     let spec = all.as_array().unwrap().iter().find(|s| s["name"] == name);
     let write = matches!(
         name,
-        "write_file" | "edit_file" | "delete_file" | "exec" | "git_do"
+        "write_file" | "edit_file" | "delete_file" | "exec" | "git_do" | "generate_image"
     );
     if spec.is_none() {
         let mut unrestricted = config.clone();
@@ -536,6 +544,12 @@ pub fn execute_in_region(
         Err(bad) => return Ok(bad),
     };
     match name {
+        "view_image" | "generate_image" => {
+            Ok(
+                crate::tool_images::execute(&mut state.workspace, config, name, &args)
+                    .unwrap_or_else(|bad| bad),
+            )
+        }
         "exec" => crate::tool_exec::execute_in_region(&mut state.workspace, config, &args, region),
         "git_inspect" => crate::tool_git::inspect(&mut state.workspace, config, &args),
         "git_do" => crate::tool_git::git_do(&mut state.workspace, config, &args),

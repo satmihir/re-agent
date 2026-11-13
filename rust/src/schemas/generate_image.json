@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "prompt": {"type": "string", "minLength": 1, "maxLength": 16000, "description": "Describe the new image or the changes to the references."},
+    "output_path": {"type": "string", "description": "New workspace-relative .png file in an existing directory. Never overwritten."},
+    "reference_image_paths": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string"}, "description": "Explicit workspace image paths for editing or composition; omit to generate from text."}
+  },
+  "required": ["prompt", "output_path"],
+  "additionalProperties": false
+}

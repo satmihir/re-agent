@@ -1,5 +1,6 @@
 use crate::run_loop::{
-    admission_bytes, admission_rate, flag, number, ordered_run_result, scope, string, window,
+    admission_bytes, admission_rate, admission_tokens, flag, number, ordered_run_result, scope,
+    string, window,
 };
 use crate::runtime::Session;
 use crate::{context, tools, types};
@@ -20,7 +21,7 @@ fn request(session: &Session, history: &[Value], focus: &str, step: i64) -> Valu
             focus.trim()
         )
     };
-    let mut history = history.to_vec();
+    let mut history = summary_history(history);
     history.push(json!({"kind":"user","user":{"text":prompt}}));
     context::build_context(
         &session.config,
@@ -33,6 +34,32 @@ fn request(session: &Session, history: &[Value], focus: &str, step: i64) -> Valu
         tools::specs(&session.config),
     )
 }
+fn summary_history(history: &[Value]) -> Vec<Value> {
+    let count: usize = history
+        .iter()
+        .map(|entry| crate::image_context::entry_references(entry).len())
+        .sum();
+    let mut history = history.to_vec();
+    if count <= crate::image_context::MAX_PREVIEWS {
+        return history;
+    }
+    for entry in &mut history {
+        if let Some(user) = entry["user"].as_object_mut() {
+            if let Some(images) = user.shift_remove("images") {
+                user.insert("historical_images".into(), images);
+            }
+        }
+        if !crate::image_context::tool_references(&entry["tool"]).is_empty() {
+            entry["tool"]["outcome"]["data"] = crate::context_gc::image_metadata(
+                &entry["tool"],
+                "pixels not supplied to compaction",
+            );
+        }
+    }
+    history.push(json!({"kind":"user","user":{"text":format!("This compaction input has {count} historical image previews, exceeding the {} preview limit. Image metadata is retained, but no historical image pixels are supplied to this summary request. Do not infer visual contents from metadata. Compaction discards image observations and recallability; saved artifacts remain available for a new view_image.",crate::image_context::MAX_PREVIEWS)}}));
+    history
+}
+
 /// summary_bytes accepts only visible text and retains its original byte content.
 pub(crate) fn summary_bytes(resp: &Value) -> Result<Vec<u8>, String> {
     let mut parts = Vec::new();
@@ -91,14 +118,11 @@ pub(crate) fn idle_request(
         last["user"]["text"] = crate::raw::string(&prompt);
     }
     if session.provider.name() != "scripted" {
-        let size = admission_bytes(&session.config, &req)?;
+        let tokens = admission_tokens(&session.config, &req, admission_rate(session))?;
         let win = window(&session.config);
         // The known-usage 80% trigger must still be able to summarize; its legacy admission
         // used the encoded hard limit, not the ordinary request's 1.5× safety margin.
-        if !automatic
-            && win > 0
-            && (size as f64 * admission_rate(session)).ceil() + 16000.0 > win as f64
-        {
+        if !automatic && win > 0 && tokens.saturating_add(16000) > win as usize {
             return Err("summary request cannot fit with 16000 tokens reserved for output".into());
         }
     }
@@ -174,7 +198,7 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
     }
     let rate = admission_rate(session);
     let threshold = win as f64 * 0.4;
-    let history = session.request_history();
+    let history = summary_history(&session.request_history());
     let next = context::build_context(
         &session.config,
         scope(
@@ -186,8 +210,8 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
         tools::specs(&session.config),
     );
     let size = admission_bytes(&session.config, &next).ok()?;
-    if (gc_ran || (number(&last["input_tokens"]) as f64) < threshold)
-        && (size as f64 * rate).ceil() < threshold
+    let tokens = admission_tokens(&session.config, &next, rate).ok()?;
+    if (gc_ran || (number(&last["input_tokens"]) as f64) < threshold) && (tokens as f64) < threshold
     {
         return None;
     }
@@ -201,8 +225,8 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
         return None;
     }
     let mut req = request(session, &history, &focus(24 << 10), steps + 1);
-    if admission_bytes(&session.config, &req)
-        .map(|n| (n as f64 * rate).ceil() + 16000.0 > win as f64)
+    if admission_tokens(&session.config, &req, rate)
+        .map(|n| n.saturating_add(16000) > win as usize)
         .unwrap_or(true)
     {
         skipped(
@@ -265,8 +289,8 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
                 &focus,
                 step + 1,
             );
-            if admission_bytes(&session.config, &req)
-                .is_ok_and(|n| (n as f64 * rate).ceil() + 16000.0 <= win as f64)
+            if admission_tokens(&session.config, &req, rate)
+                .is_ok_and(|n| n.saturating_add(16000) <= win as usize)
             {
                 session.trace.write("compaction.shorten",step as usize,json!({"summary_bytes":summary.len(),"target_bytes":target,"limit_bytes":32768,"shortening":attempt+1}));
                 continue;
@@ -294,9 +318,10 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
         tools::specs(&repinned),
     );
     let new_size = admission_bytes(&repinned, &projected_req);
-    if new_size
+    let new_tokens = admission_tokens(&repinned, &projected_req, rate);
+    if new_tokens
         .as_ref()
-        .map(|n| (*n as f64 * rate).ceil() + 16000.0 > threshold)
+        .map(|n| n.saturating_add(16000) as f64 > threshold)
         .unwrap_or(true)
     {
         failed(
@@ -306,7 +331,7 @@ pub(crate) fn within_run(session: &mut Session, gc_ran: bool) -> Option<(String,
         return None;
     }
     let new_size = new_size.unwrap();
-    if new_size as f64 > size as f64 * 0.85 {
+    if new_tokens.unwrap() as f64 > tokens as f64 * 0.85 {
         failed(
             session,
             "within-run summary shrinks the request by less than 15%",
@@ -499,6 +524,83 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn excessive_user_images_can_be_compacted_with_explicit_metadata_only_input() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = Session::new(json!({"workspace":root.path(),"provider":"openai","model":"gpt-6.1-sol","context_window_tokens":200000,"context_gc":true})).unwrap();
+        let images: Vec<Value> = (0..9).map(|index| json!({"sha256":format!("{index:064x}"),"mime_type":"image/png","width":1,"height":1,"size_bytes":64})).collect();
+        session.history = vec![
+            json!({"kind":"user","user":{"text":"retain these historical images","images":images}}),
+        ];
+        let original = session.history.clone();
+        assert!(!crate::context_gc::collect(&mut session));
+        let normal = context::build_context(
+            &session.config,
+            scope("", "", 0),
+            &session.request_history(),
+            tools::specs(&session.config),
+        );
+        let error = admission_tokens(&session.config, &normal, 0.5).unwrap_err();
+        assert!(error.contains("/compact"));
+        assert!(error.contains("/reset"));
+        let compact = idle_request(&session, b"keep the goal", false).unwrap();
+        assert!(!crate::image_context::has_images(
+            compact["history"].as_array().unwrap()
+        ));
+        assert_eq!(
+            compact["history"][0]["user"]["historical_images"],
+            json!(images)
+        );
+        assert!(compact["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["user"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("no historical image pixels are supplied"))));
+        crate::provider::encode_request(&session.config, &compact).unwrap();
+        assert_eq!(session.history, original);
+        let small = request(
+            &session,
+            &[json!({"kind":"user","user":{"text":"one image","images":[images[0]]}})],
+            "",
+            1,
+        );
+        assert!(crate::image_context::has_images(
+            small["history"].as_array().unwrap()
+        ));
+    }
+
+    #[test]
+    fn compaction_drops_images_handoffs_and_recall_without_removing_artifacts() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = root.path().join("artifact.png");
+        std::fs::write(&artifact, b"saved artifact").unwrap();
+        let mut session = Session::new(
+            json!({"workspace":root.path(),"provider":"openai","model":"gpt-6.1-sol"}),
+        )
+        .unwrap();
+        session.history = vec![
+            json!({"kind":"user","user":{"text":"image","images":[{"sha256":"a".repeat(64)}]}}),
+        ];
+        session.state["handoff"] = json!({"text":"prior","images":[{"sha256":"a".repeat(64)}]});
+        session.state["gc_state"]["dropped"]["image"] = json!({"placeholder":"recall image"});
+        session.state["tokens_per_byte"] = json!(3.0);
+        let (_, state, history) = stage_summary(&session, b"summary without pixels");
+        session.state = state;
+        session.history = history;
+        assert!(!crate::image_context::has_images(
+            &session.request_history()
+        ));
+        assert!(session.state["handoff"].is_null());
+        assert_eq!(session.state["tokens_per_byte"], 0.0);
+        assert_eq!(
+            crate::context_gc::recall(&session, r#"{"id":"image"}"#)["code"],
+            "not_found"
+        );
+        assert_eq!(std::fs::read(artifact).unwrap(), b"saved artifact");
+    }
+
     #[test]
     fn reset_clears_router_accounting_without_changing_auto_settings() {
         let directory = tempfile::tempdir().unwrap();

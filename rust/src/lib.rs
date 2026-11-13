@@ -15,6 +15,12 @@ pub mod errors;
 mod file_diff;
 pub(crate) mod friction;
 pub(crate) mod friction_export;
+/// Trusted image observations carried through context projections.
+pub(crate) mod image_context;
+/// Independent API-key-backed image generation requests.
+pub(crate) mod image_generation;
+/// Bounded image previews and immutable content-addressed storage.
+pub(crate) mod images;
 pub mod jev;
 pub mod openai;
 pub(crate) mod process;
@@ -31,6 +37,8 @@ pub mod terminal;
 pub mod tool_exec;
 pub mod tool_files;
 pub mod tool_git;
+/// Explicit image viewing and artifact generation tools.
+pub(crate) mod tool_images;
 pub mod tools;
 pub mod trace;
 pub mod transport;

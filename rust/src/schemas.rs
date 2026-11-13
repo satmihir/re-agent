@@ -6,6 +6,11 @@ use std::sync::LazyLock;
 const RAW_SCHEMAS: &[(&str, &str)] = &[
     ("echo", include_str!("schemas/echo.json")),
     ("read_file", include_str!("schemas/read_file.json")),
+    ("view_image", include_str!("schemas/view_image.json")),
+    (
+        "generate_image",
+        include_str!("schemas/generate_image.json"),
+    ),
     ("list_files", include_str!("schemas/list_files.json")),
     ("search_text", include_str!("schemas/search_text.json")),
     ("write_file", include_str!("schemas/write_file.json")),

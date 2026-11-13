@@ -301,8 +301,21 @@ impl Session {
                 &history,
                 tools::specs(&self.config),
             );
-            self.trace
-                .write("model.requested", step as usize, req.clone());
+            if crate::image_context::has_images(&history) && self.config["provider"] == "openai" {
+                let estimate = match admission_tokens(&self.config, &req, admission_rate(self)) {
+                    Ok(estimate) => estimate,
+                    Err(error) => return self.finish("limit_exceeded", &error, ""),
+                };
+                let window = crate::catalog::effective_context_window(&self.config) as usize;
+                if window == 0 || estimate.saturating_add(16000) > window {
+                    return self.finish("limit_exceeded", "image context exceeds the estimated model window; compact or start fresh before continuing", "");
+                }
+            }
+            self.trace.write(
+                "model.requested",
+                step as usize,
+                crate::image_context::redact(&req),
+            );
             if flag(&self.config["_display"]) {
                 let auth = match string(&self.config["auth_mode"]) {
                     "chatgpt" => "ChatGPT plan",
@@ -353,7 +366,12 @@ impl Session {
             self.refresh_status();
             crate::auto::record_usage(self, &resp["usage"]);
             self.add_usage(&resp["usage"]);
-            if flag(&resp["usage"]["known"]) && number(&resp["usage"]["input_tokens"]) > 0 {
+            if flag(&resp["usage"]["known"])
+                && number(&resp["usage"]["input_tokens"]) > 0
+                && !crate::image_context::has_images(
+                    req["history"].as_array().map_or(&[][..], Vec::as_slice),
+                )
+            {
                 if let Ok(size) = admission_bytes(&self.config, &req) {
                     if size > 0 {
                         self.state["tokens_per_byte"] =
@@ -781,7 +799,7 @@ impl Session {
         );
         if self.state["handoff"].is_object() {
             let handoff = &self.state["handoff"];
-            let mut user = json!({"text":handoff["text"]});
+            let mut user = crate::chat::model_switch::projected_user(&self.config, handoff);
             if !string(&handoff["plan"]).is_empty() {
                 user["plan"] = handoff["plan"].clone();
             }
@@ -818,6 +836,23 @@ impl Session {
                     if !string(&data[key]).is_empty() {
                         effect[key] = data[key].clone();
                     }
+                }
+            }
+            if string(&call["name"]) == "generate_image" {
+                if flag(&data["artifact_published"]) {
+                    effect["path"] = data["path"].clone();
+                    effect["operation"] = json!("create");
+                    effect["summary"] = json!("generated image artifact");
+                } else {
+                    effect["summary"] = json!(if string(&outcome["effect"]) == "unknown"
+                        && data["remote_generation"] == "completed"
+                    {
+                        "image generation completed; artifact publication is uncertain"
+                    } else if string(&outcome["effect"]) == "unknown" {
+                        "image generation has unknown remote effects; no artifact publication confirmed"
+                    } else {
+                        "image generation completed; artifact was not published"
+                    });
                 }
             }
             if flag(&self.config["agent"]) {
@@ -1090,7 +1125,13 @@ pub(crate) fn window(config: &Value) -> i64 {
 }
 pub(crate) fn admission_bytes(config: &Value, req: &Value) -> Result<usize, String> {
     let encoded = provider::encode_request(config, req)?;
-    let mut size = types::json_bytes(&encoded).len();
+    Ok(types::json_bytes(&encoded)
+        .len()
+        .saturating_sub(reasoning_bytes(req)?))
+}
+
+fn reasoning_bytes(req: &Value) -> Result<usize, String> {
+    let mut size = 0usize;
     if let Some(history) = req["history"].as_array() {
         for entry in history {
             if let Some(items) = entry["assistant"]["native"]["items"].as_array() {
@@ -1101,7 +1142,7 @@ pub(crate) fn admission_bytes(config: &Value, req: &Value) -> Result<usize, Stri
                         string(&parsed["type"]),
                         "reasoning" | "thinking" | "redacted_thinking"
                     ) {
-                        size = size.saturating_sub(types::json_bytes(item).len());
+                        size = size.saturating_add(types::json_bytes(item).len());
                     }
                 }
             }
@@ -1109,6 +1150,26 @@ pub(crate) fn admission_bytes(config: &Value, req: &Value) -> Result<usize, Stri
     }
     Ok(size)
 }
+/// Admission_tokens separates image allowances from serialized text and opaque reasoning.
+pub(crate) fn admission_tokens(config: &Value, req: &Value, rate: f64) -> Result<usize, String> {
+    let previews: usize = req["history"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|entry| crate::image_context::entry_references(entry).len())
+        .sum();
+    if config["provider"] == "openai" && previews > crate::image_context::MAX_PREVIEWS {
+        return Err(format!("request has {previews} active image previews, over the {} preview limit; no eligible older tool previews could be retired. Use /compact for a metadata-only summary or /reset to discard history", crate::image_context::MAX_PREVIEWS));
+    }
+    if !crate::image_context::has_images(req["history"].as_array().map_or(&[][..], Vec::as_slice)) {
+        return Ok((admission_bytes(config, req)? as f64 * rate).ceil() as usize);
+    }
+    let body = provider::encode_request(config, req)?;
+    let reasoning = reasoning_bytes(req)?;
+    Ok(crate::image_context::estimate(&body, rate)
+        .saturating_sub((reasoning as f64 * rate).floor() as usize))
+}
+
 pub(crate) fn admission_rate(session: &Session) -> f64 {
     let rate = session.state["tokens_per_byte"].as_f64().unwrap_or(0.0);
     if rate == 0.0 {
@@ -3409,6 +3470,40 @@ mod boundary_tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "changed");
         assert!(restored.tools.workspace.seen.is_empty());
     }
+    #[test]
+    fn mixed_image_requests_do_not_recalibrate_the_text_token_ratio() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        std::fs::write(&script, types::json_bytes(&json!([{"usage":{"known":true,"input_tokens":100,"cached_input_tokens":0,"output_tokens":1,"reasoning_tokens":0},"blocks":[{"kind":"text","text":"done"}]}]))).unwrap();
+        for images in [false, true] {
+            let mut session = Session::new(json!({"workspace":root.path(),"provider":"scripted","model":"scripted","scripted":script,"no_project_instructions":true})).unwrap();
+            session.state["tokens_per_byte"] = json!(0.25);
+            if images {
+                session.history.push(json!({"kind":"user","user":{"text":"historical image","images":[{"sha256":"a".repeat(64),"mime_type":"image/png","width":1,"height":1,"size_bytes":64}]}}));
+            }
+            let result = session.submit("continue");
+            assert_eq!(result["status"], "completed", "{result}");
+            if images {
+                assert_eq!(session.state["tokens_per_byte"], 0.25);
+            } else {
+                assert_ne!(session.state["tokens_per_byte"], 0.25);
+                let request = context::build_context(
+                    &session.config,
+                    scope("", "", 0),
+                    &session.request_history()[..1],
+                    json!([]),
+                );
+                for rate in [0.25, 0.5, 0.75] {
+                    assert_eq!(
+                        admission_tokens(&session.config, &request, rate).unwrap(),
+                        (admission_bytes(&session.config, &request).unwrap() as f64 * rate).ceil()
+                            as usize
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn admission_omits_wrapped_encrypted_reasoning_using_wire_bytes() {
         for wrapped in [false, true] {

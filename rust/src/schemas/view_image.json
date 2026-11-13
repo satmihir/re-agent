@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {"type": "string", "description": "Workspace-relative PNG, JPEG, or still WebP file."}
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}

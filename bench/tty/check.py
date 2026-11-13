@@ -20,6 +20,7 @@ quirks (resize reflow especially), so UI changes still deserve a manual look.
 """
 
 import codecs
+import zlib
 import fcntl
 import hashlib
 import http.server
@@ -600,6 +601,23 @@ SCENARIOS = {
             ("key", "ctrl-c"),
             ("exit", 2, "ChatGPT sign-in cancelled or timed out", 5),
             ("show", "Invalid paste followed by clean Ctrl-C cancellation"),
+        ],
+    },
+    "image-view-and-missing-key": {
+        "chatgpt": True,
+        "image_tools": True,
+        "size": (24, 110),
+        "steps": [
+            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("type", "inspect an image and generate a revision"), ("key", "enter"),
+            ("wait", "Image input received; please configure OPENAI_API_KEY for generation.", 10),
+            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("show", "Image viewing succeeds and missing generation credentials do not block chat"),
+            ("expect", "raw_has", "view_image"),
+            ("expect", "raw_has", "1 × 1"),
+            ("expect", "raw_has", "credentials_required"),
+            ("expect", "screen_lacks", "(blocked)"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
     },
     "default-model": {
@@ -2333,6 +2351,13 @@ def run(binary, name, scenario, workspace):
             f.write(json.dumps(scenario["script"]).replace("__CONSENT__", consent_root.name) if consent_root else json.dumps(scenario["script"]))
             script_path = f.name
     extra_env = {"REAGENT_OPENAI_AUTH": "auto"}
+    if scenario.get("image_tools"):
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        pixels = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+                  + chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\xff\xff")) + chunk(b"IEND", b""))
+        with open(os.path.join(workspace, "input.png"), "wb") as fixture:
+            fixture.write(pixels)
     if scenario.get("no_color"):
         extra_env["NO_COLOR"] = "1"
     if scenario.get("exec_tail") or scenario.get("stalled_exec") or scenario.get("queue_gate"):
@@ -2685,6 +2710,18 @@ def run(binary, name, scenario, workspace):
                                 failures.append("Default request lacked GC recall")
                         if "truncation" in json.loads(request):
                             failures.append("ChatGPT request included truncation")
+                    if scenario.get("image_tools"):
+                        body = json.loads(request)
+                        calls = ([("view_image", {"path": "input.png"})] if number == 1 else
+                                 [("generate_image", {"prompt": "make a revision", "output_path": "revision.png"})] if number == 2 else [])
+                        if number == 2:
+                            outputs = [item for item in body["input"] if item.get("type") == "function_call_output"]
+                            if not any(part.get("type") == "input_image" for part in outputs[-1]["output"]):
+                                failures.append("view_image did not supply pixels in the next real request")
+                        if number == 3:
+                            outputs = [item for item in body["input"] if item.get("type") == "function_call_output"]
+                            if json.loads(outputs[-1]["output"]).get("code") != "credentials_required":
+                                failures.append("missing image API key did not yield credentials_required")
                     if scenario.get("context_gc"):
                         calls = [("read_file", {"path": "gc.txt"})] if number <= 2 else [("list_files", {"path": "."})] if number <= 16 else []
                     if scenario.get("context_status"):
@@ -2708,6 +2745,8 @@ def run(binary, name, scenario, workspace):
                             text = "GC turn complete." if number == 17 else "Next turn works."
                         if scenario.get("chatgpt"):
                             text = "ChatGPT reply." if number == 1 else "Next ChatGPT turn."
+                        if scenario.get("image_tools"):
+                            text = "Image input received; please configure OPENAI_API_KEY for generation."
                         if scenario.get("context_status"):
                             text = "Status turn complete."
                         if scenario.get("workspace_consent") == "noise":
