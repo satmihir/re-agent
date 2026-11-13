@@ -518,6 +518,29 @@ mod tests {
     }
 
     #[test]
+    fn astra_requests_encode_catalog_efforts_verbosity_and_tools() {
+        let info = crate::catalog::model_info("gpt-6-astra");
+        for effort in info["efforts"].as_array().unwrap() {
+            let request = json!({
+                "model":info["id"], "reasoning_effort":effort,
+                "history":[{"kind":"user","user":{"text":"inspect a file"}}],
+                "tools":[{"name":"read_file","description":"Read a file.","input_schema":{"type":"object"}}]
+            });
+            for proxied in [false, true] {
+                let body = encode_live_request(&request, proxied).unwrap();
+                assert_eq!(body["model"], "gpt-6-astra");
+                assert_eq!(&body["reasoning"]["effort"], effort);
+                assert_eq!(body["text"]["verbosity"], "low");
+                assert_eq!(body["input"][0]["content"][0]["text"], "inspect a file");
+                assert_eq!(body["tools"][0]["name"], "read_file");
+                assert_eq!(body["tools"][0]["type"], "function");
+                assert_eq!(body["parallel_tool_calls"], true);
+                assert!(body.get("service_tier").is_none());
+            }
+        }
+    }
+
+    #[test]
     fn user_parts_keep_workspace_roster_plan_order_for_both_providers() {
         for roster in [false, true] {
             for plan in ["", "on", "ended"] {

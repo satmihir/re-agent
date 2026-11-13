@@ -649,6 +649,36 @@ SCENARIOS = {
             ("show", "Model picker numeric selection"),
         ],
     },
+    "astra-model": {
+        "chatgpt": True,
+        "size": (30, 110),
+        "steps": [
+            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("type", "/model"), ("key", "enter"),
+            ("wait", "7  gpt-6-astra", 5),
+            ("show", "Astra appended without renumbering existing models"),
+            ("type", "7"), ("key", "enter"),
+            ("wait_status", "gpt-6-astra / low", 5),
+            ("type", "hello"), ("key", "enter"),
+            ("wait", "ChatGPT reply.", 5),
+            ("wait_status", "gpt-6-astra / low", 5),
+            ("type", "/effort"), ("key", "enter"),
+            ("wait", "5  max", 5),
+            ("show", "Astra offers low through max effort"),
+            ("type", "5"), ("key", "enter"),
+            ("wait_status", "gpt-6-astra / max", 5),
+            ("type", "again"), ("key", "enter"),
+            ("wait", "Next ChatGPT turn.", 5),
+            ("wait_status", "gpt-6-astra / max", 5),
+            ("show", "Astra follow-up request uses the selected max effort"),
+            ("type", "/model 1"), ("key", "enter"),
+            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("type", "/model gpt-6-astra"), ("key", "enter"),
+            ("wait_status", "gpt-6-astra / low", 5),
+            ("show", "Astra name selection carries history and restores its default effort"),
+            ("expect", "status_row_last"),
+        ],
+    },
     "chatgpt-plan": {
         "chatgpt": True,
         "size": (30, 110),
@@ -2640,6 +2670,13 @@ def run(binary, name, scenario, workspace):
                         calls = []
                         if self.headers.get("Authorization") != "Bearer tty-access" or not self.headers.get("session_id"):
                             failures.append("ChatGPT request lacked bearer token or session_id")
+                        if name == "astra-model":
+                            body = json.loads(request)
+                            effort = "low" if number == 1 else "max"
+                            if body.get("model") != "gpt-6-astra" or body.get("reasoning", {}).get("effort") != effort:
+                                failures.append(f"Astra request did not use gpt-6-astra/{effort}")
+                            if body.get("text", {}).get("verbosity") != "low" or "service_tier" in body:
+                                failures.append("Astra request lost low verbosity or enabled unverified Fast mode")
                         if scenario.get("default_model"):
                             body = json.loads(request)
                             if body.get("model") != "gpt-6.1-sol" or body.get("reasoning", {}).get("effort") != "high":

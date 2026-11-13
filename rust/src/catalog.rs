@@ -60,6 +60,15 @@ pub fn models() -> Value {
             "most capable, costs most",
             1_000_000,
         ),
+        (
+            "gpt-6-astra",
+            "openai",
+            REASONING_EFFORTS,
+            "low",
+            "low",
+            "frontier reasoning",
+            272_000,
+        ),
     ];
     Value::Array(entries.iter().map(|(id,provider,efforts,effort,verbosity,note,window)| {
         json!({"id":id,"provider":provider,"efforts":efforts,"effort":effort,"verbosity":verbosity,"note":note,"context_window":window})
@@ -230,6 +239,7 @@ mod tests {
     fn fast_support_is_explicit_and_provider_specific() {
         for (provider, model, supported) in [
             ("openai", "gpt-6.1-luna", false),
+            ("openai", "gpt-6-astra", false),
             ("openai", "gpt-6.1-terra", true),
             ("openai", "gpt-6.1-sol", true),
             ("anthropic", "claude-opus-5-5", true),
@@ -265,7 +275,8 @@ mod tests {
                 "gpt-6.1-sol",
                 "claude-haiku-5-5",
                 "claude-sonnet-5-5",
-                "claude-opus-5-5"
+                "claude-opus-5-5",
+                "gpt-6-astra"
             ]
         );
         let haiku = select_model("4").unwrap();
@@ -279,6 +290,19 @@ mod tests {
         assert_eq!(terra["id"], "gpt-6.1-terra");
         assert_eq!(terra["effort"], "");
         assert_eq!(terra["context_window"], 1_050_000);
+        let astra = select_model("7").unwrap();
+        assert_eq!(astra, select_model("gpt-6-astra").unwrap());
+        assert_eq!(astra["provider"], "openai");
+        assert_eq!(astra["effort"], "low");
+        assert_eq!(astra["verbosity"], "low");
+        assert_eq!(astra["context_window"], 272_000);
+        assert_eq!(
+            astra["efforts"],
+            json!(["low", "medium", "high", "xhigh", "max"])
+        );
+        assert_eq!(select_effort(&astra, "5").unwrap(), "max");
+        assert!(select_effort(&astra, "none").is_err());
+        assert!(select_effort(&astra, "ultra").is_err());
         let sol = select_model("3").unwrap();
         let luna = select_model("1").unwrap();
         assert_eq!(luna["id"], "gpt-6.1-luna");
@@ -302,7 +326,7 @@ mod tests {
         );
         for invalid in [
             "0",
-            "7",
+            "8",
             "gpt-5.6-luna",
             "gpt-5.6-terra",
             "claude-haiku-4-5",
@@ -322,6 +346,9 @@ mod tests {
         for (model, cap, want) in [
             ("gpt-6.1-luna", 2_000_000, 1_050_000),
             ("gpt-6.1-luna", 500, 500),
+            ("gpt-6-astra", 0, 272_000),
+            ("gpt-6-astra", 2_000_000, 272_000),
+            ("gpt-6-astra", 500, 500),
             ("unlisted", 500, 500),
             ("gpt-5.6-luna", 0, 0),
             ("claude-haiku-5-5", 0, 1_000_000),
@@ -343,6 +370,7 @@ mod tests {
         let listing = render_models("gpt-6.1-luna", &json!({"openai":true}));
         assert!(listing.contains("1  gpt-6.1-luna      openai     current"));
         assert!(listing.contains("4  claude-haiku-5-5  anthropic  no key"));
+        assert!(listing.contains("7  gpt-6-astra       openai"));
         assert!(listing.contains("models marked no key need ANTHROPIC_API_KEY"));
         assert!(listing
             .lines()
