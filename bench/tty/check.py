@@ -363,6 +363,7 @@ SCENARIOS = {
             ("wait_status", "gpt-6.1-sol", 5),
             ("type", "follow up"), ("key", "enter"),
             ("wait", "Follow-up after approval works.", 5),
+            ("wait_status", "gpt-6.1-sol", 5),
             ("show", "Explicit approval permits switching workspaces and the next chat turn"),
             ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
