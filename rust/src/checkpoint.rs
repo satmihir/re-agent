@@ -349,6 +349,7 @@ const FIELDS: &[&str] = &[
     "fast",
     "launch",
     "active",
+    "origin",
     "read_only",
     "plan",
     "no_project_instructions",
@@ -456,6 +457,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
                 "provider",
                 "model",
                 "fast",
+                "origin",
                 "read_only",
                 "no_project_instructions",
                 "project_instructions",
@@ -482,6 +484,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
         };
         let optional = [
             "fast",
+            "origin",
             "project_instructions",
             "launch_instructions",
             "context_window_tokens",
@@ -736,7 +739,7 @@ fn valid_checkpoint_type(value: &mut Value, kind: &str) -> bool {
 fn checkpoint_fields(kind: &str) -> &'static str {
     match kind {
         "checkpoint" => "version:int id:string provider:string model:string effort:string fast:bool \
-            launch:string active:string read_only:bool plan:bool no_project_instructions:bool \
+            launch:string active:string origin:string read_only:bool plan:bool no_project_instructions:bool \
             project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
             model_retry_window:int in_run_compact:bool context_window_tokens:int \
             context_gc_age_steps:int context_gc_consolidate:bool context_gc:bool gc_state:gc \
@@ -966,6 +969,7 @@ fn restored(id: &str, cp: Value) -> Value {
         "provider",
         "model",
         "fast",
+        "origin",
         "read_only",
         "plan",
         "no_project_instructions",
@@ -1212,6 +1216,24 @@ mod tests {
         assert!(!String::from_utf8(envelope(&cp()).unwrap())
             .unwrap()
             .contains("\"images\""));
+    }
+
+    #[test]
+    fn origin_survives_save_and_restore_and_is_absent_when_unset() {
+        let root = tempfile::tempdir().unwrap();
+        let config = json!({"workspace":root.path(),"provider":"openai","model":"gpt-6.1-sol","checkpoint_enabled":false});
+        let plain = state(
+            &crate::runtime::Session::new(config.clone()).unwrap(),
+            "idle",
+            "",
+        );
+        assert!(plain.get("origin").is_none());
+        let mut labelled = config;
+        labelled["origin"] = json!("covalent");
+        let cp = state(&crate::runtime::Session::new(labelled).unwrap(), "idle", "");
+        let id = cp["id"].as_str().unwrap();
+        let saved = restored(id, parse(id, &envelope(&cp).unwrap()).unwrap());
+        assert_eq!(saved["config"]["origin"], "covalent");
     }
 
     #[test]

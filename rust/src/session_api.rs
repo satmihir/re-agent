@@ -231,6 +231,18 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
                 .ok_or_else(|| error("invalid_argument", "script path must be UTF-8"))
         })
         .transpose()?;
+    if options.origin.as_ref().is_some_and(|origin| {
+        origin.is_empty()
+            || origin.len() > 32
+            || !origin
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    }) {
+        return Err(error(
+            "invalid_argument",
+            "origin must be 1 to 32 lowercase ASCII letters, digits or hyphens",
+        ));
+    }
     let mut config = json!({
         "workspace": workspace, "model":options.model.unwrap_or_default(),
         "reasoning_effort":options.reasoning_effort.unwrap_or_else(|| "auto".into()),
@@ -240,6 +252,9 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
         "max_tool_calls":i64::try_from(options.max_tool_calls).map_err(|_| error("invalid_argument", "max_tool_calls is too large"))?,
         "git_do":"recipe", "context_gc":true
     });
+    if let Some(origin) = options.origin {
+        config["origin"] = json!(origin);
+    }
     crate::provider::validate_environment().map_err(|e| error("invalid_argument", e))?;
     config["project_instructions"] =
         json!(crate::workspace::project_instructions(workspace)

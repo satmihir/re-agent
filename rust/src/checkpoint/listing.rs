@@ -66,6 +66,13 @@ pub(crate) fn list() -> Result<Vec<SavedSession>, String> {
         let Ok(cp) = parse(&id, &bytes) else {
             continue;
         };
+        // A labelled Session belongs to the host that opened it; `--resume ID` still reaches it.
+        if cp["origin"]
+            .as_str()
+            .is_some_and(|origin| !origin.is_empty())
+        {
+            continue;
+        }
         sessions.push(SavedSession {
             id,
             workspace: cp["launch"].as_str().unwrap().to_owned(),
@@ -231,6 +238,11 @@ mod tests {
         let invalid = store.join("not-a-session");
         fs::create_dir(&invalid).unwrap();
         fs::write(invalid.join("checkpoint.json"), &oldest).unwrap();
+
+        let labelled_id = "000000000000000c";
+        let mut labelled = checkpoint(labelled_id, Some("from another host"));
+        labelled["origin"] = json!("covalent");
+        write_checkpoint(labelled_id, &envelope(&labelled).unwrap(), 400);
 
         // Holding an exclusive checkpoint lock must not hide an otherwise valid Session.
         let _ = load("0000000000000001").unwrap();

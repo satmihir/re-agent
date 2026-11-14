@@ -26,6 +26,8 @@ pub struct SessionOptions {
     pub max_steps: u64,
     /// max_tool_calls limits accepted calls per Run, with zero meaning unlimited.
     pub max_tool_calls: u64,
+    /// origin labels Sessions owned by another host so the CLI's picker and `--continue` skip them.
+    pub origin: Option<String>,
 }
 
 impl Default for SessionOptions {
@@ -41,6 +43,7 @@ impl Default for SessionOptions {
             checkpoint: true,
             max_steps: 0,
             max_tool_calls: 0,
+            origin: None,
         }
     }
 }
