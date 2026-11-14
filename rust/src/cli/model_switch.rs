@@ -86,7 +86,7 @@ pub(crate) fn visit_visible(
             "assistant" => {
                 for block in data["blocks"].as_array().into_iter().flatten() {
                     match text(block, "kind") {
-                        "text" | "refusal" => {}
+                        "text" | "refusal" | "web_search" => {}
                         "thinking" | "reasoning" | "redacted_thinking" | "native" if question => {}
                         "tool_call" => {
                             let call = &block["call"];

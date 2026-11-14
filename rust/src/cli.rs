@@ -18,6 +18,7 @@ fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("show-context", "", "print the request the first step would send, then exit", json!(false)),
         ("read-only", "", "withhold write and exec tools; only allow reading", json!(false)),
         ("plan", "", "start in plan mode; model edits and commands are refused", json!(false)),
+        ("web-search", "", "let the model search the web with the provider's hosted search; off by default", json!(false)),
         ("auto", "", "opt in to TypeSafe routing; default fallback gpt-6.1-sol/medium", json!(false)),
         ("in-run-compact", "", "bounded compaction within a long run; default on, disable with --in-run-compact=false", json!(true)),
         ("context-gc", "", "lossless context GC with recall; default on, disable with --context-gc=false", json!(true)),
@@ -56,7 +57,13 @@ fn help(command: &str) -> String {
         ),
         (
             "Authority",
-            vec!["workspace", "allow-workspace", "read-only", "plan"],
+            vec![
+                "workspace",
+                "allow-workspace",
+                "read-only",
+                "plan",
+                "web-search",
+            ],
         ),
         (
             "Input",

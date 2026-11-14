@@ -155,7 +155,10 @@ fn encode(req: &Value, proxied: bool, stream: bool) -> Result<Value, String> {
             _ => {}
         }
     }
-    let tools:Vec<Value>=array(req,"tools").iter().map(|t|json!({"type":"function","name":s(t,"name"),"description":s(t,"description"),"parameters":t["input_schema"],"strict":false})).collect();
+    let mut tools:Vec<Value>=array(req,"tools").iter().map(|t|json!({"type":"function","name":s(t,"name"),"description":s(t,"description"),"parameters":t["input_schema"],"strict":false})).collect();
+    if req["web_search"] == true {
+        tools.push(json!({"type":"web_search"}));
+    }
     let mut body = json!({"model":s(req,"model"),"instructions":s(req,"instructions"),"input":input,"tools":tools});
     if req["fast"] == true {
         body["service_tier"] = json!("priority");
@@ -274,6 +277,25 @@ pub fn usage(body: &Value) -> Value {
     result
 }
 
+/// Search_block records one hosted web search; Anthropic later adds its sources or error.
+pub fn search_block(query: &str) -> Value {
+    json!({"kind":"web_search","search":{"query":query}})
+}
+
+/// Cite attaches the distinct sources a text Block cites, in first-cited order.
+pub fn cite<'a>(mut block: Value, sources: impl Iterator<Item = (&'a str, &'a str)>) -> Value {
+    let mut cited: Vec<Value> = Vec::new();
+    for (url, title) in sources {
+        if !url.is_empty() && !cited.iter().any(|c| c["url"] == url) {
+            cited.push(json!({"url":url,"title":title}));
+        }
+    }
+    if !cited.is_empty() {
+        block["citations"] = json!(cited);
+    }
+    block
+}
+
 pub fn text_block(kind: &str, text: &str) -> Value {
     let mut b = json!({"kind":kind});
     if !text.is_empty() {
@@ -322,7 +344,8 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
         let item = &item;
         let kind = s(item, "type");
         let status = s(item, "status");
-        if !status.is_empty() && status != "completed" {
+        let failed_search = kind == "web_search_call" && status == "failed";
+        if !status.is_empty() && status != "completed" && !failed_search {
             return Err(error(
                 "protocol_error",
                 &format!("output item of type {} has status {}", kind, status),
@@ -331,8 +354,16 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
         match kind{
             "reasoning"=>{},
             "function_call"=>blocks.push(json!({"kind":"tool_call","call":{"call_id":s(item,"call_id"),"name":s(item,"name"),"arguments":s(item,"arguments")}})),
+            // OpenAI reports a search's query here and its sources only as citations in the reply.
+            "web_search_call"=>{
+                let action=&item["action"];
+                let query=[s(action,"query"),action["queries"][0].as_str().unwrap_or(""),s(action,"url")].into_iter().find(|q|!q.is_empty()).unwrap_or("");
+                let mut block=search_block(query);
+                if failed_search { block["search"]["error"]=json!("failed"); }
+                blocks.push(block);
+            }
             "message"=>for content in array(item,"content") {match s(content,"type"){
-                "output_text"=>blocks.push(text_block("text",s(content,"text"))),
+                "output_text"=>blocks.push(cite(text_block("text",s(content,"text")),array(content,"annotations").iter().filter(|a|s(a,"type")=="url_citation").map(|a|(s(a,"url"),s(a,"title"))))),
                 "refusal"=>blocks.push(text_block("refusal",s(content,"refusal"))),
                 kind=>return Err(error("protocol_error",&format!("unsupported message content type {}",kind)))
             }},
@@ -581,6 +612,29 @@ pub fn transient(raw: &[u8], chatgpt_only: bool) -> (String, Value) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hosted_search_records_its_query_and_the_reply_keeps_distinct_cited_sources() {
+        let cite = |url: &str| json!({"type":"url_citation","start_index":0,"end_index":1,"url":url,"title":"T"});
+        let body = json!({"id":"r","model":"m","status":"completed","usage":{"input_tokens":1,"output_tokens":1},"output":[
+            {"type":"web_search_call","id":"ws","status":"completed","action":{"type":"search","queries":["rust release"]}},
+            {"type":"web_search_call","id":"ws2","status":"failed","action":{"type":"open_page","url":"https://b.example"}},
+            {"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"1.100","annotations":[cite("https://a.example"),cite("https://a.example"),cite("https://c.example")]}]}
+        ]});
+        let response = normalize(&crate::types::json_bytes(&body)).unwrap();
+        assert_eq!(
+            response["blocks"],
+            json!([
+                {"kind":"web_search","search":{"query":"rust release"}},
+                {"kind":"web_search","search":{"query":"https://b.example","error":"failed"}},
+                {"kind":"text","text":"1.100","citations":[{"url":"https://a.example","title":"T"},{"url":"https://c.example","title":"T"}]}
+            ])
+        );
+        assert_eq!(array(&response["native"], "items").len(), 3);
+        let request =
+            encode_request(&json!({"model":"m","history":[],"web_search":true}), true).unwrap();
+        assert!(array(&request, "tools").contains(&json!({"type":"web_search"})));
+    }
+
     use super::*;
     fn missing_preview() -> Value {
         json!({"sha256":"not-a-valid-stored-hash","mime_type":"image/png","width":1,"height":1,"size_bytes":1})

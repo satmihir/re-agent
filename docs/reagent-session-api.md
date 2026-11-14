@@ -36,6 +36,12 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   `read_events` (at most 30 s, caller-local cancellation). When the Run is terminal the page
   says `finished`, the text is freed, and `RunResult.reply` is the only authoritative reply.
   Scripted Sessions do not stream and have no preview text. Nothing is checkpointed.
+  A page's `searching` is true while the provider runs a hosted web search; a cursor
+  carries the state the reader last saw, so a change wakes the read.
+- `SessionOptions.web_search` (saved in the checkpoint, reported in the snapshot) lets
+  conversation Runs use the provider's hosted search. `RunResult.web_searches` counts
+  searches across the Run's Steps and `RunResult.sources` lists the final reply's
+  distinct cited pages. Entry pages show a search as `BlockView::WebSearch`.
 - Messages are literal bytes. `PlanMode` applies an explicit planning change at
   turn start; the CLI translates inline `/plan` rather than letting the API parse it.
 - `live_runs` contains every queued/running conversation and BTW Run, without requiring

@@ -21,6 +21,8 @@ const KEY: &str = "zq-preview-fixture";
 enum Part {
     Text(&'static str),
     Reasoning(&'static str),
+    /// Searching sends OpenAI's hosted search progress: true while searching, false when done.
+    Searching(bool),
     /// Wait holds the stream open until the named file exists in the test root.
     Wait(&'static str),
     /// Done completes the response with these output items.
@@ -104,6 +106,10 @@ fn isolated(name: &str, replies: Vec<Vec<Part>>) -> Option<PathBuf> {
                     Part::Reasoning(delta) => send(
                         &mut stream,
                         json!({"type":"response.reasoning_text.delta","output_index":0,"content_index":0,"delta":delta}),
+                    ),
+                    Part::Searching(active) => send(
+                        &mut stream,
+                        json!({"type":if active {"response.web_search_call.searching"} else {"response.web_search_call.completed"},"item_id":"ws","output_index":0}),
                     ),
                     Part::Wait(file) => {
                         let mut open = true;
@@ -327,5 +333,45 @@ fn cancelling_a_run_finishes_its_preview() {
         api.wait_run(&run).unwrap().result.unwrap().status,
         "cancelled"
     );
+    api.close().unwrap();
+}
+
+#[test]
+fn a_hosted_search_is_visible_to_readers_while_it_runs() {
+    let search = json!({"type":"web_search_call","id":"ws","status":"completed","action":{"type":"search","query":"q"}});
+    let replies = vec![vec![
+        Part::Searching(true),
+        Part::Wait("go"),
+        Part::Searching(false),
+        Part::Text("Found it."),
+        Part::Wait("end"),
+        Part::Done(json!([search, message("Found it.")])),
+    ]];
+    let Some(root) = isolated(
+        "a_hosted_search_is_visible_to_readers_while_it_runs",
+        replies,
+    ) else {
+        return;
+    };
+    let api = open(&root, true);
+    let run = start(&api, "look it up");
+    let mut cursor = None;
+    let searching = loop {
+        let page = api.read_preview(&run, cursor, 5000, None).unwrap();
+        cursor = Some(page.next);
+        if page.searching || page.finished {
+            break page;
+        }
+    };
+    assert!(searching.searching && searching.text.is_empty());
+    std::fs::write(root.join("go"), b"").unwrap();
+    let mut reader = Reader::new();
+    reader.cursor = cursor;
+    assert!(reader.until(&api, &run, |text| text == "Found it."));
+    let done = api.read_preview(&run, reader.cursor, 0, None).unwrap();
+    assert!(!done.searching);
+    std::fs::write(root.join("end"), b"").unwrap();
+    let result = api.wait_run(&run).unwrap().result.unwrap();
+    assert_eq!(result.web_searches, 1);
     api.close().unwrap();
 }

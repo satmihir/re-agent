@@ -77,7 +77,10 @@ pub fn encode_request(req: &Value) -> Result<Value, String> {
     if req["fast"] == true {
         body["speed"] = json!("fast");
     }
-    let tools:Vec<Value>=array(req,"tools").iter().map(|t|json!({"name":s(t,"name"),"description":s(t,"description"),"input_schema":t["input_schema"]})).collect();
+    let mut tools:Vec<Value>=array(req,"tools").iter().map(|t|json!({"name":s(t,"name"),"description":s(t,"description"),"input_schema":t["input_schema"]})).collect();
+    if req["web_search"] == true {
+        tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":8}));
+    }
     if !tools.is_empty() {
         body["tools"] = json!(tools);
     }
@@ -115,7 +118,7 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
         usage: usage.clone(),
     };
     match s(&body, "stop_reason") {
-        "end_turn" | "tool_use" | "stop_sequence" | "refusal" => {}
+        "end_turn" | "tool_use" | "stop_sequence" | "refusal" | "pause_turn" => {}
         "max_tokens" => {
             return Err(fail(
                 "incomplete_response",
@@ -132,13 +135,79 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
     }
     let raw_content = raw_tokens::array(raw_tokens::field(raw, "content").unwrap_or(b"[]"));
     let mut blocks = Vec::new();
+    let mut previous_text = false;
     for (i, raw_block) in raw_content.iter().enumerate() {
         let b = crate::provider::wire::decode(raw_block, &crate::provider::wire::ANTHROPIC_BLOCK)
             .map_err(|_| fail("protocol_error", "content block is not valid JSON".into()))?;
         let b = &b;
+        let was_text = std::mem::replace(&mut previous_text, s(b, "type") == "text");
         match s(b, "type") {
-            "text" => blocks.push(crate::openai::text_block("text", s(b, "text"))),
+            "text" => {
+                let cited = array(b, "citations")
+                    .iter()
+                    .filter(|c| s(c, "type") == "web_search_result_location")
+                    .map(|c| (s(c, "url"), s(c, "title")));
+                // Citations split one paragraph into adjacent blocks; rejoin them as written.
+                match blocks.last_mut() {
+                    Some(last) if was_text => {
+                        let text = format!("{}{}", s(last, "text"), s(b, "text"));
+                        let earlier: Vec<Value> = array(last, "citations").to_vec();
+                        let mut merged = crate::openai::text_block("text", &text);
+                        merged = crate::openai::cite(
+                            merged,
+                            earlier
+                                .iter()
+                                .map(|c| (s(c, "url"), s(c, "title")))
+                                .chain(cited),
+                        );
+                        *last = merged;
+                    }
+                    _ => blocks.push(crate::openai::cite(
+                        crate::openai::text_block("text", s(b, "text")),
+                        cited,
+                    )),
+                }
+            }
             "thinking" | "redacted_thinking" => {}
+            "server_tool_use" if s(b, "name") == "web_search" => {
+                let input = raw_content
+                    .get(i)
+                    .and_then(|raw| raw_tokens::field(raw, "input"))
+                    .and_then(|raw| crate::provider::decode_json(raw).ok())
+                    .unwrap_or(Value::Null);
+                blocks.push(crate::openai::search_block(s(&input, "query")));
+            }
+            // Results follow their search; a failed search is data for the model, not a Run error.
+            "web_search_tool_result" => {
+                let search = blocks
+                    .iter_mut()
+                    .rev()
+                    .find(|block| {
+                        block["kind"] == "web_search"
+                            && block["search"]["sources"].is_null()
+                            && block["search"]["error"].is_null()
+                    })
+                    .ok_or_else(|| {
+                        fail(
+                            "protocol_error",
+                            "web search result without its search".into(),
+                        )
+                    })?;
+                match &b["content"] {
+                    Value::Array(results) => {
+                        search["search"]["sources"] = json!(results
+                            .iter()
+                            .filter(|r| s(r, "type") == "web_search_result")
+                            .map(|r| json!({"url":s(r,"url"),"title":s(r,"title")}))
+                            .collect::<Vec<_>>())
+                    }
+                    other => {
+                        let code = s(other, "error_code");
+                        search["search"]["error"] =
+                            json!(if code.is_empty() { "unavailable" } else { code });
+                    }
+                }
+            }
             "tool_use" => {
                 let arguments = raw_content
                     .get(i)
@@ -179,6 +248,10 @@ pub fn normalize(raw: &[u8]) -> Result<Value, ModelError> {
         json!(blocks)
     };
     response["native"] = json!({"provider":"anthropic.messages"});
+    // The provider stopped a long search turn early; the loop continues it without new input.
+    if s(&body, "stop_reason") == "pause_turn" {
+        response["paused"] = json!(true);
+    }
     if !array(&body, "content").is_empty() {
         response["native"]["items"] = json!(raw_content
             .into_iter()
@@ -249,8 +322,21 @@ pub fn assemble(raw: &[u8]) -> Result<Value, ModelError> {
                         "text_delta" => "text",
                         "thinking_delta" => "thinking",
                         "signature_delta" => "signature",
+                        "citations_delta" => {
+                            if s(block, "type") != "text" || !delta["citation"].is_object() {
+                                return Err(malformed());
+                            }
+                            if !block["citations"].is_array() {
+                                block["citations"] = json!([]);
+                            }
+                            block["citations"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(delta["citation"].clone());
+                            continue;
+                        }
                         "input_json_delta" => {
-                            if s(block, "type") != "tool_use" {
+                            if !matches!(s(block, "type"), "tool_use" | "server_tool_use") {
                                 return Err(malformed());
                             }
                             arguments
@@ -409,6 +495,91 @@ mod tests {
         assert_eq!(
             crate::types::json_bytes(&body),
             crate::types::json_bytes(&plain)
+        );
+    }
+
+    #[test]
+    fn hosted_search_stream_keeps_results_for_continuation_and_rejoins_cited_text() {
+        let result = json!({"type":"web_search_result","url":"https://a.example/x","title":"A","encrypted_content":"ENC","page_age":null});
+        let citation = json!({"type":"web_search_result_location","url":"https://a.example/x","title":"A","encrypted_index":"IDX","cited_text":"x"});
+        let events = [
+            json!({"type":"message_start","message":{"id":"m","model":"claude","content":[],"usage":{"input_tokens":3,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srv","name":"web_search","input":{}}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"rust release\"}"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srv","content":[result]}}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"It is "}}),
+            json!({"type":"content_block_stop","index":2}),
+            json!({"type":"content_block_start","index":3,"content_block":{"type":"text","text":"","citations":[]}}),
+            json!({"type":"content_block_delta","index":3,"delta":{"type":"citations_delta","citation":citation}}),
+            json!({"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"1.100"}}),
+            json!({"type":"content_block_stop","index":3}),
+            json!({"type":"content_block_start","index":4,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":4,"delta":{"type":"text_delta","text":"."}}),
+            json!({"type":"content_block_stop","index":4}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9,"server_tool_use":{"web_search_requests":1}}}),
+            json!({"type":"message_stop"}),
+        ];
+        let raw = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+        let response = normalize(&crate::types::json_bytes(
+            &assemble(raw.as_bytes()).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(
+            response["blocks"],
+            json!([
+                {"kind":"web_search","search":{"query":"rust release","sources":[{"url":"https://a.example/x","title":"A"}]}},
+                {"kind":"text","text":"It is 1.100.","citations":[{"url":"https://a.example/x","title":"A"}]}
+            ])
+        );
+        // The provider decrypts its own results and citation indexes on the next request.
+        let request = encode_request(
+            &json!({"model":"claude","history":[{"kind":"assistant","assistant":response}]}),
+        )
+        .unwrap();
+        let native = crate::types::json_string(&request["messages"][0]["content"]);
+        assert!(native.contains("\"encrypted_content\":\"ENC\""), "{native}");
+        assert!(native.contains("\"encrypted_index\":\"IDX\""), "{native}");
+        assert!(native.contains("\"query\":\"rust release\""), "{native}");
+    }
+
+    #[test]
+    fn search_errors_are_data_and_pause_turn_is_accepted_as_paused() {
+        let body = json!({"id":"m","model":"claude","stop_reason":"pause_turn","usage":{"input_tokens":1,"output_tokens":1},"content":[
+            {"type":"server_tool_use","id":"srv","name":"web_search","input":{"query":"q"}},
+            {"type":"web_search_tool_result","tool_use_id":"srv","content":{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}}
+        ]});
+        let response = normalize(&crate::types::json_bytes(&body)).unwrap();
+        assert_eq!(response["paused"], true);
+        assert_eq!(
+            response["blocks"][0]["search"]["error"],
+            "max_uses_exceeded"
+        );
+        let orphan = json!({"id":"m","stop_reason":"end_turn","usage":{},"content":[
+            {"type":"web_search_tool_result","tool_use_id":"srv","content":[]}
+        ]});
+        assert_eq!(
+            normalize(&crate::types::json_bytes(&orphan))
+                .unwrap_err()
+                .status,
+            "protocol_error"
+        );
+    }
+
+    #[test]
+    fn web_search_is_declared_only_when_requested() {
+        let plain = encode_request(&json!({"model":"claude","history":[]})).unwrap();
+        assert!(plain["tools"].is_null());
+        let searching =
+            encode_request(&json!({"model":"claude","history":[],"web_search":true})).unwrap();
+        assert_eq!(
+            searching["tools"],
+            json!([{"type":"web_search_20250305","name":"web_search","max_uses":8}])
         );
     }
 

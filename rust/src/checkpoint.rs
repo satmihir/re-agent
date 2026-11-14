@@ -306,7 +306,7 @@ fn convert_raw(cp: &mut Value, decode: bool) -> Result<(), String> {
                             if let Some(c) = b.get_mut("call") {
                                 *c = ordered(c, &["call_id", "name", "arguments"]);
                             }
-                            *b = ordered(b, &["kind", "text", "call"]);
+                            *b = ordered(b, &["kind", "text", "call", "search", "citations"]);
                         }
                     }
                     *a = ordered(a, &["response_id", "model", "blocks", "native", "usage"]);
@@ -353,6 +353,7 @@ const FIELDS: &[&str] = &[
     "origin",
     "tool_free",
     "instructions",
+    "web_search",
     "read_only",
     "plan",
     "no_project_instructions",
@@ -463,6 +464,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
                 "origin",
                 "tool_free",
                 "instructions",
+                "web_search",
                 "read_only",
                 "no_project_instructions",
                 "project_instructions",
@@ -492,6 +494,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "origin",
             "tool_free",
             "instructions",
+            "web_search",
             "project_instructions",
             "launch_instructions",
             "context_window_tokens",
@@ -746,7 +749,7 @@ fn valid_checkpoint_type(value: &mut Value, kind: &str) -> bool {
 fn checkpoint_fields(kind: &str) -> &'static str {
     match kind {
         "checkpoint" => "version:int id:string provider:string model:string effort:string fast:bool \
-            launch:string active:string origin:string tool_free:bool instructions:string read_only:bool plan:bool no_project_instructions:bool \
+            launch:string active:string origin:string tool_free:bool instructions:string web_search:bool read_only:bool plan:bool no_project_instructions:bool \
             project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
             model_retry_window:int in_run_compact:bool context_window_tokens:int \
             context_gc_age_steps:int context_gc_consolidate:bool context_gc:bool gc_state:gc \
@@ -762,7 +765,9 @@ fn checkpoint_fields(kind: &str) -> &'static str {
         "run_ref" => "session:session_ref run_id:string",
         "session_ref" => "session_id:string instance_id:string",
         "response" => "response_id:string model:string blocks:[]block native:native usage:usage",
-        "block" => "kind:string text:string call:call",
+        "block" => "kind:string text:string call:call search:search citations:[]source",
+        "search" => "query:string sources:[]source error:string",
+        "source" => "url:string title:string",
         "call" => "call_id:string name:string arguments:string",
         "native" => "provider:string items:[]raw",
         "usage" => "known:bool input_tokens:int cached_input_tokens:int output_tokens:int \
@@ -979,6 +984,7 @@ fn restored(id: &str, cp: Value) -> Value {
         "origin",
         "tool_free",
         "instructions",
+        "web_search",
         "read_only",
         "plan",
         "no_project_instructions",

@@ -283,6 +283,9 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
     if let Some(origin) = options.origin {
         config["origin"] = json!(origin);
     }
+    if options.web_search {
+        config["web_search"] = json!(true);
+    }
     crate::provider::validate_environment().map_err(|e| error("invalid_argument", e))?;
     if options.tool_free {
         // No workspace is opened, so neither AGENTS.md nor agents nor git_do apply.
@@ -404,6 +407,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         auth_mode: String::new(),
         read_only: session.config["read_only"].as_bool().unwrap_or(false),
         tool_free: session.config["tool_free"] == true,
+        web_search: session.config["web_search"] == true,
         plan: false,
         auto: auto_info(session),
         workspace: Default::default(),

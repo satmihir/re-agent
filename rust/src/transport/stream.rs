@@ -86,6 +86,7 @@ pub(super) struct Preview<'a> {
     text_disabled: bool,
     output_bytes: usize,
     writing: bool,
+    searching: bool,
 }
 
 impl<'a> Preview<'a> {
@@ -108,6 +109,7 @@ impl<'a> Preview<'a> {
             text_disabled: false,
             output_bytes: 0,
             writing: false,
+            searching: false,
         }
     }
 
@@ -178,8 +180,15 @@ impl<'a> Preview<'a> {
                 text
             });
             self.text_changed = false;
+            let activity = if self.searching {
+                crate::terminal::SEARCHING
+            } else if self.writing {
+                "writing"
+            } else {
+                "thinking"
+            };
             let _ = self.region.unwrap().lock().unwrap().stream_progress(
-                self.writing,
+                activity,
                 self.output_bytes.div_ceil(4),
                 text.as_deref(),
             );
@@ -275,6 +284,26 @@ impl<'a> Preview<'a> {
 
     fn event(&mut self, event: &Value, secrets: &[String], endpoint: &str) -> bool {
         let kind = s(event, "type");
+        let searching = match kind {
+            "response.web_search_call.in_progress" | "response.web_search_call.searching" => {
+                Some(true)
+            }
+            "response.web_search_call.completed" => Some(false),
+            "content_block_start" => match s(&event["content_block"], "type") {
+                "server_tool_use" => Some(true),
+                "web_search_tool_result" => Some(false),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(searching) = searching {
+            if let Some(reply) = self.reply {
+                reply.search(searching);
+            }
+            let changed = self.searching != searching;
+            self.searching = searching;
+            return changed;
+        }
         let (delta, visible) = match kind {
             "response.output_text.delta" | "response.refusal.delta" => (s(event, "delta"), true),
             "response.reasoning_text.delta"

@@ -32,6 +32,8 @@ pub struct SessionOptions {
     pub tool_free: bool,
     /// instructions replace re:agent's own instructions entirely; only tool-free Sessions accept them.
     pub instructions: Option<String>,
+    /// web_search lets the model search the web with the provider's hosted search tool.
+    pub web_search: bool,
 }
 
 impl Default for SessionOptions {
@@ -50,6 +52,7 @@ impl Default for SessionOptions {
             origin: None,
             tool_free: false,
             instructions: None,
+            web_search: false,
         }
     }
 }
@@ -309,8 +312,23 @@ pub struct RunResult {
     pub tree_cost: Option<Usage>,
     /// effects contains bounded observed operations, including uncertainty.
     pub effects: Vec<EffectRecord>,
+    /// web_searches counts provider-hosted searches across the Run's Steps.
+    #[serde(default)]
+    pub web_searches: u64,
+    /// sources lists what the final reply cites, deduplicated in first-cited order.
+    #[serde(default)]
+    pub sources: Vec<Source>,
     /// resumable permits a new explicit submission, never replay of old work.
     pub resumable: bool,
+}
+
+/// Source is one web page a reply cites.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Source {
+    /// url is the cited page as the provider reported it.
+    pub url: String,
+    /// title is the page title as the provider reported it.
+    pub title: String,
 }
 
 /// Bytes preserves the runtime's byte-valued strings in public projections.
@@ -348,6 +366,16 @@ impl RunResult {
                     tool: text(e, "tool"),
                     summary: text(e, "summary"),
                     effect: text(e, "effect"),
+                })
+                .collect(),
+            web_searches: value["web_searches"].as_u64().unwrap_or(0),
+            sources: value["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|s| Source {
+                    url: text(s, "url"),
+                    title: text(s, "title"),
                 })
                 .collect(),
             resumable: value["resumable"].as_bool().unwrap_or(false),
@@ -567,6 +595,9 @@ pub struct SessionSnapshot {
     /// tool_free is the immutable launch choice of a Session without tools or workspace.
     #[serde(default)]
     pub tool_free: bool,
+    /// web_search reports whether conversation Runs may use the provider's hosted search.
+    #[serde(default)]
+    pub web_search: bool,
     /// plan is the last published effective planning restriction.
     pub plan: bool,
     /// auto retains published routing settings without probing credentials or providers.
