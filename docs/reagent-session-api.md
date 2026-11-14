@@ -18,6 +18,14 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
 - `SessionOptions.origin` is an optional label of 1–32 lowercase ASCII letters, digits
   or hyphens naming the host that owns the Session. It is saved in the checkpoint,
   survives resume and Reset, and hides the Session from the CLI's picker and `--continue`.
+- `SessionOptions.tool_free` opens a conversation with no tools and no workspace: no tool
+  declarations, no `AGENTS.md`, agents or `git_do`, and each message carries only the local
+  date and time zone instead of workspace state. A response that calls tools ends the Run
+  with `protocol_error`. Human shell commands and turning plan mode on are rejected.
+  Unlike a BTW question it binds ordinary cancellation, can be resumable, and checkpoints.
+  `SessionOptions.instructions` (tool-free only, at most 32 KiB) replaces re:agent's
+  instructions entirely and survives resume, compaction, Reset and model switches.
+  `SessionSnapshot.tool_free` reports the choice; both settings are saved in the checkpoint.
 - Messages are literal bytes. `PlanMode` applies an explicit planning change at
   turn start; the CLI translates inline `/plan` rather than letting the API parse it.
 - `live_runs` contains every queued/running conversation and BTW Run, without requiring

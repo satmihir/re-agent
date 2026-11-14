@@ -76,7 +76,8 @@ impl Session {
             .map(str::to_owned)
             .unwrap_or_else(types::new_id);
         config["session_id"] = json!(session_id);
-        if !flag(&config["tool_free"]) {
+        // A BTW worker binds its own question-local token instead.
+        if !flag(&config["btw"]) {
             provider.set_cancellation(crate::cancellation::token(&config));
         }
         if !config["prompt"]["text"].is_string() {
@@ -228,6 +229,8 @@ impl Session {
         let mut user = json!({"text":crate::raw::string(text)});
         if !flag(&self.config["tool_free"]) {
             user["workspace"] = crate::workspace::snapshot(&snapshot_config);
+        } else if !flag(&self.config["btw"]) {
+            user["time"] = crate::workspace::message_time();
         }
         let roster = crate::agents::roster(self);
         if !roster.is_null() {
@@ -389,7 +392,11 @@ impl Session {
             }
             let calls = tool_calls(&resp);
             if flag(&self.config["tool_free"]) && !calls.is_empty() {
-                return self.finish("protocol_error", "BTW responses must not call tools", "");
+                return self.finish(
+                    "protocol_error",
+                    "a tool-free Session's response must not call tools",
+                    "",
+                );
             }
             self.trace
                 .write("model.accepted", step as usize, resp.clone());
@@ -956,7 +963,7 @@ impl Session {
         {
             result["effects"] = self.state["effects"].clone();
         }
-        if flag(&self.config["tool_free"]) {
+        if flag(&self.config["btw"]) {
             result["resumable"] = json!(false);
         } else if flag(&self.state["resumable"]) {
             result["resumable"] = json!(true);

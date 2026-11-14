@@ -481,6 +481,19 @@ fn local_date_zone(timestamp: libc::time_t) -> (String, String) {
     }
 }
 
+/// message_time records the local date and time zone for a message that carries no workspace state.
+pub fn message_time() -> Value {
+    let (date, zone) = local_date_zone(chrono::Local::now().timestamp() as libc::time_t);
+    let mut time = json!({"kind":"message_time"});
+    if !date.is_empty() {
+        time["date"] = json!(date);
+    }
+    if !zone.is_empty() {
+        time["time_zone"] = json!(zone);
+    }
+    time
+}
+
 pub fn snapshot(config: &Value) -> Value {
     use chrono::{DateTime, Local};
     let root = config["workspace"].as_str().unwrap_or(".");

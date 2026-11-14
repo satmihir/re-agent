@@ -32,6 +32,8 @@ const MAX_LIVE_RUNS: usize = 16;
 const MAX_COMMANDS: usize = 256;
 const MAX_MESSAGE_BYTES: usize = 10 << 20;
 const MAX_RETAINED_INPUT_BYTES: usize = 32 << 20;
+/// Host instructions share the AGENTS.md cap.
+const MAX_INSTRUCTION_BYTES: usize = 32 << 10;
 
 fn replaces_session(change: &SessionChange) -> bool {
     matches!(
@@ -243,6 +245,26 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
             "origin must be 1 to 32 lowercase ASCII letters, digits or hyphens",
         ));
     }
+    if let Some(text) = &options.instructions {
+        if !options.tool_free {
+            return Err(error(
+                "invalid_argument",
+                "instructions require a tool-free Session",
+            ));
+        }
+        if text.trim().is_empty() || text.len() > MAX_INSTRUCTION_BYTES {
+            return Err(error(
+                "invalid_argument",
+                "instructions must be nonblank and at most 32 KiB",
+            ));
+        }
+    }
+    if options.tool_free && options.plan {
+        return Err(error(
+            "invalid_argument",
+            "plan mode is unavailable in a tool-free Session",
+        ));
+    }
     let mut config = json!({
         "workspace": workspace, "model":options.model.unwrap_or_default(),
         "reasoning_effort":options.reasoning_effort.unwrap_or_else(|| "auto".into()),
@@ -256,9 +278,19 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
         config["origin"] = json!(origin);
     }
     crate::provider::validate_environment().map_err(|e| error("invalid_argument", e))?;
-    config["project_instructions"] =
-        json!(crate::workspace::project_instructions(workspace)
+    if options.tool_free {
+        // No workspace is opened, so neither AGENTS.md nor agents nor git_do apply.
+        config["tool_free"] = json!(true);
+        config["agents"] = json!(false);
+        config["git_do"] = json!("");
+        config["project_instructions"] = Value::Null;
+        if let Some(text) = options.instructions {
+            config["instructions"] = json!(text);
+        }
+    } else {
+        config["project_instructions"] = json!(crate::workspace::project_instructions(workspace)
             .map_err(|e| error("unavailable", e))?);
+    }
     crate::provider::configure(&mut config).map_err(|e| error("unavailable", e))?;
     open_resolved(config, None)
 }
@@ -365,6 +397,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         fast: false,
         auth_mode: String::new(),
         read_only: session.config["read_only"].as_bool().unwrap_or(false),
+        tool_free: session.config["tool_free"] == true,
         plan: false,
         auto: auto_info(session),
         workspace: Default::default(),
@@ -772,6 +805,17 @@ impl SessionApi {
         }
         if state.closing || state.closed {
             return Err(error("unavailable", "Session is closing or closed"));
+        }
+        if state.snapshot.tool_free
+            && matches!(
+                change,
+                SessionChange::RunUserShell { .. } | SessionChange::SetPlan { enabled: true }
+            )
+        {
+            return Err(error(
+                "invalid_argument",
+                "a tool-free Session has no workspace for shell commands or plan mode",
+            ));
         }
         if state.control.is_some() {
             return Err(error("busy", "Session has an unfinished idle control"));

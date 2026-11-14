@@ -402,7 +402,8 @@ impl Provider {
                 &m,
             )
         })?;
-        let tool_free = self.config["tool_free"] == true;
+        // An isolated question accounts for every attempt itself; conversations use the Run's totals.
+        let isolated = self.config["btw"] == true;
         let (status, raw) =
             match self
                 .transport
@@ -410,7 +411,7 @@ impl Provider {
             {
                 Ok(response) => response,
                 Err(mut error) => {
-                    if tool_free {
+                    if isolated {
                         // Transport errors inconsistently carry prior attempts; its accumulator is authoritative.
                         error.usage = self.transport.retry_usage.clone();
                         let missing = self
@@ -440,7 +441,7 @@ impl Provider {
         } else {
             crate::openai::normalize(&raw)
         };
-        if tool_free {
+        if isolated {
             let usage = match &mut result {
                 Ok(response) => &mut response["usage"],
                 Err(error) => &mut error.usage,
