@@ -499,7 +499,7 @@ pub fn execute_in_region(
     region: Option<&crate::terminal::RegionHandle>,
 ) -> Result<Value, String> {
     if config["tool_free"] == true {
-        return Ok(fail("permission_denied", "BTW Runs have no tools"));
+        return Ok(fail("permission_denied", "This Session has no tools"));
     }
     let all = cached_specs(config);
     let spec = all.as_array().unwrap().iter().find(|s| s["name"] == name);

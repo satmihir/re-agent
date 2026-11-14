@@ -31,7 +31,7 @@ pub fn execute(
         _ => return Err(fail("tool_unavailable", "Unknown image tool")),
     };
     if config["tool_free"] == true {
-        return Err(fail("permission_denied", "BTW Runs have no tools"));
+        return Err(fail("permission_denied", "This Session has no tools"));
     }
     if !crate::catalog::supports_images(config) {
         return Err(fail(

@@ -67,6 +67,10 @@ pub fn prompt_project(config: &Value) -> Option<&str> {
 }
 
 fn render_instructions(config: &Value) -> String {
+    // A host's instructions are its whole prompt: re:agent's rules describe tools it lacks.
+    if let Some(text) = config["instructions"].as_str() {
+        return text.to_owned();
+    }
     let effort = string(config, "reasoning_effort");
     let effort = if effort.is_empty() {
         "the provider's default"

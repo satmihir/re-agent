@@ -15,7 +15,7 @@ pub fn entry_texts(entry: &Value) -> Vec<Value> {
         "user" => {
             let user = &entry["user"];
             let mut parts = vec![user.get("text").filter(|text|!text.is_null()).cloned().unwrap_or(json!(""))];
-            for (key,preamble) in [("workspace","Workspace state when this message was sent, collected by re:agent:\n"),("roster","Agent roster when this message was sent, collected by re:agent:\n")] {
+            for (key,preamble) in [("workspace","Workspace state when this message was sent, collected by re:agent:\n"),("time","Date when this message was sent, collected by re:agent:\n"),("roster","Agent roster when this message was sent, collected by re:agent:\n")] {
                 if !user[key].is_null() {
                     let bytes = crate::raw::bytes(&user[key]).unwrap_or_else(|| raw_string(&user[key]).into_bytes());
                     parts.push(crate::raw::string(&[preamble.as_bytes(), &bytes].concat()));

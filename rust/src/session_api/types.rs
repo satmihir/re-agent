@@ -28,6 +28,10 @@ pub struct SessionOptions {
     pub max_tool_calls: u64,
     /// origin labels Sessions owned by another host so the CLI's picker and `--continue` skip them.
     pub origin: Option<String>,
+    /// tool_free offers the model no tools and attaches no workspace state to messages.
+    pub tool_free: bool,
+    /// instructions replace re:agent's own instructions entirely; only tool-free Sessions accept them.
+    pub instructions: Option<String>,
 }
 
 impl Default for SessionOptions {
@@ -44,6 +48,8 @@ impl Default for SessionOptions {
             max_steps: 0,
             max_tool_calls: 0,
             origin: None,
+            tool_free: false,
+            instructions: None,
         }
     }
 }
@@ -558,6 +564,9 @@ pub struct SessionSnapshot {
     pub auth_mode: String,
     /// read_only is the immutable launch restriction.
     pub read_only: bool,
+    /// tool_free is the immutable launch choice of a Session without tools or workspace.
+    #[serde(default)]
+    pub tool_free: bool,
     /// plan is the last published effective planning restriction.
     pub plan: bool,
     /// auto retains published routing settings without probing credentials or providers.

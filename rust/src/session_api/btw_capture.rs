@@ -263,6 +263,7 @@ pub(super) fn prepare(
                 } else {
                     let mut config = json!(bindings);
                     config["tool_free"] = json!(true);
+                    config["btw"] = json!(true);
                     config["max_steps"] = json!(1);
                     config["max_tool_calls"] = json!(0);
                     Ok(config)

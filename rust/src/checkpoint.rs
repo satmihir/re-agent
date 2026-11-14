@@ -234,7 +234,7 @@ fn user(value: &mut Value, decode: bool) -> Result<(), String> {
             value["text_bytes"] = json!(STANDARD.encode(bytes));
         }
     }
-    for key in ["workspace", "roster", "images"] {
+    for key in ["workspace", "roster", "images", "time"] {
         if let Some(v) = value.get_mut(key) {
             raw(v, decode)?;
             if key == "images" && decode {
@@ -254,6 +254,7 @@ fn user(value: &mut Value, decode: bool) -> Result<(), String> {
                 "attribution",
                 "text_bytes",
                 "images",
+                "time",
             ],
         );
     }
@@ -350,6 +351,8 @@ const FIELDS: &[&str] = &[
     "launch",
     "active",
     "origin",
+    "tool_free",
+    "instructions",
     "read_only",
     "plan",
     "no_project_instructions",
@@ -458,6 +461,8 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
                 "model",
                 "fast",
                 "origin",
+                "tool_free",
+                "instructions",
                 "read_only",
                 "no_project_instructions",
                 "project_instructions",
@@ -485,6 +490,8 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
         let optional = [
             "fast",
             "origin",
+            "tool_free",
+            "instructions",
             "project_instructions",
             "launch_instructions",
             "context_window_tokens",
@@ -739,7 +746,7 @@ fn valid_checkpoint_type(value: &mut Value, kind: &str) -> bool {
 fn checkpoint_fields(kind: &str) -> &'static str {
     match kind {
         "checkpoint" => "version:int id:string provider:string model:string effort:string fast:bool \
-            launch:string active:string origin:string read_only:bool plan:bool no_project_instructions:bool \
+            launch:string active:string origin:string tool_free:bool instructions:string read_only:bool plan:bool no_project_instructions:bool \
             project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
             model_retry_window:int in_run_compact:bool context_window_tokens:int \
             context_gc_age_steps:int context_gc_consolidate:bool context_gc:bool gc_state:gc \
@@ -750,7 +757,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             compacted_plan:string blocked:string last_trace:string last_request:usage \
             tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt",
         "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
-        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string images:raw",
+        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string images:raw time:raw",
         "user_attribution" => "request_id:string target:run_ref kind:string boundary_step:int",
         "run_ref" => "session:session_ref run_id:string",
         "session_ref" => "session_id:string instance_id:string",
@@ -970,6 +977,8 @@ fn restored(id: &str, cp: Value) -> Value {
         "model",
         "fast",
         "origin",
+        "tool_free",
+        "instructions",
         "read_only",
         "plan",
         "no_project_instructions",
