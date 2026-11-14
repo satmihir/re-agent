@@ -13,9 +13,13 @@ pub use consent::WorkspaceConsentApi;
 pub use consent_types::*;
 mod observation_types;
 mod observations;
+mod preview;
 mod types;
 /// Bounded owned records for structured Session observations.
 pub use observation_types::*;
+pub(crate) use preview::ReplyPreview;
+/// Speculative reply text of a running conversation Run.
+pub use preview::{PreviewCursor, PreviewPage};
 /// Owned records used by the in-process Session interface.
 pub use types::*;
 
@@ -154,6 +158,8 @@ struct State {
     pending: VecDeque<usize>,
     pending_steers: VecDeque<usize>,
     accepting_steers: bool,
+    /// preview is the executing conversation Run's ID and reply preview.
+    preview: Option<(String, Arc<ReplyPreview>)>,
     #[cfg(test)]
     completion_hook: Option<(bool, Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
     #[cfg(test)]
@@ -430,6 +436,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
             pending: VecDeque::new(),
             pending_steers: VecDeque::new(),
             accepting_steers: false,
+            preview: None,
             #[cfg(test)]
             completion_hook: None,
             #[cfg(test)]
@@ -1645,6 +1652,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
             );
             state.snapshot.active_conversation_run = Some(data.2.clone());
             state.accepting_steers = true;
+            state.preview = Some((data.2.run_id.clone(), Arc::default()));
             state.run_changed(index);
             shared.changed.notify_all();
             data
@@ -1652,6 +1660,16 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         let session = &mut owner.session;
         session.config["cancellation_scope"] = json!(scope);
         session.provider.set_cancellation(cancellation.clone());
+        let preview = shared
+            .state
+            .lock()
+            .unwrap()
+            .preview
+            .as_ref()
+            .unwrap()
+            .1
+            .clone();
+        session.provider.set_reply_preview(Some(preview.clone()));
         match plan_mode {
             PlanMode::Keep => {}
             PlanMode::On => {
@@ -1678,6 +1696,7 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
                 .unwrap_or("Run ended before steering application"),
         );
         session.api = None;
+        session.provider.set_reply_preview(None);
         crate::types::usage_add(&mut session.state["usage"], &result["usage"]);
         if result["status"] == "persistence_error" {
             session.state["persistence_error"] = result["reason"].clone();
@@ -1685,6 +1704,8 @@ fn own(mut owner: Owner, mut shared: Arc<Shared>) {
         let prepared = observations::prepare_current(session, &shared);
         let mut state = shared.state.lock().unwrap();
         observations::install(&mut state, prepared);
+        state.preview = None;
+        preview.finish();
         // The CLI revisits only its latest turn; receipts retain results, not old file snapshots.
         for command in &mut state.commands {
             if let Some(message) = command.work.message_mut() {

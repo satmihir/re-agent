@@ -556,6 +556,7 @@ pub(crate) fn route_next(session: &mut Session) -> Result<(), String> {
             }
             let mut next_provider = provider::Provider::new(&candidate.config)?;
             next_provider.set_cancellation(crate::cancellation::token(&candidate.config));
+            next_provider.set_reply_preview(session.provider.reply_preview());
             if candidate.config["model"] != session.config["model"] {
                 session.state["tokens_per_byte"] = json!(0.0);
             }

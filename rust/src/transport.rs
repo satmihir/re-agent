@@ -69,6 +69,20 @@ pub fn redacted(endpoint: &str) -> String {
     }
     u.to_string()
 }
+/// redaction_patterns lists every literal redact replaces, so streamed text can hold back a forming one.
+pub(crate) fn redaction_patterns(secrets: &[String], endpoint: &str) -> Vec<String> {
+    let mut patterns = Vec::new();
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        patterns.push(secret.clone());
+        let escaped = json_string(&json!(secret));
+        if escaped.len() > 2 {
+            patterns.push(escaped[1..escaped.len() - 1].to_owned());
+        }
+    }
+    patterns.extend(redaction::endpoint_secret(endpoint).map(str::to_owned));
+    patterns
+}
+
 pub fn redact(text: &str, secrets: &[String], endpoint: &str) -> String {
     let mut result = redaction::endpoint_text(text, endpoint);
     for secret in secrets {
@@ -95,6 +109,8 @@ pub struct Transport {
     /// reported_retries counts retry responses whose provider token totals were retained.
     pub reported_retries: u64,
     pub cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// reply_preview receives visible text of model streams, never of summaries.
+    pub(crate) reply_preview: Option<std::sync::Arc<crate::session_api::ReplyPreview>>,
 }
 impl Transport {
     pub fn new(config: &Value) -> Self {
@@ -108,6 +124,7 @@ impl Transport {
             sent_attempts: 0,
             reported_retries: 0,
             cancellation: None,
+            reply_preview: None,
         }
     }
     fn cancelled(&self) -> bool {
@@ -242,6 +259,7 @@ impl Transport {
         let proxied = self.config["proxied"].as_bool().unwrap_or(false);
         let chatgpt = provider == "openai" && s(&self.config, "auth_mode") == "chatgpt";
         let stream = body["stream"] == true || (provider != "anthropic" && (proxied || chatgpt));
+        let reply_preview = self.reply_preview.clone();
         let bytes = crate::types::json_bytes(body);
         let step = request["scope"]["step"].as_u64().unwrap_or(1) as usize;
         let started = Instant::now();
@@ -367,6 +385,12 @@ impl Transport {
                         let preview_region =
                             region.filter(|_| self.config["_display"] == true && status == 200);
                         let mut preview = stream::Preview::new(preview_region);
+                        preview.reply = reply_preview
+                            .as_deref()
+                            .filter(|_| status == 200 && summary_deadline.is_none());
+                        if let Some(reply) = preview.reply {
+                            reply.begin();
+                        }
                         preview.agent = (status == 200
                             && self.config["agent_id"]
                                 .as_str()
