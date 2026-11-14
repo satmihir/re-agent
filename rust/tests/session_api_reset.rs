@@ -601,7 +601,7 @@ fn router_reply(request: &Value) -> Value {
             description
                 .as_str()
                 .unwrap()
-                .starts_with("Model: gpt-6.1-luna; reasoning effort: \"medium\".")
+                .starts_with("Model: gpt-6-luna; reasoning effort: \"medium\".")
                 .then_some(id)
         })
         .unwrap();
@@ -713,7 +713,7 @@ fn reset_preserves_auto_routes_but_clears_router_accounting() {
     bounded(move || reader.wait_command("enable")).unwrap();
     run(&api, "route-once");
     let before = api.get_snapshot().unwrap();
-    assert_eq!(before.model, "gpt-6.1-luna");
+    assert_eq!(before.model, "gpt-6-luna");
     assert_eq!(before.auto.attempts, 1);
     assert_eq!(before.auto.usage.input_tokens, 7);
     let next = reset(&api, "reset");

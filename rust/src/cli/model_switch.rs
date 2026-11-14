@@ -314,15 +314,12 @@ mod tests {
         assert!(text(&out, "text").contains("omitted_native_items"));
     }
     fn config() -> Value {
-        json!({"provider":"openai","model":"gpt-6.1-luna","reasoning_effort":"low","workspace":".","prompt":{"text":""}})
+        json!({"provider":"openai","model":"gpt-6-luna","reasoning_effort":"low","workspace":".","prompt":{"text":""}})
     }
 
     #[test]
     fn stage_matches_independent_destination_encoding_and_omits_empty_plan_and_model_fields() {
-        for (provider, model) in [
-            ("openai", "gpt-6.1-luna"),
-            ("anthropic", "claude-sonnet-5-5"),
-        ] {
+        for (provider, model) in [("openai", "gpt-6-luna"), ("anthropic", "claude-sonnet-5-5")] {
             let mut config = config();
             config["provider"] = json!(provider);
             config["model"] = json!(model);
@@ -455,7 +452,7 @@ mod tests {
             session.state["last_request"].clone(),
         );
         let destination =
-            destination(&session.config, &crate::catalog::model_info("gpt-6.1-luna")).unwrap();
+            destination(&session.config, &crate::catalog::model_info("gpt-6-luna")).unwrap();
         let (reported, error) = stage_session(&session, &destination, false).unwrap_err();
         assert!(error.contains("window allowance"));
         assert!(reported > 0);
@@ -470,7 +467,7 @@ mod tests {
         assert_eq!(session.state["tokens_per_byte"], 0.211);
         assert_eq!(session.state["last_trace"], previous_trace);
         let mut destination = session.config.clone();
-        destination["model"] = json!("gpt-6.1-luna");
+        destination["model"] = json!("gpt-6-luna");
         destination["reasoning_effort"] = json!("medium");
         provider::configure(&mut destination).unwrap();
         context::pin_instructions(&mut destination);

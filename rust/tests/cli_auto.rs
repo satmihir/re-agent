@@ -77,7 +77,7 @@ fn auto_status_does_not_toggle_and_enable_is_explicit() {
 fn manual_valid_controls_pin_but_rejected_controls_leave_auto_enabled() {
     for (command, enabled) in [
         ("/model gpt-6.1-sol", false),
-        ("/model gpt-6.1-luna", false),
+        ("/model gpt-6-luna", false),
         ("/effort high", false),
         ("/model unknown", true),
         ("/effort unsupported", true),

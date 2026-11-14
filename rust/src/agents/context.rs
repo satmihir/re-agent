@@ -400,7 +400,7 @@ mod tests {
             let mut config = parent.config.clone();
             config["provider"] = json!(provider);
             config["model"] = json!(if provider == "openai" {
-                "gpt-6.1-luna"
+                "gpt-6-luna"
             } else {
                 "claude-sonnet-5-5"
             });
@@ -456,10 +456,10 @@ mod tests {
     fn gc_child(parent: &Session, arguments: &Value, foreign: bool) -> (Session, String) {
         let mut config = parent.config.clone();
         if foreign {
-            config["model"] = json!(if parent.config["model"] == "gpt-6.1-luna" {
+            config["model"] = json!(if parent.config["model"] == "gpt-6-luna" {
                 "gpt-6.1-sol"
             } else {
-                "gpt-6.1-luna"
+                "gpt-6-luna"
             });
         }
         let (history, _, mode) = prepare(parent, &mut config, arguments, "write").unwrap();
@@ -1021,7 +1021,7 @@ mod tests {
                 json!({"fork":true})
             });
             if mode == "foreign" {
-                arguments["model"] = json!("gpt-6.1-luna");
+                arguments["model"] = json!("gpt-6-luna");
             }
             let mut child = super::super::child_config(&session, &arguments, "read");
             let (history, prompt, context_mode) =

@@ -94,7 +94,7 @@ fn structural_model_errors_admit_nothing_and_scripted_switches_leave_the_cursor_
         api.change_session(
             &id,
             api.get_snapshot().unwrap().revision,
-            switch("gpt-6.1-luna", history),
+            switch("gpt-6-luna", history),
         )
         .unwrap();
         let reader = api.clone();
@@ -337,8 +337,8 @@ fn exact_model_ids_default_efforts_and_same_model_selection_pin_auto_without_inf
     let api = live(&root, false, false);
     for (index, model) in [
         "1",
-        "GPT-6.1-LUNA",
-        "gpt-6.1-luna ",
+        "GPT-6-LUNA",
+        "gpt-6-luna ",
         "claude-sonnet",
         "not-listed",
     ]
@@ -374,7 +374,7 @@ fn exact_model_ids_default_efforts_and_same_model_selection_pin_auto_without_inf
         api.change_session(
             "stale",
             before.revision - 1,
-            switch("gpt-6.1-luna", HistoryMode::Carry)
+            switch("gpt-6-luna", HistoryMode::Carry)
         )
         .unwrap_err()
         .code,
@@ -388,7 +388,7 @@ fn exact_model_ids_default_efforts_and_same_model_selection_pin_auto_without_inf
     assert_eq!(selected.auto.fallback, before.auto.fallback);
     assert_eq!(selected.auto.allowed_routes, before.auto.allowed_routes);
     for (model, effort, provider) in [
-        ("gpt-6.1-luna", "medium", "openai"),
+        ("gpt-6-luna", "medium", "openai"),
         ("gpt-6.1-terra", "", "openai"),
         ("claude-haiku-5-5", "", "anthropic"),
         ("claude-sonnet-5-5", "low", "anthropic"),
@@ -680,7 +680,7 @@ fn carry_uses_collected_history_and_refuses_unknown_effects_or_destination_windo
         json!({"read":{"reason":"stale","step":1,"placeholder":"COLLECTED-PLACEHOLDER"}});
     rewrite_checkpoint(&path, &mut saved);
     let api = resume_session(&identity.session_id).unwrap();
-    applied(&api, "carry-gc", switch("gpt-6.1-luna", HistoryMode::Carry));
+    applied(&api, "carry-gc", switch("gpt-6-luna", HistoryMode::Carry));
     let (_, _, after) = checkpoint(&api);
     assert_eq!(after["state"]["history"], saved["state"]["history"]);
     assert!(after["state"]["handoff"]["text"]
@@ -712,7 +712,7 @@ fn carry_uses_collected_history_and_refuses_unknown_effects_or_destination_windo
     api.change_session(
         "too-large",
         before.revision,
-        switch("gpt-6.1-luna", HistoryMode::Carry),
+        switch("gpt-6-luna", HistoryMode::Carry),
     )
     .unwrap();
     let reader = api.clone();
@@ -731,12 +731,12 @@ fn carry_uses_collected_history_and_refuses_unknown_effects_or_destination_windo
         .as_str()
         .unwrap()
         .contains("destination window"));
-    assert_eq!(audit[1]["data"]["destination_model"], "gpt-6.1-luna");
+    assert_eq!(audit[1]["data"]["destination_model"], "gpt-6-luna");
     assert_eq!(
         checkpoint(&api).2["state"]["history"],
         saved["state"]["history"]
     );
-    applied(&api, "fresh", switch("gpt-6.1-luna", HistoryMode::Fresh));
+    applied(&api, "fresh", switch("gpt-6-luna", HistoryMode::Fresh));
     api.get_replacement().unwrap().close().unwrap();
 
     let api = live(&root, false, false);
@@ -757,7 +757,7 @@ fn carry_uses_collected_history_and_refuses_unknown_effects_or_destination_windo
     api.change_session(
         "uncertain",
         before.revision,
-        switch("gpt-6.1-luna", HistoryMode::Carry),
+        switch("gpt-6-luna", HistoryMode::Carry),
     )
     .unwrap();
     let reader = api.clone();
@@ -765,7 +765,7 @@ fn carry_uses_collected_history_and_refuses_unknown_effects_or_destination_windo
     assert_eq!(receipt.state, CommandState::NotApplied);
     assert!(receipt.reason.unwrap().contains("uncertain tool effects"));
     assert_eq!(api.get_snapshot().unwrap().model, before.model);
-    applied(&api, "fresh", switch("gpt-6.1-luna", HistoryMode::Fresh));
+    applied(&api, "fresh", switch("gpt-6-luna", HistoryMode::Fresh));
     api.get_replacement().unwrap().close().unwrap();
 }
 
@@ -845,7 +845,7 @@ fn failed_switch_save_restores_bindings_poisons_the_instance_and_releases_fresh_
             api.change_session(
                 "no-recovery",
                 after.revision,
-                switch("gpt-6.1-luna", HistoryMode::Fresh)
+                switch("gpt-6-luna", HistoryMode::Fresh)
             )
             .unwrap_err()
             .code,
@@ -948,7 +948,7 @@ fn concurrent_identical_switches_deduplicate_the_entire_model_history_and_revisi
             let barrier = barrier.clone();
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
-                api.change_session("same", revision, switch("gpt-6.1-luna", history))
+                api.change_session("same", revision, switch("gpt-6-luna", history))
                     .unwrap()
             }));
         }
@@ -961,7 +961,7 @@ fn concurrent_identical_switches_deduplicate_the_entire_model_history_and_revisi
         assert_eq!(receipt.state, CommandState::Applied);
         assert_eq!(
             record(
-                &api.change_session("same", revision, switch("gpt-6.1-luna", history))
+                &api.change_session("same", revision, switch("gpt-6-luna", history))
                     .unwrap()
             ),
             record(&receipt)
@@ -969,7 +969,7 @@ fn concurrent_identical_switches_deduplicate_the_entire_model_history_and_revisi
         for change in [
             switch("gpt-6.1-sol", history),
             switch(
-                "gpt-6.1-luna",
+                "gpt-6-luna",
                 if history == HistoryMode::Carry {
                     HistoryMode::Fresh
                 } else {
@@ -986,7 +986,7 @@ fn concurrent_identical_switches_deduplicate_the_entire_model_history_and_revisi
             );
         }
         assert_eq!(
-            api.change_session("same", revision + 1, switch("gpt-6.1-luna", history))
+            api.change_session("same", revision + 1, switch("gpt-6-luna", history))
                 .unwrap_err()
                 .code,
             "conflict"
@@ -1287,7 +1287,7 @@ fn carry_and_fresh_operation_traces_record_measured_binding_digest_and_saved_suc
     let api = live(&root, true, true);
     let source = run(&api, "private-source-text");
     let before = api.get_snapshot().unwrap();
-    applied(&api, "carry", switch("gpt-6.1-luna", HistoryMode::Carry));
+    applied(&api, "carry", switch("gpt-6-luna", HistoryMode::Carry));
     let after = api.get_snapshot().unwrap();
     let audit = switch_trace(&api, "model.switch.finished");
     assert_eq!(audit[0]["session_id"], before.session.session_id);

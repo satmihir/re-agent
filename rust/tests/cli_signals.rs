@@ -548,17 +548,17 @@ fn fresh_model_announces_session_before_switch_and_accepts_the_next_turn() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"first\n/model gpt-6.1-luna fresh\nnext\n/exit\n")
+        .write_all(b"first\n/model gpt-6-luna fresh\nnext\n/exit\n")
         .unwrap();
     let (mut first, _) = request(&listener, &mut child);
     respond(&mut first, false);
     let (mut second, body) = request(&listener, &mut child);
-    assert_eq!(body["model"], "gpt-6.1-luna");
+    assert_eq!(body["model"], "gpt-6-luna");
     respond(&mut second, false);
     let output = child.wait_with_output().unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(output.status.success(), "{stderr}");
-    let switch = stderr.find("switched to gpt-6.1-luna").unwrap();
+    let switch = stderr.find("switched to gpt-6-luna").unwrap();
     let announcement = stderr.rfind(" · resume: reagent chat --resume ").unwrap();
     assert!(announcement < switch, "{stderr}");
     let summaries = stderr.lines().filter(|line| line.starts_with("✓ ")).count();

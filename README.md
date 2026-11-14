@@ -275,7 +275,7 @@ shell (the CLI does not automatically load `.env`):
 Without an explicit provider/model or `REAGENT_MODEL`, `--auto` starts with
 `gpt-6.1-sol / medium` as fallback. An explicit effort still wins. Otherwise the
 configured model/effort is the fallback; Auto requires a supported catalog pair
-with a known window. Auto offers **`gpt-6.1-luna` and `gpt-6.1-sol` at low, medium
+with a known window. Auto offers **`gpt-6-luna` and `gpt-6.1-sol` at low, medium
 and high effort** when supported and usable with the process's OpenAI
 credentials or proxy:
 six default pairs, selected in one joint Jev decision. Low targets clear mechanical
@@ -284,8 +284,8 @@ invariants. These are routing heuristics, not measured capability rankings;
 Luna/high is not assumed to outrank Sol/low. The configured fallback is retained
 and deduplicated; a different configured model also contributes its high pair
 when supported (at most eight pairs). A sole candidate or missing TypeSafe key
-needs no router calls. The picker offers 6.1 Luna and Sol instead of GPT-6 Luna
-and Sol; older models remain available via the `--model` flag. 6.1 Luna defaults to
+needs no router calls. The picker offers GPT-6 Luna and 6.1 Sol instead of GPT-6
+Sol; older models remain available via the `--model` flag. GPT-6 Luna defaults to
 medium, supports none, low, medium, high, xhigh and max, and has a 1,050,000-token
 context window.
 Normal run/chat defaults are **`gpt-6.1-sol` at high effort**; explicit model,

@@ -25,7 +25,7 @@ fn available(session: &Session, provider: &str) -> bool {
 }
 fn route(id: &str, model: &str, effort: &str) -> Value {
     let capability = match model {
-        "gpt-6.1-luna" => {
+        "gpt-6-luna" => {
             "Designated faster model; do not assume high effort equals the stronger model."
         }
         "gpt-6.1-sol" => {
@@ -43,7 +43,7 @@ fn route(id: &str, model: &str, effort: &str) -> Value {
 }
 fn inventory(session: &Session, fallback: &Value, require_available: bool) -> Vec<Value> {
     let mut routes = vec![fallback.clone()];
-    for model in ["gpt-6.1-luna", "gpt-6.1-sol", text(fallback, "model")] {
+    for model in ["gpt-6-luna", "gpt-6.1-sol", text(fallback, "model")] {
         let info = catalog::model_info(model);
         if info.is_null()
             || info["context_window"].as_i64().unwrap_or(0) == 0
@@ -56,7 +56,7 @@ fn inventory(session: &Session, fallback: &Value, require_available: bool) -> Ve
                 .as_array()
                 .is_some_and(|efforts| efforts.iter().any(|e| e == effort));
             if !accepts
-                || (model != "gpt-6.1-luna" && model != "gpt-6.1-sol" && effort != "high")
+                || (model != "gpt-6-luna" && model != "gpt-6.1-sol" && effort != "high")
                 || routes
                     .iter()
                     .any(|r| r["model"] == model && r["reasoning_effort"] == effort)
@@ -296,7 +296,7 @@ fn cheapest(routes: &[Value], probabilities: &Value) -> (String, Vec<String>, Ve
     let mut ladder = routes.to_vec();
     ladder.sort_by_key(|route| {
         let rank = match text(route, "model") {
-            "gpt-6.1-luna" => 0,
+            "gpt-6-luna" => 0,
             "gpt-6.1-sol" => 1,
             _ => 2,
         };
@@ -618,7 +618,7 @@ mod tests {
     fn cumulative_sufficiency_is_cost_ordered_not_the_winning_choice() {
         let routes = vec![
             route("capable", "gpt-6.1-sol", "medium"),
-            route("luna-low", "gpt-6.1-luna", "low"),
+            route("luna-low", "gpt-6-luna", "low"),
             route("sol-low", "gpt-6.1-sol", "low"),
         ];
         let (selected, ladder, sums) = cheapest(
@@ -638,8 +638,8 @@ mod tests {
             0.4300000005_f64.to_bits()
         );
         let routes = vec![
-            route("a", "gpt-6.1-luna", "low"),
-            route("b", "gpt-6.1-luna", "medium"),
+            route("a", "gpt-6-luna", "low"),
+            route("b", "gpt-6-luna", "medium"),
         ];
         let probabilities: Value = serde_json::from_str("{\"a\":0.6,\"b\":0.4300000005}").unwrap();
         let (_, _, sums) = cheapest(&routes, &probabilities);
