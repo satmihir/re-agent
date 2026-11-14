@@ -14,6 +14,9 @@ pub struct PreviewCursor {
     pub attempt: u64,
     /// offset is a byte position in that attempt's preview text.
     pub offset: u64,
+    /// searching is the search state the reader last saw.
+    #[serde(default)]
+    pub searching: bool,
 }
 
 /// PreviewPage carries speculative reply text published after a cursor.
@@ -29,6 +32,8 @@ pub struct PreviewPage {
     pub next: PreviewCursor,
     /// incomplete means this attempt's preview stopped early; its final reply arrives whole.
     pub incomplete: bool,
+    /// searching means the provider is running a hosted web search for this attempt.
+    pub searching: bool,
     /// finished means the Run is terminal and its result is authoritative.
     pub finished: bool,
 }
@@ -49,6 +54,7 @@ struct Text {
     published: String,
     cut: usize,
     incomplete: bool,
+    searching: bool,
     finished: bool,
 }
 
@@ -83,6 +89,15 @@ impl ReplyPreview {
                 crate::transport::redact(&text.received[text.cut..cut], secrets, endpoint);
             text.published.push_str(&segment);
             text.cut = cut;
+            self.changed.notify_all();
+        }
+    }
+
+    /// Search records whether a hosted web search is running, so readers can say so.
+    pub(crate) fn search(&self, active: bool) {
+        let mut text = self.text.lock().unwrap();
+        if text.attempt > 0 && !text.finished && text.searching != active {
+            text.searching = active;
             self.changed.notify_all();
         }
     }
@@ -134,7 +149,7 @@ impl ReplyPreview {
                 "preview cursor is not a text position",
             ));
         }
-        if !newer && offset == text.published.len() {
+        if !newer && offset == text.published.len() && cursor.searching == text.searching {
             return Ok(None);
         }
         Ok(Some(PreviewPage {
@@ -144,8 +159,10 @@ impl ReplyPreview {
             next: PreviewCursor {
                 attempt: text.attempt,
                 offset: text.published.len() as u64,
+                searching: text.searching,
             },
             incomplete: text.incomplete,
+            searching: text.searching,
             finished: false,
         }))
     }
@@ -201,6 +218,7 @@ impl SessionApi {
         let cursor = cursor.unwrap_or(PreviewCursor {
             attempt: 0,
             offset: 0,
+            searching: false,
         });
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         loop {
@@ -221,6 +239,7 @@ impl SessionApi {
                         text: String::new(),
                         next: cursor,
                         incomplete: false,
+                        searching: false,
                         finished: true,
                     });
                 }
@@ -266,6 +285,7 @@ fn idle(cursor: PreviewCursor) -> PreviewPage {
         text: String::new(),
         next: cursor,
         incomplete: false,
+        searching: cursor.searching,
         finished: false,
     }
 }
@@ -281,6 +301,7 @@ mod tests {
             .page(PreviewCursor {
                 attempt: 1,
                 offset: 0,
+                searching: false,
             })
             .unwrap()
             .map(|page| page.text)
@@ -332,6 +353,7 @@ mod tests {
             .page(PreviewCursor {
                 attempt: 1,
                 offset: 9,
+                searching: false,
             })
             .unwrap()
             .unwrap();

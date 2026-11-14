@@ -21,7 +21,12 @@ const ERROR: Shape = Object(
     true,
 );
 const CONTENT: Shape = Object(
-    &[("type", String), ("text", String), ("refusal", String)],
+    &[
+        ("type", String),
+        ("text", String),
+        ("refusal", String),
+        ("annotations", RawArray),
+    ],
     false,
 );
 const OPENAI_USAGE: Shape = Object(
@@ -59,6 +64,7 @@ pub(crate) const OPENAI_ITEM: Shape = Object(
         ("call_id", String),
         ("name", String),
         ("arguments", String),
+        ("action", Raw),
     ],
     false,
 );
@@ -107,6 +113,8 @@ pub(crate) const ANTHROPIC_BLOCK: Shape = Object(
         ("id", String),
         ("name", String),
         ("input", Raw),
+        ("content", Raw),
+        ("citations", RawArray),
     ],
     false,
 );

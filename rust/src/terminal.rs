@@ -19,7 +19,7 @@ mod region;
 use crate::session_api::{SessionApi, WorkspaceConsentApi, WorkspaceDecision};
 use editor::{Decoder, Editor as IdleEditor, Key, TurnInput};
 pub(crate) use readiness::poll_read;
-pub(crate) use region::output;
+pub(crate) use region::{output, SEARCHING};
 pub use region::{Region, RegionHandle};
 
 static PANIC_TERMINAL: Mutex<Option<(i32, libc::termios)>> = Mutex::new(None);

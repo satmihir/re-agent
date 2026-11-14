@@ -1136,7 +1136,21 @@ pub fn result_in_region(
         println!(
             "{}",
             reply_text(reply, chat, styled(1), columns(1).min(100))
-        )
+        );
+        // Search results shown to a reader must name their sources; stdout keeps the reply alone.
+        let sources = result["sources"].as_array().map_or(&[][..], Vec::as_slice);
+        if !sources.is_empty() {
+            eprintln!("  sources");
+            for (n, source) in sources.iter().enumerate() {
+                let title = sanitize(text(source, "title"));
+                let url = sanitize(text(source, "url"));
+                if title.is_empty() {
+                    eprintln!("    {}. {url}", n + 1);
+                } else {
+                    eprintln!("    {}. {title} · {url}", n + 1);
+                }
+            }
+        }
     }
     let status = text(result, "status");
     eprint!("{}", turn_summary(result, elapsed, state, chat, styled(2)));

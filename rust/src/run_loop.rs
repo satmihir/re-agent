@@ -160,6 +160,9 @@ impl Session {
         self.state["tool_calls"] = json!(0);
         self.state["run_usage"] = types::usage_zero(true);
         self.state["effects"] = json!([]);
+        self.state["web_searches"] = json!(0);
+        self.state["paused_steps"] = json!(0);
+        self.state["sources"] = json!([]);
         self.state["resumable"] = json!(false);
         self.state["persistence_error"] = json!("");
         self.state["compact_off"] = json!(false);
@@ -298,12 +301,19 @@ impl Session {
             crate::agents::meter(self, &types::usage_zero(true));
             let history = self.request_history();
             self.advance_agent_prefix();
-            let req = context::build_context(
+            let mut req = context::build_context(
                 &self.config,
                 scope(string(&self.state["session_id"]), &run_id, step),
                 &history,
                 tools::specs(&self.config),
             );
+            // Hosted search belongs to the root conversation, not summaries, BTW or agents.
+            if flag(&self.config["web_search"])
+                && !flag(&self.config["agent"])
+                && !flag(&self.config["btw"])
+            {
+                req["web_search"] = json!(true);
+            }
             if crate::image_context::has_images(&history) && self.config["provider"] == "openai" {
                 let estimate = match admission_tokens(&self.config, &req, admission_rate(self)) {
                     Ok(estimate) => estimate,
@@ -409,6 +419,25 @@ impl Session {
             if let Err(error) = self.save_run("accepted", "") {
                 return self.finish("persistence_error", &error, "");
             }
+            let searches = resp["blocks"].as_array().map_or(0, |b| {
+                b.iter().filter(|b| b["kind"] == "web_search").count()
+            });
+            self.state["web_searches"] =
+                json!(number(&self.state["web_searches"]) + searches as i64);
+            // A paused search turn resumes from its own accepted items, with no new input.
+            if flag(&resp["paused"]) && calls.is_empty() {
+                let paused = number(&self.state["paused_steps"]) + 1;
+                if paused > MAX_PAUSED_STEPS {
+                    return self.finish(
+                        "incomplete_response",
+                        "the provider paused its search turn too many times in a row",
+                        "",
+                    );
+                }
+                self.state["paused_steps"] = json!(paused);
+                continue;
+            }
+            self.state["paused_steps"] = json!(0);
             if calls.is_empty() {
                 let running = crate::agents::running(self);
                 if !running.is_empty() {
@@ -434,6 +463,7 @@ impl Session {
                 if !refusal.is_empty() {
                     return self.finish("refused", "the model refused the task", &refusal);
                 }
+                self.state["sources"] = cited_sources(&resp);
                 return self.finish("completed", "", &block_text(&resp, "text"));
             }
             let commentary = block_text(&resp, "text");
@@ -954,6 +984,15 @@ impl Session {
         if !self.state["router_usage"].is_null() {
             result["router_usage"] = self.state["router_usage"].clone();
         }
+        if number(&self.state["web_searches"]) > 0 {
+            result["web_searches"] = self.state["web_searches"].clone();
+        }
+        if self.state["sources"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+        {
+            result["sources"] = self.state["sources"].clone();
+        }
         if !self.trace.path().is_empty() {
             result["trace_path"] = json!(self.trace.path());
         }
@@ -1066,6 +1105,8 @@ pub(crate) fn ordered_run_result(mut result: Value) -> Value {
         "tree_cost",
         "trace_path",
         "effects",
+        "web_searches",
+        "sources",
         "resumable",
     ] {
         let Some(mut value) = result.as_object_mut().unwrap().remove(key) else {
@@ -1185,6 +1226,22 @@ pub(crate) fn admission_rate(session: &Session) -> f64 {
         (rate * 1.5).max(0.25)
     }
 }
+/// MAX_PAUSED_STEPS bounds consecutive provider-paused search steps within one Run.
+const MAX_PAUSED_STEPS: i64 = 5;
+
+/// Cited_sources lists the distinct sources a reply's text cites, in first-cited order.
+fn cited_sources(resp: &Value) -> Value {
+    let mut sources: Vec<Value> = Vec::new();
+    for block in resp["blocks"].as_array().into_iter().flatten() {
+        for source in block["citations"].as_array().into_iter().flatten() {
+            if !sources.iter().any(|s| s["url"] == source["url"]) {
+                sources.push(source.clone());
+            }
+        }
+    }
+    json!(sources)
+}
+
 pub(crate) fn tool_calls(resp: &Value) -> Vec<Value> {
     resp["blocks"]
         .as_array()
@@ -1215,6 +1272,7 @@ fn validate_response(resp: &Value, seen: &Value) -> Result<(), String> {
         match string(&b["kind"]) {
             "text" => has_text |= !string(&b["text"]).trim().is_empty(),
             "refusal" => has_refusal = true,
+            "web_search" => {}
             "tool_call" => {
                 let c = &b["call"];
                 if !c.is_object() {
@@ -1238,7 +1296,7 @@ fn validate_response(resp: &Value, seen: &Value) -> Result<(), String> {
     if has_refusal && has_call {
         return Err("response contains both a refusal and tool calls".into());
     }
-    if !has_call && !has_text && !has_refusal {
+    if !has_call && !has_text && !has_refusal && resp["paused"] != true {
         return Err("response contains no visible text, refusal, or tool call".into());
     }
     Ok(())

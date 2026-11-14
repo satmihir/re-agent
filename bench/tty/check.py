@@ -255,6 +255,23 @@ SCENARIOS = {
         "startup_argv": ["--continue"],
         "steps": [("exit", 2, "no saved", 5)],
     },
+    "web-search-progress-and-sources": {
+        "web_search": True,
+        "size": (28, 100),
+        "steps": [
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("type", "what is new in rust"), ("key", "enter"),
+            ("wait", "searching the web", 5),
+            ("show", "The provider's hosted search is shown while it runs"),
+            ("release", "advance"),
+            ("wait", "Rust 1.100 is current.", 5),
+            ("wait", "1. Announcing Rust 1.100.0 · https://blog.rust-lang.org/2026/11/12/", 5),
+            ("show", "The reply lists the sources it cites"),
+            ("wait_status", "gpt-6.1-sol", 5),
+            ("expect", "line_count", "Rust 1.100 is current.", 1),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "chat-fast-service-tier": {
         "fast": True,
         "size": (28, 110),
@@ -1849,7 +1866,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None, startup_argv=None, recap=True):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None, startup_argv=None, recap=True, web_search=False):
         self.workspace, self.home = workspace, home or workspace
         self.rows, self.cols = size
         self.raw = bytearray()
@@ -1888,6 +1905,8 @@ class Session:
                 args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6-luna"]
             elif fast:
                 args += ["--model", "gpt-6.1-sol", "--reasoning-effort", "medium", "--no-project-instructions"]
+            elif web_search:
+                args += ["--web-search", "--model", "gpt-6.1-sol", "--reasoning-effort", "low", "--no-project-instructions"]
             elif script_path is None:
                 args += ["--auto", "--no-project-instructions"]
             else:
@@ -2509,6 +2528,48 @@ def run(binary, name, scenario, workspace):
                          OPENAI_API_KEY="offline-fixture", ANTHROPIC_API_KEY="offline-fixture",
                          REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}",
                          REAGENT_ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}")
+    if scenario.get("web_search"):
+        class SearchHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if {"type": "web_search"} not in request.get("tools", []):
+                    failures.append("chat request did not declare the hosted web search tool")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+
+                def send(event):
+                    self.wfile.write(("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n").encode())
+                    self.wfile.flush()
+
+                search = {"type": "web_search_call", "id": "ws", "status": "completed",
+                          "action": {"type": "search", "query": "rust release"}}
+                url = "https://blog.rust-lang.org/2026/11/12/Rust-1.100.0/"
+                message = {"type": "message", "status": "completed", "role": "assistant", "content": [
+                    {"type": "output_text", "text": "Rust 1.100 is current.", "annotations": [
+                        {"type": "url_citation", "start_index": 0, "end_index": 10, "url": url, "title": "Announcing Rust 1.100.0"}]}]}
+                try:
+                    send({"type": "response.created", "response": {"usage": {"output_tokens": 1}}})
+                    send({"type": "response.web_search_call.in_progress", "item_id": "ws", "output_index": 0})
+                    send({"type": "response.web_search_call.searching", "item_id": "ws", "output_index": 0})
+                    if not gates["advance"].wait(20):
+                        failures.append("search fixture timed out before release")
+                    send({"type": "response.web_search_call.completed", "item_id": "ws", "output_index": 0})
+                    send({"type": "response.output_item.done", "output_index": 0, "item": search})
+                    send({"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "Rust 1.100 is current."})
+                    send({"type": "response.output_item.done", "output_index": 1, "item": message})
+                    send({"type": "response.completed", "response": {"id": "tty-search", "model": "gpt-6.1-sol", "status": "completed",
+                          "output": [search, message], "usage": {"input_tokens": 10, "output_tokens": 6}}})
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SearchHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_env.update(API_PROXY_URL="", API_PROXY_PROVIDER="", OPENAI_API_KEY="offline-fixture", TYPESAFE_API_KEY="", REAGENT_MODEL="",
+                         REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}")
     fast_requests = []
     if scenario.get("fast"):
         class FastHandler(http.server.BaseHTTPRequestHandler):
@@ -2828,7 +2889,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False), startup_argv=scenario.get("startup_argv"), recap=scenario.get("recap", True))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False), startup_argv=scenario.get("startup_argv"), recap=scenario.get("recap", True), web_search=scenario.get("web_search", False))
     try:
         for index, step in enumerate(scenario["steps"]):
             kind, args = step[0], step[1:]

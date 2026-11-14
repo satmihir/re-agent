@@ -81,6 +81,12 @@ fn block(value: &Value, remaining: &mut usize) -> BlockView {
         "refusal" => BlockView::Refusal {
             text: content(&value["text"], remaining),
         },
+        "web_search" => BlockView::WebSearch {
+            query: content(&value["search"]["query"], remaining),
+            sources: value["search"]["sources"]
+                .as_array()
+                .map_or(0, |sources| sources.len() as u64),
+        },
         "tool_call" => BlockView::ToolCall {
             call_id: content(&value["call"]["call_id"], remaining),
             name: content(&value["call"]["name"], remaining),

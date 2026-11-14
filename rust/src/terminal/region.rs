@@ -158,6 +158,8 @@ pub struct Region {
     color: bool,
 }
 
+/// SEARCHING labels progress while the provider runs a hosted web search.
+pub(crate) const SEARCHING: &str = "searching the web";
 const THINKING_PHRASES: &[&str] = &[
     "Distilling thoughts…",
     "Attempting to turn tokens into gold…",
@@ -195,7 +197,10 @@ impl Progress {
         } else {
             THINKING_PHRASES
         };
-        let label = if self.output_tokens.is_some() {
+        // A hosted search is a real wait on the provider; say so plainly.
+        let label = if self.label.starts_with(SEARCHING) {
+            SEARCHING
+        } else if self.output_tokens.is_some() {
             words[(elapsed.as_secs() / 4) as usize % words.len()]
         } else {
             &self.label
@@ -528,7 +533,7 @@ impl Region {
     /// Stream progress updates counters and optionally replaces the bounded complete-line preview.
     pub(crate) fn stream_progress(
         &mut self,
-        writing: bool,
+        activity: &str,
         tokens: usize,
         text: Option<&str>,
     ) -> io::Result<()> {
@@ -537,10 +542,7 @@ impl Region {
                 .label
                 .split_once(" · ")
                 .map_or("", |(_, suffix)| suffix);
-            progress.label = format!(
-                "{} · {suffix}",
-                if writing { "writing" } else { "thinking" }
-            );
+            progress.label = format!("{activity} · {suffix}");
             progress.output_tokens = Some(tokens);
         }
         if let Some(text) = text {
@@ -985,7 +987,7 @@ mod tests {
         let draft: Vec<_> = "next question".chars().collect();
         region.input(&draft, 3, "", 48, 24).unwrap();
         for text in ["```diff\n", "```diff\n-old\n", "```diff\n-old\n+new\n"] {
-            region.stream_progress(true, 10, Some(text)).unwrap();
+            region.stream_progress("writing", 10, Some(text)).unwrap();
             assert!(region.stream_rows[0].contains("│ diff"));
             assert!(!region.stream_rows.iter().any(|row| row.contains("```")));
             assert_eq!(region.buffer, draft);
@@ -995,7 +997,7 @@ mod tests {
         assert!(region.stream_rows[2].contains(crate::render::palette::SUCCESS));
         region
             .stream_progress(
-                true,
+                "writing",
                 20,
                 Some("```diff\n-old\n+new\n```\n[Docs](https://example.invalid/docs)"),
             )
@@ -1026,7 +1028,9 @@ mod tests {
             "```\n{}\n```\n# outside",
             "**literal** code line\n".repeat(128)
         );
-        region.stream_progress(true, 1000, Some(&text)).unwrap();
+        region
+            .stream_progress("writing", 1000, Some(&text))
+            .unwrap();
         let layouts = region.stream_layouts;
         assert!(region.stream_rows[1].contains(&format!("{ACCENT}**literal** code line")));
         assert!(region
@@ -1035,7 +1039,7 @@ mod tests {
             .unwrap()
             .contains(&format!("{BOLD}{ACCENT}outside")));
         assert!(region.visible.len() < 24);
-        region.stream_progress(true, 1001, None).unwrap();
+        region.stream_progress("writing", 1001, None).unwrap();
         region.progress.as_mut().unwrap().ticked = Instant::now() - Duration::from_millis(101);
         assert!(region.tick_progress());
         region.repaint().unwrap();
@@ -1094,7 +1098,7 @@ mod tests {
             .unwrap();
         let started = region.progress.as_ref().unwrap().started;
         region
-            .stream_progress(true, 12, Some("First live line.\nSecond live line."))
+            .stream_progress("writing", 12, Some("First live line.\nSecond live line."))
             .unwrap();
         assert_eq!(region.visible[0], "First live line.");
         assert_eq!(region.visible[1], "Second live line.");
@@ -1114,7 +1118,7 @@ mod tests {
             .set_progress(Some("thinking · model · attempt 2"))
             .unwrap();
         assert_eq!(region.progress.as_ref().unwrap().output_tokens, Some(0));
-        region.stream_progress(false, 5, None).unwrap();
+        region.stream_progress("thinking", 5, None).unwrap();
         assert!(region.visible[0].contains(THINKING_PHRASES[0]));
         assert!(!region.visible[0].contains(WRITING_PHRASES[0]));
         region.set_progress(None).unwrap();

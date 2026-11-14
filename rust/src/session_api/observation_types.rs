@@ -101,6 +101,13 @@ pub enum BlockView {
         /// text contains exact visible bytes.
         text: ContentBytes,
     },
+    /// WebSearch records a provider-hosted search the model ran within its response.
+    WebSearch {
+        /// query is the search text the model sent.
+        query: ContentBytes,
+        /// sources counts the results the provider reported; zero for OpenAI, which cites instead.
+        sources: u64,
+    },
     /// ToolCall retains a visible call without provider-native metadata.
     ToolCall {
         /// call_id identifies the call.
