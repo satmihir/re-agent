@@ -15,6 +15,9 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
 
 - Launch settings use the typed `SessionOptions` subset; credentials remain host
   environment bindings. The CLI's private adapter retains its existing flags.
+- `SessionOptions.origin` is an optional label of 1–32 lowercase ASCII letters, digits
+  or hyphens naming the host that owns the Session. It is saved in the checkpoint,
+  survives resume and Reset, and hides the Session from the CLI's picker and `--continue`.
 - Messages are literal bytes. `PlanMode` applies an explicit planning change at
   turn start; the CLI translates inline `/plan` rather than letting the API parse it.
 - `live_runs` contains every queued/running conversation and BTW Run, without requiring

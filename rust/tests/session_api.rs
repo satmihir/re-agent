@@ -655,3 +655,17 @@ fn empty_script_paths_are_rejected_instead_of_selecting_live_inference() {
     assert_eq!(error.code, "invalid_argument");
     assert!(error.message.contains("script path"));
 }
+
+#[test]
+fn malformed_origins_are_rejected_before_opening() {
+    for origin in ["", "Covalent", "has space", &"a".repeat(33)] {
+        let error = open_session(SessionOptions {
+            origin: Some(origin.into()),
+            ..Default::default()
+        })
+        .err()
+        .expect("a malformed origin must be rejected");
+        assert_eq!(error.code, "invalid_argument", "{origin:?}");
+        assert!(error.message.contains("origin"));
+    }
+}
