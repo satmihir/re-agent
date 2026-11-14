@@ -330,6 +330,17 @@ impl Provider {
         }
         .into()
     }
+    /// set_reply_preview publishes visible text of later model streams to a conversation Run's readers.
+    pub(crate) fn set_reply_preview(
+        &mut self,
+        preview: Option<std::sync::Arc<crate::session_api::ReplyPreview>>,
+    ) {
+        self.transport.reply_preview = preview;
+    }
+    /// reply_preview returns the binding a replacement provider must keep within the same Run.
+    pub(crate) fn reply_preview(&self) -> Option<std::sync::Arc<crate::session_api::ReplyPreview>> {
+        self.transport.reply_preview.clone()
+    }
     /// set_cancellation binds in-flight HTTP and retry waits to a run's cancellation token.
     pub fn set_cancellation(&mut self, token: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         self.transport.cancellation = Some(token);

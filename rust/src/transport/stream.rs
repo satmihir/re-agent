@@ -71,6 +71,8 @@ pub(super) fn contains_credentials(raw: &[u8], secrets: &[String], endpoint: &st
 pub(super) struct Preview<'a> {
     region: Option<&'a RegionHandle>,
     pub(super) agent: Option<&'a Value>,
+    /// reply receives visible text for Session API readers, independently of the terminal.
+    pub(super) reply: Option<&'a crate::session_api::ReplyPreview>,
     pending: Vec<u8>,
     data: Vec<u8>,
     lines: VecDeque<String>,
@@ -92,6 +94,7 @@ impl<'a> Preview<'a> {
         Self {
             region,
             agent: None,
+            reply: None,
             pending: Vec::new(),
             data: Vec::new(),
             lines: VecDeque::new(),
@@ -110,7 +113,7 @@ impl<'a> Preview<'a> {
 
     /// Push publishes newly completed lines while keeping provisional parsing bounded.
     pub(super) fn push(&mut self, bytes: &[u8], secrets: &[String], endpoint: &str) {
-        if self.region.is_none() && self.agent.is_none() {
+        if self.region.is_none() && self.agent.is_none() && self.reply.is_none() {
             return;
         }
         let was_writing = self.writing;
@@ -184,6 +187,9 @@ impl<'a> Preview<'a> {
     }
 
     fn omit_event(&mut self) {
+        if let Some(reply) = self.reply {
+            reply.interrupt();
+        }
         self.event_overflow = true;
         self.pending.clear();
         self.data.clear();
@@ -300,6 +306,9 @@ impl<'a> Preview<'a> {
         self.output_bytes = self.output_bytes.saturating_add(delta.len());
         if visible {
             self.writing = true;
+            if let Some(reply) = self.reply {
+                reply.append(delta, secrets, endpoint);
+            }
             self.append(delta, secrets, endpoint);
         }
         true

@@ -1,22 +1,22 @@
 use serde_json::Value;
 
-pub(super) fn endpoint_text(text: &str, endpoint: &str) -> String {
-    let Ok(mut url) = reqwest::Url::parse(endpoint) else {
-        return text.into();
-    };
-    if url.password().is_none() {
-        return text.into();
-    }
-    let Some(start) = endpoint.find("://").map(|at| at + 3) else {
-        return text.into();
-    };
+/// endpoint_secret is the scheme-to-password prefix of an endpoint that embeds a password.
+pub(super) fn endpoint_secret(endpoint: &str) -> Option<&str> {
+    reqwest::Url::parse(endpoint).ok()?.password()?;
+    let start = endpoint.find("://")? + 3;
     let authority = endpoint[start..].split('/').next().unwrap_or("");
-    let Some(at) = authority.rfind('@') else {
+    let at = authority.rfind('@')?;
+    Some(&endpoint[..start + at + 1])
+}
+
+pub(super) fn endpoint_text(text: &str, endpoint: &str) -> String {
+    let Some(prefix) = endpoint_secret(endpoint) else {
         return text.into();
     };
+    let mut url = reqwest::Url::parse(endpoint).expect("endpoint_secret parsed it");
     let _ = url.set_password(Some("xxxxx"));
     let masked = format!("{}://{}:xxxxx@", url.scheme(), url.username());
-    text.replace(&endpoint[..start + at + 1], &masked)
+    text.replace(prefix, &masked)
 }
 
 pub(super) fn endpoint_body(raw: &[u8], endpoint: &str) -> Vec<u8> {

@@ -324,7 +324,8 @@ fn isolated_with_auth(name: &str, replies: Vec<Reply>, chatgpt: bool) -> Option<
                     let stopped = stopped.clone();
                     workers.push(std::thread::spawn(move || {
                         let request=read_request(&mut stream);
-                        std::fs::write(directory.join(format!("request-{index}.json")),request.to_string()).unwrap();
+                        // Rename publishes complete bytes; wait_file only checks existence.
+                        let path=directory.join(format!("request-{index}.json"));let staged=path.with_extension("tmp");std::fs::write(&staged,request.to_string()).unwrap();std::fs::rename(&staged,&path).unwrap();
                         let reply=replies.get(index).expect("unexpected model request");
                         if reply.body.is_null() {
                             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort");

@@ -26,6 +26,16 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   `SessionOptions.instructions` (tool-free only, at most 32 KiB) replaces re:agent's
   instructions entirely and survives resume, compaction, Reset and model switches.
   `SessionSnapshot.tool_free` reports the choice; both settings are saved in the checkpoint.
+- `read_preview(run, cursor, wait_ms, cancellation)` reads the visible text a conversation
+  Run's model is writing, before the Run ends. It is speculative: each provider stream (a
+  retried attempt or a later Step) starts over at offset zero, and a page with `restarted`
+  tells the caller to discard what it showed. Only text and refusal deltas appear, never
+  reasoning or tool arguments, and only the root Run's model steps, not summaries, BTW or
+  agents. Text is redacted like traces, and a tail that could begin a credential is held
+  back until it can't. An attempt stops at 1 MiB with `incomplete`. Waits follow
+  `read_events` (at most 30 s, caller-local cancellation). When the Run is terminal the page
+  says `finished`, the text is freed, and `RunResult.reply` is the only authoritative reply.
+  Scripted Sessions do not stream and have no preview text. Nothing is checkpointed.
 - Messages are literal bytes. `PlanMode` applies an explicit planning change at
   turn start; the CLI translates inline `/plan` rather than letting the API parse it.
 - `live_runs` contains every queued/running conversation and BTW Run, without requiring
