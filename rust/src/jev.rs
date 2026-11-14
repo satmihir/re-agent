@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn routing_rejects_duplicate_pairs_and_unsupported_effort() {
         let route =
-            json!({"id":"a","model":"gpt-6.1-luna","reasoning_effort":"low","description":"cheap"});
+            json!({"id":"a","model":"gpt-6-luna","reasoning_effort":"low","description":"cheap"});
         let mut duplicate = route.clone();
         duplicate["id"] = json!("b");
         assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
@@ -445,7 +445,7 @@ mod tests {
         let request = encode_request("<&>", &[route, duplicate]).unwrap();
         let wire = json_string(&request);
         assert!(wire.starts_with("{\"state\":\"\\u003c\\u0026\\u003e\",\"model\":"));
-        assert!(wire.contains("Model: gpt-6.1-luna; reasoning effort: \\\"low\\\". cheap"));
+        assert!(wire.contains("Model: gpt-6-luna; reasoning effort: \\\"low\\\". cheap"));
     }
 
     #[test]
@@ -461,7 +461,7 @@ mod http_tests {
     use super::*;
     fn routes() -> Vec<Value> {
         vec![
-            json!({"id":"a","model":"gpt-6.1-luna","reasoning_effort":"low","description":"cheap"}),
+            json!({"id":"a","model":"gpt-6-luna","reasoning_effort":"low","description":"cheap"}),
             json!({"id":"b","model":"claude-sonnet-5-5","reasoning_effort":"low","description":"alternative"}),
         ]
     }

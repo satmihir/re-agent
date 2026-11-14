@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn fast_requests_require_an_enabled_supported_model() {
         for (provider, model, supported) in [
-            ("openai", "gpt-6.1-luna", false),
+            ("openai", "gpt-6-luna", false),
             ("openai", "gpt-6.1-terra", true),
             ("openai", "gpt-6.1-sol", true),
             ("anthropic", "claude-opus-5-5", true),

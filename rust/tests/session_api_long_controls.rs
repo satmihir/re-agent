@@ -1061,7 +1061,7 @@ fn shell_terminal_save_failure_keeps_observation_and_unknown_disk_evidence_witho
                 "unsafe-carry",
                 revision,
                 SessionChange::SwitchModel {
-                    model: "gpt-6.1-luna".into(),
+                    model: "gpt-6-luna".into(),
                     history: HistoryMode::Carry
                 }
             )

@@ -3298,7 +3298,7 @@ mod tests {
             for (model, effort) in [
                 ("", "high"),
                 ("gpt-6.1-sol", "high"),
-                ("gpt-6.1-luna", "medium"),
+                ("gpt-6-luna", "medium"),
                 ("claude-haiku-4-5", ""),
                 ("claude-future", ""),
             ] {

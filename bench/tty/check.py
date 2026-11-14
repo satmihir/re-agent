@@ -608,10 +608,10 @@ SCENARIOS = {
         "image_tools": True,
         "size": (24, 110),
         "steps": [
-            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("wait_status", "gpt-6-luna / medium", 5),
             ("type", "inspect an image and generate a revision"), ("key", "enter"),
             ("wait", "Image input received; please configure OPENAI_API_KEY for generation.", 10),
-            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("wait_status", "gpt-6-luna / medium", 5),
             ("show", "Image viewing succeeds and missing generation credentials do not block chat"),
             ("expect", "raw_has", "view_image"),
             ("expect", "raw_has", "1 × 1"),
@@ -636,9 +636,9 @@ SCENARIOS = {
             ("wait_status", "gpt-6.1-terra", 5),
             ("show", "Terra selected by its catalog position"),
             ("type", "/model 1 fresh"), ("key", "enter"),
-            ("wait", "switched to gpt-6.1-luna", 5),
-            ("wait_status", "gpt-6.1-luna / medium", 5),
-            ("show", "6.1 Luna selected with its medium default"),
+            ("wait", "switched to gpt-6-luna", 5),
+            ("wait_status", "gpt-6-luna / medium", 5),
+            ("show", "GPT-6 Luna selected with its medium default"),
             ("expect", "status_row_last"),
         ],
     },
@@ -651,7 +651,7 @@ SCENARIOS = {
             ("type", "/model"), ("key", "enter"),
             ("wait", "gpt-6.1-terra", 5),
             ("show", "Model picker after removing GPT 5.6"),
-            ("expect", "screen_has", "1  gpt-6.1-luna"),
+            ("expect", "screen_has", "1  gpt-6-luna"),
             ("expect", "screen_has", "2  gpt-6.1-terra"),
             ("expect", "screen_has", "3  gpt-6.1-sol"),
             ("expect", "screen_has", "4  claude-haiku-5-5"),
@@ -671,7 +671,7 @@ SCENARIOS = {
         "chatgpt": True,
         "size": (30, 110),
         "steps": [
-            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("wait_status", "gpt-6-luna / medium", 5),
             ("type", "/model"), ("key", "enter"),
             ("wait", "7  gpt-6-astra", 5),
             ("show", "Astra appended without renumbering existing models"),
@@ -690,7 +690,7 @@ SCENARIOS = {
             ("wait_status", "gpt-6-astra / max", 5),
             ("show", "Astra follow-up request uses the selected max effort"),
             ("type", "/model 1"), ("key", "enter"),
-            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("wait_status", "gpt-6-luna / medium", 5),
             ("type", "/model gpt-6-astra"), ("key", "enter"),
             ("wait_status", "gpt-6-astra / low", 5),
             ("show", "Astra name selection carries history and restores its default effort"),
@@ -712,7 +712,7 @@ SCENARIOS = {
             ("wait", "Next ChatGPT turn.", 5),
             ("wait_status", "ChatGPT plan", 5),
             ("type", "/status"), ("key", "enter"),
-            ("wait", "model      gpt-6.1-luna (openai · ChatGPT plan)", 5),
+            ("wait", "model      gpt-6-luna (openai · ChatGPT plan)", 5),
             ("wait_status", "ChatGPT plan", 5),
             ("idle", 0.1),
             ("show", "ChatGPT reply, next turn and status after fake-server requests"),
@@ -753,7 +753,7 @@ SCENARIOS = {
             ("expect", "screen_lacks", "Status turn complete."),
             ("release", "finish"),
             ("wait", "Status turn complete.", 5),
-            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("wait_status", "gpt-6-luna / medium", 5),
             ("expect", "status_row_last"),
         ],
     },
@@ -1059,11 +1059,11 @@ SCENARIOS = {
             ("type", "say hello"),
             ("key", "enter"),
             ("wait", "model attempt 1 failed", 5),
-            ("wait_status", "gpt-6.1-luna / medium", 5),
+            ("wait_status", "gpt-6-luna / medium", 5),
             ("show", "waiting before the next model attempt"),
             ("expect", "status_row_last"),
             ("wait", "Hello after retry", 6),
-            ("wait_status", "gpt-6.1-luna / medium", 6),
+            ("wait_status", "gpt-6-luna / medium", 6),
             ("show", "model reply after retry"),
             ("expect", "screen_has", "1 unreported retry"),
             ("expect", "status_row_last"),
@@ -1875,7 +1875,7 @@ class Session:
                 if default_model:
                     env["REAGENT_MODEL"] = ""
                 else:
-                    args += ["--model", "gpt-6.1-luna"]
+                    args += ["--model", "gpt-6-luna"]
             elif anthropic:
                 args += ["--model", "claude-haiku-5-5", "--no-project-instructions"]
             elif context_gc:
@@ -1885,7 +1885,7 @@ class Session:
                 if recap:
                     args.append("--recap")
             elif retry:
-                args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6.1-luna"]
+                args += ["--model-retry-window", "5s", "--no-project-instructions", "--model", "gpt-6-luna"]
             elif fast:
                 args += ["--model", "gpt-6.1-sol", "--reasoning-effort", "medium", "--no-project-instructions"]
             elif script_path is None:

@@ -601,7 +601,7 @@ fn router_reply(request: &Value, usage: Option<(u64, u64)>) -> Value {
             description
                 .as_str()
                 .unwrap()
-                .starts_with("Model: gpt-6.1-luna; reasoning effort: \"medium\".")
+                .starts_with("Model: gpt-6-luna; reasoning effort: \"medium\".")
                 .then_some(id)
         })
         .expect("router candidates must offer luna/medium");
@@ -1029,10 +1029,10 @@ fn routed_default_effort_fallback_and_billing_survive_enabled_and_pinned_resume(
         assert!(!root.join(format!("router-{index}.json")).exists());
         run(&api, "route through the local fixture");
         let wire = request(&root, index);
-        assert_eq!(wire["model"], "gpt-6.1-luna");
+        assert_eq!(wire["model"], "gpt-6-luna");
         assert_eq!(wire["reasoning"]["effort"], "medium");
         let routed = api.get_snapshot().unwrap();
-        assert_eq!(routed.model, "gpt-6.1-luna");
+        assert_eq!(routed.model, "gpt-6-luna");
         assert_eq!(routed.reasoning_effort, "medium");
         assert_eq!(routed.auto.fallback.as_ref().unwrap().model, model);
         assert_eq!(
@@ -1262,7 +1262,7 @@ fn fast_controls_reject_unknown_support_and_model_switches_disable_unsupported_f
     for model in [
         "claude-haiku-5-5",
         "claude-sonnet-5-5",
-        "gpt-6.1-luna",
+        "gpt-6-luna",
         "gpt-future",
     ] {
         let api = live(&root, model, None);

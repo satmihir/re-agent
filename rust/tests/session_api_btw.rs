@@ -850,7 +850,7 @@ fn changed_effort_auto_carry_and_fresh_use_the_current_source_without_native_or_
             &api,
             "carry",
             SessionChange::SwitchModel {
-                model: "gpt-6.1-luna".into(),
+                model: "gpt-6-luna".into(),
                 history: HistoryMode::Carry
             }
         )
@@ -859,7 +859,7 @@ fn changed_effort_auto_carry_and_fresh_use_the_current_source_without_native_or_
     );
     let carried = api.get_snapshot().unwrap();
     let result = ask(&api, "carry-question", b"carry");
-    assert_eq!(result.source.as_ref().unwrap().model, "gpt-6.1-luna");
+    assert_eq!(result.source.as_ref().unwrap().model, "gpt-6-luna");
     assert_eq!(
         result.source.as_ref().unwrap().history_generation,
         carried.context.history_generation
@@ -867,7 +867,7 @@ fn changed_effort_auto_carry_and_fresh_use_the_current_source_without_native_or_
     assert!(request(&root, 2)
         .to_string()
         .contains("OLD_HISTORY_SENTINEL"));
-    assert_eq!(request(&root, 2)["model"], "gpt-6.1-luna");
+    assert_eq!(request(&root, 2)["model"], "gpt-6-luna");
     assert_eq!(
         change(
             &api,

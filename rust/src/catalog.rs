@@ -7,7 +7,7 @@ const REASONING_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 pub fn models() -> Value {
     let entries = [
         (
-            "gpt-6.1-luna",
+            "gpt-6-luna",
             "openai",
             OPENAI_EFFORTS,
             "medium",
@@ -80,7 +80,7 @@ pub(crate) fn supports_images(config: &Value) -> bool {
     config["provider"] == "openai"
         && matches!(
             config["model"].as_str().unwrap_or(""),
-            "gpt-6.1-luna" | "gpt-6.1-terra" | "gpt-6.1-sol" | "gpt-6-astra"
+            "gpt-6-luna" | "gpt-6.1-terra" | "gpt-6.1-sol" | "gpt-6-astra"
         )
 }
 
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn fast_support_is_explicit_and_provider_specific() {
         for (provider, model, supported) in [
-            ("openai", "gpt-6.1-luna", false),
+            ("openai", "gpt-6-luna", false),
             ("openai", "gpt-6-astra", false),
             ("openai", "gpt-6.1-terra", true),
             ("openai", "gpt-6.1-sol", true),
@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(
             ids,
             [
-                "gpt-6.1-luna",
+                "gpt-6-luna",
                 "gpt-6.1-terra",
                 "gpt-6.1-sol",
                 "claude-haiku-5-5",
@@ -314,15 +314,15 @@ mod tests {
         assert!(select_effort(&astra, "ultra").is_err());
         let sol = select_model("3").unwrap();
         let luna = select_model("1").unwrap();
-        assert_eq!(luna["id"], "gpt-6.1-luna");
+        assert_eq!(luna["id"], "gpt-6-luna");
         assert_eq!(luna["effort"], "medium");
         assert_eq!(luna["context_window"], 1_050_000);
-        assert!(model_info("gpt-6-luna").is_null());
+        assert!(model_info("gpt-6.1-luna").is_null());
         assert!(model_info("gpt-6-sol").is_null());
         assert_eq!(sol["id"], "gpt-6.1-sol");
         assert!(select_effort(&sol, "none").is_err());
         assert_eq!(
-            select_effort(&model_info("gpt-6.1-luna"), "1").unwrap(),
+            select_effort(&model_info("gpt-6-luna"), "1").unwrap(),
             "none"
         );
         assert_eq!(
@@ -353,8 +353,8 @@ mod tests {
     #[test]
     fn context_override_caps_known_models_and_admits_unknown() {
         for (model, cap, want) in [
-            ("gpt-6.1-luna", 2_000_000, 1_050_000),
-            ("gpt-6.1-luna", 500, 500),
+            ("gpt-6-luna", 2_000_000, 1_050_000),
+            ("gpt-6-luna", 500, 500),
             ("gpt-6-astra", 0, 1_050_000),
             ("gpt-6-astra", 2_000_000, 1_050_000),
             ("gpt-6-astra", 500, 500),
@@ -376,8 +376,8 @@ mod tests {
 
     #[test]
     fn catalog_display_marks_availability_without_trailing_space() {
-        let listing = render_models("gpt-6.1-luna", &json!({"openai":true}));
-        assert!(listing.contains("1  gpt-6.1-luna      openai     current"));
+        let listing = render_models("gpt-6-luna", &json!({"openai":true}));
+        assert!(listing.contains("1  gpt-6-luna        openai     current"));
         assert!(listing.contains("4  claude-haiku-5-5  anthropic  no key"));
         assert!(listing.contains("7  gpt-6-astra       openai"));
         assert!(listing.contains("models marked no key need ANTHROPIC_API_KEY"));
