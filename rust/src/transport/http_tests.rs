@@ -270,3 +270,42 @@ fn reset_is_not_misreported_as_a_truncated_response() {
         format!("read tcp {client}->{server}: read: connection reset by peer")
     );
 }
+
+#[test]
+fn request_after_the_server_closed_an_idle_connection_uses_a_new_one() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (answered, client_answered) = std::sync::mpsc::channel();
+    let (closed, server_closed) = std::sync::mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut idle, _) = listener.accept().unwrap();
+        request(&mut idle);
+        idle.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        // Close only once the client is between requests, as a provider does to an idle
+        // keep-alive connection.
+        client_answered.recv().unwrap();
+        idle.shutdown(std::net::Shutdown::Write).unwrap();
+        // The client hanging up is the observable sign it saw the close; the read timeout
+        // only bounds a client that never does.
+        idle.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let _ = idle.read(&mut [0; 1]);
+        drop(idle);
+        closed.send(()).unwrap();
+        let (mut fresh, _) = listener.accept().unwrap();
+        request(&mut fresh);
+        fresh
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    let client = client(2000, 2000);
+    assert_eq!(client.post(&url).send().unwrap().status(), 200);
+    answered.send(()).unwrap();
+    server_closed.recv().unwrap();
+    let second = client.post(&url).send().map(|response| response.status());
+    assert_eq!(
+        second.map_err(|error| error.to_string()),
+        Ok(StatusCode::OK)
+    );
+    server.join().unwrap();
+}

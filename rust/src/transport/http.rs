@@ -36,8 +36,12 @@ pub struct Client {
 }
 impl Client {
     pub fn new(header: Duration, idle: Duration, total: Option<Duration>) -> io::Result<Self> {
+        // The worker thread keeps pooled connections polled between requests. Without it a
+        // connection the server closed while idle still looks open, and the next request
+        // is written to it and lost.
         let runtime = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
                 .enable_all()
                 .build()?,
         );
