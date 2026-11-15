@@ -67,8 +67,9 @@ pub fn prompt_project(config: &Value) -> Option<&str> {
 }
 
 fn render_instructions(config: &Value) -> String {
-    // A host's instructions are its whole prompt: re:agent's rules describe tools it lacks.
-    if let Some(text) = config["instructions"].as_str() {
+    let host = config["instructions"].as_str();
+    // A tool-free host's instructions are its whole prompt: there is no workspace to describe.
+    if let Some(text) = host.filter(|_| config["tool_free"] == true) {
         return text.to_owned();
     }
     let effort = string(config, "reasoning_effort");
@@ -78,7 +79,11 @@ fn render_instructions(config: &Value) -> String {
         effort
     };
     let agent = config["agent"].as_bool().unwrap_or(false);
-    let mut text = DEFAULT_INSTRUCTIONS.to_owned();
+    // A host's instructions replace re:agent's rules, which are written for a coding agent.
+    let mut text = host.map_or_else(
+        || DEFAULT_INSTRUCTIONS.to_owned(),
+        |host| format!("{}\n", host.trim_end()),
+    );
     if agent {
         text.push_str("\n# Agent task\n\n");
         text.push_str(AGENT_INSTRUCTIONS);
@@ -86,6 +91,8 @@ fn render_instructions(config: &Value) -> String {
     }
     let mode = if config["read_only"].as_bool().unwrap_or(false) {
         "read only"
+    } else if config["no_exec"] == true {
+        "read and write; commands are unavailable"
     } else {
         "read, write, and execute"
     };

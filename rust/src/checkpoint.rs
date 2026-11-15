@@ -356,6 +356,7 @@ const FIELDS: &[&str] = &[
     "instructions",
     "web_search",
     "image_generation",
+    "no_exec",
     "read_only",
     "plan",
     "no_project_instructions",
@@ -468,6 +469,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
                 "instructions",
                 "web_search",
                 "image_generation",
+                "no_exec",
                 "read_only",
                 "no_project_instructions",
                 "project_instructions",
@@ -499,6 +501,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "instructions",
             "web_search",
             "image_generation",
+            "no_exec",
             "project_instructions",
             "launch_instructions",
             "context_window_tokens",
@@ -753,7 +756,7 @@ fn valid_checkpoint_type(value: &mut Value, kind: &str) -> bool {
 fn checkpoint_fields(kind: &str) -> &'static str {
     match kind {
         "checkpoint" => "version:int id:string provider:string model:string effort:string fast:bool \
-            launch:string active:string origin:string tool_free:bool instructions:string web_search:bool image_generation:bool read_only:bool plan:bool no_project_instructions:bool \
+            launch:string active:string origin:string tool_free:bool instructions:string web_search:bool image_generation:bool no_exec:bool read_only:bool plan:bool no_project_instructions:bool \
             project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
             model_retry_window:int in_run_compact:bool context_window_tokens:int \
             context_gc_age_steps:int context_gc_consolidate:bool context_gc:bool gc_state:gc \
@@ -990,6 +993,7 @@ fn restored(id: &str, cp: Value) -> Value {
         "instructions",
         "web_search",
         "image_generation",
+        "no_exec",
         "read_only",
         "plan",
         "no_project_instructions",

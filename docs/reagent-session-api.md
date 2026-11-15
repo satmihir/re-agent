@@ -23,10 +23,19 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   date and time zone instead of workspace state. A response that calls tools ends the Run
   with `protocol_error`. Human shell commands and turning plan mode on are rejected.
   Unlike a BTW question it binds ordinary cancellation, can be resumable, and checkpoints.
-  `SessionOptions.instructions` (tool-free only, at most 32 KiB) replaces re:agent's
-  instructions entirely and survives resume, compaction, Reset and model switches.
-  `SessionSnapshot.tool_free` reports the choice; both settings are saved in the checkpoint.
-- `SessionOptions.image_generation` (tool-free only) offers the conversation one tool,
+  `SessionSnapshot.tool_free` reports the choice, which is saved in the checkpoint.
+- `SessionOptions.instructions` (at most 32 KiB) replaces re:agent's own rules and survives
+  resume, compaction, Reset and model switches. In a tool-free Session it is the whole
+  prompt; in a Session with tools re:agent still appends its Runtime block (workspace, mode,
+  limits) after it. It is saved in the checkpoint.
+- `SessionOptions.exec` (on by default) offers commands. Off, the Session declares neither
+  `exec` nor `git_do`, refuses a call to either without running it, and its Runtime block
+  says commands are unavailable; the file tools are unchanged. It is saved in the
+  checkpoint, stays off across resume, and is reported by `SessionSnapshot.exec`.
+- `SessionOptions.image_generation` lets a host offer image creation on any model; the
+  `workspace` must exist. A Session with tools then offers the ordinary `generate_image`
+  to Anthropic models too, which are told the result in words; `view_image` stays with the
+  OpenAI vision models. A tool-free Session gets one tool,
   `generate_image {prompt}`. re:agent names the file and saves a new PNG in the Session's
   `workspace`, which must exist and is the only folder the Session may write. Every other
   tool call still ends the Run with `protocol_error`. The tool is offered on both providers:
@@ -35,8 +44,7 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   `generating` is true while an image is being made. The setting is saved in the
   checkpoint and reported by `SessionSnapshot.image_generation`; BTW questions never get
   the tool.
-- `send_message_with_note` adds a host note to one message in a tool-free Session: at
-  most 1 KiB, sent to the model after the message's date, labelled as coming from the
+- `send_message_with_note` adds a host note to one message: at most 1 KiB, sent to the model after the message's date, labelled as coming from the
   application, and saved with the user Entry. Covalent uses it to say a message was spoken.
 - `read_preview(run, cursor, wait_ms, cancellation)` reads the visible text a conversation
   Run's model is writing, before the Run ends. It is speculative: each provider stream (a
@@ -970,7 +978,7 @@ Operations on a handle bound to one SessionRef:
 | `read_agents` | optional page cursor, `limit` | page of lifetime roster records, including ended-at-resume observations |
 | `read_events` | EventCursor, `limit`, `wait_ms` | bounded `EventPage`; zero wait polls, positive wait is cancellable |
 | `send_message` | `request_id`, `message: bytes`, `plan_mode: keep \| on \| off` | queue a new conversation Run; returns its reserved RunRef |
-| `send_message_with_note` | as `send_message`, plus `note` | the same, with a host note on this message; tool-free Sessions only |
+| `send_message_with_note` | as `send_message`, plus `note` | the same, with a host note on this message |
 | `ask` | `request_id`, `question: bytes` | isolated BTW Run; returns its reserved RunRef |
 | `steer` | `request_id`, `run: RunRef`, `message: bytes` | guidance for that active conversation Run only |
 | `cancel_run` | `run: RunRef` | updated `RunInfo`; request cancellation, including that Run's active descendants |

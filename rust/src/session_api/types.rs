@@ -30,13 +30,15 @@ pub struct SessionOptions {
     pub origin: Option<String>,
     /// tool_free offers the model no tools and attaches no workspace state to messages.
     pub tool_free: bool,
-    /// instructions replace re:agent's own instructions entirely; only tool-free Sessions accept them.
+    /// instructions replace re:agent's own rules; a Session with tools still describes its runtime after them.
     pub instructions: Option<String>,
     /// web_search lets the model search the web with the provider's hosted search tool.
     pub web_search: bool,
-    /// image_generation offers a tool-free Session one tool, which creates an image from a
-    /// prompt and saves it as a new PNG in `workspace`, the only folder the Session may write.
+    /// image_generation offers image creation on any model. A tool-free Session gets one tool,
+    /// which saves each image as a new PNG in `workspace`, the only folder it may write.
     pub image_generation: bool,
+    /// exec offers commands (`exec` and `git_do`); off, the model works with files only.
+    pub exec: bool,
 }
 
 impl Default for SessionOptions {
@@ -57,6 +59,7 @@ impl Default for SessionOptions {
             instructions: None,
             web_search: false,
             image_generation: false,
+            exec: true,
         }
     }
 }
@@ -602,9 +605,12 @@ pub struct SessionSnapshot {
     /// web_search reports whether conversation Runs may use the provider's hosted search.
     #[serde(default)]
     pub web_search: bool,
-    /// image_generation reports whether a tool-free Session may create images in its workspace.
+    /// image_generation reports whether the Session may create images on any model.
     #[serde(default)]
     pub image_generation: bool,
+    /// exec reports whether the model may run commands.
+    #[serde(default = "enabled")]
+    pub exec: bool,
     /// plan is the last published effective planning restriction.
     pub plan: bool,
     /// auto retains published routing settings without probing credentials or providers.
@@ -636,4 +642,9 @@ pub struct SessionSnapshot {
     pub checkpoint_enabled: bool,
     /// recovery_notice describes interrupted work observed on resume, never restarted work.
     pub recovery_notice: Option<String>,
+}
+
+/// A snapshot saved before `exec` existed came from a Session that could run commands.
+fn enabled() -> bool {
+    true
 }

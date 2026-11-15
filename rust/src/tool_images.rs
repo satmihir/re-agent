@@ -36,8 +36,13 @@ pub fn execute(
     if config["tool_free"] == true && !chat {
         return Err(fail("permission_denied", "This Session has no tools"));
     }
-    // A chat on any provider may ask for an image; only viewing needs a vision model.
-    if !chat && !crate::catalog::supports_images(config) {
+    // Generation may be offered on any provider; only viewing needs a vision model.
+    let offered = if name == "generate_image" {
+        chat || crate::tools::generates_images(config)
+    } else {
+        crate::catalog::supports_images(config)
+    };
+    if !offered {
         return Err(fail(
             "tool_unavailable",
             "Image tools require a supported OpenAI vision model",

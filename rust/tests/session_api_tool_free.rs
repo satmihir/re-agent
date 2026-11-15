@@ -250,13 +250,6 @@ fn a_tool_free_chat_run_can_be_cancelled_and_the_chat_continues() {
 #[test]
 fn tool_free_launch_settings_and_workspace_controls_are_validated() {
     let invalid = |options: SessionOptions| open_session(options).err().unwrap().code;
-    assert_eq!(
-        invalid(SessionOptions {
-            instructions: Some(PROMPT.into()),
-            ..Default::default()
-        }),
-        "invalid_argument"
-    );
     for instructions in [" \n".to_owned(), "x".repeat((32 << 10) + 1)] {
         assert_eq!(
             invalid(SessionOptions {
@@ -356,23 +349,20 @@ fn a_note_reaches_the_model_with_its_own_message_and_is_kept_across_resume() {
 }
 
 #[test]
-fn a_note_must_be_short_nonblank_and_on_a_tool_free_session() {
+fn a_note_must_be_short_and_nonblank() {
     let root = tempfile::tempdir().unwrap();
     let script = root.path().join("script.json");
     let text = json!({"blocks":[{"kind":"text","text":"ok"}]});
-    std::fs::write(&script, json!([text, text]).to_string()).unwrap();
-    let open = |tool_free: bool| {
-        open_session(SessionOptions {
-            workspace: root.path().into(),
-            scripted: Some(script.clone()),
-            checkpoint: false,
-            agents: false,
-            tool_free,
-            ..Default::default()
-        })
-        .unwrap()
-    };
-    let api = open(true);
+    std::fs::write(&script, json!([text]).to_string()).unwrap();
+    let api = open_session(SessionOptions {
+        workspace: root.path().into(),
+        scripted: Some(script),
+        checkpoint: false,
+        agents: false,
+        tool_free: true,
+        ..Default::default()
+    })
+    .unwrap();
     for note in [" \n".to_owned(), "x".repeat((1 << 10) + 1)] {
         let error = api
             .send_message_with_note("bad", b"hi", &note, PlanMode::Keep)
@@ -388,13 +378,5 @@ fn a_note_must_be_short_nonblank_and_on_a_tool_free_session() {
         api.wait_run(&run).unwrap().result.unwrap().status,
         "completed"
     );
-    api.close().unwrap();
-
-    let api = open(false);
-    let error = api
-        .send_message_with_note("tools", b"hi", NOTE, PlanMode::Keep)
-        .unwrap_err();
-    assert_eq!(error.code, "invalid_argument", "{}", error.message);
-    assert!(error.message.contains("tool-free"), "{}", error.message);
     api.close().unwrap();
 }

@@ -556,7 +556,13 @@ impl Session {
                             || self.config["agent_prefix"]["tools"].as_array().is_some_and(
                                 |specs| specs.iter().any(|spec| string(&spec["name"]) == name),
                             );
-                    let (code, message) = if known {
+                    let commands = matches!(name, "exec" | "git_do");
+                    let (code, message) = if commands && flag(&self.config["no_exec"]) {
+                        (
+                            "permission_denied",
+                            "This Session cannot run commands".to_owned(),
+                        )
+                    } else if known {
                         (
                             "permission_denied",
                             format!(
