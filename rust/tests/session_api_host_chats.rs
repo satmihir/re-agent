@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const ROOT: &str = "REAGENT_CHAT_IMAGES_TEST_ROOT";
+const ROOT: &str = "REAGENT_HOST_CHATS_TEST_ROOT";
 const PROMPT: &str = "You are a friendly chat assistant.";
 
 /// Reply is what the fake chat model answers one request with.
@@ -425,25 +425,173 @@ fn a_ninth_image_in_one_chat_still_sends_a_request_with_at_most_eight_previews()
 }
 
 #[test]
-fn image_generation_needs_a_tool_free_session_and_an_existing_folder() {
+fn image_generation_needs_an_existing_folder() {
     let root = tempfile::tempdir().unwrap();
-    let invalid = |options: SessionOptions| {
-        let error = open_session(options).err().unwrap();
-        (error.code, error.message)
+    for tool_free in [true, false] {
+        let error = open_session(SessionOptions {
+            workspace: root.path().join("missing"),
+            tool_free,
+            image_generation: true,
+            ..Default::default()
+        })
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "invalid_argument");
+        assert!(
+            error.message.contains("existing directory"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+const NOTE: &str = "The user spoke this message; the reply will be read aloud.";
+
+/// Workspace_chat opens a host's Session with file tools in `root/work`, without commands,
+/// that may make images on any model.
+fn workspace_chat(root: &Path, model: &str) -> SessionApi {
+    let folder = root.join("work");
+    std::fs::create_dir_all(&folder).unwrap();
+    open_session(SessionOptions {
+        workspace: folder,
+        model: Some(model.into()),
+        agents: false,
+        instructions: Some(PROMPT.into()),
+        image_generation: true,
+        exec: false,
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+fn tool_names(request: &Value) -> Vec<String> {
+    request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_host_session_with_files_and_no_commands_keeps_its_prompt_note_and_limits_across_resume() {
+    let replies = vec![
+        Reply::Call(
+            "write_file",
+            json!({"path":"list.md","content":"- socks\n"}),
+        ),
+        Reply::Text("Saved."),
+        Reply::Call("exec", json!({"argv":["ls"]})),
+        Reply::Text("I can't run programs."),
+    ];
+    let Some(root) = isolated(
+        "a_host_session_with_files_and_no_commands_keeps_its_prompt_note_and_limits_across_resume",
+        replies,
+        false,
+        true,
+    ) else {
+        return;
     };
-    let (code, message) = invalid(SessionOptions {
-        workspace: root.path().into(),
-        image_generation: true,
-        ..Default::default()
-    });
-    assert_eq!(code, "invalid_argument");
-    assert!(message.contains("tool-free"), "{message}");
-    let (code, message) = invalid(SessionOptions {
-        workspace: root.path().join("missing"),
-        tool_free: true,
-        image_generation: true,
-        ..Default::default()
-    });
-    assert_eq!(code, "invalid_argument");
-    assert!(message.contains("existing directory"), "{message}");
+    let api = workspace_chat(&root, "gpt-6.1-sol");
+    let snapshot = api.get_snapshot().unwrap();
+    assert!(!snapshot.tool_free && !snapshot.exec && snapshot.image_generation);
+    let id = snapshot.session.session_id;
+    let run = api
+        .send_message_with_note("one", b"make a packing list", NOTE, PlanMode::Keep)
+        .unwrap()
+        .run
+        .unwrap();
+    let result = api.wait_run(&run).unwrap().result.unwrap();
+    assert_eq!(result.status, "completed", "{}", result.reason);
+    assert_eq!(result.reply, b"Saved.");
+
+    // The host's text replaces re:agent's rules; the Runtime block still describes the folder.
+    let first = request(&root, "chat-0.json");
+    let instructions = first["instructions"].as_str().unwrap();
+    assert!(instructions.starts_with(PROMPT), "{instructions}");
+    assert!(instructions.contains("# Runtime"), "{instructions}");
+    assert!(
+        instructions.contains("commands are unavailable"),
+        "{instructions}"
+    );
+    assert!(!instructions.contains("You are re:agent"), "{instructions}");
+    let tools = tool_names(&first);
+    for name in ["write_file", "edit_file", "read_file", "generate_image"] {
+        assert!(tools.iter().any(|tool| tool == name), "{tools:?}");
+    }
+    for name in ["exec", "git_do"] {
+        assert!(!tools.iter().any(|tool| tool == name), "{tools:?}");
+    }
+    assert_eq!(first["input"].to_string().matches(NOTE).count(), 1);
+
+    assert_eq!(
+        std::fs::read_to_string(root.join("work/list.md")).unwrap(),
+        "- socks\n"
+    );
+    let written: Vec<_> = result
+        .effects
+        .iter()
+        .filter(|e| e.tool == "write_file")
+        .map(|e| {
+            (
+                e.operation.clone(),
+                String::from_utf8(e.path.clone()).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(written, [("create".to_owned(), "list.md".to_owned())]);
+    api.close().unwrap();
+
+    // Resume keeps commands off, and a call to one is refused without running anything.
+    let api = resume_session(&id).unwrap();
+    assert!(!api.get_snapshot().unwrap().exec);
+    let result = reply(&api, "two", "list the folder with ls");
+    assert_eq!(result.status, "completed", "{}", result.reason);
+    let tools = tool_names(&request(&root, "chat-2.json"));
+    assert!(!tools.iter().any(|tool| tool == "exec" || tool == "git_do"));
+    let refusal = request(&root, "chat-3.json").to_string();
+    assert!(refusal.contains("cannot run commands"), "{refusal}");
+    api.close().unwrap();
+}
+
+#[test]
+fn an_anthropic_session_with_files_makes_an_image_at_its_own_path_and_is_told_in_words() {
+    let Some(root) = isolated(
+        "an_anthropic_session_with_files_makes_an_image_at_its_own_path_and_is_told_in_words",
+        vec![
+            Reply::Call(
+                "generate_image",
+                json!({"prompt":"a small red sailboat","output_path":"boat.png"}),
+            ),
+            Reply::Text("Done."),
+        ],
+        false,
+        true,
+    ) else {
+        return;
+    };
+    let api = workspace_chat(&root, "claude-haiku-5-5");
+    let result = reply(&api, "one", "draw me a boat");
+    assert_eq!(result.status, "completed", "{}", result.reason);
+    let tools = tool_names(&request(&root, "chat-0.json"));
+    assert!(
+        tools.iter().any(|tool| tool == "generate_image"),
+        "{tools:?}"
+    );
+    assert!(!tools.iter().any(|tool| tool == "view_image"), "{tools:?}");
+    assert_eq!(std::fs::read(root.join("work/boat.png")).unwrap(), png());
+    let second = request(&root, "chat-1.json");
+    let outcome = second["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().into_iter().flatten())
+        .find(|block| block["type"] == "tool_result")
+        .unwrap_or_else(|| panic!("no tool result: {second}"));
+    assert!(outcome.to_string().contains("boat.png"), "{outcome}");
+    assert!(
+        !second.to_string().contains("\"type\":\"image\""),
+        "{second}"
+    );
+    api.close().unwrap();
 }

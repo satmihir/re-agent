@@ -146,11 +146,19 @@ struct SpecConfig {
     agent: bool,
     agents: bool,
     read_only: bool,
-    images: bool,
+    exec: bool,
+    view_images: bool,
+    generate_images: bool,
 }
 
 static SPECS: LazyLock<Mutex<HashMap<SpecConfig, Arc<Value>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Generates_images reports whether a Session with tools offers generate_image: on an OpenAI
+/// vision model, or on any model when the host turned image generation on.
+pub(crate) fn generates_images(config: &Value) -> bool {
+    crate::catalog::supports_images(config) || config["image_generation"] == true
+}
 
 /// Chat_images reports whether a tool-free Session may create images: its one tool.
 /// An isolated question asked beside such a Session never may.
@@ -189,7 +197,9 @@ fn cached_specs(config: &Value) -> Arc<Value> {
         agent: enabled("agent"),
         agents: enabled("agents"),
         read_only: enabled("read_only"),
-        images: crate::catalog::supports_images(config),
+        exec: config["no_exec"] != true,
+        view_images: crate::catalog::supports_images(config),
+        generate_images: generates_images(config),
     };
     // The normalized key bounds this cache independently of session IDs and paths.
     SPECS
@@ -210,6 +220,8 @@ fn build_specs(config: &Value) -> Value {
     let mut specs = BASE.clone();
     if crate::catalog::supports_images(config) {
         specs.push(json!({"name":"view_image","description":"View a local PNG, JPEG, or still WebP image as pixels. Returns an immutable, bounded preview and original file metadata; reports resizing. Paths stay inside the workspace. Viewing does not grant text-edit authorization.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/view_image.json")).unwrap(),"effect":"read"}));
+    }
+    if generates_images(config) {
         specs.push(json!({"name":"generate_image","description":"Generate one PNG, or edit/compose from explicit local reference images. Saves a new output_path in an existing directory and returns a model-visible preview. Uses OPENAI_API_KEY with separate API billing, never ChatGPT plan credentials or the Responses proxy. If missing, politely ask the user to configure the launch environment and restart/resume; never request secrets in chat. Never automatically repeat a generation after uncertain effects or a failed save. Unavailable in read-only or plan mode.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/generate_image.json")).unwrap(),"effect":"write"}));
     }
     if !config["report_friction"].as_bool().unwrap_or(false) {
@@ -268,6 +280,9 @@ fn build_specs(config: &Value) -> Value {
     }
     if config["read_only"].as_bool().unwrap_or(false) {
         specs.retain(|s| s["effect"] == "read");
+    }
+    if config["no_exec"] == true {
+        specs.retain(|s| s["name"] != "exec");
     }
     specs.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     Value::Array(specs)

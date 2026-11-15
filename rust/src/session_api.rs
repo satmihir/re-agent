@@ -256,12 +256,6 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
         ));
     }
     if let Some(text) = &options.instructions {
-        if !options.tool_free {
-            return Err(error(
-                "invalid_argument",
-                "instructions require a tool-free Session",
-            ));
-        }
         if text.trim().is_empty() || text.len() > MAX_INSTRUCTION_BYTES {
             return Err(error(
                 "invalid_argument",
@@ -270,12 +264,6 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
         }
     }
     if options.image_generation {
-        if !options.tool_free {
-            return Err(error(
-                "invalid_argument",
-                "image_generation is a tool-free Session setting; a Session with tools already has generate_image",
-            ));
-        }
         if !options.workspace.is_dir() {
             return Err(error(
                 "invalid_argument",
@@ -307,6 +295,10 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
     if options.image_generation {
         config["image_generation"] = json!(true);
     }
+    if !options.exec {
+        config["no_exec"] = json!(true);
+        config["git_do"] = json!("");
+    }
     crate::provider::validate_environment().map_err(|e| error("invalid_argument", e))?;
     if options.tool_free {
         // No workspace is opened, so neither AGENTS.md nor agents nor git_do apply.
@@ -314,12 +306,12 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
         config["agents"] = json!(false);
         config["git_do"] = json!("");
         config["project_instructions"] = Value::Null;
-        if let Some(text) = options.instructions {
-            config["instructions"] = json!(text);
-        }
     } else {
         config["project_instructions"] = json!(crate::workspace::project_instructions(workspace)
             .map_err(|e| error("unavailable", e))?);
+    }
+    if let Some(text) = options.instructions {
+        config["instructions"] = json!(text);
     }
     crate::provider::configure(&mut config).map_err(|e| error("unavailable", e))?;
     open_resolved(config, None)
@@ -331,7 +323,10 @@ pub fn resume_session(session_id: &str) -> Result<SessionApi, ApiError> {
     let lease = Lease::claim(session_id)?;
     let saved = crate::checkpoint::load_api(session_id).map_err(|e| error("unavailable", e))?;
     let mut config = saved["config"].clone();
-    config["git_do"] = json!("recipe");
+    // git_do's mode is not saved; a Session without commands keeps it off.
+    if config["no_exec"] != true {
+        config["git_do"] = json!("recipe");
+    }
     crate::provider::validate_environment().map_err(|e| error("invalid_argument", e))?;
     crate::provider::configure(&mut config).map_err(|e| error("unavailable", e))?;
     let mut owner = Owner {
@@ -430,6 +425,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         tool_free: session.config["tool_free"] == true,
         web_search: session.config["web_search"] == true,
         image_generation: session.config["image_generation"] == true,
+        exec: session.config["no_exec"] != true,
         plan: false,
         auto: auto_info(session),
         workspace: Default::default(),
@@ -647,8 +643,8 @@ impl SessionApi {
     }
 
     /// Send_message_with_note queues a message with a note from the host that the model reads
-    /// beside it, labelled as the host's, such as that the message was spoken. Only a tool-free
-    /// Session takes one, at most 1 KiB; the note is saved with the message.
+    /// beside it, labelled as the host's, such as that the message was spoken. It is at most
+    /// 1 KiB and is saved with the message.
     pub fn send_message_with_note(
         &self,
         request_id: &str,
@@ -660,12 +656,6 @@ impl SessionApi {
             return Err(error(
                 "invalid_argument",
                 "a note must be nonblank and at most 1 KiB",
-            ));
-        }
-        if !self.client.shared.state.lock().unwrap().snapshot.tool_free {
-            return Err(error(
-                "invalid_argument",
-                "a note on a message requires a tool-free Session",
             ));
         }
         self.send(request_id, message, Some(note), plan_mode)

@@ -8,8 +8,9 @@ live-verified; ChatGPT-first inference remains separate from image billing.
 
 A tool-free conversation Session can be opened with `image_generation`, which
 offers `generate_image {prompt}` alone, on either provider, with re:agent
-naming the file. See the Session API document; the contracts below describe
-Sessions with tools.
+naming the file. A Session with tools opened with `image_generation` offers
+the ordinary `generate_image` on Anthropic models too. See the Session API
+document; the contracts below describe Sessions with tools.
 
 ## Goal
 
