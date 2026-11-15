@@ -404,7 +404,10 @@ impl Session {
                 return self.finish("protocol_error", &reason, "");
             }
             let calls = tool_calls(&resp);
-            if flag(&self.config["tool_free"]) && !calls.is_empty() {
+            let allowed = |call: &Value| {
+                tools::chat_images(&self.config) && string(&call["name"]) == "generate_image"
+            };
+            if flag(&self.config["tool_free"]) && !calls.iter().all(allowed) {
                 return self.finish(
                     "protocol_error",
                     "a tool-free Session's response must not call tools",
@@ -594,6 +597,14 @@ impl Session {
                         self.region.as_ref(),
                     )
                 };
+                // An image takes many seconds; readers of the reply preview can say so.
+                let preview = self
+                    .provider
+                    .reply_preview()
+                    .filter(|_| name == "generate_image");
+                if let Some(preview) = &preview {
+                    preview.generate(true);
+                }
                 let outcome = if name == "recall" {
                     Ok(crate::context_gc::recall(self, string(&call["arguments"])))
                 } else if let Some(result) =
@@ -612,6 +623,9 @@ impl Session {
                     )
                 };
                 drop(poller);
+                if let Some(preview) = &preview {
+                    preview.generate(false);
+                }
                 self.agent_notices();
                 let outcome = match outcome {
                     Ok(outcome) => outcome,

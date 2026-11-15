@@ -25,15 +25,19 @@ pub fn execute(
     name: &str,
     args: &Value,
 ) -> Result<Value, Value> {
+    // A chat names no file: re:agent does, in the one folder the Session was given.
+    let chat = crate::tools::chat_images(config) && name == "generate_image";
     let fields = match name {
+        _ if chat => &["prompt"][..],
         "view_image" => &["path"][..],
         "generate_image" => &["prompt", "output_path", "reference_image_paths"][..],
         _ => return Err(fail("tool_unavailable", "Unknown image tool")),
     };
-    if config["tool_free"] == true {
+    if config["tool_free"] == true && !chat {
         return Err(fail("permission_denied", "This Session has no tools"));
     }
-    if !crate::catalog::supports_images(config) {
+    // A chat on any provider may ask for an image; only viewing needs a vision model.
+    if !chat && !crate::catalog::supports_images(config) {
         return Err(fail(
             "tool_unavailable",
             "Image tools require a supported OpenAI vision model",
@@ -66,7 +70,12 @@ pub fn execute(
         return Ok(workspace_outcome(ws, data, "none"));
     }
     let prompt = string(args, "prompt")?;
-    let path = string(args, "output_path")?;
+    let named = format!("image-{}.png", crate::types::new_id());
+    let path = if chat {
+        named.as_str()
+    } else {
+        string(args, "output_path")?
+    };
     if prompt.chars().count() > image_generation::MAX_PROMPT_CHARS {
         return Err(fail(
             "invalid_arguments",

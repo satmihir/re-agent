@@ -1,8 +1,15 @@
 # OpenAI image generation and viewing
 
-Status: implemented with offline boundary tests. API-key generation/editing and
-OpenAI multimodal input have not been live-verified; ChatGPT-first inference
-remains separate from image billing.
+Status: implemented with offline boundary tests. One live generation on
+2026-11-14 (`gpt-6.1-sol` on a ChatGPT plan, the image on an API key) saved a
+1536 × 1024 PNG in 15.6 s for 1,372 image output tokens, and the model saw its
+preview on the next request. Editing with references has not been
+live-verified; ChatGPT-first inference remains separate from image billing.
+
+A tool-free conversation Session can be opened with `image_generation`, which
+offers `generate_image {prompt}` alone, on either provider, with re:agent
+naming the file. See the Session API document; the contracts below describe
+Sessions with tools.
 
 ## Goal
 
