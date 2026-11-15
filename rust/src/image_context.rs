@@ -146,6 +146,12 @@ fn accounting_projection(value: &Value, images: &mut usize) -> Value {
                 projected["image_url"] = json!("");
                 return projected;
             }
+            if s(value, "type") == "image" && s(&value["source"], "type") == "base64" {
+                *images = images.saturating_add(1);
+                let mut projected = value.clone();
+                projected["source"]["data"] = json!("");
+                return projected;
+            }
             Value::Object(
                 values
                     .iter()
@@ -164,6 +170,23 @@ fn accounting_projection(value: &Value, images: &mut usize) -> Value {
 }
 
 /// Estimate serialized text tokens separately from high-detail image allowances.
+/// Pixels loads a preview's PNG bytes for a provider request.
+pub(crate) fn pixels(preview: &Value) -> Result<Vec<u8>, String> {
+    let bytes = crate::images::load(preview)?;
+    if bytes.len() > MAX_PREVIEW_BYTES {
+        return Err("stored preview exceeds the 512 KiB limit".into());
+    }
+    Ok(bytes)
+}
+
+/// Unavailable is the text a request carries in place of pixels that could not be loaded.
+pub(crate) fn unavailable(preview: &Value, message: &str) -> String {
+    format!(
+        "[image pixels unavailable: preview {}; {message}. View the current workspace file again for a new observation.]",
+        s(preview, "sha256")
+    )
+}
+
 pub fn estimate(body: &Value, rate: f64) -> usize {
     let mut images = 0;
     let text = accounting_projection(body, &mut images);

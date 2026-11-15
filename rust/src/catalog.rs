@@ -75,13 +75,21 @@ pub fn models() -> Value {
     }).collect())
 }
 
-/// Supports_images enables image tools only for the offered OpenAI vision models.
+/// Supports_images enables image tools only for the offered vision models.
 pub(crate) fn supports_images(config: &Value) -> bool {
-    config["provider"] == "openai"
-        && matches!(
-            config["model"].as_str().unwrap_or(""),
+    matches!(
+        (
+            config["provider"].as_str().unwrap_or(""),
+            config["model"].as_str().unwrap_or("")
+        ),
+        (
+            "openai",
             "gpt-6-luna" | "gpt-6.1-terra" | "gpt-6.1-sol" | "gpt-6-astra"
+        ) | (
+            "anthropic",
+            "claude-haiku-5-5" | "claude-sonnet-5-5" | "claude-opus-5-5"
         )
+    )
 }
 
 /// model_info returns an exact catalog match, or null for an unlisted model.

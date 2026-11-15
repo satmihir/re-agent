@@ -172,7 +172,7 @@ pub(crate) fn projected_user(config: &Value, handoff: &Value) -> Value {
         .is_some_and(|images| !images.is_empty())
     {
         user["images"] = handoff["images"].clone();
-        if config["provider"] != "openai" {
+        if !crate::catalog::supports_images(config) {
             user["text"] = json!(format!(
                 "{}\nHistorical image metadata only; pixels are not supplied to this model.",
                 text(handoff, "text")
@@ -290,6 +290,9 @@ mod tests {
         let user = projected_user(&json!({"provider":"anthropic"}), &admitted);
         assert!(text(&user, "text").contains("pixels are not supplied"));
         assert_eq!(user["images"], admitted["images"]);
+        let claude = json!({"provider":"anthropic","model":"claude-haiku-5-5"});
+        let user = projected_user(&claude, &admitted);
+        assert!(!text(&user, "text").contains("pixels are not supplied"));
         let returned = handoff(&[json!({"kind":"user","user":user})]).unwrap();
         let user = projected_user(&config(), &returned);
         assert_eq!(user["images"], admitted["images"]);

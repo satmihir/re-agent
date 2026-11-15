@@ -1229,7 +1229,7 @@ pub(crate) fn admission_tokens(config: &Value, req: &Value, rate: f64) -> Result
         .flatten()
         .map(|entry| crate::image_context::entry_references(entry).len())
         .sum();
-    if config["provider"] == "openai" && previews > crate::image_context::MAX_PREVIEWS {
+    if crate::catalog::supports_images(config) && previews > crate::image_context::MAX_PREVIEWS {
         return Err(format!("request has {previews} active image previews, over the {} preview limit; no eligible older tool previews could be retired. Use /compact for a metadata-only summary or /reset to discard history", crate::image_context::MAX_PREVIEWS));
     }
     if !crate::image_context::has_images(req["history"].as_array().map_or(&[][..], Vec::as_slice)) {

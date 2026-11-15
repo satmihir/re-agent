@@ -343,9 +343,9 @@ fn a_chat_that_makes_images_still_refuses_every_other_tool() {
 }
 
 #[test]
-fn an_anthropic_chat_is_offered_the_tool_and_is_told_the_result_in_words() {
+fn an_anthropic_chat_is_offered_the_tool_and_sees_the_image_it_made() {
     let Some(root) = isolated(
-        "an_anthropic_chat_is_offered_the_tool_and_is_told_the_result_in_words",
+        "an_anthropic_chat_is_offered_the_tool_and_sees_the_image_it_made",
         vec![draw(), Reply::Text("Done.")],
         false,
         true,
@@ -372,11 +372,38 @@ fn an_anthropic_chat_is_offered_the_tool_and_is_told_the_result_in_words() {
         .find(|block| block["type"] == "tool_result")
         .unwrap_or_else(|| panic!("no tool result: {second}"));
     assert!(result.to_string().contains(&saved[0]), "{result}");
-    assert!(
-        !second.to_string().contains("\"type\":\"image\""),
-        "{second}"
-    );
+    assert_eq!(image_blocks(&result), 1, "{result}");
     api.close().unwrap();
+}
+
+/// Image_blocks counts the Anthropic image blocks carrying pixels in part of a request.
+fn image_blocks(part: &Value) -> usize {
+    part.to_string().matches("\"type\":\"base64\"").count()
+}
+
+/// Tool_result finds the result of one tool call in an Anthropic request.
+fn tool_result(request: &Value, call: &str) -> Value {
+    request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().into_iter().flatten())
+        .find(|block| block["type"] == "tool_result" && block["tool_use_id"] == call)
+        .unwrap_or_else(|| panic!("no result for {call}: {request}"))
+        .clone()
+}
+
+/// Forget_previews deletes the stored image previews under the test's home, as a cleared
+/// cache would.
+fn forget_previews(directory: &Path) {
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() && path.ends_with("reagent/images") {
+            std::fs::remove_dir_all(&path).unwrap();
+        } else if path.is_dir() {
+            forget_previews(&path);
+        }
+    }
 }
 
 #[test]
@@ -399,29 +426,41 @@ fn without_an_image_key_the_call_fails_in_words_and_no_image_request_is_made() {
     api.close().unwrap();
 }
 
-#[test]
-fn a_ninth_image_in_one_chat_still_sends_a_request_with_at_most_eight_previews() {
+/// Ninth_image makes nine images in one chat and returns the last request, which must still
+/// have gone out with at most eight previews.
+fn ninth_image(name: &str, model: &str) -> Option<String> {
     let replies = (0..9)
         .flat_map(|_| [draw(), Reply::Text("Here.")])
         .collect();
-    let Some(root) = isolated(
-        "a_ninth_image_in_one_chat_still_sends_a_request_with_at_most_eight_previews",
-        replies,
-        false,
-        true,
-    ) else {
-        return;
-    };
-    let api = chat(&root, "gpt-6.1-sol");
+    let root = isolated(name, replies, false, true)?;
+    let api = chat(&root, model);
     for turn in 0..9 {
         let result = reply(&api, &format!("turn-{turn}"), "another boat");
         assert_eq!(result.status, "completed", "turn {turn}: {}", result.reason);
     }
     assert_eq!(images(&root).len(), 9);
-    let last = request(&root, "chat-17.json").to_string();
+    api.close().unwrap();
+    Some(request(&root, "chat-17.json").to_string())
+}
+
+#[test]
+fn a_ninth_image_in_one_chat_still_sends_a_request_with_at_most_eight_previews() {
+    let name = "a_ninth_image_in_one_chat_still_sends_a_request_with_at_most_eight_previews";
+    let Some(last) = ninth_image(name, "gpt-6.1-sol") else {
+        return;
+    };
     let previews = last.matches("input_image").count();
     assert!((1..=8).contains(&previews), "{previews} previews");
-    api.close().unwrap();
+}
+
+#[test]
+fn a_ninth_image_in_a_claude_chat_also_retires_the_oldest_previews() {
+    let name = "a_ninth_image_in_a_claude_chat_also_retires_the_oldest_previews";
+    let Some(last) = ninth_image(name, "claude-haiku-5-5") else {
+        return;
+    };
+    let previews = last.matches("\"type\":\"base64\"").count();
+    assert!((1..=8).contains(&previews), "{previews} previews");
 }
 
 #[test]
@@ -555,15 +594,17 @@ fn a_host_session_with_files_and_no_commands_keeps_its_prompt_note_and_limits_ac
 }
 
 #[test]
-fn an_anthropic_session_with_files_makes_an_image_at_its_own_path_and_is_told_in_words() {
+fn an_anthropic_session_with_files_sees_the_images_it_makes_and_views() {
     let Some(root) = isolated(
-        "an_anthropic_session_with_files_makes_an_image_at_its_own_path_and_is_told_in_words",
+        "an_anthropic_session_with_files_sees_the_images_it_makes_and_views",
         vec![
             Reply::Call(
                 "generate_image",
                 json!({"prompt":"a small red sailboat","output_path":"boat.png"}),
             ),
+            Reply::Call("view_image", json!({"path":"boat.png"})),
             Reply::Text("Done."),
+            Reply::Text("Still here."),
         ],
         false,
         true,
@@ -573,25 +614,28 @@ fn an_anthropic_session_with_files_makes_an_image_at_its_own_path_and_is_told_in
     let api = workspace_chat(&root, "claude-haiku-5-5");
     let result = reply(&api, "one", "draw me a boat");
     assert_eq!(result.status, "completed", "{}", result.reason);
+    assert_eq!(result.reply, b"Done.");
     let tools = tool_names(&request(&root, "chat-0.json"));
-    assert!(
-        tools.iter().any(|tool| tool == "generate_image"),
-        "{tools:?}"
-    );
-    assert!(!tools.iter().any(|tool| tool == "view_image"), "{tools:?}");
+    for name in ["generate_image", "view_image"] {
+        assert!(tools.iter().any(|tool| tool == name), "{tools:?}");
+    }
     assert_eq!(std::fs::read(root.join("work/boat.png")).unwrap(), png());
-    let second = request(&root, "chat-1.json");
-    let outcome = second["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| message["content"].as_array().into_iter().flatten())
-        .find(|block| block["type"] == "tool_result")
-        .unwrap_or_else(|| panic!("no tool result: {second}"));
-    assert!(outcome.to_string().contains("boat.png"), "{outcome}");
+
+    // The picture it made, then the one it looked at, arrive as pixels inside each result.
+    let made = tool_result(&request(&root, "chat-1.json"), "toolu_1");
+    assert!(made.to_string().contains("boat.png"), "{made}");
+    assert_eq!(image_blocks(&made), 1, "{made}");
+    let third = request(&root, "chat-2.json");
+    assert_eq!(image_blocks(&tool_result(&third, "toolu_2")), 1, "{third}");
+
+    // Without its stored preview an image is described in words, and the request still goes.
+    forget_previews(&root);
+    assert_eq!(reply(&api, "two", "still there?").reply, b"Still here.");
+    let later = request(&root, "chat-3.json");
+    assert_eq!(image_blocks(&later), 0, "{later}");
     assert!(
-        !second.to_string().contains("\"type\":\"image\""),
-        "{second}"
+        later.to_string().contains("image pixels unavailable"),
+        "{later}"
     );
     api.close().unwrap();
 }
