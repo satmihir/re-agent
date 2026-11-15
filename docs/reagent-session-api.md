@@ -26,6 +26,15 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   `SessionOptions.instructions` (tool-free only, at most 32 KiB) replaces re:agent's
   instructions entirely and survives resume, compaction, Reset and model switches.
   `SessionSnapshot.tool_free` reports the choice; both settings are saved in the checkpoint.
+- `SessionOptions.image_generation` (tool-free only) offers the conversation one tool,
+  `generate_image {prompt}`. re:agent names the file and saves a new PNG in the Session's
+  `workspace`, which must exist and is the only folder the Session may write. Every other
+  tool call still ends the Run with `protocol_error`. The tool is offered on both providers:
+  an OpenAI model also sees a preview of the image, an Anthropic model is told the result
+  in words. `RunResult.effects` names each created file, and a `read_preview` page's
+  `generating` is true while an image is being made. The setting is saved in the
+  checkpoint and reported by `SessionSnapshot.image_generation`; BTW questions never get
+  the tool.
 - `send_message_with_note` adds a host note to one message in a tool-free Session: at
   most 1 KiB, sent to the model after the message's date, labelled as coming from the
   application, and saved with the user Entry. Covalent uses it to say a message was spoken.

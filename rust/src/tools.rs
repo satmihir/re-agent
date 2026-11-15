@@ -73,10 +73,14 @@ impl ToolState {
 
     pub fn new(config: &Value) -> Result<Self, String> {
         if config["tool_free"] == true {
+            let root = config["workspace"].as_str().unwrap_or(".");
             return Ok(Self {
-                workspace: Workspace::tool_free(PathBuf::from(
-                    config["workspace"].as_str().unwrap_or("."),
-                )),
+                // A chat that makes images opens its one folder; any other has no filesystem.
+                workspace: if chat_images(config) {
+                    Workspace::open(root)?
+                } else {
+                    Workspace::tool_free(PathBuf::from(root))
+                },
                 state: json!({}),
                 handles: HashMap::new(),
                 approved: vec![],
@@ -148,8 +152,23 @@ struct SpecConfig {
 static SPECS: LazyLock<Mutex<HashMap<SpecConfig, Arc<Value>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Chat_images reports whether a tool-free Session may create images: its one tool.
+/// An isolated question asked beside such a Session never may.
+pub(crate) fn chat_images(config: &Value) -> bool {
+    config["tool_free"] == true && config["image_generation"] == true && config["btw"] != true
+}
+
+/// Chat_image_spec declares image generation as a conversation sees it: a prompt in, an image
+/// shown to the user. It names no path, key or backend, which are re:agent's to choose.
+fn chat_image_spec() -> Value {
+    json!({"name":"generate_image","description":"Create one image from a description and show it to the user. Use it only when the user asks for a picture. The image appears in the conversation on its own, so do not link to it or mention a file. Never repeat a call after an error unless the user asks again.","input_schema":{"type":"object","properties":{"prompt":{"type":"string","minLength":1,"maxLength":16000,"description":"Describe the image to create."}},"required":["prompt"],"additionalProperties":false},"effect":"write"})
+}
+
 /// specs returns the declarations enabled by this run's authority and features.
 pub fn specs(config: &Value) -> Value {
+    if chat_images(config) {
+        return json!([chat_image_spec()]);
+    }
     if config["tool_free"] == true {
         return json!([]);
     }
@@ -498,6 +517,16 @@ pub fn execute_in_region(
     arguments: &str,
     region: Option<&crate::terminal::RegionHandle>,
 ) -> Result<Value, String> {
+    if chat_images(config) && name == "generate_image" {
+        let args = match decode_arguments(arguments, &chat_image_spec()["input_schema"]) {
+            Ok(args) => args,
+            Err(bad) => return Ok(bad),
+        };
+        return Ok(
+            crate::tool_images::execute(&mut state.workspace, config, name, &args)
+                .unwrap_or_else(|bad| bad),
+        );
+    }
     if config["tool_free"] == true {
         return Ok(fail("permission_denied", "This Session has no tools"));
     }

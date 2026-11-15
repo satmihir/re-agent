@@ -269,6 +269,20 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
             ));
         }
     }
+    if options.image_generation {
+        if !options.tool_free {
+            return Err(error(
+                "invalid_argument",
+                "image_generation is a tool-free Session setting; a Session with tools already has generate_image",
+            ));
+        }
+        if !options.workspace.is_dir() {
+            return Err(error(
+                "invalid_argument",
+                "image_generation saves images in workspace, which must be an existing directory",
+            ));
+        }
+    }
     if options.tool_free && options.plan {
         return Err(error(
             "invalid_argument",
@@ -289,6 +303,9 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
     }
     if options.web_search {
         config["web_search"] = json!(true);
+    }
+    if options.image_generation {
+        config["image_generation"] = json!(true);
     }
     crate::provider::validate_environment().map_err(|e| error("invalid_argument", e))?;
     if options.tool_free {
@@ -412,6 +429,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
         read_only: session.config["read_only"].as_bool().unwrap_or(false),
         tool_free: session.config["tool_free"] == true,
         web_search: session.config["web_search"] == true,
+        image_generation: session.config["image_generation"] == true,
         plan: false,
         auto: auto_info(session),
         workspace: Default::default(),

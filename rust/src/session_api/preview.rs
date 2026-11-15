@@ -17,6 +17,9 @@ pub struct PreviewCursor {
     /// searching is the search state the reader last saw.
     #[serde(default)]
     pub searching: bool,
+    /// generating is the image-generation state the reader last saw.
+    #[serde(default)]
+    pub generating: bool,
 }
 
 /// PreviewPage carries speculative reply text published after a cursor.
@@ -34,6 +37,9 @@ pub struct PreviewPage {
     pub incomplete: bool,
     /// searching means the provider is running a hosted web search for this attempt.
     pub searching: bool,
+    /// generating means re:agent is creating an image the model asked for.
+    #[serde(default)]
+    pub generating: bool,
     /// finished means the Run is terminal and its result is authoritative.
     pub finished: bool,
 }
@@ -55,6 +61,7 @@ struct Text {
     cut: usize,
     incomplete: bool,
     searching: bool,
+    generating: bool,
     finished: bool,
 }
 
@@ -98,6 +105,15 @@ impl ReplyPreview {
         let mut text = self.text.lock().unwrap();
         if text.attempt > 0 && !text.finished && text.searching != active {
             text.searching = active;
+            self.changed.notify_all();
+        }
+    }
+
+    /// Generate records whether an image is being created between two model requests.
+    pub(crate) fn generate(&self, active: bool) {
+        let mut text = self.text.lock().unwrap();
+        if text.attempt > 0 && !text.finished && text.generating != active {
+            text.generating = active;
             self.changed.notify_all();
         }
     }
@@ -149,7 +165,8 @@ impl ReplyPreview {
                 "preview cursor is not a text position",
             ));
         }
-        if !newer && offset == text.published.len() && cursor.searching == text.searching {
+        let unchanged = cursor.searching == text.searching && cursor.generating == text.generating;
+        if !newer && offset == text.published.len() && unchanged {
             return Ok(None);
         }
         Ok(Some(PreviewPage {
@@ -160,9 +177,11 @@ impl ReplyPreview {
                 attempt: text.attempt,
                 offset: text.published.len() as u64,
                 searching: text.searching,
+                generating: text.generating,
             },
             incomplete: text.incomplete,
             searching: text.searching,
+            generating: text.generating,
             finished: false,
         }))
     }
@@ -219,6 +238,7 @@ impl SessionApi {
             attempt: 0,
             offset: 0,
             searching: false,
+            generating: false,
         });
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         loop {
@@ -240,6 +260,7 @@ impl SessionApi {
                         next: cursor,
                         incomplete: false,
                         searching: false,
+                        generating: false,
                         finished: true,
                     });
                 }
@@ -286,6 +307,7 @@ fn idle(cursor: PreviewCursor) -> PreviewPage {
         next: cursor,
         incomplete: false,
         searching: cursor.searching,
+        generating: cursor.generating,
         finished: false,
     }
 }
@@ -302,6 +324,7 @@ mod tests {
                 attempt: 1,
                 offset: 0,
                 searching: false,
+                generating: false,
             })
             .unwrap()
             .map(|page| page.text)
@@ -354,6 +377,7 @@ mod tests {
                 attempt: 1,
                 offset: 9,
                 searching: false,
+                generating: false,
             })
             .unwrap()
             .unwrap();

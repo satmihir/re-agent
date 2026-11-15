@@ -34,6 +34,9 @@ pub struct SessionOptions {
     pub instructions: Option<String>,
     /// web_search lets the model search the web with the provider's hosted search tool.
     pub web_search: bool,
+    /// image_generation offers a tool-free Session one tool, which creates an image from a
+    /// prompt and saves it as a new PNG in `workspace`, the only folder the Session may write.
+    pub image_generation: bool,
 }
 
 impl Default for SessionOptions {
@@ -53,6 +56,7 @@ impl Default for SessionOptions {
             tool_free: false,
             instructions: None,
             web_search: false,
+            image_generation: false,
         }
     }
 }
@@ -598,6 +602,9 @@ pub struct SessionSnapshot {
     /// web_search reports whether conversation Runs may use the provider's hosted search.
     #[serde(default)]
     pub web_search: bool,
+    /// image_generation reports whether a tool-free Session may create images in its workspace.
+    #[serde(default)]
+    pub image_generation: bool,
     /// plan is the last published effective planning restriction.
     pub plan: bool,
     /// auto retains published routing settings without probing credentials or providers.
