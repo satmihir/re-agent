@@ -363,14 +363,14 @@ fn a_note_must_be_short_and_nonblank() {
         ..Default::default()
     })
     .unwrap();
-    for note in [" \n".to_owned(), "x".repeat((1 << 10) + 1)] {
+    for note in [" \n".to_owned(), "x".repeat((4 << 10) + 1)] {
         let error = api
             .send_message_with_note("bad", b"hi", &note, PlanMode::Keep)
             .unwrap_err();
         assert_eq!(error.code, "invalid_argument", "{}", error.message);
     }
     let run = api
-        .send_message_with_note("good", b"hi", &"x".repeat(1 << 10), PlanMode::Keep)
+        .send_message_with_note("good", b"hi", &"x".repeat(4 << 10), PlanMode::Keep)
         .unwrap()
         .run
         .unwrap();

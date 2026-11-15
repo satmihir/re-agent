@@ -493,7 +493,7 @@ fn preview_count(history: &[Value]) -> usize {
 }
 
 fn retire_preview_overflow(session: &mut Session) -> bool {
-    if !flag(&session.config["context_gc"]) || session.config["provider"] != "openai" {
+    if !flag(&session.config["context_gc"]) {
         return false;
     }
     let before = preview_count(&session.request_history());

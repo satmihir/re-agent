@@ -34,17 +34,16 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   checkpoint, stays off across resume, and is reported by `SessionSnapshot.exec`.
 - `SessionOptions.image_generation` lets a host offer image creation on any model; the
   `workspace` must exist. A Session with tools then offers the ordinary `generate_image`
-  to Anthropic models too, which are told the result in words; `view_image` stays with the
-  OpenAI vision models. A tool-free Session gets one tool,
+  even to a model without known image input; the offered OpenAI and Claude models have
+  `view_image` and `generate_image` regardless. A tool-free Session gets one tool,
   `generate_image {prompt}`. re:agent names the file and saves a new PNG in the Session's
   `workspace`, which must exist and is the only folder the Session may write. Every other
-  tool call still ends the Run with `protocol_error`. The tool is offered on both providers:
-  an OpenAI model also sees a preview of the image, an Anthropic model is told the result
-  in words. `RunResult.effects` names each created file, and a `read_preview` page's
+  tool call still ends the Run with `protocol_error`. The tool is offered on both providers,
+  and an offered OpenAI or Claude model sees a preview of the image. `RunResult.effects` names each created file, and a `read_preview` page's
   `generating` is true while an image is being made. The setting is saved in the
   checkpoint and reported by `SessionSnapshot.image_generation`; BTW questions never get
   the tool.
-- `send_message_with_note` adds a host note to one message: at most 1 KiB, sent to the model after the message's date, labelled as coming from the
+- `send_message_with_note` adds a host note to one message: at most 4 KiB, sent to the model after the message's date, labelled as coming from the
   application, and saved with the user Entry. Covalent uses it to say a message was spoken.
 - `read_preview(run, cursor, wait_ms, cancellation)` reads the visible text a conversation
   Run's model is writing, before the Run ends. It is speculative: each provider stream (a

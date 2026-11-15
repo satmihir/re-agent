@@ -1,5 +1,6 @@
 use crate::provider::{array, error, raw_tokens, s};
 use crate::types::{json_string, usage_zero, ModelError};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 
 fn mark(messages: &mut [Value]) {
@@ -17,15 +18,47 @@ fn flush(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
     }
 }
 
+/// Images turns preview references into image blocks, or into text where pixels are missing.
+/// A model without known image input gets none, as before Claude could see images; its
+/// handoff text already says pixels are not supplied.
+fn images(references: Vec<Value>, vision: bool) -> Vec<Value> {
+    if !vision {
+        return Vec::new();
+    }
+    references
+        .iter()
+        .map(|preview| match crate::image_context::pixels(preview) {
+            Ok(bytes) => {
+                json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":STANDARD.encode(bytes)}})
+            }
+            Err(message) => {
+                json!({"type":"text","text":crate::image_context::unavailable(preview, &message)})
+            }
+        })
+        .collect()
+}
+
 pub fn encode_request(req: &Value) -> Result<Value, String> {
+    let vision =
+        crate::catalog::supports_images(&json!({"provider":"anthropic","model":s(req,"model")}));
+    let preview_count: usize = array(req, "history")
+        .iter()
+        .map(|entry| crate::image_context::entry_references(entry).len())
+        .sum();
+    if vision && preview_count > crate::image_context::MAX_PREVIEWS {
+        return Err(format!("request has {preview_count} active image previews, over the {} preview limit; retire older previews with context GC or start a new run", crate::image_context::MAX_PREVIEWS));
+    }
     let mut messages = Vec::new();
     let mut pending = Vec::new();
     for (i, entry) in array(req, "history").iter().enumerate() {
         match s(entry, "kind") {
             "user" | "summary" | "shell" => {
                 flush(&mut messages, &mut pending);
-                for text in crate::openai::entry_texts(entry) {
-                    let block = json!({"type":"text","text":text});
+                let texts = crate::openai::entry_texts(entry)
+                    .into_iter()
+                    .map(|text| json!({"type":"text","text":text}));
+                let pictures = images(crate::image_context::entry_references(entry), vision);
+                for block in texts.chain(pictures) {
                     if messages.last().is_some_and(|m| s(m, "role") == "user") {
                         messages.last_mut().unwrap()["content"]
                             .as_array_mut()
@@ -49,7 +82,17 @@ pub fn encode_request(req: &Value) -> Result<Value, String> {
             }
             "tool" => {
                 let tool = &entry["tool"];
-                let mut block = json!({"type":"tool_result","tool_use_id":s(tool,"call_id"),"content":json_string(&tool["outcome"])});
+                let text = json_string(&tool["outcome"]);
+                let pictures = images(crate::image_context::tool_references(tool), vision);
+                let content = if pictures.is_empty() {
+                    json!(text)
+                } else {
+                    let mut blocks = vec![json!({"type":"text","text":text})];
+                    blocks.extend(pictures);
+                    json!(blocks)
+                };
+                let mut block =
+                    json!({"type":"tool_result","tool_use_id":s(tool,"call_id"),"content":content});
                 if !tool["outcome"]["ok"].as_bool().unwrap_or(false) {
                     block["is_error"] = json!(true);
                 }

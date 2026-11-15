@@ -201,18 +201,12 @@ fn encode(req: &Value, proxied: bool, stream: bool) -> Result<Value, String> {
     );
     check_byte_size(projected_bytes)?;
     for (item, field, part, preview) in previews {
-        let pixels = crate::images::load(&preview).and_then(|bytes| {
-            if bytes.len() > crate::image_context::MAX_PREVIEW_BYTES {
-                return Err("stored preview exceeds the 512 KiB limit".into());
-            }
-            Ok(bytes)
-        });
-        body["input"][item][field][part] = match pixels {
+        body["input"][item][field][part] = match crate::image_context::pixels(&preview) {
             Ok(bytes) => {
                 json!({"type":"input_image","image_url":format!("data:image/png;base64,{}",STANDARD.encode(bytes)),"detail":"high"})
             }
             Err(message) => {
-                json!({"type":"input_text","text":format!("[image pixels unavailable: preview {}; {}. View the current workspace file again for a new observation.]",s(&preview,"sha256"),message)})
+                json!({"type":"input_text","text":crate::image_context::unavailable(&preview, &message)})
             }
         };
     }

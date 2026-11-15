@@ -39,7 +39,7 @@ const MAX_RETAINED_INPUT_BYTES: usize = 32 << 20;
 /// Host instructions share the AGENTS.md cap.
 const MAX_INSTRUCTION_BYTES: usize = 32 << 10;
 /// A host's note on one message is a sentence or two about how it was sent.
-const MAX_NOTE_BYTES: usize = 1 << 10;
+const MAX_NOTE_BYTES: usize = 4 << 10;
 
 fn replaces_session(change: &SessionChange) -> bool {
     matches!(
@@ -644,7 +644,7 @@ impl SessionApi {
 
     /// Send_message_with_note queues a message with a note from the host that the model reads
     /// beside it, labelled as the host's, such as that the message was spoken. It is at most
-    /// 1 KiB and is saved with the message.
+    /// 4 KiB and is saved with the message.
     pub fn send_message_with_note(
         &self,
         request_id: &str,
@@ -655,7 +655,7 @@ impl SessionApi {
         if note.trim().is_empty() || note.len() > MAX_NOTE_BYTES {
             return Err(error(
                 "invalid_argument",
-                "a note must be nonblank and at most 1 KiB",
+                "a note must be nonblank and at most 4 KiB",
             ));
         }
         self.send(request_id, message, Some(note), plan_mode)
