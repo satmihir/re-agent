@@ -16,7 +16,7 @@ rustls-native-certs = "0.8"
 openssl-probe = "0.2"
 http-body-util = "0.1"
 bytes = "1"
-tokio = { version = "1", features = ["rt", "net", "time"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time"] }
 flate2 = "1"
 sha2 = "0.10"
 base64 = "0.22"
