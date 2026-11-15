@@ -255,6 +255,7 @@ fn user(value: &mut Value, decode: bool) -> Result<(), String> {
                 "text_bytes",
                 "images",
                 "time",
+                "note",
             ],
         );
     }
@@ -760,7 +761,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             compacted_plan:string blocked:string last_trace:string last_request:usage \
             tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt",
         "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
-        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string images:raw time:raw",
+        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string images:raw time:raw note:string",
         "user_attribution" => "request_id:string target:run_ref kind:string boundary_step:int",
         "run_ref" => "session:session_ref run_id:string",
         "session_ref" => "session_id:string instance_id:string",
