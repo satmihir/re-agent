@@ -165,6 +165,7 @@ impl SessionApi {
             info: info.clone(),
             work: CommandWork::Message(MessageCommand {
                 message: retained,
+                note: None,
                 plan_mode: PlanMode::Keep,
                 cancellation: cancellation.clone(),
                 wire_result: None,

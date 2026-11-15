@@ -408,7 +408,7 @@ fn default_field(
         ]
         .contains(&key),
         "entry" => key != "kind",
-        "user" => ["attribution", "text_bytes"].contains(&key),
+        "user" => ["attribution", "text_bytes", "note"].contains(&key),
         "block" => matches!(key, "call" | "search" | "citations"),
         "shell" => ["exit_code", "signal"].contains(&key),
         "prompt" => key == "project",

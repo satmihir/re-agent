@@ -247,6 +247,9 @@ impl Session {
         if !marker.is_empty() {
             user["plan"] = json!(marker);
         }
+        if let Some(note) = crate::session_api::message_note(self) {
+            user["note"] = json!(note);
+        }
         if let Some(attribution) = crate::session_api::steering::message_attribution(self) {
             user["attribution"] = json!(attribution);
         }

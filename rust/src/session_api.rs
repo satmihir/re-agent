@@ -38,6 +38,8 @@ const MAX_MESSAGE_BYTES: usize = 10 << 20;
 const MAX_RETAINED_INPUT_BYTES: usize = 32 << 20;
 /// Host instructions share the AGENTS.md cap.
 const MAX_INSTRUCTION_BYTES: usize = 32 << 10;
+/// A host's note on one message is a sentence or two about how it was sent.
+const MAX_NOTE_BYTES: usize = 1 << 10;
 
 fn replaces_session(change: &SessionChange) -> bool {
     matches!(
@@ -134,6 +136,8 @@ impl CommandWork {
 struct MessageCommand {
     run: RunInfo,
     message: Vec<u8>,
+    /// note is the host's word on how this message was sent, for the model only.
+    note: Option<String>,
     plan_mode: PlanMode,
     cancellation: Arc<AtomicBool>,
     wire_result: Option<Value>,
@@ -621,6 +625,41 @@ impl SessionApi {
         message: &[u8],
         plan_mode: PlanMode,
     ) -> Result<CommandInfo, ApiError> {
+        self.send(request_id, message, None, plan_mode)
+    }
+
+    /// Send_message_with_note queues a message with a note from the host that the model reads
+    /// beside it, labelled as the host's, such as that the message was spoken. Only a tool-free
+    /// Session takes one, at most 1 KiB; the note is saved with the message.
+    pub fn send_message_with_note(
+        &self,
+        request_id: &str,
+        message: &[u8],
+        note: &str,
+        plan_mode: PlanMode,
+    ) -> Result<CommandInfo, ApiError> {
+        if note.trim().is_empty() || note.len() > MAX_NOTE_BYTES {
+            return Err(error(
+                "invalid_argument",
+                "a note must be nonblank and at most 1 KiB",
+            ));
+        }
+        if !self.client.shared.state.lock().unwrap().snapshot.tool_free {
+            return Err(error(
+                "invalid_argument",
+                "a note on a message requires a tool-free Session",
+            ));
+        }
+        self.send(request_id, message, Some(note), plan_mode)
+    }
+
+    fn send(
+        &self,
+        request_id: &str,
+        message: &[u8],
+        note: Option<&str>,
+        plan_mode: PlanMode,
+    ) -> Result<CommandInfo, ApiError> {
         if request_id.trim().is_empty()
             || request_id.len() > 128
             || message.len() > MAX_MESSAGE_BYTES
@@ -640,6 +679,7 @@ impl SessionApi {
             if !command.work.message().is_some_and(|m| {
                 m.run.kind == RunKind::Conversation
                     && m.message == message
+                    && m.note.as_deref() == note
                     && m.plan_mode == plan_mode
             }) {
                 return Err(error(
@@ -711,6 +751,7 @@ impl SessionApi {
                     result: None,
                 },
                 message: message.into(),
+                note: note.map(str::to_owned),
                 plan_mode,
                 cancellation,
                 wire_result: None,
@@ -1100,6 +1141,16 @@ pub(crate) struct RunObserver {
     cancellation: Arc<AtomicBool>,
     /// run_id is the identity reserved before the worker starts execution.
     pub(crate) run_id: String,
+}
+
+/// Message_note returns the host's note on the message the current conversation Run answers.
+pub(crate) fn message_note(session: &Session) -> Option<String> {
+    let observer = session
+        .api
+        .as_ref()
+        .filter(|observer| observer.kind == RunKind::Conversation)?;
+    let state = observer.shared.state.lock().unwrap();
+    state.commands[observer.index].work.message()?.note.clone()
 }
 
 /// btw_cancelled reads a question-local token without registering it as a signal target.

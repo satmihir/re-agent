@@ -15,7 +15,7 @@ pub fn entry_texts(entry: &Value) -> Vec<Value> {
         "user" => {
             let user = &entry["user"];
             let mut parts = vec![user.get("text").filter(|text|!text.is_null()).cloned().unwrap_or(json!(""))];
-            for (key,preamble) in [("workspace","Workspace state when this message was sent, collected by re:agent:\n"),("time","Date when this message was sent, collected by re:agent:\n"),("roster","Agent roster when this message was sent, collected by re:agent:\n")] {
+            for (key,preamble) in [("workspace","Workspace state when this message was sent, collected by re:agent:\n"),("time","Date when this message was sent, collected by re:agent:\n"),("roster","Agent roster when this message was sent, collected by re:agent:\n"),("note","Note from the application this message was sent through:\n")] {
                 if !user[key].is_null() {
                     let bytes = crate::raw::bytes(&user[key]).unwrap_or_else(|| raw_string(&user[key]).into_bytes());
                     parts.push(crate::raw::string(&[preamble.as_bytes(), &bytes].concat()));
@@ -939,6 +939,17 @@ mod tests {
         assert_eq!(
             entry_texts(&json!({"kind":"user","user":{}})),
             vec![json!("")]
+        );
+    }
+    #[test]
+    fn a_host_note_follows_the_date_labelled_as_the_hosts() {
+        let user = json!({"text":"hi","time":{"kind":"message_time","date":"2026-11-14"},"note":"The user spoke this message."});
+        let parts = entry_texts(&json!({"kind":"user","user":user}));
+        assert_eq!(parts.len(), 3);
+        assert!(parts[1].as_str().unwrap().starts_with("Date when"));
+        assert_eq!(
+            parts[2],
+            "Note from the application this message was sent through:\nThe user spoke this message."
         );
     }
     #[test]

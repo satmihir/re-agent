@@ -26,6 +26,9 @@ Run cancellation flags. The model loop remains in `run_loop.rs`.
   `SessionOptions.instructions` (tool-free only, at most 32 KiB) replaces re:agent's
   instructions entirely and survives resume, compaction, Reset and model switches.
   `SessionSnapshot.tool_free` reports the choice; both settings are saved in the checkpoint.
+- `send_message_with_note` adds a host note to one message in a tool-free Session: at
+  most 1 KiB, sent to the model after the message's date, labelled as coming from the
+  application, and saved with the user Entry. Covalent uses it to say a message was spoken.
 - `read_preview(run, cursor, wait_ms, cancellation)` reads the visible text a conversation
   Run's model is writing, before the Run ends. It is speculative: each provider stream (a
   retried attempt or a later Step) starts over at offset zero, and a page with `restarted`
@@ -958,6 +961,7 @@ Operations on a handle bound to one SessionRef:
 | `read_agents` | optional page cursor, `limit` | page of lifetime roster records, including ended-at-resume observations |
 | `read_events` | EventCursor, `limit`, `wait_ms` | bounded `EventPage`; zero wait polls, positive wait is cancellable |
 | `send_message` | `request_id`, `message: bytes`, `plan_mode: keep \| on \| off` | queue a new conversation Run; returns its reserved RunRef |
+| `send_message_with_note` | as `send_message`, plus `note` | the same, with a host note on this message; tool-free Sessions only |
 | `ask` | `request_id`, `question: bytes` | isolated BTW Run; returns its reserved RunRef |
 | `steer` | `request_id`, `run: RunRef`, `message: bytes` | guidance for that active conversation Run only |
 | `cancel_run` | `run: RunRef` | updated `RunInfo`; request cancellation, including that Run's active descendants |

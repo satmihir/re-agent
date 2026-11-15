@@ -307,3 +307,94 @@ fn tool_free_launch_settings_and_workspace_controls_are_validated() {
     assert!(result.reason.contains("tool-free"), "{}", result.reason);
     api.close().unwrap();
 }
+
+const NOTE: &str = "The user spoke this message; the reply will be read aloud.";
+
+#[test]
+fn a_note_reaches_the_model_with_its_own_message_and_is_kept_across_resume() {
+    let Some(root) = isolated(
+        "a_note_reaches_the_model_with_its_own_message_and_is_kept_across_resume",
+        vec!["first", "second", "third"],
+    ) else {
+        return;
+    };
+    let api = chat(&root);
+    let id = api.get_snapshot().unwrap().session.session_id;
+    let run = api
+        .send_message_with_note("spoken", b"hello", NOTE, PlanMode::Keep)
+        .unwrap()
+        .run
+        .unwrap();
+    assert_eq!(api.wait_run(&run).unwrap().result.unwrap().reply, b"first");
+    let first = request(&root, 0)["input"].to_string();
+    assert!(
+        first.contains("Note from the application this message was sent through"),
+        "{first}"
+    );
+    assert_eq!(first.matches(NOTE).count(), 1, "{first}");
+    // Repeating the request ID with another note is a different message.
+    let error = api
+        .send_message_with_note("spoken", b"hello", "Typed.", PlanMode::Keep)
+        .unwrap_err();
+    assert_eq!(error.code, "conflict");
+
+    assert_eq!(reply(&api, "typed", "and typed").reply, b"second");
+    let second = request(&root, 1);
+    assert_eq!(second["input"].to_string().matches(NOTE).count(), 1);
+    let last = second["input"].as_array().unwrap().last().unwrap();
+    assert!(last.to_string().contains("and typed"), "{last}");
+    assert!(!last.to_string().contains(NOTE), "{last}");
+    api.close().unwrap();
+
+    let api = resume_session(&id).unwrap();
+    assert_eq!(reply(&api, "later", "still there?").reply, b"third");
+    assert_eq!(
+        request(&root, 2)["input"].to_string().matches(NOTE).count(),
+        1
+    );
+    api.close().unwrap();
+}
+
+#[test]
+fn a_note_must_be_short_nonblank_and_on_a_tool_free_session() {
+    let root = tempfile::tempdir().unwrap();
+    let script = root.path().join("script.json");
+    let text = json!({"blocks":[{"kind":"text","text":"ok"}]});
+    std::fs::write(&script, json!([text, text]).to_string()).unwrap();
+    let open = |tool_free: bool| {
+        open_session(SessionOptions {
+            workspace: root.path().into(),
+            scripted: Some(script.clone()),
+            checkpoint: false,
+            agents: false,
+            tool_free,
+            ..Default::default()
+        })
+        .unwrap()
+    };
+    let api = open(true);
+    for note in [" \n".to_owned(), "x".repeat((1 << 10) + 1)] {
+        let error = api
+            .send_message_with_note("bad", b"hi", &note, PlanMode::Keep)
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_argument", "{}", error.message);
+    }
+    let run = api
+        .send_message_with_note("good", b"hi", &"x".repeat(1 << 10), PlanMode::Keep)
+        .unwrap()
+        .run
+        .unwrap();
+    assert_eq!(
+        api.wait_run(&run).unwrap().result.unwrap().status,
+        "completed"
+    );
+    api.close().unwrap();
+
+    let api = open(false);
+    let error = api
+        .send_message_with_note("tools", b"hi", NOTE, PlanMode::Keep)
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_argument", "{}", error.message);
+    assert!(error.message.contains("tool-free"), "{}", error.message);
+    api.close().unwrap();
+}
