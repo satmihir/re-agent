@@ -34,6 +34,24 @@ pub fn models() -> Value {
             1_050_000,
         ),
         (
+            "gpt-6-astra",
+            "openai",
+            REASONING_EFFORTS,
+            "low",
+            "low",
+            "frontier reasoning",
+            1_050_000,
+        ),
+        (
+            "gpt-6-sol",
+            "openai",
+            OPENAI_EFFORTS,
+            "low",
+            "low",
+            "earlier Sol, answers sooner",
+            1_050_000,
+        ),
+        (
             "claude-haiku-5-5",
             "anthropic",
             &[][..],
@@ -60,15 +78,6 @@ pub fn models() -> Value {
             "most capable, costs most",
             1_000_000,
         ),
-        (
-            "gpt-6-astra",
-            "openai",
-            REASONING_EFFORTS,
-            "low",
-            "low",
-            "frontier reasoning",
-            1_050_000,
-        ),
     ];
     Value::Array(entries.iter().map(|(id,provider,efforts,effort,verbosity,note,window)| {
         json!({"id":id,"provider":provider,"efforts":efforts,"effort":effort,"verbosity":verbosity,"note":note,"context_window":window})
@@ -84,7 +93,7 @@ pub(crate) fn supports_images(config: &Value) -> bool {
         ),
         (
             "openai",
-            "gpt-6-luna" | "gpt-6.1-terra" | "gpt-6.1-sol" | "gpt-6-astra"
+            "gpt-6-luna" | "gpt-6.1-terra" | "gpt-6.1-sol" | "gpt-6-astra" | "gpt-6-sol"
         ) | (
             "anthropic",
             "claude-haiku-5-5" | "claude-sonnet-5-5" | "claude-opus-5-5"
@@ -290,13 +299,14 @@ mod tests {
                 "gpt-6-luna",
                 "gpt-6.1-terra",
                 "gpt-6.1-sol",
+                "gpt-6-astra",
+                "gpt-6-sol",
                 "claude-haiku-5-5",
                 "claude-sonnet-5-5",
-                "claude-opus-5-5",
-                "gpt-6-astra"
+                "claude-opus-5-5"
             ]
         );
-        let haiku = select_model("4").unwrap();
+        let haiku = select_model("6").unwrap();
         assert_eq!(haiku["provider"], "anthropic");
         assert_eq!(haiku["efforts"], json!([]));
         assert_eq!(haiku["effort"], "");
@@ -307,7 +317,7 @@ mod tests {
         assert_eq!(terra["id"], "gpt-6.1-terra");
         assert_eq!(terra["effort"], "");
         assert_eq!(terra["context_window"], 1_050_000);
-        let astra = select_model("7").unwrap();
+        let astra = select_model("4").unwrap();
         assert_eq!(astra, select_model("gpt-6-astra").unwrap());
         assert_eq!(astra["provider"], "openai");
         assert_eq!(astra["effort"], "low");
@@ -326,7 +336,11 @@ mod tests {
         assert_eq!(luna["effort"], "medium");
         assert_eq!(luna["context_window"], 1_050_000);
         assert!(model_info("gpt-6.1-luna").is_null());
-        assert!(model_info("gpt-6-sol").is_null());
+        let earlier = select_model("5").unwrap();
+        assert_eq!(earlier, select_model("gpt-6-sol").unwrap());
+        assert_eq!(earlier["effort"], "low");
+        assert_eq!(earlier["efforts"], json!(OPENAI_EFFORTS));
+        assert_eq!(earlier["context_window"], 1_050_000);
         assert_eq!(sol["id"], "gpt-6.1-sol");
         assert!(select_effort(&sol, "none").is_err());
         assert_eq!(
@@ -343,7 +357,7 @@ mod tests {
         );
         for invalid in [
             "0",
-            "8",
+            "9",
             "gpt-5.6-luna",
             "gpt-5.6-terra",
             "claude-haiku-4-5",
@@ -386,8 +400,9 @@ mod tests {
     fn catalog_display_marks_availability_without_trailing_space() {
         let listing = render_models("gpt-6-luna", &json!({"openai":true}));
         assert!(listing.contains("1  gpt-6-luna        openai     current"));
-        assert!(listing.contains("4  claude-haiku-5-5  anthropic  no key"));
-        assert!(listing.contains("7  gpt-6-astra       openai"));
+        assert!(listing.contains("4  gpt-6-astra       openai"));
+        assert!(listing.contains("5  gpt-6-sol         openai"));
+        assert!(listing.contains("6  claude-haiku-5-5  anthropic  no key"));
         assert!(listing.contains("models marked no key need ANTHROPIC_API_KEY"));
         assert!(listing
             .lines()
