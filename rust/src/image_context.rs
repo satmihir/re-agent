@@ -20,9 +20,13 @@ pub fn tool_references(result: &Value) -> Vec<Value> {
     if !successful(outcome) {
         return Vec::new();
     }
+    // A restored checkpoint holds data as opaque bytes; read it the same as a live result.
+    let Ok(data) = crate::raw::parse(&outcome["data"]) else {
+        return Vec::new();
+    };
     let data = match s(result, "name") {
-        "view_image" | "generate_image" => &outcome["data"],
-        "recall" if successful(&outcome["data"]) => &outcome["data"]["data"],
+        "view_image" | "generate_image" => &data,
+        "recall" if successful(&data) => &data["data"],
         _ => return Vec::new(),
     };
     data.get("preview")
