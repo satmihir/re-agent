@@ -639,3 +639,57 @@ fn an_anthropic_session_with_files_sees_the_images_it_makes_and_views() {
     );
     api.close().unwrap();
 }
+
+/// Uncached drops the cache markers, which move between requests and are not history.
+fn uncached(value: &Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .filter(|(key, _)| *key != "cache_control")
+                .map(|(key, field)| (key.clone(), uncached(field)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(uncached).collect()),
+        _ => value.clone(),
+    }
+}
+
+#[test]
+fn a_resumed_claude_chat_resends_its_image_results_unchanged() {
+    let Some(root) = isolated(
+        "a_resumed_claude_chat_resends_its_image_results_unchanged",
+        vec![
+            Reply::Call("view_image", json!({"path":"boat.png"})),
+            Reply::Text("A boat."),
+            Reply::Text("Still a boat."),
+        ],
+        false,
+        true,
+    ) else {
+        return;
+    };
+    std::fs::create_dir_all(root.join("work")).unwrap();
+    std::fs::write(root.join("work/boat.png"), png()).unwrap();
+    let api = workspace_chat(&root, "claude-haiku-5-5");
+    let id = api.get_snapshot().unwrap().session.session_id;
+    assert_eq!(reply(&api, "one", "what is this?").reply, b"A boat.");
+    api.close().unwrap();
+
+    // Claude binds a thinking block to every byte before it, so a resumed Session must
+    // resend the viewed picture exactly as the first process did.
+    let api = resume_session(&id).unwrap();
+    assert_eq!(reply(&api, "two", "and now?").reply, b"Still a boat.");
+    let before = request(&root, "chat-1.json");
+    let after = request(&root, "chat-2.json");
+    let viewed = tool_result(&after, "toolu_1");
+    assert_eq!(image_blocks(&viewed), 1, "{viewed}");
+    let earlier = before["messages"].as_array().unwrap();
+    assert_eq!(
+        uncached(&json!(
+            after["messages"].as_array().unwrap()[..earlier.len()]
+        )),
+        uncached(&before["messages"])
+    );
+    api.close().unwrap();
+}
