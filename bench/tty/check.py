@@ -1200,6 +1200,25 @@ SCENARIOS = {
             ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
     },
+    "skills-manual-invocation": {
+        "size": (28, 110),
+        "skills": True,
+        "manual_skill": True,
+        "script": [reply("Manual skill accepted.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5),
+            ("type", "/skills"), ("key", "enter"),
+            ("wait", "(only you can run it)", 5),
+            ("wait", "/reset picks up changes", 5),
+            ("show", "/skills marks a user-only skill and explains the pinned list"),
+            ("type", "/deploy staging"), ("key", "enter"),
+            ("wait", "Manual skill accepted.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("wait_check", "dispatched_prompt_has", "\n\nDeploy staging carefully.\n"),
+            ("show", "A user-only skill still runs through /deploy"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "input-history-restart": {
         "script": [reply("History turn accepted.")],
         "steps": [
@@ -2394,7 +2413,8 @@ def run(binary, name, scenario, workspace):
     if scenario.get("skills"):
         os.makedirs(os.path.join(workspace, ".agents", "skills", "deploy"))
         with open(os.path.join(workspace, ".agents", "skills", "deploy", "SKILL.md"), "w", encoding="utf-8") as fixture:
-            fixture.write("---\ndescription: Deploy the app\n---\nDeploy $ARGUMENTS carefully.\n")
+            manual = "disable-model-invocation: true\n" if scenario.get("manual_skill") else ""
+            fixture.write("---\ndescription: Deploy the app\n" + manual + "---\nDeploy $ARGUMENTS carefully.\n")
     if scenario.get("slow_read"):
         with open(os.path.join(workspace, "dense.txt"), "w") as dense:
             dense.write("x\n" * 500000)

@@ -48,12 +48,20 @@ pub fn instructions(config: &Value) -> String {
     render_instructions(config)
 }
 
-/// pin_instructions fixes the runtime and project text for future requests.
+/// pin_instructions fixes the runtime, project and skill text for future requests.
 pub fn pin_instructions(config: &mut Value) {
-    let text = render_instructions(config);
+    let mut text = render_instructions(config);
+    // Skills are read from disk here, not when rendering, so a pin is the only moment they change.
+    let skills = crate::skills::prompt_section(config);
+    if let Some(section) = &skills {
+        text.push_str(section);
+    }
     let mut prompt = json!({"text":text});
     if config["project_instructions"].is_string() {
         prompt["project"] = config["project_instructions"].clone();
+    }
+    if skills.is_some() {
+        prompt["skills"] = json!(true);
     }
     config["prompt"] = prompt;
 }
@@ -192,6 +200,29 @@ mod tests {
         config["project_instructions"] = "changed".into();
         assert_eq!(instructions(&config), pinned);
         assert_eq!(prompt_project(&config), Some("original"));
+    }
+
+    #[test]
+    fn pin_lists_workspace_skills_after_project_instructions() {
+        let workspace = tempfile::tempdir().unwrap();
+        let folder = workspace.path().join(".agents/skills/pin-check-skill");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("SKILL.md"),
+            "---\ndescription: Check pins\n---\nBody\n",
+        )
+        .unwrap();
+        let mut config = json!({"workspace":workspace.path(),"project_instructions":"rules"});
+        pin_instructions(&mut config);
+        let text = config["prompt"]["text"].as_str().unwrap();
+        let (before, skills) = text.split_once("\n# Skills\n").unwrap();
+        assert!(before.ends_with("rules"));
+        assert!(skills.contains("- pin-check-skill: Check pins\n"));
+        assert_eq!(config["prompt"]["skills"], true);
+        config["no_project_instructions"] = json!(true);
+        pin_instructions(&mut config);
+        assert!(!instructions(&config).contains("pin-check-skill"));
+        assert!(config["prompt"].get("skills").is_none());
     }
 
     #[test]

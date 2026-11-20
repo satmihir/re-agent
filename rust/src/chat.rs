@@ -996,8 +996,13 @@ fn skill_listing((skills, warnings): (Vec<crate::skills::Skill>, Vec<String>)) -
     for skill in &skills {
         let command = format!("/{}", skill.name);
         let shadowed = command == "/exit" || COMMANDS.iter().any(|c| c.0 == command);
+        let only_you = if skill.model_invocable {
+            ""
+        } else {
+            " (only you can run it)"
+        };
         out.push_str(&format!(
-            "  {command:<20} {}{}\n  {:<20} {}\n",
+            "  {command:<20} {}{only_you}{}\n  {:<20} {}\n",
             render::sanitize(&skill.description),
             if shadowed {
                 format!(" (built-in {command} runs instead; use ${})", skill.name)
@@ -1010,6 +1015,9 @@ fn skill_listing((skills, warnings): (Vec<crate::skills::Skill>, Vec<String>)) -
     }
     for warning in &warnings {
         out.push_str(&format!("warning: {}\n", render::sanitize(warning)));
+    }
+    if !skills.is_empty() {
+        out.push_str("the model sees skills listed when this conversation started; /reset picks up changes\n");
     }
     out.trim_end().to_string()
 }
