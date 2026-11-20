@@ -1,10 +1,15 @@
+use crate::tools::{fail, outcome};
 use crate::workspace::Workspace;
+use serde_json::{json, Value};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use yaml_rust2::YamlLoader;
+use yaml_rust2::{Yaml, YamlLoader};
 
 const MAX_SKILL_BYTES: u64 = 32 << 10;
+// Codex budgets its skill list at 8,000 characters when the context window is unknown.
+const MAX_INDEX_BYTES: usize = 8000;
+const INDEX_HEADING: &str = "\n# Skills\n\nThe user installed these skills: instructions for particular kinds of task. When a request matches a skill's description, call load_skill with its name before you start, then follow what it returns. A message that begins with \"re:agent skill NAME\" already carries that skill's instructions.\n\n";
 
 /// Skill is one Agent Skills folder whose SKILL.md a user runs as /name or $name.
 pub struct Skill {
@@ -13,6 +18,15 @@ pub struct Skill {
     /// location names the skill folder: workspace-relative for project skills, absolute otherwise.
     pub location: String,
     pub body: String,
+    /// model_invocable is false when frontmatter sets disable-model-invocation, as in Claude Code.
+    pub model_invocable: bool,
+}
+
+/// home is the directory holding the user's ~/.agents and ~/.claude skill folders.
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
 }
 
 /// discover reads skills from ~/.agents, ~/.claude, then the workspace's .agents and .claude; the first of a name wins.
@@ -121,13 +135,14 @@ fn read(
         Ok(docs) => (docs.into_iter().next(), None),
         Err(e) => (None, Some(format!("frontmatter ignored: {e}"))),
     };
-    let field = |key: &str| {
-        fields
-            .as_ref()
-            .and_then(|f| f[key].as_str())
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string()
+    let value = |key: &str| fields.as_ref().map_or(&Yaml::BadValue, |f| &f[key]);
+    let field = |key: &str| value(key).as_str().map(str::trim).unwrap_or("").to_string();
+    // Claude Code also accepts yes, on and 1 for booleans.
+    let disabled = match value("disable-model-invocation") {
+        Yaml::Boolean(b) => *b,
+        Yaml::Integer(n) => *n == 1,
+        Yaml::String(s) => matches!(s.to_ascii_lowercase().as_str(), "true" | "yes" | "on" | "1"),
+        _ => false,
     };
     let mut name = field("name");
     if name.is_empty() {
@@ -153,6 +168,7 @@ fn read(
         description,
         location: String::new(),
         body,
+        model_invocable: !disabled,
     };
     Ok(Some((skill, warning)))
 }
@@ -194,6 +210,76 @@ pub fn invocation(skill: &Skill, arguments: Option<&str>) -> String {
         "re:agent skill {}\nSkill folder: {} (relative paths in the skill start there)\n\n{body}\n",
         skill.name, skill.location
     )
+}
+
+/// prompt_section lists the skills the model may load, for pinning into a Session's instructions.
+pub fn prompt_section(config: &Value) -> Option<String> {
+    if config["tool_free"] == true || config["no_project_instructions"] == true {
+        return None;
+    }
+    let workspace = config["workspace"].as_str().filter(|w| !w.is_empty())?;
+    let (skills, _) = discover(Path::new(workspace), home().as_deref());
+    index(&skills)
+}
+
+fn index(skills: &[Skill]) -> Option<String> {
+    let listed: Vec<_> = skills.iter().filter(|s| s.model_invocable).collect();
+    if listed.is_empty() {
+        return None;
+    }
+    let mut text = INDEX_HEADING.to_string();
+    let mut omitted = 0;
+    for skill in listed {
+        let description: String = skill
+            .description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(1024)
+            .collect();
+        let line = format!("- {}: {description}\n", skill.name);
+        if text.len() + line.len() > MAX_INDEX_BYTES {
+            omitted += 1;
+            continue;
+        }
+        text.push_str(&line);
+    }
+    if omitted > 0 {
+        text.push_str(&format!(
+            "({omitted} more skills are installed but do not fit in this list.)\n"
+        ));
+    }
+    Some(text)
+}
+
+/// load runs the load_skill tool, rereading the named skill from the current workspace and home.
+pub fn load(workspace: &Path, home: Option<&Path>, args: &Value) -> Value {
+    let name = args["name"].as_str().unwrap_or("");
+    let (skills, _) = discover(workspace, home);
+    let Some(skill) = skills.iter().find(|s| s.name == name && s.model_invocable) else {
+        return fail(
+            "not_found",
+            &format!(
+                "no skill named {} can be loaded; use a name from the Skills list",
+                crate::errors::quote(name)
+            ),
+        );
+    };
+    let out = outcome(
+        true,
+        "ok",
+        "",
+        json!({"name":skill.name,"folder":skill.location,"instructions":skill.body}),
+        "none",
+    );
+    if crate::types::json_string(&out).len() > crate::workspace::MAX_RESULT_BYTES {
+        return fail(
+            "too_large",
+            &format!("SKILL.md does not fit in one result; ask the user to run /{name}"),
+        );
+    }
+    out
 }
 
 /// mentioned returns the skills named by $name words in text, once each, in order of mention.
@@ -398,6 +484,7 @@ mod tests {
             description: String::new(),
             location: ".agents/skills/deploy".into(),
             body: body.into(),
+            model_invocable: true,
         };
         for (body, arguments, expected) in [
             (
@@ -427,6 +514,7 @@ mod tests {
             description: String::new(),
             location: String::new(),
             body: String::new(),
+            model_invocable: true,
         };
         let skills = [skill("deploy"), skill("lint")];
         for (text, expected) in [
@@ -440,6 +528,88 @@ mod tests {
                 .map(|s| s.name.as_str())
                 .collect();
             assert_eq!(found, expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn model_list_omits_disabled_skills_and_fits_its_budget() {
+        let workspace = tempfile::tempdir().unwrap();
+        for (folder, setting) in [
+            ("a-shown", ""),
+            ("b-false", "disable-model-invocation: false\n"),
+            ("c-true", "disable-model-invocation: true\n"),
+            ("d-yes", "disable-model-invocation: yes\n"),
+            ("e-one", "disable-model-invocation: 1\n"),
+        ] {
+            write(
+                workspace.path(),
+                &format!(".agents/skills/{folder}/SKILL.md"),
+                &format!("---\ndescription: |\n  Use for\n  {folder}.\n{setting}---\nBody\n"),
+            );
+        }
+        let config = json!({"workspace": workspace.path()});
+        let section = prompt_section(&config).unwrap();
+        assert!(section.starts_with(INDEX_HEADING));
+        assert!(
+            section.contains("- a-shown: Use for a-shown.\n"),
+            "{section}"
+        );
+        assert!(
+            section.contains("- b-false: Use for b-false.\n"),
+            "{section}"
+        );
+        for hidden in ["c-true", "d-yes", "e-one"] {
+            assert!(!section.contains(hidden), "{hidden}: {section}");
+        }
+        for key in ["no_project_instructions", "tool_free"] {
+            let mut off = config.clone();
+            off[key] = json!(true);
+            assert_eq!(prompt_section(&off), None, "{key}");
+        }
+        let many: Vec<_> = (0..40)
+            .map(|n| Skill {
+                name: format!("skill-{n}"),
+                description: "d".repeat(2000),
+                location: String::new(),
+                body: String::new(),
+                model_invocable: true,
+            })
+            .collect();
+        let section = index(&many).unwrap();
+        assert!(section.len() <= MAX_INDEX_BYTES + 100, "{}", section.len());
+        assert!(section.ends_with("(33 more skills are installed but do not fit in this list.)\n"));
+    }
+
+    #[test]
+    fn load_skill_rereads_by_name_and_refuses_hidden_skills() {
+        let workspace = tempfile::tempdir().unwrap();
+        write(
+            workspace.path(),
+            ".agents/skills/manual/SKILL.md",
+            "---\ndisable-model-invocation: true\n---\nOnly the user runs this\n",
+        );
+        write(
+            workspace.path(),
+            ".agents/skills/huge/SKILL.md",
+            &"\"\n".repeat(12 << 10),
+        );
+        write(
+            workspace.path(),
+            ".claude/skills/deploy/SKILL.md",
+            "---\ndescription: Deploy\n---\nEdited version\n",
+        );
+        let result = load(workspace.path(), None, &json!({"name":"deploy"}));
+        assert_eq!(
+            result["data"],
+            json!({"name":"deploy","folder":".claude/skills/deploy","instructions":"Edited version"})
+        );
+        for (name, code) in [
+            ("manual", "not_found"),
+            ("missing", "not_found"),
+            ("huge", "too_large"),
+        ] {
+            let result = load(workspace.path(), None, &json!({"name":name}));
+            assert_eq!(result["code"], code, "{name}: {result}");
         }
     }
 }

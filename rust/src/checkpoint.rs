@@ -789,7 +789,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
         "gc" => "dropped:map:drop paths:map:string last_pass:int inherited:map:outcome",
         "drop" => "reason:string step:int placeholder:string",
         "handoff" => "text:string plan:string entries:int native_items:int images:[]raw",
-        "prompt" => "text:string project:string",
+        "prompt" => "text:string project:string skills:bool",
         "thread" => "id:string parent_id:string kind:string name:string state:string task:string steps:int \
             cost:usage trace_path:string authority:string context_mode:string effects_unknown:bool",
         "observation" => "id:string parent_id:string kind:string name:string state:string task:string steps:int \

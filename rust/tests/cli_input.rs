@@ -250,6 +250,89 @@ fn run_from_stdin_keeps_user_bytes_in_the_recorded_request() {
 }
 
 #[test]
+fn model_sees_installed_skills_and_loads_one_by_name() {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    for (root, folder, text) in [
+        (
+            home.path(),
+            ".claude/skills/deploy",
+            "---\ndescription: Deploy the app. Use when asked to ship.\n---\nRun make deploy.\n",
+        ),
+        (
+            workspace.path(),
+            ".agents/skills/manual",
+            "---\ndescription: Hand-run only\ndisable-model-invocation: true\n---\nSecret steps.\n",
+        ),
+    ] {
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join("SKILL.md"), text).unwrap();
+    }
+    let script = home.path().join("responses.json");
+    std::fs::write(
+        &script,
+        serde_json::to_vec(&json!([
+            {"blocks":[
+                {"kind":"tool_call","call":{"call_id":"a","name":"load_skill","arguments":"{\"name\":\"deploy\"}"}},
+                {"kind":"tool_call","call":{"call_id":"b","name":"load_skill","arguments":"{\"name\":\"manual\"}"}}
+            ]},
+            {"blocks":[{"kind":"text","text":"shipped"}]}
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let trace = home.path().join("trace.jsonl");
+    let mut command = command(&home);
+    command
+        .args(["run", "--workspace"])
+        .arg(workspace.path())
+        .arg("--scripted")
+        .arg(script)
+        .arg("--trace-file")
+        .arg(&trace)
+        .args(["--prompt-file", "-"]);
+    let output = with_stdin(command, b"ship it");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests: Vec<Value> = std::fs::read_to_string(trace)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["type"] == "model.requested")
+        .map(|event| event["data"].clone())
+        .collect();
+    let last = requests.last().unwrap();
+    let instructions = last["instructions"].as_str().unwrap();
+    assert!(
+        instructions.contains("\n# Skills\n")
+            && instructions.contains("- deploy: Deploy the app. Use when asked to ship.\n")
+            && !instructions.contains("manual"),
+        "{instructions}"
+    );
+    assert!(last["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["name"] == "load_skill"));
+    let outcomes: Vec<_> = last["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["kind"] == "tool")
+        .map(|entry| &entry["tool"]["outcome"])
+        .collect();
+    assert_eq!(outcomes[0]["data"]["instructions"], "Run make deploy.");
+    assert!(outcomes[0]["data"]["folder"]
+        .as_str()
+        .unwrap()
+        .ends_with("/.claude/skills/deploy"));
+    assert_eq!(outcomes[1]["code"], "not_found");
+}
+
+#[test]
 fn preview_reports_a_closed_stdout_without_panicking() {
     let directory = tempfile::tempdir().unwrap();
     let (reader, writer) = std::io::pipe().unwrap();

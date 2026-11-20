@@ -149,6 +149,7 @@ struct SpecConfig {
     exec: bool,
     view_images: bool,
     generate_images: bool,
+    skills: bool,
 }
 
 static SPECS: LazyLock<Mutex<HashMap<SpecConfig, Arc<Value>>>> =
@@ -200,6 +201,7 @@ fn cached_specs(config: &Value) -> Arc<Value> {
         exec: config["no_exec"] != true,
         view_images: crate::catalog::supports_images(config),
         generate_images: generates_images(config),
+        skills: lists_skills(config),
     };
     // The normalized key bounds this cache independently of session IDs and paths.
     SPECS
@@ -208,6 +210,11 @@ fn cached_specs(config: &Value) -> Arc<Value> {
         .entry(key)
         .or_insert_with(|| Arc::new(build_specs(config)))
         .clone()
+}
+
+/// lists_skills reports whether the pinned instructions list skills, so load_skill is offered.
+fn lists_skills(config: &Value) -> bool {
+    config["prompt"]["skills"] == true
 }
 
 fn build_specs(config: &Value) -> Value {
@@ -223,6 +230,9 @@ fn build_specs(config: &Value) -> Value {
     }
     if generates_images(config) {
         specs.push(json!({"name":"generate_image","description":"Generate one PNG, or edit/compose from explicit local reference images. Saves a new output_path in an existing directory and returns a model-visible preview. Uses OPENAI_API_KEY with separate API billing, never ChatGPT plan credentials or the Responses proxy. If missing, politely ask the user to configure the launch environment and restart/resume; never request secrets in chat. Never automatically repeat a generation after uncertain effects or a failed save. Unavailable in read-only or plan mode.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/generate_image.json")).unwrap(),"effect":"write"}));
+    }
+    if lists_skills(config) {
+        specs.push(json!({"name":"load_skill","description":"Load the instructions of a skill named in the Skills list. Returns its SKILL.md body and folder; relative paths in the instructions start at that folder.","input_schema":{"type":"object","properties":{"name":{"type":"string","description":"Skill name exactly as listed."}},"required":["name"],"additionalProperties":false},"effect":"read"}));
     }
     if !config["report_friction"].as_bool().unwrap_or(false) {
         specs.retain(|s| s["name"] != "report_friction");
@@ -266,6 +276,7 @@ fn build_specs(config: &Value) -> Value {
                         | "view_image"
                         | "generate_image"
                         | "report_friction"
+                        | "load_skill"
                         | "edit_file"
                         | "write_file"
                         | "delete_file"
@@ -601,6 +612,14 @@ pub fn execute_in_region(
             Ok(workspace_tool(state, config, name, &args).unwrap_or_else(|bad| bad))
         }
         "report_friction" => Ok(report_friction(state, &args).unwrap_or_else(|bad| bad)),
+        "load_skill" => {
+            let home = crate::skills::home();
+            Ok(crate::skills::load(
+                &state.workspace.root,
+                home.as_deref(),
+                &args,
+            ))
+        }
         "echo" => {
             let text = args["text"].as_str().unwrap_or("");
             if text.is_empty() {
