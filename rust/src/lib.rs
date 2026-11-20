@@ -33,6 +33,7 @@ pub mod runtime;
 pub mod schemas;
 /// Trusted-local ownership and concurrent control of root Sessions.
 pub mod session_api;
+pub(crate) mod skills;
 pub mod terminal;
 pub mod tool_exec;
 pub mod tool_files;
