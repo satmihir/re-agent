@@ -68,6 +68,11 @@ pub(crate) const COMMANDS: &[(&str, &str, &str)] = &[
         "[low|medium|high|max]",
         "review this branch and uncommitted changes (default medium)",
     ),
+    (
+        "/skills",
+        "",
+        "list skills; run one with /NAME [arguments] or mention $NAME",
+    ),
     ("/trace", "", "path of the last turn or compaction trace"),
     ("/diff", "", "full file-tool diff from the last turn"),
     (
@@ -144,6 +149,12 @@ impl Chat {
         self.input.set_workspace(&snapshot.workspace);
         self.input.set_status(&config, &state);
         Ok(snapshot)
+    }
+
+    fn skills(&mut self) -> Result<(Vec<crate::skills::Skill>, Vec<String>), ApiError> {
+        let workspace = self.refresh()?.workspace;
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        Ok(crate::skills::discover(&workspace, home.as_deref()))
     }
 
     fn failure(&self, error: &ApiError) {
@@ -926,6 +937,10 @@ impl Chat {
                 }
                 self.say("usage: /review [low|medium|high|max]");
             }
+            "/skills" => {
+                let listing = skill_listing(self.skills()?);
+                self.say(&listing);
+            }
             "/edit" => return Ok(edit(&mut self.input)),
             _ if raw.starts_with(b"!") && !raw.contains(&b'\n') => {
                 let command = crate::cli::trim_bytes(&raw[1..]);
@@ -940,6 +955,12 @@ impl Chat {
                 }
             }
             _ if raw.starts_with(b"/") => {
+                let (skills, _) = self.skills()?;
+                if let Some(skill) = skills.iter().find(|s| command[1..] == s.name) {
+                    return Ok(Some(
+                        crate::skills::invocation(skill, Some(arg)).into_bytes(),
+                    ));
+                }
                 let suggestion = suggestion(command);
                 self.say(&format!(
                     "unknown command {};{} /help lists commands.",
@@ -951,10 +972,46 @@ impl Chat {
                     }
                 ));
             }
+            _ if raw.contains(&b'$') => {
+                let (skills, _) = self.skills()?;
+                let mut message = Vec::new();
+                for skill in crate::skills::mentioned(&skills, &semantic) {
+                    message.extend(crate::skills::invocation(skill, None).into_bytes());
+                    message.push(b'\n');
+                }
+                message.extend_from_slice(raw);
+                return Ok(Some(message));
+            }
             _ => return Ok(Some(raw.to_vec())),
         }
         Ok(None)
     }
+}
+
+fn skill_listing((skills, warnings): (Vec<crate::skills::Skill>, Vec<String>)) -> String {
+    let mut out = String::new();
+    if skills.is_empty() {
+        out.push_str("no skills; add one as .agents/skills/NAME/SKILL.md or .claude/skills/NAME/SKILL.md in the workspace or your home directory\n");
+    }
+    for skill in &skills {
+        let command = format!("/{}", skill.name);
+        let shadowed = command == "/exit" || COMMANDS.iter().any(|c| c.0 == command);
+        out.push_str(&format!(
+            "  {command:<20} {}{}\n  {:<20} {}\n",
+            render::sanitize(&skill.description),
+            if shadowed {
+                format!(" (built-in {command} runs instead; use ${})", skill.name)
+            } else {
+                String::new()
+            },
+            "",
+            render::sanitize(&skill.location)
+        ));
+    }
+    for warning in &warnings {
+        out.push_str(&format!("warning: {}\n", render::sanitize(warning)));
+    }
+    out.trim_end().to_string()
 }
 
 /// Run reads a conversation from stdin and translates local commands into typed SessionApi operations.

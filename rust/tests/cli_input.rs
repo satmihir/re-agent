@@ -128,6 +128,101 @@ fn piped_chat_keeps_invalid_bytes_through_commands_and_multiple_turns() {
 }
 
 #[test]
+fn chat_skills_run_as_slash_commands_and_dollar_mentions() {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let skill = |root: &std::path::Path, folder: &str, text: &str| {
+        let dir = root.join(folder);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), text).unwrap();
+    };
+    skill(
+        home.path(),
+        ".agents/skills/deploy",
+        "---\ndescription: Deploy the app\n---\nDeploy $ARGUMENTS carefully.\n",
+    );
+    skill(
+        workspace.path(),
+        ".claude/skills/lint",
+        "---\nname: lint\ndescription: Run the linter\n---\nRun the linter.\n",
+    );
+    skill(
+        workspace.path(),
+        ".agents/skills/review",
+        "Project review steps.\n",
+    );
+    let script = home.path().join("responses.json");
+    let trace = home.path().join("traces");
+    std::fs::write(
+        &script,
+        serde_json::to_vec(&json!([
+            {"blocks":[{"kind":"text","text":"first"}]},
+            {"blocks":[{"kind":"text","text":"second"}]}
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut command = command(&home);
+    command
+        .args(["chat", "--workspace"])
+        .arg(workspace.path())
+        .arg("--scripted")
+        .arg(script)
+        .arg("--trace-dir")
+        .arg(&trace);
+    let output = with_stdin(
+        command,
+        b"/deploy staging\nplease $lint this, not $HOME\n/skills\n/exit\n",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(output.stdout, b"first\nsecond\n");
+    for listed in [
+        "/deploy",
+        "Deploy the app",
+        "/lint",
+        ".claude/skills/lint",
+        "built-in /review runs instead; use $review",
+    ] {
+        assert!(stderr.contains(listed), "{listed}: {stderr}");
+    }
+    let trace = std::fs::read_dir(trace)
+        .unwrap()
+        .map(|entry| std::fs::read(entry.unwrap().path().join("events.jsonl")).unwrap())
+        .collect::<Vec<_>>()
+        .concat();
+    let last = trace
+        .split(|b| *b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+        .filter(|event| event["type"] == "model.requested")
+        .max_by_key(|event| event["data"]["history"].as_array().unwrap().len())
+        .unwrap();
+    let users: Vec<_> = last["data"]["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["kind"] == "user")
+        .map(|entry| entry["user"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(users.len(), 2);
+    assert!(
+        users[0].starts_with("re:agent skill deploy\nSkill folder: ")
+            && users[0].contains("/.agents/skills/deploy")
+            && users[0].contains("\n\nDeploy staging carefully."),
+        "{}",
+        users[0]
+    );
+    assert!(
+        users[1].starts_with("re:agent skill lint\nSkill folder: .claude/skills/lint ")
+            && users[1].contains("\n\nRun the linter.\n")
+            && users[1].ends_with("\nplease $lint this, not $HOME"),
+        "{}",
+        users[1]
+    );
+}
+
+#[test]
 fn run_from_stdin_keeps_user_bytes_in_the_recorded_request() {
     let directory = tempfile::tempdir().unwrap();
     let script = directory.path().join("responses.json");

@@ -1180,6 +1180,26 @@ SCENARIOS = {
             ("expect", "status_row_last"),
         ],
     },
+    "skills-slash-command": {
+        "size": (28, 110),
+        "skills": True,
+        "script": [reply("Skill turn accepted.")],
+        "steps": [
+            ("wait_status", "scripted / low", 5), ("type", "/sk"),
+            ("wait", "list skills; run one with /NAME", 5),
+            ("key", "tab"), ("wait_regex", "^❯ /skills$", 5),
+            ("key", "enter"), ("wait", "Deploy the app", 5),
+            ("expect", "screen_has", "/deploy"),
+            ("show", "/skills lists the workspace skill folder"),
+            ("type", "/deploy staging"), ("key", "enter"),
+            ("wait", "Skill turn accepted.", 5),
+            ("wait_status", "scripted / low", 5),
+            ("wait_check", "dispatched_prompt_has", "re:agent skill deploy\nSkill folder: "),
+            ("expect", "dispatched_prompt_has", "\n\nDeploy staging carefully.\n"),
+            ("show", "/deploy sends the skill body with its arguments"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "input-history-restart": {
         "script": [reply("History turn accepted.")],
         "steps": [
@@ -2064,6 +2084,12 @@ def check_dispatched_prompts(s, expected):
     return None if sorted(actual) == sorted(expected) else "dispatched prompts %r, expected %r" % (actual, expected)
 
 
+def check_dispatched_prompt_has(s, text):
+    events = trace_events(os.path.join(cache_root(s.home), "reagent", "runs"))
+    actual = [event["data"]["prompt"] for event in events if event.get("type") == "run.started"]
+    return None if any(text in prompt for prompt in actual) else "no dispatched prompt has %r: %r" % (text, actual)
+
+
 def check_input_history(s, expected):
     key = hashlib.sha256(os.fsencode(os.path.realpath(s.workspace))).hexdigest()
     path = os.path.join(cache_root(s.home), "reagent", "input-history", key + ".json")
@@ -2305,6 +2331,7 @@ CHECKS = {
     "input_rows": check_input_rows,
     "no_suggestions": check_no_suggestions,
     "dispatched_prompts": check_dispatched_prompts,
+    "dispatched_prompt_has": check_dispatched_prompt_has,
     "input_history": check_input_history,
     "raw_has": check_raw_has,
     "all_lines": check_all_lines,
@@ -2364,6 +2391,10 @@ def run(binary, name, scenario, workspace):
         for path, content in [("alpha.txt", "header\nold\nmiddle\ntail\n"), ("beta.txt", "first\nsecond\n")]:
             with open(os.path.join(workspace, path), "w", encoding="utf-8") as fixture:
                 fixture.write(content)
+    if scenario.get("skills"):
+        os.makedirs(os.path.join(workspace, ".agents", "skills", "deploy"))
+        with open(os.path.join(workspace, ".agents", "skills", "deploy", "SKILL.md"), "w", encoding="utf-8") as fixture:
+            fixture.write("---\ndescription: Deploy the app\n---\nDeploy $ARGUMENTS carefully.\n")
     if scenario.get("slow_read"):
         with open(os.path.join(workspace, "dense.txt"), "w") as dense:
             dense.write("x\n" * 500000)
