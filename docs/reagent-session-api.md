@@ -264,9 +264,11 @@ metadata on resume without requiring the fallback provider's credentials; enable
 routing rechecks availability. Checkpoints do not store the route inventory, so
 pinned resume reconstructs catalog routes without credential gating, and explicit
 enable rebuilds the usable inventory after rebasing to the current pair. An absent
-legacy enabled flag retains the old enable/validation semantics. Fallback
-provider-default effort survives resume independently of the currently selected route. Provider-default effort is not silently replaced with a
-catalog default when an Auto fallback requires an explicit effort. Failed enable
+legacy enabled flag retains the old enable/validation semantics. A fallback
+saved without an effort, as checkpoints did while its model listed none, resumes at
+that model's catalog default effort, independently of the currently selected route.
+On enable, provider-default effort is not silently replaced with a catalog default
+when an Auto fallback requires an explicit effort. Failed enable
 restores the previous settings. Snapshot `auto` publishes enabled state, fallback,
 allowed routes, usage, attempts, and the existing TypeSafe data-sharing notice;
 provably never-used accounting remains known zero after resume without clearing

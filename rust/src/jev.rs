@@ -435,10 +435,12 @@ mod tests {
         duplicate["id"] = json!("b");
         assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
         duplicate["model"] = json!("claude-haiku-5-5");
-        assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
-        duplicate["reasoning_effort"] = json!("");
-        assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_ok());
+        for unsupported in ["none", ""] {
+            duplicate["reasoning_effort"] = json!(unsupported);
+            assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_err());
+        }
         duplicate["model"] = json!("gpt-6.1-terra");
+        duplicate["reasoning_effort"] = json!("none");
         assert!(encode_request("state", &[route.clone(), duplicate.clone()]).is_ok());
         duplicate["model"] = json!("claude-sonnet-5-5");
         duplicate["reasoning_effort"] = json!("low");

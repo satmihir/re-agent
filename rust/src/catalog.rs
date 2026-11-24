@@ -22,10 +22,10 @@ pub fn models() -> Value {
             "openai",
             "Terra",
             "6.1",
-            &[][..],
+            OPENAI_EFFORTS,
+            "medium",
             "",
-            "",
-            "provider defaults; effort unverified",
+            "more capable, costs more",
             1_050_000,
         ),
         (
@@ -66,10 +66,10 @@ pub fn models() -> Value {
             "anthropic",
             "Haiku",
             "5.5",
-            &[][..],
+            REASONING_EFFORTS,
+            "medium",
             "",
-            "",
-            "provider defaults; effort unverified",
+            "cheapest",
             1_000_000,
         ),
         (
@@ -338,14 +338,18 @@ mod tests {
         );
         let haiku = select_model("6").unwrap();
         assert_eq!(haiku["provider"], "anthropic");
-        assert_eq!(haiku["efforts"], json!([]));
-        assert_eq!(haiku["effort"], "");
+        assert_eq!(haiku["efforts"], json!(REASONING_EFFORTS));
+        assert_eq!(haiku["effort"], "medium");
         assert_eq!(haiku["verbosity"], "");
         assert_eq!(haiku["context_window"], 1_000_000);
-        assert_eq!(haiku["note"], "provider defaults; effort unverified");
+        assert_eq!(haiku["note"], "cheapest");
+        assert!(select_effort(&haiku, "none").is_err());
         let terra = select_model("2").unwrap();
         assert_eq!(terra["id"], "gpt-6.1-terra");
-        assert_eq!(terra["effort"], "");
+        assert_eq!(terra["efforts"], json!(OPENAI_EFFORTS));
+        assert_eq!(terra["effort"], "medium");
+        assert_eq!(terra["verbosity"], "");
+        assert_eq!(select_effort(&terra, "1").unwrap(), "none");
         assert_eq!(terra["context_window"], 1_050_000);
         let astra = select_model("4").unwrap();
         assert_eq!(astra, select_model("gpt-6-astra").unwrap());
@@ -382,8 +386,8 @@ mod tests {
             "medium"
         );
         assert_eq!(
-            select_effort(&model_info("claude-haiku-5-5"), "low").unwrap_err(),
-            "claude-haiku-5-5 takes no reasoning effort setting"
+            select_effort(&json!({"id":"plain","efforts":[]}), "low").unwrap_err(),
+            "plain takes no reasoning effort setting"
         );
         for invalid in [
             "0",

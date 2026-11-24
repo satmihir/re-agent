@@ -109,18 +109,19 @@ pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
     let model = saved_model
         .unwrap_or(text(&session.config, "model"))
         .to_owned();
-    // A saved fallback omits its effort only when that effort is provider-default.
+    let info = catalog::model_info(&model);
+    // A saved fallback omits its effort only when that effort was the provider default. A
+    // model that has since gained an effort list names that default as its catalog effort.
     let effort = session.state["auto_fallback_effort"]
         .as_str()
         .unwrap_or_else(|| {
             if saved_model.is_some() {
-                ""
+                text(&info, "effort")
             } else {
                 text(&session.config, "reasoning_effort")
             }
         })
         .to_owned();
-    let info = catalog::model_info(&model);
     let efforts = info["efforts"].as_array();
     let accepted = efforts.is_some_and(|efforts| {
         if efforts.is_empty() {

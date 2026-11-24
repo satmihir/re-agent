@@ -679,7 +679,7 @@ SCENARIOS = {
             ("expect", "screen_has", "9  gpt-6.2-sol"),
             ("expect", "screen_lacks", "gpt-5.6"),
             ("expect", "screen_lacks", "claude-haiku-4-5"),
-            ("expect", "screen_has", "effort unverified"),
+            ("expect", "screen_lacks", "effort unverified"),
             ("expect", "screen_lacks", "window unverified"),
             ("type", "2"), ("key", "enter"),
             ("wait", "switched to gpt-6.1-terra", 5),
