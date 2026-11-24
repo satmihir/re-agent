@@ -871,8 +871,8 @@ fn effort_and_auto_validate_the_current_model_without_silently_defaulting() {
     };
     for (model, initial_effort, named_supported, auto_supported) in [
         ("unlisted-model", Some("high"), false, false),
-        ("gpt-6.1-terra", None, false, true),
-        ("claude-haiku-5-5", None, false, true),
+        ("gpt-6.1-terra", None, true, true),
+        ("claude-haiku-5-5", None, true, true),
         ("gpt-6.1-sol", Some("unsupported"), true, false),
     ] {
         let api = live(&root, model, initial_effort);
@@ -899,7 +899,7 @@ fn effort_and_auto_validate_the_current_model_without_silently_defaulting() {
         } else {
             assert_eq!(
                 api.get_snapshot().unwrap().auto.fallback.unwrap().effort,
-                ReasoningEffort::ProviderDefault
+                ReasoningEffort::Named("medium".into())
             );
         }
         let receipt = change(
@@ -999,9 +999,9 @@ fn failed_control_persistence_rolls_back_blocks_mutation_and_still_allows_close(
 }
 
 #[test]
-fn routed_default_effort_fallback_and_billing_survive_enabled_and_pinned_resume() {
+fn routed_fallback_saved_without_effort_resumes_at_the_catalog_default_with_its_billing() {
     let Some(root) = isolated_with_router(
-        "routed_default_effort_fallback_and_billing_survive_enabled_and_pinned_resume",
+        "routed_fallback_saved_without_effort_resumes_at_the_catalog_default_with_its_billing",
         vec![provider_text(); 4],
         Some(vec![Some((7, 2)); 4]),
     ) else {
@@ -1022,7 +1022,7 @@ fn routed_default_effort_fallback_and_billing_survive_enabled_and_pinned_resume(
         assert_eq!(initial.auto.fallback.as_ref().unwrap().model, model);
         assert_eq!(
             initial.auto.fallback.as_ref().unwrap().effort,
-            ReasoningEffort::ProviderDefault
+            ReasoningEffort::Named("medium".into())
         );
         assert!(initial.auto.usage.known);
         assert_eq!(initial.auto.attempts, 0);
@@ -1035,10 +1035,6 @@ fn routed_default_effort_fallback_and_billing_survive_enabled_and_pinned_resume(
         assert_eq!(routed.model, "gpt-6-luna");
         assert_eq!(routed.reasoning_effort, "medium");
         assert_eq!(routed.auto.fallback.as_ref().unwrap().model, model);
-        assert_eq!(
-            routed.auto.fallback.as_ref().unwrap().effort,
-            ReasoningEffort::ProviderDefault
-        );
         assert!(routed.auto.usage.known);
         assert_eq!(routed.auto.usage.input_tokens, 7);
         assert_eq!(routed.auto.usage.output_tokens, 2);
@@ -1050,7 +1046,16 @@ fn routed_default_effort_fallback_and_billing_survive_enabled_and_pinned_resume(
             assert_eq!(after.auto.attempts, routed.auto.attempts);
         }
         let before = api.get_snapshot().unwrap();
+        let (path, mut saved) = checkpoint(&api);
         api.close().unwrap();
+        // Checkpoints from before these models listed efforts saved no fallback effort.
+        let state = saved["state"].as_object_mut().unwrap();
+        assert_eq!(state.remove("auto_fallback_effort"), Some(json!("medium")));
+        let payload = saved["state"].to_string();
+        saved["sha256"] = json!(format!("{:x}", Sha256::digest(payload.as_bytes())));
+        let permissions = std::fs::metadata(&path).unwrap().permissions();
+        std::fs::write(&path, saved.to_string()).unwrap();
+        std::fs::set_permissions(&path, permissions).unwrap();
         let resumed = resume_session(&before.session.session_id).unwrap();
         let after = resumed.get_snapshot().unwrap();
         assert_eq!(after.model, before.model);

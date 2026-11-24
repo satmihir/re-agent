@@ -92,7 +92,7 @@ fn auto_starting_with_anthropic_selects_openai_auth_independently() {
     if let Ok(expected) = std::env::var(WORKER) {
         let session = reagent::runtime::Session::new(json!({
             "provider":"anthropic", "model":"claude-haiku-5-5", "auth_mode":"key",
-            "auto":true, "workspace":std::env::var("HOME").unwrap()
+            "reasoning_effort":"medium", "auto":true, "workspace":std::env::var("HOME").unwrap()
         }))
         .unwrap();
         assert_eq!(session.state["auto_openai_auth"], expected);

@@ -152,7 +152,12 @@ fn default_model_and_effort_preview_and_explicit_overrides() {
     for (model_env, flags, model, effort) in [
         ("", vec![], "gpt-6.1-sol", "high"),
         ("", vec!["--model", "gpt-6.1-sol"], "gpt-6.1-sol", "high"),
-        ("", vec!["--model", "gpt-6.1-terra"], "gpt-6.1-terra", ""),
+        (
+            "",
+            vec!["--model", "gpt-6.1-terra"],
+            "gpt-6.1-terra",
+            "medium",
+        ),
         ("", vec!["--model", "gpt-5.6-luna"], "gpt-5.6-luna", "low"),
         ("", vec!["--model", "gpt-5.6-terra"], "gpt-5.6-terra", "low"),
         ("", vec!["--reasoning-effort", "low"], "gpt-6.1-sol", "low"),
@@ -188,7 +193,7 @@ fn default_model_and_effort_preview_and_explicit_overrides() {
         let request: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(request["model"], model, "{flags:?}");
         if model == "claude-haiku-5-5" {
-            assert!(request.get("output_config").is_none(), "{flags:?}");
+            assert_eq!(request["output_config"]["effort"], "medium", "{flags:?}");
         }
         if model.starts_with("gpt-5.6-") {
             assert!(request.get("text").is_none(), "{flags:?}");

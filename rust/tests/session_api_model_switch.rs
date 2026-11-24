@@ -389,8 +389,8 @@ fn exact_model_ids_default_efforts_and_same_model_selection_pin_auto_without_inf
     assert_eq!(selected.auto.allowed_routes, before.auto.allowed_routes);
     for (model, effort, provider) in [
         ("gpt-6-luna", "medium", "openai"),
-        ("gpt-6.1-terra", "", "openai"),
-        ("claude-haiku-5-5", "", "anthropic"),
+        ("gpt-6.1-terra", "medium", "openai"),
+        ("claude-haiku-5-5", "medium", "anthropic"),
         ("claude-sonnet-5-5", "low", "anthropic"),
     ] {
         let receipt = applied(&api, model, switch(model, HistoryMode::Carry));
@@ -501,7 +501,7 @@ fn carry_preserves_history_usage_plan_workspace_and_file_evidence_but_projects_n
     assert!(wire.contains(root.to_str().unwrap()));
     assert!(wire.contains("re:agent plan mode is on"));
     assert!(!wire.contains("PROVIDER-NATIVE-SECRET"));
-    assert!(request(&root, 2).get("output_config").is_none());
+    assert_eq!(request(&root, 2)["output_config"]["effort"], "medium");
     assert!(std::fs::read_to_string(root.join("headers-2.txt"))
         .unwrap()
         .starts_with("POST /v1/messages "));
@@ -520,7 +520,7 @@ fn carry_preserves_history_usage_plan_workspace_and_file_evidence_but_projects_n
     api.close().unwrap();
     let resumed = resume_session(&before.session.session_id).unwrap();
     assert_eq!(resumed.get_snapshot().unwrap().provider, "anthropic");
-    assert_eq!(resumed.get_snapshot().unwrap().reasoning_effort, "");
+    assert_eq!(resumed.get_snapshot().unwrap().reasoning_effort, "medium");
     resumed.close().unwrap();
 }
 
@@ -557,7 +557,7 @@ fn fresh_switch_reuses_replacement_ownership_with_new_counters_and_both_checkpoi
     assert_eq!(fresh.auto.allowed_routes, before.auto.allowed_routes);
     assert_eq!(
         (fresh.model.as_str(), fresh.reasoning_effort.as_str()),
-        ("gpt-6.1-terra", "")
+        ("gpt-6.1-terra", "medium")
     );
     let (_, _, saved) = checkpoint(&next);
     assert!(saved["state"]["history"].is_null());
@@ -601,14 +601,14 @@ fn fresh_switch_reuses_replacement_ownership_with_new_counters_and_both_checkpoi
     );
     let wire = request(&root, 2);
     assert_eq!(wire["model"], "gpt-6.1-terra");
-    assert!(wire["reasoning"].get("effort").is_none());
+    assert_eq!(wire["reasoning"]["effort"], "medium");
     assert!(!wire.to_string().contains("old-secret-task"));
     next.close().unwrap();
     let resumed = resume_session(&fresh.session.session_id).unwrap();
     let snapshot = resumed.get_snapshot().unwrap();
     assert_eq!(
         (snapshot.model.as_str(), snapshot.reasoning_effort.as_str()),
-        ("gpt-6.1-terra", "")
+        ("gpt-6.1-terra", "medium")
     );
     assert!(!snapshot.auto.enabled);
     resumed.close().unwrap();
@@ -921,11 +921,11 @@ fn only_fresh_switch_recovers_blocked_terminal_work_and_preserves_launch_restric
             fresh.model.as_str(),
             fresh.reasoning_effort.as_str()
         ),
-        ("anthropic", "claude-haiku-5-5", "")
+        ("anthropic", "claude-haiku-5-5", "medium")
     );
     assert_eq!(run(&next, "healthy").result.unwrap().status, "completed");
     assert_eq!(request(&root, 1)["model"], "claude-haiku-5-5");
-    assert!(request(&root, 1).get("output_config").is_none());
+    assert_eq!(request(&root, 1)["output_config"]["effort"], "medium");
     assert_eq!(record(&api.get_run(&broken.run).unwrap()), record(&broken));
     next.close().unwrap();
 }
@@ -1044,7 +1044,7 @@ fn pinned_model_switch_resume_needs_only_destination_credentials() {
         );
         assert_eq!(
             enabled.fallback.as_ref().unwrap().effort,
-            ReasoningEffort::ProviderDefault
+            ReasoningEffort::Named("medium".into())
         );
         assert_eq!(enabled.usage, before_enable.usage);
         assert_eq!(enabled.attempts, before_enable.attempts);
