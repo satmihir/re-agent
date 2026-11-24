@@ -78,6 +78,15 @@ pub fn models() -> Value {
             "most capable, costs most",
             1_000_000,
         ),
+        (
+            "gpt-6.2-sol",
+            "openai",
+            REASONING_EFFORTS,
+            "high",
+            "low",
+            "latest Sol",
+            1_050_000,
+        ),
     ];
     Value::Array(entries.iter().map(|(id,provider,efforts,effort,verbosity,note,window)| {
         json!({"id":id,"provider":provider,"efforts":efforts,"effort":effort,"verbosity":verbosity,"note":note,"context_window":window})
@@ -268,6 +277,7 @@ mod tests {
             ("openai", "gpt-6-astra", false),
             ("openai", "gpt-6.1-terra", true),
             ("openai", "gpt-6.1-sol", true),
+            ("openai", "gpt-6.2-sol", false),
             ("anthropic", "claude-opus-5-5", true),
             ("anthropic", "claude-sonnet-5-5", false),
             ("anthropic", "claude-haiku-5-5", false),
@@ -303,7 +313,8 @@ mod tests {
                 "gpt-6-sol",
                 "claude-haiku-5-5",
                 "claude-sonnet-5-5",
-                "claude-opus-5-5"
+                "claude-opus-5-5",
+                "gpt-6.2-sol"
             ]
         );
         let haiku = select_model("6").unwrap();
@@ -357,7 +368,7 @@ mod tests {
         );
         for invalid in [
             "0",
-            "9",
+            "10",
             "gpt-5.6-luna",
             "gpt-5.6-terra",
             "claude-haiku-4-5",
@@ -373,10 +384,35 @@ mod tests {
     }
 
     #[test]
+    fn sol_6_2_selection_preserves_sol_6_1_window_and_effort_choices() {
+        let sol = select_model("9").unwrap();
+        assert_eq!(sol, select_model("gpt-6.2-sol").unwrap());
+        assert_eq!(sol["provider"], "openai");
+        assert_eq!(sol["effort"], "high");
+        assert_eq!(sol["verbosity"], "low");
+        let earlier = model_info("gpt-6.1-sol");
+        assert_eq!(sol["context_window"], earlier["context_window"]);
+        assert_eq!(sol["efforts"], earlier["efforts"]);
+        for (position, effort) in REASONING_EFFORTS.iter().enumerate() {
+            assert_eq!(select_effort(&sol, effort).unwrap(), *effort);
+            assert_eq!(
+                select_effort(&sol, &(position + 1).to_string()).unwrap(),
+                *effort
+            );
+        }
+        for invalid in ["none", "minimal", "ultra", "0", "6"] {
+            assert!(select_effort(&sol, invalid).is_err());
+        }
+    }
+
+    #[test]
     fn context_override_caps_known_models_and_admits_unknown() {
         for (model, cap, want) in [
             ("gpt-6-luna", 2_000_000, 1_050_000),
             ("gpt-6-luna", 500, 500),
+            ("gpt-6.2-sol", 0, 1_050_000),
+            ("gpt-6.2-sol", 2_000_000, 1_050_000),
+            ("gpt-6.2-sol", 500, 500),
             ("gpt-6-astra", 0, 1_050_000),
             ("gpt-6-astra", 2_000_000, 1_050_000),
             ("gpt-6-astra", 500, 500),
@@ -403,6 +439,7 @@ mod tests {
         assert!(listing.contains("4  gpt-6-astra       openai"));
         assert!(listing.contains("5  gpt-6-sol         openai"));
         assert!(listing.contains("6  claude-haiku-5-5  anthropic  no key"));
+        assert!(listing.contains("9  gpt-6.2-sol       openai"));
         assert!(listing.contains("models marked no key need ANTHROPIC_API_KEY"));
         assert!(listing
             .lines()
