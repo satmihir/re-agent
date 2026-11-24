@@ -9,6 +9,8 @@ pub fn models() -> Value {
         (
             "gpt-6-luna",
             "openai",
+            "Luna",
+            "6",
             OPENAI_EFFORTS,
             "medium",
             "low",
@@ -18,6 +20,8 @@ pub fn models() -> Value {
         (
             "gpt-6.1-terra",
             "openai",
+            "Terra",
+            "6.1",
             &[][..],
             "",
             "",
@@ -27,6 +31,8 @@ pub fn models() -> Value {
         (
             "gpt-6.1-sol",
             "openai",
+            "Sol",
+            "6.1",
             REASONING_EFFORTS,
             "high",
             "low",
@@ -36,6 +42,8 @@ pub fn models() -> Value {
         (
             "gpt-6-astra",
             "openai",
+            "Astra",
+            "6",
             REASONING_EFFORTS,
             "low",
             "low",
@@ -45,6 +53,8 @@ pub fn models() -> Value {
         (
             "gpt-6-sol",
             "openai",
+            "Sol",
+            "6",
             OPENAI_EFFORTS,
             "low",
             "low",
@@ -54,6 +64,8 @@ pub fn models() -> Value {
         (
             "claude-haiku-5-5",
             "anthropic",
+            "Haiku",
+            "5.5",
             &[][..],
             "",
             "",
@@ -63,6 +75,8 @@ pub fn models() -> Value {
         (
             "claude-sonnet-5-5",
             "anthropic",
+            "Sonnet",
+            "5.5",
             REASONING_EFFORTS,
             "low",
             "",
@@ -72,6 +86,8 @@ pub fn models() -> Value {
         (
             "claude-opus-5-5",
             "anthropic",
+            "Opus",
+            "5.5",
             REASONING_EFFORTS,
             "low",
             "",
@@ -81,6 +97,8 @@ pub fn models() -> Value {
         (
             "gpt-6.2-sol",
             "openai",
+            "Sol",
+            "6.2",
             REASONING_EFFORTS,
             "high",
             "low",
@@ -88,8 +106,9 @@ pub fn models() -> Value {
             1_050_000,
         ),
     ];
-    Value::Array(entries.iter().map(|(id,provider,efforts,effort,verbosity,note,window)| {
-        json!({"id":id,"provider":provider,"efforts":efforts,"effort":effort,"verbosity":verbosity,"note":note,"context_window":window})
+    // Family and version let a host show the versions of one model line as one choice.
+    Value::Array(entries.iter().map(|(id,provider,family,version,efforts,effort,verbosity,note,window)| {
+        json!({"id":id,"provider":provider,"family":family,"version":version,"efforts":efforts,"effort":effort,"verbosity":verbosity,"note":note,"context_window":window})
     }).collect())
 }
 
@@ -402,6 +421,41 @@ mod tests {
         }
         for invalid in ["none", "minimal", "ultra", "0", "6"] {
             assert!(select_effort(&sol, invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn a_family_and_version_name_exactly_one_model() {
+        let catalog = models();
+        let named = |provider: &str, family: &str| -> Vec<(String, String)> {
+            catalog
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["provider"] == provider && m["family"] == family)
+                .map(|m| {
+                    (
+                        m["version"].as_str().unwrap().to_owned(),
+                        m["id"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect()
+        };
+        let pair = |version: &str, id: &str| (version.to_owned(), id.to_owned());
+        assert_eq!(
+            named("openai", "Sol"),
+            [
+                pair("6.1", "gpt-6.1-sol"),
+                pair("6", "gpt-6-sol"),
+                pair("6.2", "gpt-6.2-sol")
+            ]
+        );
+        assert_eq!(named("anthropic", "Opus"), [pair("5.5", "claude-opus-5-5")]);
+        let mut seen = std::collections::HashSet::new();
+        for model in catalog.as_array().unwrap() {
+            let name = ["provider", "family", "version"].map(|key| model[key].as_str().unwrap());
+            assert!(name.iter().all(|part| !part.is_empty()), "{model}");
+            assert!(seen.insert(name), "{model}");
         }
     }
 
