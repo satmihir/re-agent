@@ -676,6 +676,7 @@ SCENARIOS = {
             ("expect", "screen_has", "6  claude-haiku-5-5"),
             ("expect", "screen_has", "7  claude-sonnet-5-5"),
             ("expect", "screen_has", "8  claude-opus-5-5"),
+            ("expect", "screen_has", "9  gpt-6.2-sol"),
             ("expect", "screen_lacks", "gpt-5.6"),
             ("expect", "screen_lacks", "claude-haiku-4-5"),
             ("expect", "screen_has", "effort unverified"),
@@ -684,6 +685,36 @@ SCENARIOS = {
             ("wait", "switched to gpt-6.1-terra", 5),
             ("wait_status", "gpt-6.1-terra", 5),
             ("show", "Model picker numeric selection"),
+        ],
+    },
+    "sol-6-2-model": {
+        "chatgpt": True,
+        "size": (30, 110),
+        "steps": [
+            ("wait_status", "gpt-6-luna / medium", 5),
+            ("type", "/model"), ("key", "enter"),
+            ("wait", "9  gpt-6.2-sol", 5),
+            ("type", "9"), ("key", "enter"),
+            ("wait_status", "gpt-6.2-sol / high", 5),
+            ("show", "6.2 Sol selected by number with high effort"),
+            ("type", "hello"), ("key", "enter"),
+            ("wait", "ChatGPT reply.", 5),
+            ("wait_status", "gpt-6.2-sol / high", 5),
+            ("type", "/effort"), ("key", "enter"),
+            ("wait", "5  max", 5),
+            ("show", "6.2 Sol offers low, medium, high, xhigh and max"),
+            ("type", "5"), ("key", "enter"),
+            ("wait_status", "gpt-6.2-sol / max", 5),
+            ("type", "again"), ("key", "enter"),
+            ("wait", "Next ChatGPT turn.", 5),
+            ("wait_status", "gpt-6.2-sol / max", 5),
+            ("show", "6.2 Sol follow-up request uses max effort"),
+            ("type", "/model 1"), ("key", "enter"),
+            ("wait_status", "gpt-6-luna / medium", 5),
+            ("type", "/model gpt-6.2-sol"), ("key", "enter"),
+            ("wait_status", "gpt-6.2-sol / high", 5),
+            ("show", "6.2 Sol name selection retains history and restores high effort"),
+            ("expect", "status_row_last"),
         ],
     },
     "astra-model": {
@@ -2809,6 +2840,13 @@ def run(binary, name, scenario, workspace):
                         calls = []
                         if self.headers.get("Authorization") != "Bearer tty-access" or not self.headers.get("session_id"):
                             failures.append("ChatGPT request lacked bearer token or session_id")
+                        if name == "sol-6-2-model":
+                            body = json.loads(request)
+                            effort = "high" if number == 1 else "max"
+                            if body.get("model") != "gpt-6.2-sol" or body.get("reasoning", {}).get("effort") != effort:
+                                failures.append(f"6.2 Sol request did not use gpt-6.2-sol/{effort}")
+                            if body.get("text", {}).get("verbosity") != "low" or "service_tier" in body:
+                                failures.append("6.2 Sol request lost low verbosity or enabled unverified Fast mode")
                         if name == "astra-model":
                             body = json.loads(request)
                             effort = "low" if number == 1 else "max"
