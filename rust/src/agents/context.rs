@@ -1125,6 +1125,37 @@ mod tests {
     }
 
     #[test]
+    fn gemini_forks_keep_native_signatures_only_for_the_same_model() {
+        let (_directory, mut parent) = session();
+        parent.config["provider"] = json!("gemini");
+        parent.config["model"] = json!("gemini-4-hydrogen");
+        parent.config["reasoning_effort"] = json!("high");
+        let response = crate::gemini::normalize(br#"{"status":"completed","steps":[{"type":"thought","signature":"private-signature"},{"type":"model_output","content":[{"type":"text","text":"visible reply"}]}]}"#).unwrap();
+        parent.history = vec![
+            user("request"),
+            json!({"kind":"assistant","assistant":response}),
+        ];
+        for (provider, model, mode) in [
+            ("gemini", "gemini-4-hydrogen", "fork_native"),
+            ("gemini", "gemini-4-carbon", "fork_text"),
+            ("openai", "gpt-6-luna", "fork_text"),
+        ] {
+            let mut config = parent.config.clone();
+            config["provider"] = json!(provider);
+            config["model"] = json!(model);
+            config["reasoning_effort"] = crate::catalog::model_info(model)["effort"].clone();
+            let (history, _, actual) =
+                prepare(&parent, &mut config, &args(json!({"fork":true})), "read").unwrap();
+            assert_eq!(actual, mode);
+            let req = crate::context::build_context(&config, json!({}), &history, json!([]));
+            let wire =
+                crate::types::json_string(&crate::provider::encode_request(&config, &req).unwrap());
+            assert_eq!(wire.contains("private-signature"), mode == "fork_native");
+            assert!(wire.contains("visible reply"));
+        }
+    }
+
+    #[test]
     fn native_copy_validates_and_owns_raw_json_and_normalizes_byte_strings() {
         let (_directory, mut session) = session();
         session.history = vec![

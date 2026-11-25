@@ -244,6 +244,7 @@ pub(crate) fn destination(current: &Value, info: &Value) -> Result<Value, String
     config["provider"] = info["provider"].clone();
     config["model"] = info["id"].clone();
     config["reasoning_effort"] = info["effort"].clone();
+    config["auto"] = json!(false);
     if config["fast"] == true && !crate::catalog::supports_fast(&config) {
         config["fast"] = json!(false);
     }
@@ -280,6 +281,28 @@ pub(crate) fn stage_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gemini_model_switches_keep_visible_history_without_foreign_native_steps() {
+        let gemini =
+            json!({"provider":"gemini","model":"gemini-4-hydrogen","reasoning_effort":"high"});
+        let openai = json!({"provider":"openai","model":"gpt-6-luna"});
+        let native = crate::gemini::normalize(br#"{"status":"completed","steps":[{"type":"thought","signature":"private-signature"},{"type":"model_output","content":[{"type":"text","text":"visible reply"}]}]}"#).unwrap();
+        let original = vec![
+            json!({"kind":"user","user":{"text":"request"}}),
+            json!({"kind":"assistant","assistant":native}),
+        ];
+        let (admitted, _) = stage(&openai, &original, 0.5).unwrap();
+        assert!(!types::json_string(&admitted).contains("private-signature"));
+        let projected = vec![json!({"kind":"user","user":projected_user(&openai, &admitted)})];
+        let (returned, _) = stage(&gemini, &projected, 0.5).unwrap();
+        let history = vec![json!({"kind":"user","user":projected_user(&gemini, &returned)})];
+        let req = context::build_context(&gemini, json!({}), &history, json!([]));
+        let wire = types::json_string(&provider::encode_request(&gemini, &req).unwrap());
+        assert!(wire.contains("visible reply"));
+        assert!(!wire.contains("private-signature"));
+        assert!(!wire.contains("previous_interaction_id"));
+    }
+
     #[test]
     fn image_handoffs_retain_structural_references_through_text_only_destinations() {
         let preview = json!({"sha256":"a".repeat(64),"mime_type":"image/png","width":1,"height":1,"size_bytes":64});
@@ -322,7 +345,11 @@ mod tests {
 
     #[test]
     fn stage_matches_independent_destination_encoding_and_omits_empty_plan_and_model_fields() {
-        for (provider, model) in [("openai", "gpt-6-luna"), ("anthropic", "claude-sonnet-5-5")] {
+        for (provider, model) in [
+            ("openai", "gpt-6-luna"),
+            ("anthropic", "claude-sonnet-5-5"),
+            ("gemini", "gemini-4-hydrogen"),
+        ] {
             let mut config = config();
             config["provider"] = json!(provider);
             config["model"] = json!(model);

@@ -1746,6 +1746,28 @@ SCENARIOS = {
             ("expect", "region_after_output"), ("expect", "status_row_last"),
         ],
     },
+    "live-gemini-reply": {
+        "live_stream": "gemini", "gemini": True,
+        "steps": [
+            ("wait_status", "gemini-4-hydrogen", 5),
+            ("type", "stream a reply"), ("key", "enter"),
+            ("wait", "Distilling thoughts…", 5), ("release", "advance"),
+            ("wait", "First live line.", 5), ("wait_regex", "^[·∘°]⚗ " + WRITING_PHRASE_PATTERN, 5),
+            ("expect", "screen_lacks", "Final tail."),
+            ("expect", "raw_lacks", "PRIVATE REASONING"),
+            ("show", "Gemini text arrives before interaction.completed without exposing thoughts"),
+            ("release", "finish"), ("wait", "Final tail.", 5),
+            ("wait_status", "gemini-4-hydrogen", 5),
+            ("expect", "line_count", "First live line.", 1),
+            ("expect", "line_count", "Second live line.", 1),
+            ("expect", "raw_lacks", "PRIVATE REASONING"),
+            ("type", "next turn"), ("key", "enter"),
+            ("wait", "Follow-up after stream.", 5),
+            ("wait_status", "gemini-4-hydrogen", 5),
+            ("show", "The accepted Gemini reply survives the next request without duplicate output"),
+            ("expect", "region_after_output"), ("expect", "status_row_last"),
+        ],
+    },
     "live-anthropic-reply": {
         "live_stream": "anthropic", "anthropic": True,
         "steps": [
@@ -1938,7 +1960,7 @@ KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "es
 class Session:
     """One reagent process in a pty, with the emulator reading its output."""
 
-    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None, startup_argv=None, recap=True, web_search=False):
+    def __init__(self, binary, workspace, script_path, size, extra_env=None, retry=False, agents=False, context_gc=False, chatgpt=False, login=False, default_model=False, run_prompt=None, anthropic=False, fast=False, home=None, startup_argv=None, recap=True, web_search=False, gemini=False):
         self.workspace, self.home = workspace, home or workspace
         self.rows, self.cols = size
         self.raw = bytearray()
@@ -1965,6 +1987,8 @@ class Session:
                     env["REAGENT_MODEL"] = ""
                 else:
                     args += ["--model", "gpt-6-luna"]
+            elif gemini:
+                args += ["--model", "gemini-4-hydrogen", "--no-project-instructions"]
             elif anthropic:
                 args += ["--model", "claude-haiku-5-5", "--no-project-instructions"]
             elif context_gc:
@@ -2159,6 +2183,10 @@ def check_line_count(s, text, count):
 
 def check_raw_has(s, text):
     return None if text.encode() in s.raw else "terminal output never contained %r" % text
+
+
+def check_raw_lacks(s, text):
+    return "terminal output contained %r" % text if text.encode() in s.raw else None
 
 
 def check_all_lines(s, lines):
@@ -2384,6 +2412,7 @@ CHECKS = {
     "dispatched_prompt_has": check_dispatched_prompt_has,
     "input_history": check_input_history,
     "raw_has": check_raw_has,
+    "raw_lacks": check_raw_lacks,
     "all_lines": check_all_lines,
     "all_lack": check_all_lack,
     "rule_width": check_rule_width,
@@ -2538,6 +2567,10 @@ def run(binary, name, scenario, workspace):
             startup_before = after
     if scenario.get("live_stream"):
         class StreamHandler(http.server.BaseHTTPRequestHandler):
+            def setup(self):
+                self.request.setblocking(True)
+                super().setup()
+
             def do_POST(self):
                 request = self.rfile.read(int(self.headers["Content-Length"]))
                 ordinal = len(stream_requests) + 1
@@ -2546,6 +2579,9 @@ def run(binary, name, scenario, workspace):
                     failures.append("live provider request did not enable streaming")
                 first = ordinal == 1
                 anthropic = scenario["live_stream"] == "anthropic"
+                gemini = scenario["live_stream"] == "gemini"
+                if gemini and (self.path != "/interactions" or self.headers.get("x-goog-api-key") != "offline-fixture" or self.headers.get("Authorization")):
+                    failures.append("Gemini request used the wrong endpoint or authentication")
                 text = stream_reply if first else "Follow-up after stream."
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -2553,13 +2589,33 @@ def run(binary, name, scenario, workspace):
                 chunks = []
 
                 def send(event):
-                    chunk = ("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n").encode()
+                    chunk = ("event: " + event.get("event_type", event.get("type", "")) + "\ndata: " + json.dumps(event) + "\n\n").encode()
                     chunks.append(chunk)
                     self.wfile.write(chunk)
                     self.wfile.flush()
 
                 try:
-                    if anthropic:
+                    if gemini:
+                        send({"event_type": "interaction.created", "interaction": {"id": "tty-stream", "status": "in_progress", "model": "gemini-4-hydrogen"}})
+                        if first:
+                            send({"event_type": "step.start", "index": 0, "step": {"type": "thought"}})
+                            send({"event_type": "step.delta", "index": 0, "delta": {"type": "thought_summary", "content": {"type": "text", "text": "PRIVATE REASONING"}}})
+                            send({"event_type": "step.delta", "index": 0, "delta": {"type": "thought_signature", "signature": "tty-signature"}})
+                            send({"event_type": "step.stop", "index": 0})
+                            if not gates["advance"].wait(20):
+                                failures.append("stream fixture timed out before text release")
+                        index = 1 if first else 0
+                        send({"event_type": "step.start", "index": index, "step": {"type": "model_output"}})
+                        for part in preview_parts if first else [text]:
+                            send({"event_type": "step.delta", "index": index, "delta": {"type": "text", "text": part}})
+                        if first:
+                            if not gates["finish"].wait(20):
+                                failures.append("stream fixture timed out before completion release")
+                            send({"event_type": "step.delta", "index": index, "delta": {"type": "text", "text": stream_tail}})
+                        send({"event_type": "step.stop", "index": index})
+                        send({"event_type": "interaction.completed", "interaction": {"id": "tty-stream", "status": "completed", "model": "gemini-4-hydrogen",
+                              "usage": {"total_input_tokens": 10, "total_output_tokens": 12, "total_thought_tokens": 3}}})
+                    elif anthropic:
                         send({"type": "message_start", "message": {"id": "tty-stream", "type": "message", "role": "assistant",
                               "model": "claude-haiku-5-5", "content": [], "stop_reason": None,
                               "usage": {"input_tokens": 10, "output_tokens": 1}}})
@@ -2609,9 +2665,10 @@ def run(binary, name, scenario, workspace):
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StreamHandler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         extra_env.update(API_PROXY_PROVIDER="", API_PROXY_URL="", TYPESAFE_API_KEY="", REAGENT_MODEL="",
-                         OPENAI_API_KEY="offline-fixture", ANTHROPIC_API_KEY="offline-fixture",
+                         OPENAI_API_KEY="offline-fixture", ANTHROPIC_API_KEY="offline-fixture", GEMINI_API_KEY="offline-fixture",
                          REAGENT_OPENAI_BASE_URL=f"http://127.0.0.1:{server.server_port}",
-                         REAGENT_ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}")
+                         REAGENT_ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_port}",
+                         REAGENT_GEMINI_BASE_URL=f"http://127.0.0.1:{server.server_port}")
     if scenario.get("web_search"):
         class SearchHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
@@ -2980,7 +3037,7 @@ def run(binary, name, scenario, workspace):
         extra_env["VISUAL"] = editor_path
     if scenario.get("context_window"):
         extra_env["REAGENT_CONTEXT_WINDOW_TOKENS"] = str(scenario["context_window"])
-    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False), startup_argv=scenario.get("startup_argv"), recap=scenario.get("recap", True), web_search=scenario.get("web_search", False))
+    s = Session(binary, workspace, script_path, scenario.get("size", (24, 80)), extra_env, scenario.get("retry", False), scenario.get("agents", False), scenario.get("context_gc", False), scenario.get("chatgpt", False), scenario.get("login", False), scenario.get("default_model", False), scenario.get("run_prompt"), scenario.get("anthropic", False), scenario.get("fast", False), startup_argv=scenario.get("startup_argv"), recap=scenario.get("recap", True), web_search=scenario.get("web_search", False), gemini=scenario.get("gemini", False))
     try:
         for index, step in enumerate(scenario["steps"]):
             kind, args = step[0], step[1:]

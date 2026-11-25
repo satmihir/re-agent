@@ -105,6 +105,28 @@ pub fn models() -> Value {
             "latest Sol",
             1_050_000,
         ),
+        (
+            "gemini-4-hydrogen",
+            "gemini",
+            "Hydrogen",
+            "4",
+            &["low", "medium", "high", "xhigh"][..],
+            "high",
+            "",
+            "efficient reasoning; text and tools",
+            1_048_576,
+        ),
+        (
+            "gemini-4-carbon",
+            "gemini",
+            "Carbon",
+            "4",
+            &["low", "medium", "high"][..],
+            "medium",
+            "",
+            "capable reasoning; text and tools",
+            1_048_576,
+        ),
     ];
     // Family and version let a host show the versions of one model line as one choice.
     Value::Array(entries.iter().map(|(id,provider,family,version,efforts,effort,verbosity,note,window)| {
@@ -219,7 +241,7 @@ fn decimal_setting(value: &str) -> Option<u64> {
 /// render_models lists models, their current selection, and missing credentials.
 pub fn render_models(current: &str, available: &Value) -> String {
     let mut out = String::new();
-    let mut needed = [false; 2];
+    let mut needed = [false; 3];
     for (i, info) in models().as_array().unwrap().iter().enumerate() {
         let id = info["id"].as_str().unwrap();
         let provider = info["provider"].as_str().unwrap();
@@ -227,7 +249,11 @@ pub fn render_models(current: &str, available: &Value) -> String {
         let status = if id == current {
             "current"
         } else if !available[provider].as_bool().unwrap_or(false) {
-            needed[usize::from(provider == "anthropic")] = true;
+            needed[match provider {
+                "anthropic" => 1,
+                "gemini" => 2,
+                _ => 0,
+            }] = true;
             "no key"
         } else {
             ""
@@ -249,6 +275,9 @@ pub fn render_models(current: &str, available: &Value) -> String {
     }
     if needed[1] {
         missing.push("ANTHROPIC_API_KEY");
+    }
+    if needed[2] {
+        missing.push("GEMINI_API_KEY");
     }
     if !missing.is_empty() {
         out.push_str(&format!(
@@ -288,6 +317,32 @@ pub fn render_efforts(info: &Value, current: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gemini_catalog_uses_verified_windows_and_efforts_without_extra_capabilities() {
+        for (model, effort, levels) in [
+            (
+                "gemini-4-hydrogen",
+                "high",
+                vec!["low", "medium", "high", "xhigh"],
+            ),
+            ("gemini-4-carbon", "medium", vec!["low", "medium", "high"]),
+        ] {
+            let info = select_model(model).unwrap();
+            assert_eq!(info["provider"], "gemini");
+            assert_eq!(info["effort"], effort);
+            assert_eq!(info["efforts"], json!(levels));
+            let config = json!({"provider":"gemini", "model":model});
+            assert_eq!(effective_context_window(&config), 1_048_576);
+            assert!(!supports_images(&config));
+            assert!(!supports_fast(&config));
+            assert!(select_effort(&info, "max").is_err());
+        }
+        let rendered = render_models("", &json!({"openai":true,"anthropic":true}));
+        assert!(rendered.contains("GEMINI_API_KEY"));
+        assert!(!rendered.contains("OPENAI_API_KEY"));
+        assert!(!rendered.contains("ANTHROPIC_API_KEY"));
+    }
 
     #[test]
     fn fast_support_is_explicit_and_provider_specific() {
@@ -333,7 +388,9 @@ mod tests {
                 "claude-haiku-5-5",
                 "claude-sonnet-5-5",
                 "claude-opus-5-5",
-                "gpt-6.2-sol"
+                "gpt-6.2-sol",
+                "gemini-4-hydrogen",
+                "gemini-4-carbon"
             ]
         );
         let haiku = select_model("6").unwrap();
@@ -391,7 +448,7 @@ mod tests {
         );
         for invalid in [
             "0",
-            "10",
+            "12",
             "gpt-5.6-luna",
             "gpt-5.6-terra",
             "claude-haiku-4-5",
@@ -455,6 +512,11 @@ mod tests {
             ]
         );
         assert_eq!(named("anthropic", "Opus"), [pair("5.5", "claude-opus-5-5")]);
+        assert_eq!(
+            named("gemini", "Hydrogen"),
+            [pair("4", "gemini-4-hydrogen")]
+        );
+        assert_eq!(named("gemini", "Carbon"), [pair("4", "gemini-4-carbon")]);
         let mut seen = std::collections::HashSet::new();
         for model in catalog.as_array().unwrap() {
             let name = ["provider", "family", "version"].map(|key| model[key].as_str().unwrap());

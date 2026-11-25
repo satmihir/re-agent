@@ -7,6 +7,9 @@ mod display;
 #[cfg(test)]
 #[path = "transport/event_tests.rs"]
 mod event_tests;
+#[cfg(test)]
+#[path = "transport/gemini_tests.rs"]
+mod gemini_tests;
 pub mod http;
 #[cfg(test)]
 #[path = "transport/performance_tests.rs"]
@@ -217,13 +220,23 @@ impl Transport {
                 "{}/messages",
                 base("REAGENT_ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
             )
-        } else if proxied {
+        } else if provider == "gemini" {
+            format!(
+                "{}/interactions",
+                base(
+                    "REAGENT_GEMINI_BASE_URL",
+                    "https://generativelanguage.googleapis.com/v1beta"
+                )
+            )
+        } else if provider == "openai" && proxied {
             std::env::var("API_PROXY_URL").unwrap_or_default()
-        } else {
+        } else if provider == "openai" {
             format!(
                 "{}/responses",
                 base("REAGENT_OPENAI_BASE_URL", "https://api.openai.com/v1")
             )
+        } else {
+            return Err(error("provider_error", "unsupported HTTP provider"));
         };
         self.call_endpoint_displayed(request, body, &endpoint, trace, region, summary_deadline)
     }
@@ -258,7 +271,7 @@ impl Transport {
         let provider = s(&self.config, "provider").to_owned();
         let proxied = self.config["proxied"].as_bool().unwrap_or(false);
         let chatgpt = provider == "openai" && s(&self.config, "auth_mode") == "chatgpt";
-        let stream = body["stream"] == true || (provider != "anthropic" && (proxied || chatgpt));
+        let stream = body["stream"] == true || (provider == "openai" && (proxied || chatgpt));
         let reply_preview = self.reply_preview.clone();
         let bytes = crate::types::json_bytes(body);
         let step = request["scope"]["step"].as_u64().unwrap_or(1) as usize;
@@ -274,10 +287,11 @@ impl Transport {
         self.retry_usage = usage_zero(true);
         self.sent_attempts = 0;
         self.reported_retries = 0;
-        let mut secrets = vec![std::env::var(if provider == "anthropic" {
-            "ANTHROPIC_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
+        let mut secrets = vec![std::env::var(match provider.as_str() {
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "gemini" => "GEMINI_API_KEY",
+            "openai" => "OPENAI_API_KEY",
+            _ => return Err(error("provider_error", "unsupported HTTP provider")),
         })
         .unwrap_or_default()];
         if chatgpt {
@@ -297,7 +311,7 @@ impl Transport {
                             error("provider_error", &m)
                         }
                     })?
-            } else if proxied {
+            } else if provider == "openai" && proxied {
                 String::new()
             } else {
                 secrets[0].clone()
@@ -343,10 +357,12 @@ impl Transport {
                     if !betas.is_empty() {
                         req = req.header("anthropic-beta", betas.join(","));
                     }
-                } else if !token.is_empty() {
+                } else if provider == "gemini" {
+                    req = req.header("x-goog-api-key", &token);
+                } else if provider == "openai" && !token.is_empty() {
                     req = req.bearer_auth(&token);
                 }
-                if provider != "anthropic" && (proxied || chatgpt) {
+                if provider == "openai" && (proxied || chatgpt) {
                     let key = crate::openai::cache_key(request);
                     if chatgpt {
                         req = req.header(
@@ -430,6 +446,9 @@ impl Transport {
                             if provider == "anthropic" {
                                 self.retain_stream_usage(&crate::anthropic::transient(&raw).1);
                                 error.usage = self.retry_usage.clone();
+                            } else if provider == "gemini" {
+                                self.retain_stream_usage(&stream::gemini_usage(&raw));
+                                error.usage = self.retry_usage.clone();
                             }
                             return Err(error);
                         }
@@ -491,6 +510,9 @@ impl Transport {
                                             &crate::anthropic::transient(&raw).1,
                                         );
                                     }
+                                    if provider == "gemini" {
+                                        self.retain_stream_usage(&stream::gemini_usage(&raw));
+                                    }
                                     return Err(
                                         self.cancelled_error("cancelled during a model request")
                                     );
@@ -523,7 +545,7 @@ impl Transport {
                 && (crate::openai::stream_shaped(&raw) || (status == 200 && raw.is_empty()));
             let (mut stream_reason, stream_usage) = if anthropic_stream {
                 crate::anthropic::transient(&raw)
-            } else if status == 200 && stream && provider != "anthropic" && (overnight || chatgpt) {
+            } else if status == 200 && stream && provider == "openai" && (overnight || chatgpt) {
                 crate::openai::transient(&raw, !overnight)
             } else {
                 (String::new(), usage_zero(false))
@@ -531,8 +553,28 @@ impl Transport {
             if self.request_cancelled(summary_deadline) {
                 if anthropic_stream {
                     self.retain_stream_usage(&stream_usage);
+                } else if provider == "gemini" {
+                    self.retain_stream_usage(&stream::gemini_usage(&raw));
                 }
                 return Err(self.cancelled_error("cancelled during a model request"));
+            }
+            // Never replay an incomplete Gemini function-call stream automatically.
+            if provider == "gemini" && stream && (status == 200 || failure.is_some()) {
+                let invalid = (crate::openai::stream_shaped(&raw) || raw.is_empty())
+                    .then(|| crate::gemini::assemble(&raw).err())
+                    .flatten();
+                if let Some(mut error) = invalid.or_else(|| {
+                    failure.as_ref().map(|message| {
+                        error(
+                            "provider_error",
+                            &format!("model request failed: {message}"),
+                        )
+                    })
+                }) {
+                    self.retain_stream_usage(&stream::gemini_usage(&raw));
+                    error.usage = self.retry_usage.clone();
+                    return Err(error);
+                }
             }
             if anthropic_stream && failure.is_some() && stream_reason.is_empty() {
                 if let Err(mut error) = crate::anthropic::assemble(&raw) {
@@ -556,6 +598,9 @@ impl Transport {
                     if anthropic_stream {
                         self.retain_stream_usage(&stream_usage);
                         error.usage = self.retry_usage.clone();
+                    } else if provider == "gemini" {
+                        self.retain_stream_usage(&stream::gemini_usage(&raw));
+                        error.usage = self.retry_usage.clone();
                     }
                     return Err(error);
                 }
@@ -566,11 +611,16 @@ impl Transport {
                     usage_add(&mut self.retry_usage, &stream_usage);
                     self.reported_retries += 1;
                 }
+                if provider == "gemini" {
+                    self.retain_stream_usage(&stream::gemini_usage(&raw));
+                }
                 self.pause(Duration::from_millis(500))?;
                 continue;
             }
             if anthropic_stream {
                 self.retain_stream_usage(&stream_usage);
+            } else if provider == "gemini" {
+                self.retain_stream_usage(&stream::gemini_usage(&raw));
             } else if !stream_reason.is_empty() && stream_usage["known"] == true {
                 usage_add(&mut self.retry_usage, &stream_usage);
                 self.reported_retries += 1;

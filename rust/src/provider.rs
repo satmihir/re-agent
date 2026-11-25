@@ -58,6 +58,7 @@ pub fn validate_environment() -> Result<(), String> {
         "REAGENT_OPENAI_BASE_URL",
         "REAGENT_OPENAI_AUTH_ISSUER",
         "REAGENT_ANTHROPIC_BASE_URL",
+        "REAGENT_GEMINI_BASE_URL",
         "REAGENT_JEV_BASE_URL",
     ] {
         let value = std::env::var(name).unwrap_or_default();
@@ -112,6 +113,17 @@ pub(crate) fn openai_auth_mode(config: &Value) -> Result<&'static str, String> {
     Ok("key")
 }
 
+/// Infers the provider from the supported model name prefixes.
+pub(crate) fn infer_provider(model: &str) -> &'static str {
+    if model.starts_with("claude-") {
+        return "anthropic";
+    }
+    if model.starts_with("gemini-") {
+        return "gemini";
+    }
+    "openai"
+}
+
 /// Resolves the model, provider, and inference authentication for a Session.
 pub fn configure(config: &mut Value) -> Result<(), String> {
     let scripted = !s(config, "scripted").is_empty();
@@ -120,16 +132,15 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
         model = std::env::var("REAGENT_MODEL").unwrap_or_default();
     }
     let mut provider = s(config, "provider").to_owned();
-    let inferred = if model.starts_with("claude-") {
-        "anthropic"
-    } else {
-        "openai"
-    };
+    let inferred = infer_provider(&model);
     if provider.is_empty() {
         provider = inferred.into();
-    } else if provider != "openai" && provider != "anthropic" && provider != "scripted" {
+    } else if !matches!(
+        provider.as_str(),
+        "openai" | "anthropic" | "gemini" | "scripted"
+    ) {
         return Err(format!(
-            "unknown provider {:?}; use openai or anthropic",
+            "unknown provider {:?}; use openai, anthropic or gemini",
             provider
         ));
     } else if !model.is_empty() && provider != inferred && provider != "scripted" {
@@ -139,10 +150,10 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
         ));
     }
     if model.is_empty() {
-        model = if provider == "anthropic" {
-            "claude-haiku-5-5"
-        } else {
-            "gpt-6.1-sol"
+        model = match provider.as_str() {
+            "anthropic" => "claude-haiku-5-5",
+            "gemini" => "gemini-4-hydrogen",
+            _ => "gpt-6.1-sol",
         }
         .into();
     }
@@ -152,7 +163,7 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
         effort = info
             .get("effort")
             .and_then(Value::as_str)
-            .unwrap_or(if provider == "anthropic" { "" } else { "low" })
+            .unwrap_or(if provider == "openai" { "low" } else { "" })
             .to_string();
     }
     if scripted {
@@ -162,6 +173,21 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
     config["provider"] = json!(provider);
     config["model"] = json!(model);
     config["reasoning_effort"] = json!(effort);
+    if provider == "gemini" {
+        for option in ["web_search", "fast", "auto"] {
+            if config[option] == true {
+                return Err(format!("{option} is unavailable for Gemini"));
+            }
+        }
+        let info = crate::catalog::model_info(&model);
+        if !effort.is_empty()
+            && (info.is_null() || crate::catalog::select_effort(&info, &effort).is_err())
+        {
+            return Err(format!(
+                "unsupported Gemini reasoning effort {effort:?} for {model}"
+            ));
+        }
+    }
     let endpoint = std::env::var("API_PROXY_URL").unwrap_or_default();
     let proxy_provider = std::env::var("API_PROXY_PROVIDER").unwrap_or_default();
     match (endpoint.is_empty(), proxy_provider.is_empty()) {
@@ -186,7 +212,11 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
     }
     let proxied = provider == "openai" && !endpoint.is_empty();
     config["proxied"] = json!(proxied);
-    let mode = openai_auth_mode(config)?;
+    let mode = if provider == "gemini" {
+        "key"
+    } else {
+        openai_auth_mode(config)?
+    };
     let preview = config["show_context"].as_bool().unwrap_or(false);
     if mode == "chatgpt" && !preview && !crate::auth::usable() {
         return Err("no usable ChatGPT plan login; run reagent login and grant plan usage, or use --openai-auth key".into());
@@ -199,10 +229,10 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
         mode
     });
     if !scripted && !preview && !proxied && s(config, "auth_mode") != "chatgpt" {
-        let variable = if provider == "anthropic" {
-            "ANTHROPIC_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
+        let variable = match provider.as_str() {
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "gemini" => "GEMINI_API_KEY",
+            _ => "OPENAI_API_KEY",
         };
         if std::env::var(variable).unwrap_or_default().is_empty() {
             return Err(format!(
@@ -220,7 +250,9 @@ pub fn configure(config: &mut Value) -> Result<(), String> {
 }
 
 pub fn encode_request(config: &Value, request: &Value) -> Result<Value, String> {
-    let mut body = if s(config, "provider") == "anthropic" {
+    let mut body = if s(config, "provider") == "gemini" {
+        crate::gemini::encode_request(request)?
+    } else if s(config, "provider") == "anthropic" {
         crate::anthropic::encode_request(request)?
     } else {
         crate::openai::encode_live_request(
@@ -326,6 +358,7 @@ impl Provider {
         match s(&self.config, "provider") {
             "scripted" => "scripted",
             "anthropic" => "anthropic.messages",
+            "gemini" => "gemini.interactions",
             _ => "openai.responses",
         }
         .into()
@@ -439,6 +472,13 @@ impl Provider {
             };
         let mut result = if status != 200 {
             Err(crate::transport::provider_error(status, &raw))
+        } else if s(&self.config, "provider") == "gemini" {
+            if crate::openai::stream_shaped(&raw) {
+                crate::gemini::assemble(&raw)
+                    .and_then(|body| crate::gemini::normalize(&crate::types::json_bytes(&body)))
+            } else {
+                crate::gemini::normalize(&raw)
+            }
         } else if s(&self.config, "provider") == "anthropic" {
             if crate::openai::stream_shaped(&raw) {
                 crate::anthropic::assemble(&raw)
@@ -597,6 +637,33 @@ fn normalize_script(v: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gemini_selection_never_uses_openai_auth_or_deferred_capabilities() {
+        let mut config =
+            json!({"model":"gemini-4-hydrogen","show_context":true,"openai_auth":"chatgpt"});
+        configure(&mut config).unwrap();
+        assert_eq!(config["provider"], "gemini");
+        assert_eq!(config["auth_mode"], "key");
+        assert_eq!(config["reasoning_effort"], "high");
+        assert_eq!(config["proxied"], false);
+        assert_eq!(
+            Provider::new(&config).unwrap().name(),
+            "gemini.interactions"
+        );
+        for option in ["web_search", "fast", "auto"] {
+            let mut invalid = config.clone();
+            invalid[option] = json!(true);
+            assert!(configure(&mut invalid).unwrap_err().contains(option));
+        }
+        config["reasoning_effort"] = json!("max");
+        assert!(configure(&mut config).unwrap_err().contains("effort"));
+        config["reasoning_effort"] = json!("high");
+        config["provider"] = json!("openai");
+        assert!(configure(&mut config)
+            .unwrap_err()
+            .contains("selects the gemini"));
+    }
+
     #[test]
     fn endpoint_validation_rejects_url_parser_repairs() {
         for endpoint in [

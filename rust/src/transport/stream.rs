@@ -67,6 +67,29 @@ pub(super) fn contains_credentials(raw: &[u8], secrets: &[String], endpoint: &st
         .any(|text| super::redact(text, secrets, endpoint) != *text)
 }
 
+/// Gemini usage keeps the latest cumulative token counters, including incomplete streams.
+pub(super) fn gemini_usage(raw: &[u8]) -> Value {
+    if let Ok(body) = serde_json::from_slice::<Value>(raw) {
+        return crate::gemini::usage(&body);
+    }
+    let mut totals = serde_json::Map::new();
+    for data in crate::openai::stream_data(raw) {
+        let Ok(event) = serde_json::from_slice::<Value>(&data) else {
+            continue;
+        };
+        for usage in [
+            &event["usage"],
+            &event["metadata"]["total_usage"],
+            &event["interaction"]["usage"],
+        ] {
+            if let Some(fields) = usage.as_object() {
+                totals.extend(fields.clone());
+            }
+        }
+    }
+    crate::gemini::usage(&serde_json::json!({"usage":totals}))
+}
+
 /// Preview retains speculative stream text only for the active terminal region.
 pub(super) struct Preview<'a> {
     region: Option<&'a RegionHandle>,
@@ -87,6 +110,7 @@ pub(super) struct Preview<'a> {
     output_bytes: usize,
     writing: bool,
     searching: bool,
+    gemini_text_steps: std::collections::BTreeSet<u64>,
 }
 
 impl<'a> Preview<'a> {
@@ -110,6 +134,7 @@ impl<'a> Preview<'a> {
             output_bytes: 0,
             writing: false,
             searching: false,
+            gemini_text_steps: std::collections::BTreeSet::new(),
         }
     }
 
@@ -283,7 +308,29 @@ impl<'a> Preview<'a> {
     }
 
     fn event(&mut self, event: &Value, secrets: &[String], endpoint: &str) -> bool {
-        let kind = s(event, "type");
+        let kind = if event["event_type"].is_string() {
+            s(event, "event_type")
+        } else {
+            s(event, "type")
+        };
+        if kind == "step.start" {
+            if let Some(index) = event["index"].as_u64() {
+                if event["step"]["type"] == "model_output"
+                    && self.gemini_text_steps.len() < PREVIEW_LINES
+                {
+                    self.gemini_text_steps.insert(index);
+                } else {
+                    self.gemini_text_steps.remove(&index);
+                }
+            }
+            return false;
+        }
+        if kind == "step.stop" {
+            if let Some(index) = event["index"].as_u64() {
+                self.gemini_text_steps.remove(&index);
+            }
+            return false;
+        }
         let searching = match kind {
             "response.web_search_call.in_progress" | "response.web_search_call.searching" => {
                 Some(true)
@@ -305,6 +352,18 @@ impl<'a> Preview<'a> {
             return changed;
         }
         let (delta, visible) = match kind {
+            "step.delta" => {
+                let delta = &event["delta"];
+                if delta["type"] != "text"
+                    || delta["thought"] == true
+                    || !event["index"]
+                        .as_u64()
+                        .is_some_and(|index| self.gemini_text_steps.contains(&index))
+                {
+                    return false;
+                }
+                (s(delta, "text"), true)
+            }
             "response.output_text.delta" | "response.refusal.delta" => (s(event, "delta"), true),
             "response.reasoning_text.delta"
             | "response.reasoning_summary_text.delta"
@@ -509,6 +568,64 @@ mod tests {
         push_text(&mut preview, "private-second\n", &secrets);
         assert_eq!(preview.lines.back().unwrap(), "[redacted]");
         assert!(!preview.lines.iter().any(|line| line.contains("private")));
+    }
+
+    #[test]
+    fn gemini_preview_hides_thoughts_and_arguments_and_redacts_split_text() {
+        use serde_json::json;
+        let region = Arc::new(Mutex::new(crate::terminal::Region::new()));
+        let mut preview = Preview::new(Some(&region));
+        let secrets = ["gemini-private-key".into()];
+        for event in [
+            json!({"event_type":"step.start","index":0,"step":{"type":"thought"}}),
+            json!({"event_type":"step.delta","index":0,"delta":{"type":"thought_summary","content":{"type":"text","text":"PRIVATE THOUGHT\n"}}}),
+            json!({"event_type":"step.delta","index":0,"delta":{"type":"text","text":"PRIVATE THOUGHT\n"}}),
+            json!({"event_type":"step.delta","index":0,"delta":{"type":"thought_signature","signature":"PRIVATE SIGNATURE"}}),
+            json!({"event_type":"step.stop","index":0}),
+            json!({"event_type":"step.start","index":1,"step":{"type":"function_call"}}),
+            json!({"event_type":"step.delta","index":1,"delta":{"type":"arguments_delta","arguments":"PRIVATE ARGUMENTS"}}),
+            json!({"event_type":"step.stop","index":1}),
+        ] {
+            preview.push(format!("data: {event}\n\n").as_bytes(), &secrets, "");
+        }
+        assert!(!preview.writing);
+        assert!(preview.lines.is_empty());
+        for event in [
+            json!({"event_type":"step.start","index":2,"step":{"type":"model_output"}}),
+            json!({"event_type":"step.delta","index":2,"delta":{"type":"text","text":"café 界 gemini-private-"}}),
+            json!({"event_type":"step.delta","index":2,"delta":{"type":"text","text":"PRIVATE THOUGHT\n","thought":true}}),
+            json!({"event_type":"step.delta","index":2,"delta":{"type":"text","text":"key\n"}}),
+            json!({"event_type":"step.stop","index":2}),
+            json!({"event_type":"step.delta","index":2,"delta":{"type":"text","text":"AFTER STOP\n"}}),
+        ] {
+            for byte in format!("data: {event}\r\n\r\n").as_bytes() {
+                preview.push(&[*byte], &secrets, "");
+            }
+        }
+        assert!(preview.writing);
+        assert_eq!(
+            preview.lines.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["café 界 [redacted]"]
+        );
+        assert!(preview.line.is_empty());
+    }
+
+    #[test]
+    fn gemini_stream_usage_uses_latest_cumulative_counters_without_inventing_usage() {
+        use serde_json::json;
+        assert_eq!(gemini_usage(b""), crate::types::usage_zero(false));
+        assert_eq!(
+            gemini_usage(b"{\"usage\":{}}"),
+            crate::types::usage_zero(false)
+        );
+        let first = json!({"event_type":"step.stop","usage":{"total_input_tokens":10,"total_output_tokens":2,"total_thought_tokens":3}});
+        let second = json!({"event_type":"step.stop","usage":{"total_output_tokens":12}});
+        let usage =
+            gemini_usage(format!("data: {first}\n\ndata: {second}\n\ndata: broken\n\n").as_bytes());
+        assert_eq!(usage["known"], true);
+        assert_eq!(usage["input_tokens"], 10);
+        assert_eq!(usage["output_tokens"], 15);
+        assert_eq!(usage["reasoning_tokens"], 3);
     }
 
     #[test]
