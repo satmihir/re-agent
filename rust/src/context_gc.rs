@@ -538,6 +538,11 @@ fn retire_preview_overflow(session: &mut Session) -> bool {
 
 /// Collect retires over-limit eligible previews before encoding, then considers cache savings.
 pub(crate) fn collect(session: &mut Session) -> bool {
+    // Rewriting tool results under Gemini thought signatures is unproven. Keep
+    // inherited GC projections and recall, but never collect new Gemini history.
+    if session.config["provider"] == "gemini" {
+        return false;
+    }
     if retire_preview_overflow(session) {
         return true;
     }
@@ -792,6 +797,12 @@ mod tests {
             assert!(crate::provider::encode_request(&session.config, &request)
                 .unwrap_err()
                 .contains("9 active image previews"));
+            session.config["provider"] = json!("gemini");
+            let before = session.state.clone();
+            assert!(!collect(&mut session));
+            assert_eq!(session.state, before);
+            assert_eq!(preview_count(&session.request_history()), 9);
+            session.config["provider"] = json!("openai");
             assert!(collect(&mut session));
             let view = session.request_history();
             assert_eq!(preview_count(&view), 8);

@@ -1435,6 +1435,11 @@ fn switch_model(
         if info.is_null() {
             return Err(format!("{model:?} is not an exact catalog model ID"));
         }
+        if info["provider"] == "gemini" && session.state["auto_enabled"] == true {
+            return Err(
+                "Auto is unavailable for Gemini; disable Auto before selecting Gemini".into(),
+            );
+        }
         crate::chat::model_switch::destination(&session.config, &info)
     })();
     let config = match destination {

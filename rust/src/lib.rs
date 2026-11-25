@@ -15,6 +15,8 @@ pub mod errors;
 mod file_diff;
 pub(crate) mod friction;
 pub(crate) mod friction_export;
+/// Stateless Gemini Interactions requests and native response replay.
+pub mod gemini;
 /// Trusted image observations carried through context projections.
 pub(crate) mod image_context;
 /// Independent API-key-backed image generation requests.

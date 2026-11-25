@@ -11,10 +11,10 @@ fn enabled(value: &Value, key: &str) -> bool {
     value[key].as_bool().unwrap_or(false)
 }
 fn available(session: &Session, provider: &str) -> bool {
-    let key = if provider == "anthropic" {
-        "ANTHROPIC_API_KEY"
-    } else {
-        "OPENAI_API_KEY"
+    let key = match provider {
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openai" => "OPENAI_API_KEY",
+        _ => return false,
     };
     !std::env::var(key).unwrap_or_default().is_empty()
         || (provider == "openai"
@@ -71,6 +71,13 @@ fn inventory(session: &Session, fallback: &Value, require_available: bool) -> Ve
 
 /// initialize reconstructs Auto routing from its saved fallback and session settings.
 pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
+    if session.config["provider"] == "gemini"
+        && (enabled(&session.config, "auto")
+            || enabled(&session.state, "auto_enabled")
+            || (enabled(&session.state, "auto") && session.state["auto_enabled"] != false))
+    {
+        return Err("Auto is unavailable for Gemini; disable Auto before selecting Gemini".into());
+    }
     let mut unused_usage = types::usage_zero(false);
     if session.state["auto_usage"]["unreported_attempts"] == 0 {
         unused_usage["unreported_attempts"] = json!(0);
@@ -122,6 +129,9 @@ pub(crate) fn initialize(session: &mut Session) -> Result<(), String> {
             }
         })
         .to_owned();
+    if info["provider"] == "gemini" {
+        return Err("Auto fallback cannot use Gemini".into());
+    }
     let efforts = info["efforts"].as_array();
     let accepted = efforts.is_some_and(|efforts| {
         if efforts.is_empty() {
@@ -238,6 +248,9 @@ fn stage(session: &Session, route: &Value) -> Result<Candidate, String> {
     }
     let mut config = session.config.clone();
     config["provider"] = catalog::model_info(text(route, "model"))["provider"].clone();
+    if config["provider"] == "gemini" {
+        return Err("Auto routes cannot use Gemini".into());
+    }
     config["model"] = route["model"].clone();
     config["reasoning_effort"] = route["reasoning_effort"].clone();
     if config["fast"] == true && !catalog::supports_fast(&config) {
@@ -615,6 +628,31 @@ pub(crate) fn record_usage(session: &mut Session, usage: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gemini_auto_initialization_and_reenable_fail_without_mutating_the_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session =
+            Session::new(json!({"provider":"openai","model":"gpt-6-luna","workspace":dir.path()}))
+                .unwrap();
+        session.config["provider"] = json!("gemini");
+        session.config["model"] = json!("gemini-4-hydrogen");
+        session.config["reasoning_effort"] = json!("high");
+        session.config["auto"] = json!(true);
+        assert!(initialize(&mut session).unwrap_err().contains("Gemini"));
+        session.config["auto"] = json!(false);
+        let before = session.state.clone();
+        assert!(set_enabled(&mut session, true)
+            .unwrap_err()
+            .contains("Gemini"));
+        assert_eq!(session.state, before);
+        assert!(set_enabled(&mut session, false).is_ok());
+        assert!(!available(&session, "gemini"));
+        assert!(stage(&session, &route("bad", "gemini-4-hydrogen", "high")).is_err());
+        session.state["auto"] = json!(true);
+        session.state["auto_enabled"] = json!(true);
+        assert!(initialize(&mut session).unwrap_err().contains("Gemini"));
+    }
+
     #[test]
     fn cumulative_sufficiency_is_cost_ordered_not_the_winning_choice() {
         let routes = vec![

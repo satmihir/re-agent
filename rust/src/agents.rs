@@ -488,22 +488,19 @@ fn child_config(s: &Session, a: &Value, authority: &str) -> Value {
     c["max_steps"] = json!(if kind == "teammate" { 0 } else { 64 });
     c["max_tool_calls"] = json!(if kind == "teammate" { 0 } else { 256 });
     c["in_run_compact"] = json!(false);
+    c["auto"] = json!(false);
     c["checkpoint_enabled"] = json!(false);
     c["agent_tree_id"] = json!(s.config["agent_tree_id"]
         .as_str()
         .unwrap_or_else(|| text(&s.state["session_id"])));
     if !text(&a["model"]).is_empty() {
         c["model"] = a["model"].clone();
-        let provider = if text(&a["model"]).starts_with("claude-") {
-            "anthropic"
-        } else {
-            "openai"
-        };
+        let provider = crate::provider::infer_provider(text(&a["model"]));
         c["provider"] = json!(provider);
         if c["provider"] != s.config["provider"] || c["model"] != s.config["model"] {
             c["reasoning_effort"] = json!(crate::catalog::model_info(text(&a["model"]))["effort"]
                 .as_str()
-                .unwrap_or(if provider == "anthropic" { "" } else { "low" }));
+                .unwrap_or(if provider == "openai" { "low" } else { "" }));
         }
     }
     if c["fast"] == true && !crate::catalog::supports_fast(&c) {
@@ -3301,9 +3298,16 @@ mod tests {
                 ("gpt-6-luna", "medium"),
                 ("claude-haiku-4-5", ""),
                 ("claude-future", ""),
+                ("gemini-4-hydrogen", "high"),
+                ("gemini-4-carbon", "medium"),
+                ("gemini-future", ""),
             ] {
                 let config = child_config(&session, &json!({"model":model}), authority);
                 assert_eq!(config["reasoning_effort"], effort);
+                if model.starts_with("gemini-") {
+                    assert_eq!(config["provider"], "gemini");
+                }
+                assert_eq!(config["auto"], false);
                 assert_eq!(config["fast"], crate::catalog::supports_fast(&config));
                 assert_eq!(config["agent_snapshot_refs_only"], true);
                 assert_eq!(config["read_only"], authority == "read");

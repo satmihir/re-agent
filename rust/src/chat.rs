@@ -528,7 +528,7 @@ impl Chat {
             self.say("a scripted run replays recorded responses, so it has no model to choose");
             return Ok(());
         }
-        let available = json!({"openai":!std::env::var("OPENAI_API_KEY").unwrap_or_default().is_empty() || matches!(snapshot.auth_mode.as_str(), "proxy" | "chatgpt"), "anthropic":!std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty()});
+        let available = json!({"openai":!std::env::var("OPENAI_API_KEY").unwrap_or_default().is_empty() || matches!(snapshot.auth_mode.as_str(), "proxy" | "chatgpt"), "anthropic":!std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty(), "gemini":!std::env::var("GEMINI_API_KEY").unwrap_or_default().is_empty()});
         let (id, history) = if arg.is_empty() {
             let catalog = crate::catalog::models();
             let models = catalog.as_array().unwrap();
@@ -542,10 +542,10 @@ impl Chat {
                     } else if disabled {
                         format!(
                             "needs {}  {}",
-                            if text(model, "provider") == "openai" {
-                                "OPENAI_API_KEY"
-                            } else {
-                                "ANTHROPIC_API_KEY"
+                            match text(model, "provider") {
+                                "gemini" => "GEMINI_API_KEY",
+                                "anthropic" => "ANTHROPIC_API_KEY",
+                                _ => "OPENAI_API_KEY",
                             },
                             text(model, "note")
                         )

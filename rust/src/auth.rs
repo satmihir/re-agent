@@ -503,23 +503,28 @@ pub(crate) fn token_until(
     Ok(c.access_token)
 }
 
-/// Builds bearer headers for the configured provider or ChatGPT connection.
+/// Builds authentication headers for the configured provider or ChatGPT connection.
 pub fn headers(config: &Value, _request: &Value) -> Result<reqwest::header::HeaderMap, String> {
-    let bearer = if text(config, "auth_mode") == "chatgpt" {
+    let bearer = if text(config, "provider") == "openai" && text(config, "auth_mode") == "chatgpt" {
         token(false, "")?
     } else {
-        let variable = if text(config, "provider") == "anthropic" {
-            "ANTHROPIC_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
+        let variable = match text(config, "provider") {
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "gemini" => "GEMINI_API_KEY",
+            "openai" => "OPENAI_API_KEY",
+            _ => return Err("unsupported authentication provider".into()),
         };
         std::env::var(variable).unwrap_or_default()
     };
     let mut headers = reqwest::header::HeaderMap::new();
     if !bearer.is_empty() {
-        if text(config, "provider") == "anthropic" {
+        if matches!(text(config, "provider"), "anthropic" | "gemini") {
             headers.insert(
-                "x-api-key",
+                if text(config, "provider") == "gemini" {
+                    "x-goog-api-key"
+                } else {
+                    "x-api-key"
+                },
                 reqwest::header::HeaderValue::from_str(&bearer).map_err(|_| "invalid API key")?,
             );
         } else {
