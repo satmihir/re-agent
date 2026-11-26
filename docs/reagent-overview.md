@@ -126,6 +126,7 @@ One JSONL file per root Run, compaction attempt and configured catalog model-swi
 - Each tty scenario has disposable HOME and XDG cache/config.
 - `make tty-check`: drives the built binary in a pseudo-terminal through `bench/tty` scenarios; run it for input or display changes.
 - `make live`: opt-in live tests for providers whose key is present.
+- `make probe-model MODEL=id`: opt-in and paid; `bench/model_probe.py` sends one small request per reasoning effort, one without an effort and one made-up control, and reports which efforts the model accepts. The `add-model` skill in `.agents/skills` orders the rest of adding a model.
 - `make git-do-eval`: opt-in repeated git_do decisions over recorded and hand-written cases; recipe mode needs no key, Jev mode needs `TYPESAFE_API_KEY`.
 - `bench/` holds offline checkers for friction, behavior comparison and workflow evidence (`docs/reagent-requirement-discovery.md`, `docs/reagent-task-workflow.md`).
 

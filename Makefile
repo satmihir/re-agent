@@ -5,8 +5,9 @@
 #   make live     conformance runs against both providers; reads ./.env or main checkout .env in a worktree
 #   make tty-check  drive the Rust chat in a pseudo-terminal and check the screen; offline
 #   make git-do-eval  repeated git_do decisions; MODE=jev|recipe N=5 SET=all|tuning|held_out; Jev reads .env
+#   make probe-model MODEL=id  which reasoning efforts a model accepts; 8 small paid requests; reads .env like make live
 
-.PHONY: all build check live tty-check git-do-eval
+.PHONY: all build check live tty-check git-do-eval probe-model
 
 all: build
 
@@ -46,6 +47,10 @@ live:
 # cursor-report round trip. Needs python3; no keys or network.
 tty-check: build
 	python3 bench/tty/check.py ./reagent
+
+# Paid: one request per effort level, one without an effort and one made-up control.
+probe-model: build
+	@$(load_env); python3 bench/model_probe.py ./reagent "$(MODEL)"
 
 # Repeats each case; recipe mode uses only actual model-named outcomes and needs no key.
 # Wrong runs or <90% held-out real git-only right-and-ran fail (v0 §10.9).
