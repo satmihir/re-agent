@@ -41,28 +41,35 @@ are. Do not turn a capability on because a sibling model has it.
 
 ## 3. Tests
 
-Run the whole suite without stopping at the first failing file, which is what
-plain `cargo test` and `make check` do:
-
-```bash
-cd rust && cargo +1.99.1 test --locked --no-fail-fast 2>&1 | grep -E "FAILED|^test result"
-```
+The two full checks take about three and five minutes. Run each once, at the
+end, and use the quick commands below while editing.
 
 - **A new model** needs the id list in
   `model_positions_and_model_specific_efforts_are_fixed`, its facts asserted
   beside the other rows in that module, and a line in
-  `fast_support_is_explicit_and_provider_specific`.
+  `fast_support_is_explicit_and_provider_specific`. Check them as you go with
+  `cd rust && cargo +1.99.1 test --locked --lib catalog::tests`, which takes
+  seconds. A new row should break no test outside that module; the one
+  `make check` at the end confirms it.
 - **Changed facts of a listed model** also break tests that use it as an example
   of those facts. Expect `rust/tests/cli_flags.rs`,
   `rust/tests/session_api_controls.rs`, `rust/tests/session_api_model_switch.rs`,
   `rust/tests/provider_auth_selection.rs` and the tests in `rust/src/jev.rs`.
-  Move them to the new facts. If one guards a promise in
+  Only for this case, list every failure in one run, since `make check` stops at
+  the first failing file:
+
+  ```bash
+  cd rust && cargo +1.99.1 test --locked --no-fail-fast 2>&1 | grep -E "FAILED|^test result"
+  ```
+
+  Move those tests to the new facts. If one guards a promise in
   `docs/reagent-session-api.md` that the change would break, such as what a
   saved checkpoint resumes as, stop and ask.
-- **The terminal picker** lists every row. Add the new line to the `model-picker`
-  scenario in `bench/tty/check.py`, then run `make tty-check`. Rerun a single
-  failing scenario by name (`python3 bench/tty/check.py ./reagent NAME`) before
-  treating it as real.
+- **The terminal picker** lists every row, so add one `screen_has` line for the
+  new row to the `model-picker` scenario in `bench/tty/check.py`. A model does
+  not need a scenario of its own. Check it with `make build` and then
+  `python3 bench/tty/check.py ./reagent model-picker`. The picker's digit keys
+  reach only 9; a scenario picks a later row with `/model N` or by name.
 
 ## 4. Documents
 
@@ -72,7 +79,13 @@ Change `docs/reagent-session-api.md` only if a promise in it changed.
 
 ## 5. Finish
 
-Paste `make check` and the `make tty-check` verdict. The pull request says what
+Run `make check`, then `make tty-check`, once each, and paste the first's output
+and the second's verdict. On macOS put `caffeinate -i` in front of both: an idle
+laptop that sleeps stops them until someone comes back. If one terminal
+scenario fails, rerun it by name (`python3 bench/tty/check.py ./reagent NAME`)
+before treating it as real or repeating the full run.
+
+The pull request says what
 was verified live and how many requests that took, what came from documentation
 only, and what was not checked (Linux, the ChatGPT plan login, the other
 providers).
