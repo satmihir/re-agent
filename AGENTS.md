@@ -27,6 +27,9 @@ beats completeness. When in doubt, write less.
 
 For traces, see `docs/reagent-trace-format.md`; `bench/git/harvest_git_do.py` is a worked example.
 
+To add a catalog model or change what one accepts, follow
+`.agents/skills/add-model/SKILL.md` (`.claude/skills` links to the same folder).
+
 ## Code economy
 
 - No line budgets. Size follows from doing one thing per function and one
