@@ -127,6 +127,17 @@ pub fn models() -> Value {
             "capable reasoning; text and tools",
             1_048_576,
         ),
+        (
+            "gpt-6.2-astra",
+            "openai",
+            "Astra",
+            "6.2",
+            REASONING_EFFORTS,
+            "medium",
+            "low",
+            "latest Astra",
+            1_050_000,
+        ),
     ];
     // Family and version let a host show the versions of one model line as one choice.
     Value::Array(entries.iter().map(|(id,provider,family,version,efforts,effort,verbosity,note,window)| {
@@ -143,7 +154,12 @@ pub(crate) fn supports_images(config: &Value) -> bool {
         ),
         (
             "openai",
-            "gpt-6-luna" | "gpt-6.1-terra" | "gpt-6.1-sol" | "gpt-6-astra" | "gpt-6-sol"
+            "gpt-6-luna"
+                | "gpt-6.1-terra"
+                | "gpt-6.1-sol"
+                | "gpt-6-astra"
+                | "gpt-6-sol"
+                | "gpt-6.2-astra"
         ) | (
             "anthropic",
             "claude-haiku-5-5" | "claude-sonnet-5-5" | "claude-opus-5-5"
@@ -169,7 +185,8 @@ pub fn supports_fast(config: &Value) -> bool {
             config["provider"].as_str().unwrap_or(""),
             config["model"].as_str().unwrap_or("")
         ),
-        ("openai", "gpt-6.1-terra" | "gpt-6.1-sol") | ("anthropic", "claude-opus-5-5")
+        ("openai", "gpt-6.1-terra" | "gpt-6.1-sol" | "gpt-6.2-astra")
+            | ("anthropic", "claude-opus-5-5")
     )
 }
 
@@ -352,6 +369,8 @@ mod tests {
             ("openai", "gpt-6.1-terra", true),
             ("openai", "gpt-6.1-sol", true),
             ("openai", "gpt-6.2-sol", false),
+            ("openai", "gpt-6.2-astra", true),
+            ("anthropic", "gpt-6.2-astra", false),
             ("anthropic", "claude-opus-5-5", true),
             ("anthropic", "claude-sonnet-5-5", false),
             ("anthropic", "claude-haiku-5-5", false),
@@ -390,7 +409,8 @@ mod tests {
                 "claude-opus-5-5",
                 "gpt-6.2-sol",
                 "gemini-4-hydrogen",
-                "gemini-4-carbon"
+                "gemini-4-carbon",
+                "gpt-6.2-astra"
             ]
         );
         let haiku = select_model("6").unwrap();
@@ -421,6 +441,32 @@ mod tests {
         assert_eq!(select_effort(&astra, "5").unwrap(), "max");
         assert!(select_effort(&astra, "none").is_err());
         assert!(select_effort(&astra, "ultra").is_err());
+        let latest_astra = select_model("12").unwrap();
+        assert_eq!(latest_astra, select_model("gpt-6.2-astra").unwrap());
+        assert_eq!(latest_astra["provider"], "openai");
+        assert_eq!(latest_astra["family"], "Astra");
+        assert_eq!(latest_astra["version"], "6.2");
+        assert_eq!(latest_astra["effort"], "medium");
+        assert_eq!(latest_astra["verbosity"], "low");
+        assert_eq!(latest_astra["context_window"], 1_050_000);
+        assert_eq!(latest_astra["efforts"], json!(REASONING_EFFORTS));
+        assert_eq!(latest_astra["note"], "latest Astra");
+        for (position, effort) in REASONING_EFFORTS.iter().enumerate() {
+            assert_eq!(select_effort(&latest_astra, effort).unwrap(), *effort);
+            assert_eq!(
+                select_effort(&latest_astra, &(position + 1).to_string()).unwrap(),
+                *effort
+            );
+        }
+        for invalid in ["none", "minimal", "ultra", "0", "6"] {
+            assert!(select_effort(&latest_astra, invalid).is_err());
+        }
+        assert!(supports_images(
+            &json!({"provider":"openai","model":"gpt-6.2-astra"})
+        ));
+        assert!(!supports_images(
+            &json!({"provider":"anthropic","model":"gpt-6.2-astra"})
+        ));
         let sol = select_model("3").unwrap();
         let luna = select_model("1").unwrap();
         assert_eq!(luna["id"], "gpt-6-luna");
@@ -448,7 +494,7 @@ mod tests {
         );
         for invalid in [
             "0",
-            "12",
+            "13",
             "gpt-5.6-luna",
             "gpt-5.6-terra",
             "claude-haiku-4-5",
@@ -511,6 +557,10 @@ mod tests {
                 pair("6.2", "gpt-6.2-sol")
             ]
         );
+        assert_eq!(
+            named("openai", "Astra"),
+            [pair("6", "gpt-6-astra"), pair("6.2", "gpt-6.2-astra")]
+        );
         assert_eq!(named("anthropic", "Opus"), [pair("5.5", "claude-opus-5-5")]);
         assert_eq!(
             named("gemini", "Hydrogen"),
@@ -533,6 +583,9 @@ mod tests {
             ("gpt-6.2-sol", 0, 1_050_000),
             ("gpt-6.2-sol", 2_000_000, 1_050_000),
             ("gpt-6.2-sol", 500, 500),
+            ("gpt-6.2-astra", 0, 1_050_000),
+            ("gpt-6.2-astra", 2_000_000, 1_050_000),
+            ("gpt-6.2-astra", 500, 500),
             ("gpt-6-astra", 0, 1_050_000),
             ("gpt-6-astra", 2_000_000, 1_050_000),
             ("gpt-6-astra", 500, 500),
@@ -560,6 +613,7 @@ mod tests {
         assert!(listing.contains("5  gpt-6-sol         openai"));
         assert!(listing.contains("6  claude-haiku-5-5  anthropic  no key"));
         assert!(listing.contains("9  gpt-6.2-sol       openai"));
+        assert!(listing.contains("12  gpt-6.2-astra     openai"));
         assert!(listing.contains("models marked no key need ANTHROPIC_API_KEY"));
         assert!(listing
             .lines()
