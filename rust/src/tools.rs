@@ -36,6 +36,8 @@ pub type WorkspaceConsent =
 
 pub struct ToolState {
     pub workspace: Workspace,
+    /// Background commands live with this opening, independently of individual Runs.
+    pub(crate) jobs: crate::jobs::Jobs,
     pub state: Value,
     handles: HashMap<PathBuf, Workspace>,
     approved: Vec<WorkspaceDestination>,
@@ -82,6 +84,7 @@ impl ToolState {
                     Workspace::tool_free(PathBuf::from(root))
                 },
                 state: json!({}),
+                jobs: Default::default(),
                 handles: HashMap::new(),
                 approved: vec![],
                 workspace_consent: None,
@@ -122,6 +125,7 @@ impl ToolState {
         }
         Ok(Self {
             workspace,
+            jobs: Default::default(),
             state: json!({}),
             handles: HashMap::new(),
             approved,
@@ -148,6 +152,7 @@ struct SpecConfig {
     agent_questions: bool,
     read_only: bool,
     exec: bool,
+    background_exec: bool,
     view_images: bool,
     generate_images: bool,
     skills: bool,
@@ -201,6 +206,7 @@ fn cached_specs(config: &Value) -> Arc<Value> {
         agent_questions: enabled("agent_questions"),
         read_only: enabled("read_only"),
         exec: config["no_exec"] != true,
+        background_exec: background_exec(config),
         view_images: crate::catalog::supports_images(config),
         generate_images: generates_images(config),
         skills: lists_skills(config),
@@ -219,6 +225,13 @@ fn lists_skills(config: &Value) -> bool {
     config["prompt"]["skills"] == true
 }
 
+fn background_exec(config: &Value) -> bool {
+    config["background_exec"] == true
+        && config["agent"] != true
+        && config["no_exec"] != true
+        && config["read_only"] != true
+}
+
 fn build_specs(config: &Value) -> Value {
     static BASE: LazyLock<Vec<Value>> = LazyLock::new(|| {
         let mut specs: Vec<Value> = serde_json::from_str(include_str!("tool_specs.json")).unwrap();
@@ -227,6 +240,13 @@ fn build_specs(config: &Value) -> Value {
         specs
     });
     let mut specs = BASE.clone();
+    if background_exec(config) {
+        let exec = specs.iter_mut().find(|s| s["name"] == "exec").unwrap();
+        exec["input_schema"] =
+            serde_json::from_str(include_str!("schemas/exec_background.json")).unwrap();
+        exec["description"] = json!(format!("{} Set background:true to get a job ID instead of waiting; inspect or cancel with exec_job.", exec["description"].as_str().unwrap()));
+        specs.push(json!({"name":"exec_job","description":"List this Session's background commands, inspect bounded output and status by ID, or request cancellation. Reading status does not consume completion notifications. Cancellation cannot undo effects.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/exec_job.json")).unwrap(),"effect":"read"}));
+    }
     if crate::catalog::supports_images(config) {
         specs.push(json!({"name":"view_image","description":"View a local PNG, JPEG, or still WebP image as pixels. Returns an immutable, bounded preview and original file metadata; reports resizing. Paths stay inside the workspace. Viewing does not grant text-edit authorization.","input_schema":serde_json::from_str::<Value>(include_str!("schemas/view_image.json")).unwrap(),"effect":"read"}));
     }
@@ -612,7 +632,7 @@ pub fn execute_in_region(
     } else {
         spec.unwrap()["input_schema"].clone()
     };
-    let args = match decode_arguments(arguments, &schema) {
+    let mut args = match decode_arguments(arguments, &schema) {
         Ok(args) => args,
         Err(bad) => return Ok(bad),
     };
@@ -623,7 +643,18 @@ pub fn execute_in_region(
                     .unwrap_or_else(|bad| bad),
             )
         }
-        "exec" => crate::tool_exec::execute_in_region(&mut state.workspace, config, &args, region),
+        "exec" => {
+            let background = match optional_bool(&args, "background") {
+                Ok(value) => value,
+                Err(bad) => return Ok(bad),
+            };
+            args.as_object_mut().unwrap().remove("background");
+            if background {
+                return state.jobs.start(&mut state.workspace, config, &args);
+            }
+            crate::tool_exec::execute_in_region(&mut state.workspace, config, &args, region)
+        }
+        "exec_job" => Ok(state.jobs.inspect(&args)),
         "git_inspect" => crate::tool_git::inspect(&mut state.workspace, config, &args),
         "git_do" => crate::tool_git::git_do(&mut state.workspace, config, &args),
         "request_workspace_access" | "switch_workspace" => {
@@ -991,6 +1022,7 @@ mod tests {
         for key in [
             "report_friction",
             "context_gc",
+            "background_exec",
             "agent",
             "agents",
             "read_only",
@@ -1007,6 +1039,42 @@ mod tests {
             let config = json!({"git_do":mode});
             assert_eq!(*cached_specs(&config), build_specs(&config));
             assert_ne!(specs(&config), specs(&json!({})));
+        }
+    }
+
+    #[test]
+    fn background_exec_is_limited_to_the_interactive_root_at_dispatch() {
+        let root = tempfile::tempdir().unwrap();
+        let config = json!({"workspace":root.path(),"background_exec":true});
+        let mut state = ToolState::new(&config).unwrap();
+        let launch = r#"{"argv":["true"],"cwd":".","background":true}"#;
+        let list = r#"{"operation":"list"}"#;
+        for (setting, value) in [
+            ("background_exec", false),
+            ("agent", true),
+            ("read_only", true),
+            ("no_exec", true),
+            ("tool_free", true),
+            ("plan", true),
+        ] {
+            let mut restricted = config.clone();
+            restricted[setting] = json!(value);
+            assert_ne!(
+                execute(&mut state, &restricted, "exec", launch).unwrap()["ok"],
+                true,
+                "{setting}"
+            );
+            let result = execute(&mut state, &restricted, "exec_job", list).unwrap();
+            assert_eq!(result["ok"], setting == "plan", "{setting}");
+        }
+        let receipt = execute(&mut state, &config, "exec", launch).unwrap();
+        assert!(receipt["data"]["id"].is_string(), "{receipt}");
+        for spec in specs(&config).as_array().unwrap() {
+            assert!(crate::schemas::raw_schema(
+                spec["name"].as_str().unwrap(),
+                &spec["input_schema"]
+            )
+            .is_some());
         }
     }
 

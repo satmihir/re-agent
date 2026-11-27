@@ -68,9 +68,13 @@ pub(crate) fn visit_visible(
         let mut trust = "";
         match kind {
             "user" => {
+                if data["source"] == "exec_job" && data["job_effect"] == "unknown" {
+                    return Err(format!("entry {n} has uncertain background command effects; inspect before discarding context"));
+                }
                 trust = match text(data, "source") {
                     "agent" => "untrusted_agent_data",
-                    "context_gc" => "untrusted_tool_data",
+                    "context_gc" | "exec_job" => "untrusted_tool_data",
+                    "runtime" => "runtime_notification",
                     _ => "",
                 };
             }

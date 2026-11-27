@@ -419,6 +419,7 @@ fn recap(call: &Value, outcome: &Value, target: &str, a: Option<&Value>) -> Stri
             s
         }
         "delete_file" => format!("deleted {target}"),
+        "exec" if a.is_some_and(|a| yes(a, "background")) => format!("started {target}"),
         "exec" => format!("ran {target}"),
         _ => String::new(),
     }
@@ -520,6 +521,11 @@ fn activity_text(
                     } else {
                         "no change".into()
                     };
+                }
+                "exec"
+                    if a.as_ref().is_some_and(|a| yes(a, "background")) && yes(outcome, "ok") =>
+                {
+                    result = format!("background job {}", sanitize(text(data, "id")));
                 }
                 "exec" if a.is_some() && (data.is_object() || data.is_null()) => {
                     let steps = data["steps"].as_array();

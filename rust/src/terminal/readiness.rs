@@ -57,6 +57,12 @@ mod tests {
 
     fn pty() -> (File, File) {
         let (mut master, mut slave) = (-1, -1);
+        let mut size = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
         assert_eq!(
             unsafe {
                 libc::openpty(
@@ -64,7 +70,7 @@ mod tests {
                     &mut slave,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
-                    std::ptr::null_mut(),
+                    &mut size,
                 )
             },
             0,
@@ -186,6 +192,177 @@ mod tests {
             "child never requested input: {}",
             String::from_utf8_lossy(&output)
         );
+    }
+
+    #[test]
+    fn idle_wake_preserves_continuation_cursor_and_partial_paste() {
+        use crate::terminal::{Input, Region, Submission};
+        use std::sync::{atomic::AtomicBool, Arc, Mutex};
+
+        // The fallback editor polls stdin, so give the test its own process and PTY.
+        const CHILD: &str = "REAGENT_TEST_IDLE_WAKE";
+        if std::env::var_os(CHILD).is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .env("HOME", home.path())
+                .env("XDG_CACHE_HOME", home.path().join("cache"))
+                .args([
+                    "--exact",
+                    "terminal::readiness::tests::idle_wake_preserves_continuation_cursor_and_partial_paste",
+                ])
+                .env(CHILD, "1")
+                .env("TERM", "dumb")
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        unsafe { libc::alarm(10) }; // Bound a regression that never polls the predicate.
+        assert!(matches!(
+            Input::new()
+                .read_line_until("", || panic!("pipe woke"))
+                .unwrap(),
+            Submission::Eof
+        ));
+        for regional in [false, true] {
+            let (mut master, slave) = pty();
+            assert_eq!(unsafe { libc::dup2(slave.as_raw_fd(), 0) }, 0);
+            let mut input = Input::new();
+            if regional {
+                input.tty = Some(slave);
+                input.region = Some(Arc::new(Mutex::new(Region::new())));
+                input.next.queued = Some("queued".into());
+                assert!(matches!(
+                    input.read_line_until("", || panic!("queue lost priority")).unwrap(),
+                    Submission::Text(text) if text == "queued"
+                ));
+            }
+            let mut sent = false;
+            let submission = input
+                .read_line_until("> ", || {
+                    if sent {
+                        return true;
+                    }
+                    // Start pasting a UTF-8 character in the middle of a continuation line.
+                    master.write_all(b"first\\\rab\x1b[D\x1b[200~\xc3").unwrap();
+                    sent = true;
+                    false
+                })
+                .unwrap();
+            assert!(matches!(submission, Submission::Wake));
+            input
+                .poll_turn(&AtomicBool::new(true), &AtomicBool::new(false))
+                .unwrap();
+            let mut tail = Some(b"\xa9\rX\x1b[201~\r");
+            let submission = input
+                .read_line_until("> ", || {
+                    master
+                        .write_all(tail.take().expect("submission did not finish"))
+                        .unwrap();
+                    false
+                })
+                .unwrap();
+            assert!(matches!(submission, Submission::Text(text) if text == "first\naé\nXb"));
+
+            // A lone ESC belongs to the idle editor, not to the Run that wakes it.
+            input.decoder.feed(b"prefix\\\rab\x1b[D\x1b");
+            assert!(matches!(
+                input.read_line_until("> ", || true).unwrap(),
+                Submission::Wake
+            ));
+            assert_eq!(input.decoder.escape(), None);
+            if regional {
+                input.decoder.feed(b"X\x03");
+                let cancelled = AtomicBool::new(false);
+                input
+                    .poll_turn(&AtomicBool::new(false), &cancelled)
+                    .unwrap();
+                assert!(cancelled.into_inner());
+                input.decoder.feed(b"!\r");
+                assert!(
+                    matches!(input.read_line("> ").unwrap(), Submission::Text(text) if text == "prefix\naX!b")
+                );
+
+                // The next, ordinary Run still discards its type-ahead on Ctrl-C.
+                input.decoder.feed(b"discard me\x03");
+                input
+                    .poll_turn(&AtomicBool::new(false), &AtomicBool::new(false))
+                    .unwrap();
+                input.decoder.feed(b"ok\r");
+                assert!(
+                    matches!(input.read_line("> ").unwrap(), Submission::Text(text) if text == "ok")
+                );
+                woken_draft_survives_consent(&mut input, &mut master);
+            }
+        }
+    }
+
+    fn woken_draft_survives_consent(input: &mut crate::terminal::Input, master: &mut File) {
+        use crate::session_api::{open_session, PlanMode, SessionOptions};
+        use crate::terminal::Submission;
+        use std::sync::atomic::AtomicBool;
+
+        let root = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let script = root.path().join("script.json");
+        let arguments = serde_json::json!({"path":target.path()}).to_string();
+        std::fs::write(&script, serde_json::json!([
+            {"blocks":[{"kind":"tool_call","call":{"call_id":"consent","name":"request_workspace_access","arguments":arguments}}]},
+            {"blocks":[{"kind":"text","text":"done"}]}
+        ]).to_string()).unwrap();
+        let api = open_session(SessionOptions {
+            workspace: root.path().to_owned(),
+            scripted: Some(script),
+            ..Default::default()
+        })
+        .unwrap();
+        input.bind_workspace_consent(&api).unwrap();
+        input.decoder.feed(b"prefix\\\rab\x1b[D");
+        assert!(matches!(
+            input.read_line_until("> ", || true).unwrap(),
+            Submission::Wake
+        ));
+        let run = api
+            .send_message("consent-test", b"ask", PlanMode::Keep)
+            .unwrap()
+            .run
+            .unwrap();
+        let guard = &input.consent.as_ref().unwrap().0;
+        while guard.get_pending_workspace_access().unwrap().is_none() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Both the decoder and the PTY contain keys that would select Allow.
+        input.decoder.feed(b"\x1b[A\r");
+        master.write_all(b"\x1b[A\r").unwrap();
+        assert_ne!(poll_read(0, 100).unwrap(), 0);
+        // An undersized picker must fail closed without consuming these keys as answers.
+        let tiny = libc::winsize {
+            ws_row: 2,
+            ws_col: 10,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(unsafe { libc::ioctl(0, libc::TIOCSWINSZ, &tiny) }, 0);
+        let cancelled = AtomicBool::new(false);
+        let error = input
+            .poll_turn(&AtomicBool::new(false), &cancelled)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("workspace approval could not be displayed"));
+        assert!(cancelled.into_inner());
+        assert_eq!(poll_read(0, 0).unwrap(), 0);
+        input.decoder.feed(b"X\r");
+        assert!(
+            matches!(input.read_line("> ").unwrap(), Submission::Text(text) if text == "prefix\naXb")
+        );
+        api.wait_run(&run).unwrap();
+        api.close().unwrap();
     }
 
     #[test]

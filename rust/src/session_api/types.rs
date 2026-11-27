@@ -102,7 +102,7 @@ pub struct RunRef {
     pub run_id: String,
 }
 
-/// UserInputKind distinguishes original conversation input from in-Run guidance.
+/// UserInputKind distinguishes user messages, steering, and automatic Run triggers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserInputKind {
@@ -110,6 +110,8 @@ pub enum UserInputKind {
     Message,
     /// Steer was applied at a settled boundary within the target Run.
     Steer,
+    /// JobCompletion started the Run automatically, without a new user instruction.
+    JobCompletion,
 }
 
 /// UserAttribution retains trusted input identity as historical data across resume and handoff.
@@ -119,7 +121,7 @@ pub struct UserAttribution {
     pub request_id: String,
     /// target identifies the existing Run that received this instruction.
     pub target: RunRef,
-    /// kind distinguishes an original message from steering.
+    /// kind identifies how this input entered the conversation.
     pub kind: UserInputKind,
     /// boundary_step is the last settled Step when steering was applied.
     #[serde(skip_serializing_if = "Option::is_none")]

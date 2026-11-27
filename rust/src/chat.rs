@@ -131,11 +131,17 @@ fn presentation(snapshot: &SessionSnapshot, recap: bool) -> (Value, Value) {
     )
 }
 
+enum Turn {
+    User(Vec<u8>),
+    JobCompletion,
+}
+
 struct Chat {
     api: SessionApi,
     input: Input,
     recap: bool,
     last_run: Option<session_api::RunRef>,
+    watch_jobs: bool,
 }
 
 impl Chat {
@@ -321,7 +327,9 @@ impl Chat {
         Ok(Some(command))
     }
 
-    fn message(&mut self, bytes: &[u8]) -> Result<Option<Vec<u8>>, ApiError> {
+    fn message(&mut self, turn: Turn) -> Result<Option<Vec<u8>>, ApiError> {
+        // Never spin on an admission failure or resume a cancelled Run by itself.
+        self.watch_jobs = false;
         let before = self.refresh()?;
         if let Some(blocked) = &before.blocked {
             let location =
@@ -351,9 +359,17 @@ impl Chat {
             region.lock().unwrap().printed = false;
         }
         let started = Instant::now();
-        let admitted = self
-            .api
-            .send_message(&request_id, bytes, session_api::PlanMode::Keep)?;
+        let automatic = matches!(turn, Turn::JobCompletion);
+        let admitted = match turn {
+            Turn::User(bytes) => {
+                self.api
+                    .send_message(&request_id, &bytes, session_api::PlanMode::Keep)?
+            }
+            Turn::JobCompletion => self.api.send_job_followup(&request_id)?,
+        };
+        if automatic {
+            self.say(&dim("background job finished; checking the result"));
+        }
         let run = admitted
             .run
             .as_ref()
@@ -372,6 +388,7 @@ impl Chat {
             ));
             return Ok(None);
         }
+        self.watch_jobs = matches!(text(&result, "status"), "completed" | "refused");
         if !before.plan && snapshot.plan {
             plan_switch(true, self.input.region().as_ref());
         }
@@ -387,7 +404,7 @@ impl Chat {
         );
         self.refresh()?;
         if let Some((start, end)) = render::plan_block(text(&result, "reply"))
-            .filter(|_| text(&result, "status") == "completed" && snapshot.plan)
+            .filter(|_| !automatic && text(&result, "status") == "completed" && snapshot.plan)
         {
             let block = &text(&result, "reply")[start..end];
             let plan = block
@@ -1031,6 +1048,7 @@ pub fn run(mut cfg: Value) -> i32 {
     }
     let recap = yes(&cfg, "recap");
     let input = Input::new();
+    cfg["background_exec"] = json!(input.interactive());
     let api = match session_api::open_resolved(cfg, input.region()) {
         Ok(api) => api,
         Err(error) => {
@@ -1043,6 +1061,7 @@ pub fn run(mut cfg: Value) -> i32 {
         input,
         recap,
         last_run: None,
+        watch_jobs: true,
     };
     let snapshot = match chat.refresh() {
         Ok(snapshot) => snapshot,
@@ -1088,7 +1107,10 @@ pub fn run(mut cfg: Value) -> i32 {
             },
             if snapshot.plan { "plan> " } else { "> " }
         );
-        let bytes = match chat.input.read_line(&prompt) {
+        let submission = chat
+            .input
+            .read_line_until(&prompt, || chat.watch_jobs && chat.api.job_followup_ready());
+        let bytes = match submission {
             Ok(Submission::Eof) => break 0,
             Ok(Submission::Interrupted) => {
                 if interrupted.is_some_and(|time: Instant| time.elapsed().as_secs() < 2) {
@@ -1099,8 +1121,9 @@ pub fn run(mut cfg: Value) -> i32 {
                 chat.say(&dim("  (Ctrl-C again to exit, or Ctrl-D)"));
                 continue;
             }
-            Ok(Submission::Text(text)) => text.into_bytes(),
-            Ok(Submission::Bytes(bytes)) => bytes,
+            Ok(Submission::Wake) => None,
+            Ok(Submission::Text(text)) => Some(text.into_bytes()),
+            Ok(Submission::Bytes(bytes)) => Some(bytes),
             Err(error) => {
                 chat.say(&format!(
                     "error: read chat input: {}",
@@ -1110,20 +1133,24 @@ pub fn run(mut cfg: Value) -> i32 {
             }
         };
         interrupted = None;
-        let raw = crate::cli::trim_bytes(&bytes);
-        if raw == b"/exit" || raw.starts_with(b"/exit ") {
-            break 0;
-        }
-        let mut turn = match chat.command(raw) {
-            Ok(turn) => turn,
-            Err(error) => {
-                chat.failure(&error);
-                None
+        let mut turn = if let Some(bytes) = bytes {
+            let raw = crate::cli::trim_bytes(&bytes);
+            if raw == b"/exit" || raw.starts_with(b"/exit ") {
+                break 0;
             }
+            match chat.command(raw) {
+                Ok(turn) => turn.map(Turn::User),
+                Err(error) => {
+                    chat.failure(&error);
+                    None
+                }
+            }
+        } else {
+            Some(Turn::JobCompletion)
         };
         while let Some(message) = turn.take() {
-            match chat.message(&message) {
-                Ok(next) => turn = next,
+            match chat.message(message) {
+                Ok(next) => turn = next.map(Turn::User),
                 Err(error) => chat.failure(&error),
             }
             if chat

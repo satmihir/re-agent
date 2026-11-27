@@ -362,6 +362,9 @@ pub(super) fn prepare(session: &Session, shared: &Shared, request: Option<&Value
             pending.remove(&bytes(&value["tool"]["call_id"]));
             effects_unknown |= value["tool"]["outcome"]["effect"] == "unknown";
         }
+        if kind == "user" && value["user"]["source"] == "exec_job" {
+            effects_unknown |= value["user"]["job_effect"] == "unknown";
+        }
         if kind == "shell" {
             effects_unknown |= value["shell"]["kind"] == "user_shell_command_effect_unknown"
                 || value["shell"]["output_incomplete"] == true

@@ -24,6 +24,8 @@ pub(crate) mod image_generation;
 /// Bounded image previews and immutable content-addressed storage.
 pub(crate) mod images;
 pub mod jev;
+/// Session-owned background executions and their bounded observations.
+pub(crate) mod jobs;
 pub mod openai;
 pub(crate) mod process;
 pub mod provider;

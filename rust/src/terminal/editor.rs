@@ -297,9 +297,21 @@ pub(super) struct TurnInput {
     pub(super) prefix: String,
     pub(super) queued: Option<String>,
     pub(super) exit: bool,
+    /// An idle editor yielded this draft to the current Run rather than submitting it.
+    pub(super) woken: bool,
 }
 
 impl TurnInput {
+    /// Never dispatch discarded type-ahead, but keep a woken editor available to resume.
+    pub(super) fn discard_typeahead(&mut self) {
+        if self.woken {
+            self.queued = None;
+            self.exit = false;
+        } else {
+            *self = Self::default();
+        }
+    }
+
     /// Apply permits queued recall and cancellation without recording undispatched text.
     pub(super) fn apply(
         &mut self,
