@@ -1,0 +1,3 @@
+Migrate FAIR's Go fairness tracker to a native Rust library under `rust/`. Preserve the behavior described by the Go source and tests and the public `conformance/PROTOCOL.md`. Add Rust tests that exercise the port. The adapter is not the implementation: have it call the library, not a Go binary, vendored oracle, or precomputed transcript.
+
+Provide `rust/Cargo.toml`, `rust/Cargo.lock`, and a `fair-conformance` binary implementing that protocol over stdin/stdout. A clean build must succeed with `cargo build --release --locked --manifest-path rust/Cargo.toml --bin fair-conformance`. Keep the original Go implementation available for comparison. Report what you implemented and tested and any known gaps.
