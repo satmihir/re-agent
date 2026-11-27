@@ -367,9 +367,45 @@ fn agents_are_default_and_can_be_disabled() {
 }
 
 #[test]
+fn root_can_answer_agent_questions_only_when_enabled() {
+    let root = tempfile::tempdir().unwrap();
+    for (flags, agents, questions) in [
+        (vec![], true, false),
+        (vec!["--agent-questions=false"], true, false),
+        (vec!["--agent-questions"], true, true),
+        (vec!["--agents=false", "--agent-questions"], false, false),
+    ] {
+        let output = reagent(root.path())
+            .args(["run", "--show-context"])
+            .args(&flags)
+            .arg("task")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{flags:?}: {:?}", output.stderr);
+        let request: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let tools = request["tools"].as_array().unwrap();
+        assert!(!tools.iter().any(|tool| tool["name"] == "ask_parent"));
+        let send = tools.iter().find(|tool| tool["name"] == "send");
+        assert_eq!(send.is_some(), agents, "{flags:?}");
+        if let Some(send) = send {
+            assert_eq!(
+                send["parameters"]["properties"].get("reply_to").is_some(),
+                questions,
+                "{flags:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn scripted_replay_keeps_agents_disabled() {
     for mode in ["run", "chat"] {
-        for flags in [vec![], vec!["--agents=false"], vec!["--agents"]] {
+        for flags in [
+            vec![],
+            vec!["--agents=false"],
+            vec!["--agents"],
+            vec!["--agent-questions"],
+        ] {
             let root = tempfile::tempdir().unwrap();
             let script = root.path().join("responses.json");
             std::fs::write(

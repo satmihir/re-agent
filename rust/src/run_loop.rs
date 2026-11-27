@@ -448,12 +448,23 @@ impl Session {
                 let running = crate::agents::running(self);
                 if !running.is_empty() {
                     crate::session_api::publish(self, "waiting_for_agents", false);
-                    self.history.push(json!({"kind":"user","user":{"text":format!("{} still running; wait for their results before finishing.",running.join(", ")),"source":"agent"}}));
-                    let _ = crate::agents::execute(
+                    let waited = crate::agents::execute(
                         self,
                         "wait",
                         &types::json_string(&json!({"ids":running})),
                     );
+                    let notice = match waited {
+                        Some(Ok(result)) if result["data"]["reason"] == "question_pending" => {
+                            "Answer the pending child question with send before waiting again."
+                                .to_string()
+                        }
+                        _ => format!(
+                            "{} still running; wait for their results before finishing.",
+                            running.join(", ")
+                        ),
+                    };
+                    self.history
+                        .push(json!({"kind":"user","user":{"text":notice,"source":"agent"}}));
                     self.deliver_agents();
                     continue;
                 }

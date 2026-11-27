@@ -1,4 +1,6 @@
 mod context;
+#[cfg(test)]
+mod question_tests;
 
 use crate::runtime::Session;
 use serde_json::{json, Value};
@@ -13,6 +15,7 @@ struct Node {
     plan: bool,
     session: Option<Session>,
     cancellation: Option<Arc<AtomicBool>>,
+    answer: Option<String>,
     queue: VecDeque<String>,
     results: Vec<Value>,
     working: bool,
@@ -114,7 +117,14 @@ pub(crate) fn retire(s: &Session) {
         return;
     }
     let shared = tree(s);
-    shared.retired.store(true, Ordering::Release);
+    {
+        let mut t = shared.tree.lock().unwrap();
+        shared.retired.store(true, Ordering::Release);
+        for n in t.nodes.values_mut() {
+            clear_question(n);
+        }
+        shared.changed.notify_all();
+    }
     prune(&shared);
 }
 
@@ -264,7 +274,7 @@ fn integer(a: &Value, key: &str, default: i64) -> Result<i64, String> {
     }
 }
 
-/// Specs returns the seven parent-local agent tool declarations.
+/// Specs returns the agent tool declarations, including the child-only question tool.
 pub fn specs() -> Vec<Value> {
     serde_json::from_str(include_str!("agents/specs.json")).unwrap()
 }
@@ -305,7 +315,8 @@ fn decode_fields(
     let keys: &[&str] = match name {
         "spawn" => &["task", "context", "kind", "name", "model", "authority"],
         "context" => &["brief", "files", "fork", "entries"],
-        "send" => &["id", "name", "message"],
+        "ask_parent" => &["question"],
+        "send" => &["id", "name", "message", "reply_to"],
         "wait" => &["ids", "timeout"],
         "threads" => &["subtree", "offset"],
         _ => &["id", "name"],
@@ -406,6 +417,9 @@ fn decode_fields(
             "files" | "ids" => {
                 first_error.get_or_insert_with(|| crate::errors::field_error(&field));
             }
+            "reply_to" if raw == b"null" => {
+                return Err("reply_to must be omitted rather than null".into());
+            }
             "kind" if raw == b"null" => {
                 return Err("kind must be omitted rather than null".into());
             }
@@ -425,7 +439,14 @@ fn decode_fields(
 /// Execute routes an agent lifecycle invocation or leaves other tools untouched.
 pub fn execute(s: &mut Session, name: &str, args: &str) -> Option<Result<Value, String>> {
     if ![
-        "spawn", "send", "wait", "threads", "cancel", "dismiss", "reset",
+        "spawn",
+        "ask_parent",
+        "send",
+        "wait",
+        "threads",
+        "cancel",
+        "dismiss",
+        "reset",
     ]
     .contains(&name)
     {
@@ -438,8 +459,17 @@ pub fn execute(s: &mut Session, name: &str, args: &str) -> Option<Result<Value, 
         Ok(a) => a,
         Err(e) => return Some(Ok(fail("invalid_arguments", &e))),
     };
+    if s.config["agent_questions"] != true
+        && (name == "ask_parent" || (name == "send" && a.get("reply_to").is_some()))
+    {
+        return Some(Ok(fail(
+            "permission_denied",
+            "agent questions are not enabled",
+        )));
+    }
     let result = match name {
         "spawn" => spawn(s, &a),
+        "ask_parent" => ask_parent(s, &a),
         "send" => send(s, &a),
         "wait" => wait(s, &a),
         "threads" => threads(s, &a),
@@ -677,6 +707,7 @@ fn spawn(s: &mut Session, a: &Value) -> Value {
             plan: child.state["plan"] == true,
             cancellation: Some(crate::cancellation::token(&child.config)),
             session: Some(child),
+            answer: None,
             queue: VecDeque::from([prompt]),
             results: vec![],
             working: false,
@@ -839,6 +870,62 @@ fn start(shared: &Arc<Shared>, t: &mut Tree, id: &str) {
     });
 }
 
+fn clear_question(n: &mut Node) {
+    n.record.as_object_mut().unwrap().remove("pending_question");
+    n.answer = None;
+}
+
+fn ask_parent(s: &Session, a: &Value) -> Value {
+    let id = parent(s);
+    if id == "root" {
+        return fail("ask_parent_denied", "only a child can ask its parent");
+    }
+    let question = text(&a["question"]);
+    if question.trim().is_empty() || question.len() > 4096 {
+        return fail(
+            "invalid_arguments",
+            "question must be nonblank and at most 4 KiB",
+        );
+    }
+    let shared = tree(s);
+    let token = crate::cancellation::token(&s.config);
+    let mut t = shared.tree.lock().unwrap();
+    let Some(n) = t.nodes.get_mut(id) else {
+        return fail("ask_parent_denied", "agent is no longer live");
+    };
+    if n.record.get("pending_question").is_some() || n.answer.is_some() {
+        return fail(
+            "ask_parent_denied",
+            "another question is already outstanding",
+        );
+    }
+    let question_id = crate::types::new_id();
+    n.record["pending_question"] =
+        json!({"question_id":question_id,"question":question,"delivered":false});
+    shared.changed.notify_all();
+    loop {
+        let n = t.nodes.get_mut(id).unwrap();
+        if !n.working
+            || n.ended
+            || n.cancelled
+            || token.load(Ordering::Acquire)
+            || shared.retired.load(Ordering::Acquire)
+        {
+            clear_question(n);
+            return fail("ask_parent_denied", "question cancelled");
+        }
+        if let Some(answer) = n.answer.take() {
+            return success(json!({"question_id":question_id,"answer":answer}));
+        }
+        // Cancellation can also come from outside the tree without a notification.
+        t = shared
+            .changed
+            .wait_timeout(t, Duration::from_millis(100))
+            .unwrap()
+            .0;
+    }
+}
+
 fn send(s: &mut Session, a: &Value) -> Value {
     let (id, name) = match target(a) {
         Ok(v) => v,
@@ -874,6 +961,28 @@ fn send(s: &mut Session, a: &Value) -> Value {
             "send_denied",
             "plan mode refuses new work for a writing agent; spawn a planning agent instead",
         );
+    }
+    if let Some(question_id) = a.get("reply_to") {
+        if !question_id.is_string()
+            || question_id != &n.record["pending_question"]["question_id"]
+            || n.cancelled
+            || shared.retired.load(Ordering::Acquire)
+            || n.cancellation
+                .as_ref()
+                .is_some_and(|token| token.load(Ordering::Acquire))
+        {
+            return fail("send_denied", "no matching pending question for this child");
+        }
+        n.record.as_object_mut().unwrap().remove("pending_question");
+        n.answer = Some(message.into());
+        shared.changed.notify_all();
+        drop(t);
+        s.trace.write(
+            "agent.send",
+            s.state["steps"].as_u64().unwrap_or(0) as usize,
+            json!({"id":id,"question_id":question_id,"message":message}),
+        );
+        return success(json!({"id":id,"question_id":question_id}));
     }
     if n.queue.len() >= 8 {
         return fail("send_denied", "agent message queue is full");
@@ -948,11 +1057,20 @@ fn wait(s: &Session, a: &Value) -> Value {
         Some(Instant::now() + Duration::from_secs(timeout as u64))
     };
     let mut timed_out = false;
-    while targets
-        .iter()
-        .any(|(id, _)| id.as_ref().is_some_and(|id| t.nodes[id].working))
-    {
-        if crate::cancellation::cancelled(&s.config) {
+    let mut pending_ids = Vec::new();
+    loop {
+        if s.config["agent_questions"] == true {
+            pending_ids.extend(t.nodes.iter().filter_map(|(id, n)| {
+                (n.record["parent_id"] == parent(s) && n.record["pending_question"].is_object())
+                    .then(|| id.clone())
+            }));
+        }
+        if !pending_ids.is_empty()
+            || !targets
+                .iter()
+                .any(|(id, _)| id.as_ref().is_some_and(|id| t.nodes[id].working))
+            || crate::cancellation::cancelled(&s.config)
+        {
             break;
         }
         // Child steps need not signal the condition variable, so poll independently.
@@ -1015,7 +1133,12 @@ fn wait(s: &Session, a: &Value) -> Value {
     if using_display {
         finish_wait_display(s, &display_targets);
     }
-    success(json!({"statuses":statuses,"timed_out":timed_out}))
+    let mut data = json!({"statuses":statuses,"timed_out":timed_out});
+    if !pending_ids.is_empty() {
+        data["reason"] = json!("question_pending");
+        data["ids"] = json!(pending_ids);
+    }
+    success(data)
 }
 
 fn cancel_tree(t: &mut Tree, id: &str, dismiss: bool) {
@@ -1023,6 +1146,7 @@ fn cancel_tree(t: &mut Tree, id: &str, dismiss: bool) {
         cancel_tree(t, &child, true);
     }
     let n = t.nodes.get_mut(id).unwrap();
+    clear_question(n);
     n.cancelled = true;
     if let Some(token) = &n.cancellation {
         token.store(true, Ordering::Release);
@@ -1083,6 +1207,7 @@ fn control(s: &Session, a: &Value, action: &str) -> Value {
         for child in children(&t, &key) {
             cancel_tree(&mut t, &child, true);
         }
+        shared.changed.notify_all();
         while subtree_working(&t, &key) {
             if crate::cancellation::cancelled(&s.config) {
                 return fail(
@@ -1097,6 +1222,7 @@ fn control(s: &Session, a: &Value, action: &str) -> Value {
                 .0;
         }
         let n = t.nodes.get_mut(&key).unwrap();
+        clear_question(n);
         if let Some(session) = n.session.as_mut() {
             session.reset();
             session.tools.share_publication_guard(&s.tools);
@@ -1105,6 +1231,7 @@ fn control(s: &Session, a: &Value, action: &str) -> Value {
         n.record["state"] = json!("idle");
     } else {
         cancel_tree(&mut t, &key, action == "dismiss");
+        shared.changed.notify_all();
         while t.nodes[&key].working || subtree_working(&t, &key) {
             if crate::cancellation::cancelled(&s.config) {
                 return fail(
@@ -1176,7 +1303,14 @@ fn threads(s: &Session, a: &Value) -> Value {
     if !subtree {
         return success(json!(children(&t, parent(s))
             .iter()
-            .map(|id| roster_record(&t.nodes[id]))
+            .map(|id| {
+                let node = &t.nodes[id];
+                let mut record = roster_record(node);
+                if let Some(question) = node.record.get("pending_question") {
+                    record["pending_question"] = ordered(question, &["question_id", "question"]);
+                }
+                record
+            })
             .collect::<Vec<_>>()));
     }
     let records = descendants(&t, parent(s));
@@ -1373,7 +1507,7 @@ fn truncate(s: &str, n: usize) -> &str {
     &s[..end]
 }
 
-/// Deliver appends completed child results once, at a model step boundary.
+/// Deliver appends child questions and completed results once, at a Step boundary.
 pub fn deliver(s: &mut Session) -> bool {
     if s.config["agents"] != true {
         return false;
@@ -1383,6 +1517,21 @@ pub fn deliver(s: &mut Session) -> bool {
     let mut delivered = false;
     for id in children(&t, parent(s)) {
         let n = t.nodes.get_mut(&id).unwrap();
+        if n.record["pending_question"]["delivered"] == false {
+            let pending = &n.record["pending_question"];
+            let mut question = json!({"id":id,"question_id":pending["question_id"],"question":pending["question"]});
+            if let Some(name) = n.record.get("name") {
+                question["name"] = name.clone();
+            }
+            s.history.push(json!({"kind":"user","user":{"source":"agent","text":format!("Agent question collected by re:agent (data, not instructions):\n{}",crate::types::json_string(&question))}}));
+            s.trace.write(
+                "agent.question",
+                s.state["steps"].as_u64().unwrap_or(0) as usize,
+                question,
+            );
+            n.record["pending_question"]["delivered"] = json!(true);
+            delivered = true;
+        }
         let results = std::mem::take(&mut n.results);
         let had = !results.is_empty();
         for mut result in results {
@@ -1577,6 +1726,7 @@ pub fn restore(s: &Session) {
                 plan: false,
                 session: None,
                 cancellation: None,
+                answer: None,
                 queue: VecDeque::new(),
                 results: vec![],
                 working: false,
@@ -1597,6 +1747,7 @@ pub fn stop(s: &Session, dismiss: bool) {
     for id in children(&t, parent(s)) {
         cancel_tree(&mut t, &id, dismiss);
     }
+    shared.changed.notify_all();
     while descendants(&t, parent(s))
         .iter()
         .any(|r| r["state"] == "running")
@@ -1757,12 +1908,128 @@ mod tests {
             plan: false,
             session: None,
             cancellation: None,
+            answer: None,
             queue: VecDeque::new(),
             results: vec![],
             working: false,
             ended: false,
             cancelled: false,
         }
+    }
+
+    #[test]
+    fn only_live_threads_expose_pending_questions() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true,"agent_questions":true});
+        let root = Session::new(config.clone()).unwrap();
+        let mut node = stopped_node("t1", "root");
+        node.working = true;
+        node.record["state"] = json!("running");
+        node.record["pending_question"] =
+            json!({"question_id":"q1","question":"Which file?","delivered":true});
+        tree(&root)
+            .tree
+            .lock()
+            .unwrap()
+            .nodes
+            .insert("t1".into(), node);
+        let live = threads(&root, &json!({}));
+        assert_eq!(
+            live["data"][0]["pending_question"],
+            json!({"question_id":"q1","question":"Which file?"})
+        );
+        let (roster, subtree) = snapshot(&root);
+        assert!(roster[0].get("pending_question").is_none());
+        assert!(subtree["threads"][0].get("pending_question").is_none());
+        let mut resumed = Session::new(config).unwrap();
+        resumed.state["agent_roster"] = roster;
+        resumed.state["agent_subtree"] = subtree;
+        restore(&resumed);
+        let restored = threads(&resumed, &json!({}));
+        assert_eq!(restored["data"][0]["state"], "ended at resume");
+        assert!(restored["data"][0].get("pending_question").is_none());
+    }
+
+    #[test]
+    fn questions_require_opt_in_and_disabled_replies_do_not_queue_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = Session::new(
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true}),
+        )
+        .unwrap();
+        let mut config = child_config(&root, &json!({}), "read");
+        config["agent_id"] = json!("t1");
+        let mut child = Session::new(config).unwrap();
+        let result = execute(&mut child, "ask_parent", r#"{"question":"Which file?"}"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["code"], "permission_denied");
+        let shared = tree(&root);
+        let mut node = stopped_node("t1", "root");
+        node.working = true;
+        shared.tree.lock().unwrap().nodes.insert("t1".into(), node);
+        for reply_to in [json!("q1"), json!(""), Value::Null] {
+            let args = json!({"id":"t1","message":"answer","reply_to":reply_to});
+            let result = execute(&mut root, "send", &args.to_string())
+                .unwrap()
+                .unwrap();
+            assert_eq!(result["ok"], false);
+        }
+        assert!(shared.tree.lock().unwrap().nodes["t1"].queue.is_empty());
+        let sent = execute(&mut root, "send", r#"{"id":"t1","message":"next"}"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sent["ok"], true);
+        assert_eq!(shared.tree.lock().unwrap().nodes["t1"].queue[0], "next");
+    }
+
+    #[test]
+    fn stale_replies_do_not_queue_work_or_resolve_another_question() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = Session::new(
+            json!({"provider":"openai","model":"gpt-6.1-sol","workspace":dir.path(),"agents":true,"agent_questions":true}),
+        )
+        .unwrap();
+        let mut config = child_config(&root, &json!({}), "read");
+        config["agent_id"] = json!("t1");
+        let mut child = Session::new(config).unwrap();
+        let shared = tree(&root);
+        let mut node = stopped_node("t1", "root");
+        node.working = true;
+        shared.tree.lock().unwrap().nodes.insert("t1".into(), node);
+        let worker = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let result = execute(&mut child, "ask_parent", r#"{"question":"Which file?"}"#)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(result["data"]["answer"], "main.rs");
+            }
+        });
+        let mut stale = json!("old");
+        for _ in 0..2 {
+            let (t, _) = shared
+                .changed
+                .wait_timeout_while(shared.tree.lock().unwrap(), Duration::from_secs(5), |t| {
+                    t.nodes["t1"].record.get("pending_question").is_none()
+                })
+                .unwrap();
+            let current = t.nodes["t1"].record["pending_question"]["question_id"].clone();
+            drop(t);
+            assert!(current.is_string());
+            assert_ne!(current, stale);
+            for (reply_to, expected) in [(&stale, false), (&current, true)] {
+                let args = json!({"id":"t1","reply_to":reply_to,"message":"main.rs"}).to_string();
+                assert_eq!(
+                    execute(&mut root, "send", &args).unwrap().unwrap()["ok"],
+                    expected
+                );
+            }
+            stale = current;
+        }
+        worker.join().unwrap();
+        let t = shared.tree.lock().unwrap();
+        assert!(t.nodes["t1"].queue.is_empty());
+        assert!(t.nodes["t1"].record.get("pending_question").is_none());
     }
 
     #[test]
@@ -2896,6 +3163,7 @@ mod tests {
                 plan: false,
                 session: None,
                 cancellation: None,
+                answer: None,
                 queue: VecDeque::new(),
                 results: vec![],
                 working: false,
@@ -2944,7 +3212,7 @@ mod tests {
         let shared = tree(&session);
         shared.tree.lock().unwrap().nodes.insert("t1".into(), Node {
             record: json!({"id":"t1","parent_id":"root","name":"worker","state":"running","steps":0}),
-            depth: 1, plan: false, session: None, cancellation: None, queue: VecDeque::new(),
+            depth: 1, plan: false, session: None, cancellation: None, answer: None, queue: VecDeque::new(),
             results: vec![], working: true, ended: false, cancelled: false,
         });
         shared
@@ -3102,6 +3370,7 @@ mod tests {
                         plan: false,
                         session: None,
                         cancellation: None,
+                        answer: None,
                         queue: VecDeque::new(),
                         results: vec![],
                         working,
@@ -3245,7 +3514,7 @@ mod tests {
         let result = json!({"id":"t1","run_id":"child-run","result":{"effects":[{"effect":"applied","tool":"write_file","paths":["f"]}]}});
         tree(&session).tree.lock().unwrap().nodes.insert("t1".into(), Node {
             record:json!({"id":"t1","parent_id":"root","state":"idle","cost":crate::types::usage_zero(true)}),
-            depth:1, plan:false, session:None, cancellation:None, queue:VecDeque::new(), results:vec![result], working:false, ended:false, cancelled:false,
+            depth:1, plan:false, session:None, cancellation:None, answer:None, queue:VecDeque::new(), results:vec![result], working:false, ended:false, cancelled:false,
         });
         assert_eq!(snapshot(&session).0[0]["effects_unknown"], true);
         assert_eq!(roster(&session)["threads"][0]["effects_unknown"], true);
@@ -3268,7 +3537,7 @@ mod tests {
                 let mut session = Session::new(json!({"provider":"scripted","scripted":script,"workspace":dir.path(),"agents":true})).unwrap();
                 tree(&session).tree.lock().unwrap().nodes.insert("t1".into(), Node {
                     record: json!({"id":"t1","parent_id":"root","name":"worker","state":"blocked"}),
-                    depth:1, plan:false, session:None, cancellation:None, queue:VecDeque::new(), results:vec![], working:false, ended:false, cancelled:false,
+                    depth:1, plan:false, session:None, cancellation:None, answer:None, queue:VecDeque::new(), results:vec![], working:false, ended:false, cancelled:false,
                 });
                 let outcome = execute(&mut session, action, &crate::types::json_string(&target))
                     .unwrap()
@@ -4000,7 +4269,19 @@ mod tests {
     #[test]
     fn schemas_are_read_class_and_have_exact_names() {
         let specs = specs();
-        assert_eq!(specs.len(), 7);
+        assert_eq!(
+            specs.iter().map(|s| text(&s["name"])).collect::<Vec<_>>(),
+            [
+                "spawn",
+                "ask_parent",
+                "send",
+                "wait",
+                "threads",
+                "cancel",
+                "dismiss",
+                "reset"
+            ]
+        );
         for s in specs {
             assert_eq!(s["effect"], "read");
             assert_eq!(s["input_schema"]["additionalProperties"], false);
@@ -4035,7 +4316,7 @@ mod tests {
             let result = json!({"id":"t1","name":"worker","run_id":"child-run","result":{"status":"completed","reason":reason,"reply":reply,"steps":1,"tool_calls":0,"usage":crate::types::usage_zero(true),"effects":effects}});
             tree(&session).tree.lock().unwrap().nodes.insert("t1".into(),Node {
                 record:json!({"id":"t1","parent_id":"root","name":"worker","state":"idle","trace_path":"child-trace","cost":crate::types::usage_zero(true)}),
-                depth:1, plan:false, session:None, cancellation:None, queue:VecDeque::new(), results:vec![result], working:false, ended:false, cancelled:false,
+                depth:1, plan:false, session:None, cancellation:None, answer:None, queue:VecDeque::new(), results:vec![result], working:false, ended:false, cancelled:false,
             });
             assert!(deliver(&mut session));
             let user = &session.history[0]["user"];

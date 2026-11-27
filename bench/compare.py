@@ -21,6 +21,19 @@ def mean(tasks, key):
     return sum(float(task.get(key) or 0) for task in tasks) / len(tasks)
 
 
+def usage_coverage(tasks):
+    """One incomplete task makes the reported sum or mean incomplete too."""
+    complete = bool(tasks)
+    for task in tasks:
+        known = task.get("usage_known")
+        missing = task.get("unreported_attempts")
+        if known is False or (missing or 0) > 0:
+            return "incomplete"
+        if known is not True or missing is None:
+            complete = False
+    return "complete" if complete else "unknown"
+
+
 def commit_stats(runs):
     """Aggregates selected task-runs by commit, model, and reasoning effort.
 
@@ -30,6 +43,7 @@ def commit_stats(runs):
     grouped = {}
     for run in runs.values():
         key = f"{run.get('commit') or 'unknown'} {run.get('model') or '?'}@{run.get('effort') or 'default'}"
+        key += f" {run.get('agent', 'reagent')}:{run.get('agent_mode') or 'unspecified'}"
         grouped.setdefault(key, []).extend(run.get("tasks", {}).values())
 
     stats = {}
@@ -59,6 +73,7 @@ def commit_stats(runs):
         recorded_any = any("tool_failures" in task for task in tasks)
         stats[commit] = {
             "runs": len(tasks),
+            "usage_coverage": usage_coverage(tasks),
             "resolved": sum(bool(task.get("resolved")) for task in tasks),
             "mean_steps": mean(tasks, "steps"),
             "mean_input_tokens": mean(tasks, "input_tokens"),
@@ -81,8 +96,10 @@ def main():
             runs[label] = json.load(f)
     tasks = sorted({task for run in runs.values() for task in run["tasks"]})
 
+    print("Steps, calls, tool diagnostics and peak input are root-only. Spawns count direct children; asks count questions delivered to the root.")
+    print("Token columns show reported usage; coverage is unknown when accounting was not recorded.")
     print(f"{'task':28s} {'label':14s} {'ok':>3s} {'steps':>5s} {'calls':>5s} "
-          f"{'in':>8s} {'cached':>8s} {'out':>7s} {'peak':>7s}  status")
+          f"{'in':>8s} {'cached':>8s} {'out':>7s} {'peak':>7s} {'spawns':>6s} {'asks':>4s}  {'usage':10s}  status")
     for task in tasks:
         for label, run in runs.items():
             t = run["tasks"].get(task)
@@ -91,19 +108,20 @@ def main():
             print(f"{task:28s} {label:14s} {'✓' if t.get('resolved') else '✗':>3s} "
                   f"{t.get('steps', 0):5d} {t.get('tool_calls', 0):5d} {t.get('input_tokens', 0):8d} "
                   f"{t.get('cached_input_tokens', 0):8d} {t.get('output_tokens', 0):7d} "
-                  f"{t.get('peak_input_tokens', 0):7d}  {t.get('status')}")
+                  f"{t.get('peak_input_tokens', 0):7d} {t.get('agent_spawns', '-'):>6} {t.get('agent_questions', '-'):>4}  "
+                  f"{usage_coverage([t]):10s}  {t.get('status')}")
     print()
-    print(f"{'label':14s} {'commit':16s} {'resolved':>9s} {'steps':>6s} {'in':>9s} {'cached':>9s} {'out':>8s}")
+    print(f"{'label':14s} {'commit':16s} {'resolved':>9s} {'steps':>6s} {'in':>9s} {'cached':>9s} {'out':>8s}  usage")
     for label, run in runs.items():
         ts = run["tasks"].values()
         total = {c: sum(int(t.get(c) or 0) for t in ts) for c in COLUMNS}
         print(f"{label:14s} {run['commit']:16s} {total['resolved']:>4d} of {len(ts):<2d} {total['steps']:6d} "
-              f"{total['input_tokens']:9d} {total['cached_input_tokens']:9d} {total['output_tokens']:8d}")
+              f"{total['input_tokens']:9d} {total['cached_input_tokens']:9d} {total['output_tokens']:8d}  {usage_coverage(ts)}")
 
     print()
-    print(f"{'commit model@effort':34s} {'resolved':>11s} {'mean steps':>10s} {'mean in':>10s} "
+    print(f"{'commit model@effort agent:mode':34s} {'resolved':>11s} {'mean steps':>10s} {'mean in':>10s} "
           f"{'mean out':>10s}  non-completed statuses  top tool failures  "
-          f"{'mean search_text':>16s} {'exec_searches':>13s}")
+          f"{'mean search_text':>16s} {'exec_searches':>13s}  usage")
     for commit, stats in sorted(commit_stats(runs).items()):
         statuses = ", ".join(f"{status}={count}" for status, count in stats["statuses"].items()) or "none"
         if stats["tool_failures"] is None:
@@ -118,7 +136,7 @@ def main():
         print(f"{commit:34s} {stats['resolved']:4d} of {stats['runs']:<6d} "
               f"{stats['mean_steps']:10.1f} {stats['mean_input_tokens']:10.1f} "
               f"{stats['mean_output_tokens']:10.1f}  {statuses}  {failures}  "
-              f"{mean_search_text:>16s} {exec_searches:>13s}")
+              f"{mean_search_text:>16s} {exec_searches:>13s}  {stats['usage_coverage']}")
 
 
 if __name__ == "__main__":

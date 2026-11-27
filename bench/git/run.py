@@ -425,8 +425,11 @@ def git_invocations(command):
 def summarize(trace_path):
     """Turns, calls, tokens, and model time from one run's trace."""
     s = {"turns": 0, "tool_calls": 0, "git_calls": 0, "git_invocations": 0, "other_calls": 0, "multi_call_turns": 0,
-         "failed_calls": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0,
-         "reasoning_tokens": 0, "model_ms": 0, "status": None, "commands": []}
+         "failed_calls": 0, "agent_spawns": 0, "model_ms": 0, "status": None, "commands": []}
+    token_keys = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens")
+    # Accepted responses omit failed retries and cannot certify a complete total.
+    accepted = dict.fromkeys((*token_keys, "unreported_attempts"), 0)
+    root = tree = None
     with open(trace_path) as f:
         for line in f:
             event = json.loads(line)
@@ -435,8 +438,9 @@ def summarize(trace_path):
                 calls = [b["call"] for b in data.get("blocks", []) if b.get("kind") == "tool_call"]
                 s["turns"] += 1
                 s["multi_call_turns"] += len(calls) > 1
-                for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens"):
-                    s[key] += (data.get("usage") or {}).get(key, 0)
+                usage = data.get("usage") or {}
+                for key in accepted:
+                    accepted[key] += usage.get(key, 0)
             elif kind == "tool.finished":
                 s["tool_calls"] += 1
                 outcome = data.get("outcome") or {}
@@ -460,11 +464,24 @@ def summarize(trace_path):
                     s["commands"].append(data.get("name"))
                 exit_code = result.get("exit_code")
                 s["failed_calls"] += not outcome.get("ok", False) or exit_code not in (0, None)
+            elif kind == "agent.spawn":
+                s["agent_spawns"] += 1
             elif kind == "api.attempt.finished":
                 s["model_ms"] += data.get("duration_ms") or 0
             elif kind == "run.finished":
                 s["status"] = data.get("status")
-    s["uncached_input_tokens"] = s["input_tokens"] - s["cached_input_tokens"]
+                root = data.get("usage")
+                tree = data.get("tree_cost")
+    s["usage_source"] = "tree_cost" if tree is not None else "usage" if root is not None else "model.accepted"
+    root = root if root is not None else accepted
+    for prefix, usage in (("root_", root), ("", tree if tree is not None else root)):
+        for key in token_keys:
+            s[prefix + key] = usage.get(key, 0)
+        s[prefix + "uncached_input_tokens"] = usage.get("input_tokens", 0) - usage.get("cached_input_tokens", 0)
+        s[prefix + "usage_known"] = usage.get("known", False)
+        s[prefix + "unreported_attempts"] = usage.get("unreported_attempts", 0)
+    if s["agent_spawns"] and tree is None:
+        s["usage_known"] = False
     return s
 
 
@@ -682,6 +699,11 @@ def report(rows):
               f"{total('multi_call_turns'):>5} "
               f"{total('failed_calls'):>4} {total('input_tokens'):>8} {total('uncached_input_tokens'):>8} "
               f"{total('output_tokens'):>7} {total('model_ms') / 1000:>7.1f} {round(total('wall_s'), 1):>6}")
+    incomplete = [r for r in rows if r.get("usage_known") is False or r.get("unreported_attempts")]
+    if incomplete:
+        tasks = ", ".join(r["task"] for r in incomplete)
+        missing = sum(r["unreported_attempts"] for r in incomplete)
+        print(f"  Incomplete token totals (lower bounds) for {tasks}; unreported attempts: {missing}.")
     for r in rows:
         if not r["passed"]:
             print(f"  {r['task']}: {r['failure']}")
