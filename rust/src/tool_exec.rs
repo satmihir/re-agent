@@ -97,14 +97,35 @@ pub fn execute_in_region(
     args: &Value,
     region: Option<&crate::terminal::RegionHandle>,
 ) -> Result<Value, String> {
-    if let Err(v) = keys(args, &["argv", "then", "cwd", "timeout_ms"]) {
-        return Ok(v);
-    }
+    let prepared = match prepare(workspace, args, 120_000) {
+        Ok(prepared) => prepared,
+        Err(v) => return Ok(v),
+    };
+    prepared.execute(config, &crate::cancellation::token(config), region, None)
+}
+
+/// A validated exec chain with owned arguments and workspace paths.
+#[derive(Debug)]
+pub(crate) struct PreparedExec {
+    root: PathBuf,
+    dir: PathBuf,
+    cwd: String,
+    commands: Vec<Vec<String>>,
+    timeout: u64,
+}
+
+/// Validate every command and resolve its working directory before admitting the exec.
+pub(crate) fn prepare(
+    workspace: &Workspace,
+    args: &Value,
+    default_timeout_ms: i64,
+) -> Result<PreparedExec, Value> {
+    keys(args, &["argv", "then", "cwd", "timeout_ms"])?;
     if args
         .get("argv")
         .is_some_and(|v| !v.is_array() && !v.is_null())
     {
-        return Ok(fail("invalid_arguments", "argv must be an array holding the first command's executable and arguments, such as [\"git\",\"fetch\",\"origin\"]; then holds only the commands after it"));
+        return Err(fail("invalid_arguments", "argv must be an array holding the first command's executable and arguments, such as [\"git\",\"fetch\",\"origin\"]; then holds only the commands after it"));
     }
     let parse = |v: &Value, field: &str| -> Result<Vec<String>, Value> {
         if v.is_null() {
@@ -125,130 +146,130 @@ pub fn execute_in_region(
             })
             .collect()
     };
-    let first = match parse(&args["argv"], "argv") {
-        Ok(a) => a,
-        Err(v) => return Ok(v),
-    };
-    let mut commands = vec![first];
+    let mut commands = vec![parse(&args["argv"], "argv")?];
     if let Some(v) = args.get("then").filter(|v| !v.is_null()) {
         let Some(a) = v.as_array() else {
-            return Ok(fail("invalid_arguments", &field_error("then")));
+            return Err(fail("invalid_arguments", &field_error("then")));
         };
         for v in a {
-            match parse(v, "then") {
-                Ok(a) => commands.push(a),
-                Err(v) => return Ok(v),
-            }
+            commands.push(parse(v, "then")?);
         }
     }
     if args
         .get("cwd")
         .is_some_and(|v| !v.is_string() && !v.is_null())
     {
-        return Ok(fail("invalid_arguments", &field_error("cwd")));
+        return Err(fail("invalid_arguments", &field_error("cwd")));
     }
-    let timeout = match integer(args, "timeout_ms", 120000, 1) {
-        Ok(n) => n.max(10000) as u64,
-        Err(v) => return Ok(v),
-    };
+    let timeout = integer(args, "timeout_ms", default_timeout_ms, 1)?.max(10000) as u64;
     if commands.len() > 8 {
-        return Ok(fail("invalid_arguments", "then holds at most 7 commands"));
+        return Err(fail("invalid_arguments", "then holds at most 7 commands"));
     }
     for a in &commands {
         if a.first().is_none_or(String::is_empty) {
-            return Ok(fail(
+            return Err(fail(
                 "invalid_arguments",
                 "every command must start with an executable",
             ));
         }
         if a.iter().any(|s| s.contains('\0')) {
-            return Ok(fail(
+            return Err(fail(
                 "invalid_arguments",
                 "argument vectors must not contain NUL bytes",
             ));
         }
     }
     let cwd = args["cwd"].as_str().unwrap_or("");
-    let dir = match workspace.resolve(cwd) {
-        Ok(p) => p,
-        Err(v) => return Ok(v),
-    };
+    let dir = workspace.resolve(cwd)?;
     match fs::metadata(&dir) {
-        Ok(m) if !m.is_dir() => return Ok(fail("not_directory", "cwd is not a directory")),
-        Err(e) => return Ok(os_failure(&e)),
+        Ok(m) if !m.is_dir() => return Err(fail("not_directory", "cwd is not a directory")),
+        Err(e) => return Err(os_failure(&e)),
         _ => {}
     }
-    let cancellation = crate::cancellation::token(config);
-    if commands.len() == 1 {
-        return run(
-            &workspace.root,
-            &dir,
-            cwd,
-            &commands[0],
-            timeout,
-            LIMIT,
-            &cancellation,
-            config,
-            region,
-        );
-    }
-    let budget = (LIMIT - 1024) / commands.len();
-    let mut steps = vec![];
-    let mut effect = "none";
-    let mut truncated = false;
-    let mut last = Value::Null;
-    let mut not_run = vec![];
-    for (i, argv) in commands.iter().enumerate() {
-        let mut step = run(
-            &workspace.root,
-            &dir,
-            cwd,
-            argv,
-            timeout,
-            budget,
-            &cancellation,
-            config,
-            region,
-        )?;
-        steps.push(step["data"].clone());
-        truncated |= step["truncated"].as_bool().unwrap_or(false);
-        if step["effect"] == "unknown" || (step["effect"] == "applied" && effect == "none") {
-            effect = if step["effect"] == "unknown" {
-                "unknown"
-            } else {
-                "applied"
-            };
+    Ok(PreparedExec {
+        root: workspace.root.clone(),
+        dir,
+        cwd: cwd.to_owned(),
+        commands,
+        timeout,
+    })
+}
+
+impl PreparedExec {
+    /// Run the prepared chain with the caller's cancellation token and optional display tails.
+    pub(crate) fn execute(
+        self,
+        config: &Value,
+        cancellation: &AtomicBool,
+        region: Option<&crate::terminal::RegionHandle>,
+        live: Option<&Mutex<ExecTail>>,
+    ) -> Result<Value, String> {
+        let commands = self.commands;
+        let step = |argv: &[String], budget| {
+            run(
+                &self.root,
+                &self.dir,
+                &self.cwd,
+                argv,
+                self.timeout,
+                budget,
+                cancellation,
+                config,
+                region,
+                live,
+            )
+        };
+        if commands.len() == 1 {
+            return step(&commands[0], LIMIT);
         }
-        if step["ok"] != true {
-            not_run = commands[i + 1..].to_vec();
-            let mut message = format!(
-                "step {} of {}: {}",
-                i + 1,
-                commands.len(),
-                step["message"].as_str().unwrap_or("")
-            );
-            if !not_run.is_empty() {
-                message += &format!("; the {} after it did not run", not_run.len());
+        let budget = (LIMIT - 1024) / commands.len();
+        let mut steps = vec![];
+        let mut effect = "none";
+        let mut truncated = false;
+        let mut last = Value::Null;
+        let mut not_run = vec![];
+        for (i, argv) in commands.iter().enumerate() {
+            let mut step = step(argv, budget)?;
+            steps.push(step["data"].clone());
+            truncated |= step["truncated"].as_bool().unwrap_or(false);
+            if step["effect"] == "unknown" || (step["effect"] == "applied" && effect == "none") {
+                effect = if step["effect"] == "unknown" {
+                    "unknown"
+                } else {
+                    "applied"
+                };
             }
-            step["message"] = json!(message);
+            if step["ok"] != true {
+                not_run = commands[i + 1..].to_vec();
+                let mut message = format!(
+                    "step {} of {}: {}",
+                    i + 1,
+                    commands.len(),
+                    step["message"].as_str().unwrap_or("")
+                );
+                if !not_run.is_empty() {
+                    message += &format!("; the {} after it did not run", not_run.len());
+                }
+                step["message"] = json!(message);
+                last = step;
+                break;
+            }
             last = step;
-            break;
         }
-        last = step;
+        let mut data = json!({"steps":steps});
+        if !not_run.is_empty() {
+            data["not_run"] = json!(not_run);
+        }
+        let mut result = outcome(
+            last["ok"] == true,
+            last["code"].as_str().unwrap_or(""),
+            last["message"].as_str().unwrap_or(""),
+            data,
+            effect,
+        );
+        result["truncated"] = json!(truncated);
+        Ok(attributed(result, &self.root))
     }
-    let mut data = json!({"steps":steps});
-    if !not_run.is_empty() {
-        data["not_run"] = json!(not_run);
-    }
-    let mut result = outcome(
-        last["ok"] == true,
-        last["code"].as_str().unwrap_or(""),
-        last["message"].as_str().unwrap_or(""),
-        data,
-        effect,
-    );
-    result["truncated"] = json!(truncated);
-    Ok(attributed(result, &workspace.root))
 }
 
 pub(crate) fn withheld(name: &str) -> bool {
@@ -263,12 +284,14 @@ fn os_failure(e: &std::io::Error) -> Value {
     }
 }
 
-#[derive(Default)]
-struct ExecTail {
+/// A bounded display tail, independent of the captured exec outcome.
+#[derive(Clone, Default)]
+pub(crate) struct ExecTail {
     lines: VecDeque<ExecTailLine>,
     dirty: bool,
 }
 
+#[derive(Clone)]
 struct ExecTailLine {
     stream: usize,
     bytes: Vec<u8>,
@@ -307,7 +330,8 @@ impl ExecTail {
         }
     }
 
-    fn lines(&self) -> Vec<String> {
+    /// Return up to five recent lines, without rendering a partial UTF-8 suffix.
+    pub(crate) fn lines(&self) -> Vec<String> {
         self.lines
             .iter()
             .map(|line| {
@@ -452,19 +476,18 @@ struct ActiveExec {
     notice: Value,
 }
 
-static ACTIVE_EXECS: OnceLock<Mutex<HashMap<String, BTreeMap<String, ActiveExec>>>> =
-    OnceLock::new();
+static ACTIVE_EXECS: OnceLock<Mutex<HashMap<String, BTreeMap<u64, ActiveExec>>>> = OnceLock::new();
 
 struct ExecRegistration {
     tree: String,
-    agent: String,
+    claim: u64,
 }
 
 impl Drop for ExecRegistration {
     fn drop(&mut self) {
         let mut trees = ACTIVE_EXECS.get().unwrap().lock().unwrap();
         if let Some(execs) = trees.get_mut(&self.tree) {
-            execs.remove(&self.agent);
+            execs.remove(&self.claim);
             if execs.is_empty() {
                 trees.remove(&self.tree);
             }
@@ -479,47 +502,62 @@ fn start_exec(
     cwd: &str,
     budget: usize,
 ) -> (Option<ExecRegistration>, Vec<Value>) {
-    if config["agents"] != true {
-        return (None, vec![]);
-    }
-    let tree = config["agent_tree_id"]
+    let Some(tree) = config["agent_tree_id"]
         .as_str()
-        .or_else(|| config["session_id"].as_str())
-        .unwrap_or("")
-        .to_owned();
-    let agent = config["agent_id"].as_str().unwrap_or("root").to_owned();
+        .filter(|id| !id.is_empty())
+        .or_else(|| config["session_id"].as_str().filter(|id| !id.is_empty()))
+    else {
+        // Without a Session or tree ID we cannot safely scope an advisory notice.
+        return (None, vec![]);
+    };
+    let agent = config["agent_id"].as_str().unwrap_or("root");
+    let mut notice = json!({"agent_id":agent,"argv":argv,"cwd":cwd});
+    bound_notice(&mut notice, 1024);
     let mut trees = ACTIVE_EXECS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap();
-    let execs = trees.entry(tree.clone()).or_default();
-    let concurrent = execs
-        .iter()
-        .filter(|(id, active)| {
-            id.as_str() != agent
-                && (root.starts_with(&active.workspace) || active.workspace.starts_with(root))
-        })
-        .map(|(_, active)| active.notice.clone())
+    let execs = trees.entry(tree.to_owned()).or_default();
+    // Reserve enough space for each notice's fixed JSON fields and array punctuation.
+    let max_count = budget / (2 * 128);
+    let mut concurrent: Vec<_> = execs
+        .values()
+        .filter(|active| root.starts_with(&active.workspace) || active.workspace.starts_with(root))
+        .take(max_count + 1)
+        .map(|active| active.notice.clone())
         .collect();
+    let claim = execs.last_key_value().map_or(0, |(last, _)| last + 1);
     execs.insert(
-        agent.clone(),
+        claim,
         ActiveExec {
             workspace: root.to_owned(),
-            notice: json!({"agent_id":agent,"argv":argv,"cwd":cwd}),
+            notice,
         },
     );
     drop(trees);
+
+    if concurrent.len() > max_count {
+        concurrent.truncate(max_count);
+        if let Some(last) = concurrent.last_mut() {
+            last["truncated"] = json!(true);
+        }
+    }
+    if !concurrent.is_empty() {
+        let limit = 1024.min((budget / 2 - 1) / concurrent.len() - 1);
+        for notice in &mut concurrent {
+            bound_notice(notice, limit);
+        }
+    }
     (
-        Some(ExecRegistration { tree, agent }),
-        bound_concurrent_exec(concurrent, budget),
+        Some(ExecRegistration {
+            tree: tree.to_owned(),
+            claim,
+        }),
+        concurrent,
     )
 }
 
-fn bound_concurrent_exec(mut notices: Vec<Value>, budget: usize) -> Vec<Value> {
-    if notices.is_empty() {
-        return notices;
-    }
-    let limit = 1024.min(budget / (2 * notices.len()));
+fn bound_notice(notice: &mut Value, limit: usize) {
     let truncate = |text: &str, mut count: usize| {
         count = count.min(text.len());
         while !text.is_char_boundary(count) {
@@ -527,42 +565,44 @@ fn bound_concurrent_exec(mut notices: Vec<Value>, budget: usize) -> Vec<Value> {
         }
         text[..count].to_owned()
     };
-    for notice in &mut notices {
-        let argv = notice["argv"].as_array().unwrap().clone();
-        let cwd = notice["cwd"].as_str().unwrap();
-        let mut truncated = argv.len() > 8 || cwd.len() > limit;
-        let cwd = truncate(cwd, limit);
-        let argv: Vec<_> = argv
-            .iter()
-            .take(8)
-            .map(|arg| {
-                let arg = arg.as_str().unwrap();
-                truncated |= arg.len() > limit;
-                truncate(arg, limit)
-            })
-            .collect();
-        notice["argv"] = json!(argv);
-        notice["cwd"] = json!(cwd);
-        if truncated {
-            notice["truncated"] = json!(true);
+    let argv = notice["argv"].as_array().unwrap();
+    let cwd = notice["cwd"].as_str().unwrap();
+    let mut truncated = argv.len() > 8 || cwd.len() > limit;
+    let cwd = truncate(cwd, limit);
+    let argv: Vec<_> = argv
+        .iter()
+        .take(8)
+        .map(|arg| {
+            let arg = arg.as_str().unwrap();
+            truncated |= arg.len() > limit;
+            truncate(arg, limit)
+        })
+        .collect();
+    notice["argv"] = json!(argv);
+    notice["cwd"] = json!(cwd);
+    if truncated {
+        notice["truncated"] = json!(true);
+    }
+    while crate::types::json_string(notice).len() > limit {
+        notice["truncated"] = json!(true);
+        let args = notice["argv"].as_array_mut().unwrap();
+        if args.len() > 1 {
+            args.truncate(1.max(args.len() / 2));
+            continue;
         }
-        while crate::types::json_string(notice).len() > limit {
-            notice["truncated"] = json!(true);
-            let args = notice["argv"].as_array_mut().unwrap();
-            if args.len() > 1 {
-                args.truncate(1.max(args.len() / 2));
-                continue;
-            }
-            let arg = notice["argv"][0].as_str().unwrap();
-            let cwd = notice["cwd"].as_str().unwrap();
-            if cwd.len() > arg.len() {
-                notice["cwd"] = json!(truncate(cwd, cwd.len() / 2));
-            } else {
-                notice["argv"][0] = json!(truncate(arg, arg.len() / 2));
-            }
+        let arg = notice["argv"][0].as_str().unwrap();
+        let cwd = notice["cwd"].as_str().unwrap();
+        let agent = notice["agent_id"].as_str().unwrap();
+        if agent.len() > cwd.len().max(arg.len()) {
+            notice["agent_id"] = json!(truncate(agent, agent.len() / 2));
+        } else if cwd.len() > arg.len() {
+            notice["cwd"] = json!(truncate(cwd, cwd.len() / 2));
+        } else if !arg.is_empty() {
+            notice["argv"][0] = json!(truncate(arg, arg.len() / 2));
+        } else {
+            break;
         }
     }
-    notices
 }
 
 fn run(
@@ -575,6 +615,7 @@ fn run(
     cancellation: &AtomicBool,
     config: &Value,
     region: Option<&crate::terminal::RegionHandle>,
+    live: Option<&Mutex<ExecTail>>,
 ) -> Result<Value, String> {
     if region.is_some() {
         crate::render::tool_started(
@@ -659,20 +700,39 @@ fn run(
         kill_group_on_incomplete: true,
         eof_timeout: Duration::from_secs(1),
     };
-    let captured = if let Some(region) = region {
+    let captured = if region.is_some() || live.is_some() {
         let mut tail = ExecTail::default();
         let mut updated = Instant::now();
-        crate::process::capture_with_output(command, options, &mut |stream, bytes| {
-            tail.push(stream, bytes);
-            if tail.dirty && updated.elapsed() >= Duration::from_millis(100) {
-                // Terminal backpressure must not hold up process deadlines or cancellation.
-                if let Ok(mut region) = region.try_lock() {
-                    region.set_exec_lines(&tail.lines());
+        let captured =
+            crate::process::capture_with_output(command, options, &mut |stream, bytes| {
+                tail.push(stream, bytes);
+                if tail.dirty && updated.elapsed() >= Duration::from_millis(100) {
+                    // Neither a terminal nor a job-tail reader may delay process control.
                     tail.dirty = false;
+                    if let Some(region) = region {
+                        if let Ok(mut region) = region.try_lock() {
+                            region.set_exec_lines(&tail.lines());
+                        } else {
+                            tail.dirty = true;
+                        }
+                    }
+                    if let Some(live) = live {
+                        if let Ok(mut live) = live.try_lock() {
+                            live.clone_from(&tail);
+                        } else {
+                            tail.dirty = true;
+                        }
+                    }
+                    updated = Instant::now();
                 }
-                updated = Instant::now();
+            });
+        // Capture has finished, so a final job-tail update cannot delay process control.
+        if tail.dirty {
+            if let Some(live) = live {
+                *live.lock().unwrap() = tail;
             }
-        })
+        }
+        captured
     } else {
         crate::process::capture(command, options)
     };
@@ -937,6 +997,8 @@ pub(crate) fn terminate_tree(pid: i32) -> std::io::Result<()> {
     let own = unsafe { libc::getpgrp() };
     let groups: BTreeSet<_> = tree
         .iter()
+        // A descendant can join a sibling job's group. Signal its PID, not that whole group.
+        .filter(|(member, _, group)| member == group)
         .map(|v| v.2)
         .filter(|p| *p > 0 && *p != own)
         .collect();
@@ -1260,6 +1322,48 @@ mod boundary_tests {
     }
 
     #[test]
+    fn cancelling_a_descendant_in_a_sibling_group_spares_the_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let python = exec_fixture_python();
+        let mut sibling = Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let script = r#"import os, pathlib, signal, sys, time
+if os.fork() == 0:
+ os.setpgid(0, int(sys.argv[1]))
+ signal.signal(signal.SIGTERM, signal.SIG_IGN)
+ pathlib.Path('joined.tmp').write_text(str(os.getpid()))
+ os.rename('joined.tmp', 'joined.pid')
+time.sleep(30)"#;
+        let args = json!({"argv":[python,"-c",script,sibling.id().to_string()],"cwd":"."});
+        let command = prepare(&workspace, &args, 120_000).unwrap();
+        let cancel = AtomicBool::new(false);
+        let result = thread::scope(|s| {
+            let job = s.spawn(|| command.execute(&json!({}), &cancel, None, None).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !dir.path().join("joined.pid").exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            cancel.store(true, Ordering::Release);
+            job.join().unwrap()
+        });
+        let sibling_status = sibling.try_wait().unwrap();
+        if sibling_status.is_none() {
+            sibling.kill().unwrap();
+            sibling.wait().unwrap();
+        }
+        assert_eq!(result["code"], "cancelled", "{result}");
+        assert_exec_pids_stopped(dir.path(), &["joined.pid"], &result);
+        assert!(
+            sibling_status.is_none(),
+            "sibling exited: {sibling_status:?}"
+        );
+    }
+
+    #[test]
     fn exec_timeout_stops_term_resistant_escaped_descendants_with_both_pipe_modes() {
         let python = exec_fixture_python();
         for redirected in [false, true] {
@@ -1292,6 +1396,7 @@ time.sleep(30)"#,
                 LIMIT,
                 &AtomicBool::new(false),
                 &json!({}),
+                None,
                 None,
             )
             .unwrap();
@@ -1494,6 +1599,69 @@ mod cancellation_tests {
 #[cfg(test)]
 mod overlap_tests {
     use super::*;
+
+    #[test]
+    fn foreground_steps_see_a_live_job_even_in_a_single_agent_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let config = json!({"session_id":crate::types::new_id()});
+        let args = json!({"argv":["/bin/sh","-c","echo ready; exec sleep 30"],"cwd":"."});
+        let job = prepare(&workspace, &args, 120_000).unwrap();
+        let tail = Mutex::new(ExecTail::default());
+        let cancel = AtomicBool::new(false);
+        thread::scope(|scope| {
+            let handle = scope.spawn(|| job.execute(&config, &cancel, None, Some(&tail)).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while tail.lock().unwrap().lines().is_empty() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            let running_lines = tail.lock().unwrap().lines();
+            let foreground = json!({"argv":["/usr/bin/true"],"then":[["/usr/bin/true"]],"cwd":"."});
+            let result = execute(&mut workspace, &config, &foreground).unwrap();
+            cancel.store(true, Ordering::Release);
+            let stopped = handle.join().unwrap();
+            assert_eq!(running_lines, ["ready"]);
+            assert_eq!(stopped["code"], "cancelled");
+            assert_eq!(stopped["effect"], "unknown");
+            assert_eq!(result["ok"], true);
+            for step in result["data"]["steps"].as_array().unwrap() {
+                assert_eq!(
+                    step["concurrent_exec"],
+                    json!([{"agent_id":"root","argv":args["argv"],"cwd":"."}])
+                );
+            }
+        });
+        let after = execute(
+            &mut workspace,
+            &config,
+            &json!({"argv":["/usr/bin/true"],"cwd":"."}),
+        )
+        .unwrap();
+        assert!(after["data"].get("concurrent_exec").is_none());
+    }
+
+    #[test]
+    fn small_step_budgets_bound_many_overlaps_including_long_agent_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = json!({"session_id":crate::types::new_id(),"agent_id":"é<&".repeat(1000)});
+        let argv = ["command".repeat(100)];
+        let mut workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let _claims: Vec<_> = (0..64)
+            .map(|_| start_exec(&config, &workspace.root, &argv, ".", 1).0)
+            .collect();
+        let cmd = json!(["/usr/bin/true"]);
+        let args = json!({"argv":cmd,"then":vec![cmd.clone();7],"cwd":"."});
+        let result = execute(&mut workspace, &config, &args).unwrap();
+        assert_eq!(result["ok"], true);
+        for step in result["data"]["steps"].as_array().unwrap() {
+            let notices = &step["concurrent_exec"];
+            assert_eq!(
+                notices.as_array().unwrap().last().unwrap()["truncated"],
+                true
+            );
+            assert!(crate::types::json_string(notices).len() <= (LIMIT - 1024) / 16);
+        }
+    }
 
     #[test]
     fn overlap_is_advisory_tree_scoped_canonical_and_per_chain_step() {

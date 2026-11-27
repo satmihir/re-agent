@@ -151,10 +151,11 @@ pub(crate) fn message_attribution(session: &Session) -> Option<UserAttribution> 
         .filter(|observer| observer.kind == RunKind::Conversation)?;
     let state = observer.shared.state.lock().unwrap();
     let command = &state.commands[observer.index];
+    let message = command.work.message()?;
     Some(UserAttribution {
         request_id: command.info.request_id.clone(),
-        target: command.work.message().unwrap().run.run.clone(),
-        kind: UserInputKind::Message,
+        target: message.run.run.clone(),
+        kind: message.input_kind,
         boundary_step: None,
     })
 }

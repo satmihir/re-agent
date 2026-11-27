@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+             "description": "The first or only command: its executable followed by its literal arguments."},
+    "then": {"type": "array", "maxItems": 7,
+             "items": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+             "description": "Commands to run after argv, each only if the previous command succeeded."},
+    "cwd": {"type": "string", "description": "Existing workspace-relative directory, or . for the root."},
+    "timeout_ms": {"type": "integer", "minimum": 1, "description": "Time limit per command in milliseconds. Defaults to 3600000 in the background or 120000 in the foreground; values below 10000 are raised to 10000."},
+    "background": {"type": "boolean", "description": "For a requested background test, eval or watch, start a Session-owned command and return its job ID immediately. Completion notifies the conversation; do not poll in a model loop. Only rearm a bounded wait if the user's task calls for it. Jobs stay in their launch workspace and cannot be resumed after exit or reset."}
+  },
+  "required": ["argv", "cwd"],
+  "additionalProperties": false
+}

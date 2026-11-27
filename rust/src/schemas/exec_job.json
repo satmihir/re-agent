@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "operation": {"type":"string","enum":["list","status","cancel"]},
+    "id": {"type":"string","description":"Job ID for status or cancel; omit for list."}
+  },
+  "required": ["operation"],
+  "additionalProperties": false
+}

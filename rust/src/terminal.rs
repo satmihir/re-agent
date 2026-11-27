@@ -105,6 +105,8 @@ pub struct Input {
 pub enum Submission {
     Text(String),
     Bytes(Vec<u8>),
+    /// The interactive read yielded without submitting or clearing its draft.
+    Wake,
     Interrupted,
     Eof,
 }
@@ -181,8 +183,9 @@ impl Input {
                     .flatten()
                     .is_none_or(|pending| pending.approval != request.approval)
         };
-        *next = TurnInput::default();
+        next.discard_typeahead();
         let result = (|| {
+            // The editor stays in `next`; the picker must only read fresh input.
             self.discard_input()?;
             let mut disclosure = format!(
                 "Allow this location as a workspace?\nLocation: {}\n",
@@ -671,6 +674,16 @@ impl Input {
     }
     /// Read line handles continuation and bracketed pastes as one submission.
     pub fn read_line(&mut self, prompt: &str) -> io::Result<Submission> {
+        self.read_line_until(prompt, || false)
+    }
+
+    /// An idle interactive read yields when `wake` requests it; pipes always read to newline or EOF.
+    pub fn read_line_until(
+        &mut self,
+        prompt: &str,
+        mut wake: impl FnMut() -> bool,
+    ) -> io::Result<Submission> {
+        self.next.woken = false;
         if !self.terminal {
             let mut line = Vec::new();
             if self.reader.read_until(b'\n', &mut line)? == 0 {
@@ -688,37 +701,52 @@ impl Input {
             });
         }
         if self.region.is_some() {
-            let result = self.regional_line();
-            eprint!("\x1b[?2004l");
-            io::stderr().flush()?;
+            let result = self.regional_line(&mut wake);
+            self.next.woken = matches!(result, Ok(Submission::Wake));
+            if !self.next.woken {
+                eprint!("\x1b[?2004l");
+                io::stderr().flush()?;
+            }
             return result;
         }
         let _raw = Raw::enter()?;
-        let mut line = String::new();
-        let mut current_prompt = prompt;
+        let mut line = std::mem::take(&mut self.next.prefix);
         loop {
-            match self.physical(current_prompt)? {
+            let current_prompt = if line.is_empty() { prompt } else { "… " };
+            match self.physical(current_prompt, &mut wake)? {
                 Submission::Text(next) => {
                     line.push_str(&next);
                     if line.ends_with('\\') && !line.ends_with("\\\\") {
                         line.pop();
                         line.push('\n');
-                        current_prompt = "… ";
                         continue;
                     }
                     self.remember(&line);
                     return Ok(Submission::Text(line));
                 }
+                Submission::Wake => {
+                    self.next.woken = true;
+                    self.next.prefix = line;
+                    return Ok(Submission::Wake);
+                }
                 other => return Ok(other),
             }
         }
     }
-    fn physical(&mut self, prompt: &str) -> io::Result<Submission> {
-        let mut editor = IdleEditor::default();
-        eprint!("{prompt}");
-        io::stderr().flush()?;
+    fn physical(&mut self, prompt: &str, wake: &mut dyn FnMut() -> bool) -> io::Result<Submission> {
+        let mut editor = std::mem::take(&mut self.next.editor);
+        if editor.buffer.is_empty() {
+            eprint!("{prompt}");
+            io::stderr().flush()?;
+        } else {
+            draw(prompt, &editor)?;
+        }
         loop {
-            let key = decoded_key(&mut self.reader, &mut self.decoder, None)?;
+            let Some(key) = decoded_key(&mut self.reader, &mut self.decoder, None, wake)? else {
+                self.next.editor = editor;
+                eprint!("\r\x1b[2K");
+                return Ok(Submission::Wake);
+            };
             if !self.completion.apply(&mut editor, &key, true, true) {
                 match editor.apply(&key, &self.history, 0, prompt) {
                     Some("enter") => {
@@ -864,13 +892,11 @@ impl Input {
         if result.is_err() {
             cancelled.store(true, Ordering::Release);
         }
-        if self.region.is_none() {
-            return result;
-        }
-        if cancelled.load(Ordering::Acquire) {
-            next = TurnInput::default();
+        if self.region.is_some() && cancelled.load(Ordering::Acquire) {
+            next.discard_typeahead();
             self.decoder = Decoder::default();
         }
+        next.woken = false;
         // Keep the last turn's pane until its result and trace have been printed.
         self.next = next;
         result
@@ -955,7 +981,7 @@ impl Input {
         Ok(())
     }
 
-    fn regional_line(&mut self) -> io::Result<Submission> {
+    fn regional_line(&mut self, wake: &mut dyn FnMut() -> bool) -> io::Result<Submission> {
         if self.raw.is_none() {
             self.raw = Some(Raw::enter_fd(self.tty.as_ref().unwrap().as_raw_fd())?);
         } else {
@@ -997,6 +1023,10 @@ impl Input {
                 if ready == 0 {
                     if let Some(key) = self.decoder.escape() {
                         key
+                    } else if wake() {
+                        self.next.editor = editor;
+                        self.next.prefix = prefix;
+                        return Ok(Submission::Wake);
                     } else {
                         let (columns, height) = self.size()?;
                         let handle = self.region.as_ref().unwrap().lock().unwrap();
@@ -1096,22 +1126,26 @@ fn read_key(
     decoder: &mut Decoder,
     withdrawn: Option<&dyn Fn() -> bool>,
 ) -> io::Result<String> {
-    Ok(match decoded_key(reader, decoder, withdrawn)? {
-        Key::Name(name) => name.into(),
-        Key::Text(c) => format!("text:{c}"),
-    })
+    Ok(
+        match decoded_key(reader, decoder, withdrawn, &mut || false)? {
+            Some(Key::Name(name)) => name.into(),
+            Some(Key::Text(c)) => format!("text:{c}"),
+            None => "escape".into(),
+        },
+    )
 }
 fn decoded_key(
     reader: &mut io::BufReader<io::Stdin>,
     decoder: &mut Decoder,
     withdrawn: Option<&dyn Fn() -> bool>,
-) -> io::Result<Key> {
+    wake: &mut dyn FnMut() -> bool,
+) -> io::Result<Option<Key>> {
     loop {
         if withdrawn.is_some_and(|withdrawn| withdrawn()) {
-            return Ok(Key::Name("escape"));
+            return Ok(None);
         }
         if let Some(key) = decoder.next() {
-            return Ok(key);
+            return Ok(Some(key));
         }
         if reader.buffer().is_empty() {
             let ready = match poll_read(0, 20) {
@@ -1121,7 +1155,10 @@ fn decoded_key(
             };
             if ready == 0 {
                 if let Some(key) = decoder.escape() {
-                    return Ok(key);
+                    return Ok(Some(key));
+                }
+                if wake() {
+                    return Ok(None);
                 }
                 continue;
             }
@@ -1129,7 +1166,7 @@ fn decoded_key(
         let mut bytes = [0; 256];
         let count = reader.read(&mut bytes)?;
         if count == 0 {
-            return Ok(Key::Name("eof"));
+            return Ok(Some(Key::Name("eof")));
         }
         decoder.feed(&bytes[..count]);
     }

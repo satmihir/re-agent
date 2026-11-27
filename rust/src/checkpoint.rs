@@ -250,6 +250,7 @@ fn user(value: &mut Value, decode: bool) -> Result<(), String> {
                 "workspace",
                 "roster",
                 "source",
+                "job_effect",
                 "plan",
                 "attribution",
                 "text_bytes",
@@ -544,6 +545,10 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
         cp["agent_subtree"] = subtree;
     }
     cp = ordered(&cp, FIELDS);
+    let jobs = session.tools.jobs.outstanding();
+    if !jobs.is_empty() {
+        cp["outstanding_jobs"] = Value::Array(jobs);
+    }
     cp["seen"] = sort_map(&cp["seen"]);
     if let Some(seen) = s.get("seen_calls") {
         cp["seen"] = sort_map(seen);
@@ -769,9 +774,10 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             auto_fallback_effort:string auto_usage:usage auto_attempts:int auto_compact_off:bool \
             history:[]entry pending_submission:user first_message:string seen:map:bool handoff:handoff \
             compacted_plan:string blocked:string last_trace:string last_request:usage \
-            tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt",
+            tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt outstanding_jobs:[]job",
+        "job" => "id:string workspace:string",
         "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
-        "user" => "text:string workspace:raw roster:raw source:string plan:string attribution:user_attribution text_bytes:string images:raw time:raw note:string",
+        "user" => "text:string workspace:raw roster:raw source:string job_effect:string plan:string attribution:user_attribution text_bytes:string images:raw time:raw note:string",
         "user_attribution" => "request_id:string target:run_ref kind:string boundary_step:int",
         "run_ref" => "session:session_ref run_id:string",
         "session_ref" => "session_id:string instance_id:string",
@@ -861,6 +867,15 @@ fn parse(id: &str, bytes: &[u8]) -> Result<Value, String> {
     // in internal wrappers, which are deliberately not accepted as v2 JSON strings.
     if env.version == 2 && !valid_checkpoint_type(&mut cp, "checkpoint") {
         return Err(corrupt("invalid checkpoint state"));
+    }
+    if let Some(jobs) = cp["outstanding_jobs"].as_array() {
+        if jobs.iter().any(|job| {
+            ["id", "workspace"]
+                .iter()
+                .any(|key| job[key].as_str().unwrap_or("").is_empty())
+        }) {
+            return Err(corrupt("invalid outstanding job"));
+        }
     }
     convert_raw(&mut cp, true).map_err(|e| corrupt(&e))?;
     for path in ["/agent_roster", "/agent_subtree/threads"] {
@@ -1048,13 +1063,47 @@ fn restored(id: &str, cp: Value) -> Value {
     json!({"config":config,"history":cp["history"],"state":s,"checkpoint":cp})
 }
 
-/// Recover records interrupted calls as observations, never restarted actions.
+/// Recover records interrupted work as observations without replaying or reattaching to it.
 pub fn recover(session: &mut crate::runtime::Session) -> Result<String, String> {
     crate::agents::restore(session);
     let phase = session.state["phase"].as_str().unwrap_or("idle");
-    if ["idle", "terminal"].contains(&phase) && session.state["pending_submission"].is_null() {
-        return Ok(String::new());
+    let interrupted =
+        !["idle", "terminal"].contains(&phase) || !session.state["pending_submission"].is_null();
+    let mut notice = if interrupted {
+        recover_interrupted(session)
+    } else {
+        String::new()
+    };
+    // Append after any missing ToolResults. A launched job is not another pending tool call.
+    if let Some(Value::Array(jobs)) = session
+        .state
+        .as_object_mut()
+        .unwrap()
+        .remove("outstanding_jobs")
+    {
+        for job in &jobs {
+            let observation = json!({"job_id":job["id"], "workspace":job["workspace"],
+                "code":"recovery_effect_unknown", "effect":"unknown"});
+            let text = format!("Background command result unobserved on resume (runtime observation). No job was restarted or reattached; inspect effects before retrying.\n{}", crate::types::json_string(&observation));
+            session
+                .history
+                .push(json!({"kind":"user","user":{"source":"exec_job","job_effect":"unknown","text":text}}));
+        }
+        if !jobs.is_empty() {
+            if !notice.is_empty() {
+                notice.push_str("; ");
+            }
+            notice.push_str(&format!("{} background job result(s) unobserved; effects are unknown; no jobs were restarted or reattached", jobs.len()));
+        }
     }
+    if !notice.is_empty() {
+        let phase = session.state["phase"].as_str().unwrap_or("idle").to_owned();
+        save(session, &phase, "")?;
+    }
+    Ok(notice)
+}
+
+fn recover_interrupted(session: &mut crate::runtime::Session) -> String {
     let mut calls = Vec::new();
     let mut results = HashSet::new();
     for e in &session.history {
@@ -1117,8 +1166,7 @@ pub fn recover(session: &mut crate::runtime::Session) -> Result<String, String> 
             "; an in-flight tool has unknown effects; inspect them before further changes",
         );
     }
-    save(session, "terminal", "")?;
-    Ok(message)
+    message
 }
 
 #[cfg(test)]
@@ -1225,6 +1273,71 @@ mod tests {
         assert!(!root.path().join("queued.png").exists());
         assert!(recover(&mut session).unwrap().is_empty());
         assert_eq!(session.history.len(), 3);
+    }
+
+    #[test]
+    fn settled_checkpoint_recovers_an_undelivered_job_once_without_reattaching() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().canonicalize().unwrap();
+        let config = json!({"workspace":workspace,"provider":"openai","model":"test","background_exec":true,"checkpoint_enabled":false});
+        let mut source = crate::runtime::Session::new(config.clone()).unwrap();
+        let started = crate::tools::execute(
+            &mut source.tools,
+            &config,
+            "exec",
+            r#"{"cwd":".","argv":["echo","private output"],"background":true}"#,
+        )
+        .unwrap();
+        assert_eq!(started["ok"], true, "{started}");
+        let job = &started["data"]["id"];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while source
+            .tools
+            .jobs
+            .inspect(&json!({"operation":"status","id":job}))["data"]["state"]
+            != "completed"
+        {
+            assert!(std::time::Instant::now() < deadline, "job did not complete");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for phase in ["idle", "terminal"] {
+            let cp = state(&source, phase, "");
+            let id = cp["id"].as_str().unwrap();
+            assert_eq!(
+                cp["outstanding_jobs"],
+                json!([{"id":job,"workspace":workspace}])
+            );
+            let loaded = restored(id, parse(id, &envelope(&cp).unwrap()).unwrap());
+            let mut resume_config = loaded["config"].clone();
+            resume_config["checkpoint_enabled"] = json!(false);
+            let mut session = crate::runtime::Session::new(resume_config).unwrap();
+            session.state = loaded["state"].clone();
+            session.state["blocked"] = json!("unrelated block");
+            assert!(recover(&mut session)
+                .unwrap()
+                .contains("effects are unknown"));
+            assert_eq!(session.state["blocked"], "unrelated block");
+            assert_eq!(session.state["phase"], phase);
+            assert!(!session.tools.jobs.pending());
+            let next = state(&session, phase, "");
+            assert!(next.get("outstanding_jobs").is_none());
+            let saved = parse(id, &envelope(&next).unwrap()).unwrap();
+            assert_eq!(saved["history"].as_array().unwrap().len(), 1);
+            let entry = &saved["history"][0]["user"];
+            assert_eq!(entry["source"], "exec_job");
+            assert_eq!(entry["job_effect"], "unknown");
+            let (_, data) = entry["text"].as_str().unwrap().split_once('\n').unwrap();
+            let observed: Value = serde_json::from_str(data).unwrap();
+            assert_eq!(
+                observed,
+                json!({"job_id":job,"workspace":workspace,"code":"recovery_effect_unknown","effect":"unknown"})
+            );
+            assert!(recover(&mut session).unwrap().is_empty());
+        }
+        assert_eq!(source.tools.jobs.take_completed().len(), 1);
+        assert!(state(&source, "terminal", "")
+            .get("outstanding_jobs")
+            .is_none());
     }
 
     #[test]

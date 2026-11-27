@@ -17,6 +17,8 @@ const RAW_SCHEMAS: &[(&str, &str)] = &[
     ("edit_file", include_str!("schemas/edit_file.json")),
     ("delete_file", include_str!("schemas/delete_file.json")),
     ("exec", include_str!("schemas/exec.json")),
+    ("exec", include_str!("schemas/exec_background.json")),
+    ("exec_job", include_str!("schemas/exec_job.json")),
     ("git_inspect", include_str!("schemas/git_inspect.json")),
     ("git_do", include_str!("schemas/git_do_recipe.json")),
     ("git_do", include_str!("schemas/git_do_jev.json")),
