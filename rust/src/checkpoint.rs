@@ -373,6 +373,7 @@ const FIELDS: &[&str] = &[
     "gc_state",
     "gc_requests",
     "agents",
+    "agent_questions",
     "agent_roster",
     "agent_subtree",
     "report_friction",
@@ -441,6 +442,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             | "in_run_compact"
             | "context_gc"
             | "agents"
+            | "agent_questions"
             | "report_friction"
             | "auto"
             | "auto_enabled"
@@ -482,6 +484,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
                 "context_gc_consolidate",
                 "context_gc",
                 "agents",
+                "agent_questions",
                 "report_friction",
                 "prompt",
             ]
@@ -508,6 +511,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "context_gc_age_steps",
             "context_gc_consolidate",
             "gc_requests",
+            "agent_questions",
             "agent_roster",
             "agent_subtree",
             "auto_fallback_model",
@@ -760,7 +764,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
             model_retry_window:int in_run_compact:bool context_window_tokens:int \
             context_gc_age_steps:int context_gc_consolidate:bool context_gc:bool gc_state:gc \
-            gc_requests:int agents:bool agent_roster:[]thread agent_subtree:subtree \
+            gc_requests:int agents:bool agent_questions:bool agent_roster:[]thread agent_subtree:subtree \
             report_friction:bool auto:bool auto_enabled:bool auto_fallback_model:string \
             auto_fallback_effort:string auto_usage:usage auto_attempts:int auto_compact_off:bool \
             history:[]entry pending_submission:user first_message:string seen:map:bool handoff:handoff \
@@ -1007,6 +1011,7 @@ fn restored(id: &str, cp: Value) -> Value {
         "context_gc_consolidate",
         "context_gc",
         "agents",
+        "agent_questions",
         "report_friction",
         "prompt",
     ] {
@@ -1428,7 +1433,7 @@ mod tests {
             let root = std::path::PathBuf::from(root);
             let script = root.join("script.json");
             fs::write(&script, r#"[{"blocks":[{"kind":"text","text":"unused"}]}]"#).unwrap();
-            let mut session = crate::runtime::Session::new(json!({"session_id":"0123456789abcdef","provider":"scripted","model":"scripted","scripted":script,"workspace":root,"checkpoint_enabled":true,"agents":true})).unwrap();
+            let mut session = crate::runtime::Session::new(json!({"session_id":"0123456789abcdef","provider":"scripted","model":"scripted","scripted":script,"workspace":root,"checkpoint_enabled":true,"agents":true,"agent_questions":true})).unwrap();
             session.config["provider"] = json!("openai");
             session.config["model"] = json!("gpt-6-sol");
             session.config["scripted"] = json!("");
@@ -1457,6 +1462,7 @@ mod tests {
             save(&mut session, "idle", "").unwrap();
             close("0123456789abcdef");
             let saved = load("0123456789abcdef").unwrap();
+            assert_eq!(saved["config"]["agent_questions"], true);
             assert_eq!(saved["state"]["agent_roster"], expected.0);
             assert_eq!(saved["state"]["agent_subtree"], expected.1);
             for (index, kind) in ["task", "teammate", "task", "teammate"]
@@ -1474,8 +1480,10 @@ mod tests {
             session.history = saved["history"].as_array().cloned().unwrap_or_default();
             assert_eq!(recover(&mut session).unwrap(), "");
             assert_eq!(crate::agents::snapshot(&session), expected);
+            session.config["agent_questions"] = json!(false);
             save(&mut session, "idle", "").unwrap();
             let saved_again = load("0123456789abcdef").unwrap();
+            assert!(saved_again["config"].get("agent_questions").is_none());
             assert_eq!(saved_again["state"]["agent_subtree"], expected.1);
 
             let path = directory("0123456789abcdef")

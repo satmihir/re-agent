@@ -145,6 +145,7 @@ struct SpecConfig {
     scripted: bool,
     agent: bool,
     agents: bool,
+    agent_questions: bool,
     read_only: bool,
     exec: bool,
     view_images: bool,
@@ -197,6 +198,7 @@ fn cached_specs(config: &Value) -> Arc<Value> {
         scripted: config["scripted"].as_str().is_some_and(|s| !s.is_empty()),
         agent: enabled("agent"),
         agents: enabled("agents"),
+        agent_questions: enabled("agent_questions"),
         read_only: enabled("read_only"),
         exec: config["no_exec"] != true,
         view_images: crate::catalog::supports_images(config),
@@ -287,7 +289,23 @@ fn build_specs(config: &Value) -> Value {
     }
     if config["agents"].as_bool().unwrap_or(false) || config["agent"].as_bool().unwrap_or(false) {
         static AGENTS: LazyLock<Vec<Value>> = LazyLock::new(crate::agents::specs);
-        specs.extend(AGENTS.iter().cloned());
+        let questions = config["agent_questions"] == true;
+        for mut spec in AGENTS.iter().cloned() {
+            match spec["name"].as_str() {
+                Some("ask_parent") if !questions || config["agent"] != true => continue,
+                Some("send") if questions => {
+                    spec["input_schema"] =
+                        serde_json::from_str(include_str!("schemas/send_question.json")).unwrap();
+                    let description = spec["description"].as_str().unwrap();
+                    spec["description"] = json!(format!("{description} With reply_to set to a pending question ID, answer your child's ask_parent call in its current Run instead of queuing work."));
+                }
+                Some("wait") if questions => {
+                    spec["description"] = json!("Wait for your given children (IDs or names) to finish current and queued work; any pending question from a direct child interrupts the wait, even for a different child. Answer with send(reply_to=question_id). Results and questions arrive once at the next step boundary (bounded to 32 KiB encoded per entry, with truncated=true and a full trace reference when shortened; bounded file effects and exec uncertainty survive reply truncation). Recent delivered IDs return their delivery run and step. Omit timeout to wait until done (cancellation still works). An explicit timeout is opt-in polling, in seconds (0–600); it does not cancel children. If timed_out is true, do other useful work and wait again before relying on their results.");
+                }
+                _ => {}
+            }
+            specs.push(spec);
+        }
     }
     if config["read_only"].as_bool().unwrap_or(false) {
         specs.retain(|s| s["effect"] == "read");
@@ -993,12 +1011,46 @@ mod tests {
     }
 
     #[test]
+    fn agent_question_declarations_require_explicit_opt_in() {
+        for child in [false, true] {
+            let base = json!({"agents": !child, "agent": child});
+            let default_catalog = specs(&base);
+            for flag in [json!(true), json!(false), Value::Null, json!("true")] {
+                let mut config = base.clone();
+                config["agent_questions"] = flag.clone();
+                let catalog = specs(&config);
+                let find = |name: &str| {
+                    catalog
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|s| s["name"] == name)
+                };
+                let enabled = flag == true;
+                assert_eq!(find("ask_parent").is_some(), child && enabled);
+                let schema = &find("send").unwrap()["input_schema"];
+                assert_eq!(schema["properties"].get("reply_to").is_some(), enabled);
+                assert!(crate::schemas::raw_schema("send", schema).is_some());
+                for name in ["send", "wait"] {
+                    let description = find(name).unwrap()["description"].as_str().unwrap();
+                    assert_eq!(description.contains("reply_to"), enabled);
+                    assert_eq!(description.contains("question"), enabled);
+                }
+                if !enabled {
+                    assert_eq!(catalog, default_catalog);
+                }
+            }
+        }
+        assert_eq!(specs(&json!({"agent_questions": true})), specs(&json!({})));
+    }
+
+    #[test]
     fn child_declarations_preserve_parent_schema_bytes_and_limit_authority() {
         for read_only in [false, true] {
             for plan in [false, true] {
                 for context_gc in [false, true] {
                     for friction in [false, true] {
-                        let parent = json!({"agents":true,"read_only":read_only,"plan":plan,"context_gc":context_gc,"report_friction":friction,"scripted":"responses.json","git_do":"jev"});
+                        let parent = json!({"agents":true,"agent_questions":true,"read_only":read_only,"plan":plan,"context_gc":context_gc,"report_friction":friction,"scripted":"responses.json","git_do":"jev"});
                         let mut child = parent.clone();
                         child["agent"] = json!(true);
                         child["agents"] = json!(false);
@@ -1029,7 +1081,20 @@ mod tests {
                             .collect();
                         assert_eq!(actual, expected, "{child}");
                         let parent_specs = specs(&parent);
+                        assert!(!parent_specs
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|s| s["name"] == "ask_parent"));
                         for spec in declarations.as_array().unwrap() {
+                            if spec["name"] == "ask_parent" {
+                                assert!(crate::schemas::raw_schema(
+                                    "ask_parent",
+                                    &spec["input_schema"]
+                                )
+                                .is_some());
+                                continue;
+                            }
                             let original = parent_specs
                                 .as_array()
                                 .unwrap()

@@ -10,7 +10,7 @@ API_PROXY_URL and API_PROXY_PROVIDER set to route OpenAI requests through a
 proxy. re:agent runs inside a container, where localhost is the container
 itself, so a localhost proxy URL reaches it as host.docker.internal:
 
-    python bench/run.py --label NAME [--ref REF] [--model M] [--effort E] [--repeat N] [INSTANCE_ID ...]
+    python bench/run.py --label NAME [--ref REF] [--agent-mode {solo,agents,agents-ask}] [--model M] [--effort E] [--repeat N] [INSTANCE_ID ...]
     python bench/run.py --agent codex --codex-dir DIR --label NAME [--model M] [--effort E] ...
 
 --agent codex runs the Codex CLI in the same containers instead, for
@@ -52,6 +52,8 @@ DATASET = "SWE-bench/SWE-bench_Verified"
 # The SWE-bench images install each project into this conda environment, and
 # exec passes PATH through to the commands the model runs.
 PATH = "/opt/miniconda3/envs/testbed/bin:/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+AGENT_MODE_FLAGS = {"solo": ["--agents=false"], "agents": ["--agents=true"],
+                    "agents-ask": ["--agents=true", "--agent-questions"]}
 MAX_STEPS = 50
 MAX_TOOL_CALLS = 50
 SEARCH_COMMANDS = {"grep", "rg", "egrep", "fgrep"}
@@ -176,7 +178,16 @@ def summarize_codex(out):
             "failed_calls": s["failed_calls"], "calls_by_tool": dict(calls)}
 
 
-def run_task(task, binary, model, effort, out, agent="reagent", codex_dir=None, limits=(50, 50), timeout=1800):
+def reagent_command(model, effort, limits, agent_mode=None):
+    # Omit mode flags by default: older --ref binaries may not recognize them.
+    flags = AGENT_MODE_FLAGS[agent_mode] if agent_mode is not None else []
+    return ["reagent", "run", *flags, "--model", model, "--reasoning-effort", effort, "--workspace", "/testbed",
+            "--max-steps", str(limits[0]), "--max-tool-calls", str(limits[1]),
+            "--trace-file", "/tmp/events.jsonl", "--prompt-file", "/tmp/prompt.md"]
+
+
+def run_task(task, binary, model, effort, out, agent="reagent", codex_dir=None, limits=(50, 50), timeout=1800,
+             agent_mode=None):
     """Runs one task in a fresh container and keeps its reply, trace, and diff."""
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(BENCH, "prompt.txt")) as f:
@@ -203,9 +214,7 @@ def run_task(task, binary, model, effort, out, agent="reagent", codex_dir=None, 
             sh("docker", "cp", binary, f"{name}:/usr/local/bin/reagent")
             command = ["docker", "exec", "-e", "OPENAI_API_KEY", *proxy_env(), "-e", "API_PROXY_PROVIDER",
                        "-e", "PATH=" + PATH, "-w", "/testbed", name,
-                       "reagent", "run", "--model", model, "--reasoning-effort", effort, "--workspace", "/testbed",
-                       "--max-steps", str(limits[0]), "--max-tool-calls", str(limits[1]),
-                       "--trace-file", "/tmp/events.jsonl", "--prompt-file", "/tmp/prompt.md"]
+                       *reagent_command(model, effort, limits, agent_mode)]
         started = time.time()
         # Codex writes its JSON events to stdout; re:agent writes its reply there.
         stdout_name = "events.jsonl" if agent == "codex" else "reply.md"
@@ -299,7 +308,7 @@ def summarize_trace(path):
                "calls_by_tool": {}, "exec_searches": 0}
     if not os.path.exists(path):
         return summary
-    last_request, peak = None, 0
+    last_request, peak, agent_spawns, agent_questions = None, 0, 0, 0
     started_calls = {}
     calls_by_tool = collections.Counter()
     exec_searches = 0
@@ -313,6 +322,10 @@ def summarize_trace(path):
                 last_request = event["data"]
             elif event["type"] == "model.accepted":
                 peak = max(peak, event["data"].get("usage", {}).get("input_tokens", 0))
+            elif event["type"] == "agent.spawn":
+                agent_spawns += 1
+            elif event["type"] == "agent.question":
+                agent_questions += 1
             elif event["type"] == "tool.started":
                 data = event["data"]
                 started_calls[data["call_id"]] = data
@@ -335,15 +348,21 @@ def summarize_trace(path):
                     last_call_failure = {"tool": name, "code": code, "arguments": arguments[:200]}
             elif event["type"] == "run.finished":
                 data = event["data"]
-                usage = data.get("usage", {})
+                root = data.get("usage") or {}
+                tree = data.get("tree_cost")
+                usage = tree if tree is not None else root
                 summary = {
                     "status": data["status"], "reason": data.get("reason", ""),
                     "steps": data["steps"], "tool_calls": data["tool_calls"],
-                    "input_tokens": usage.get("input_tokens", 0),
-                    "cached_input_tokens": usage.get("cached_input_tokens", 0),
-                    "output_tokens": usage.get("output_tokens", 0),
-                    "reasoning_tokens": usage.get("reasoning_tokens", 0),
+                    "usage_source": "tree_cost" if tree is not None else "usage",
+                    "usage_known": False if tree is None and agent_spawns else usage.get("known"),
+                    "unreported_attempts": usage.get("unreported_attempts", 0),
                 }
+                for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens"):
+                    summary[key] = usage.get(key, 0)
+                    summary["root_" + key] = root.get(key, 0)
+    summary["agent_spawns"] = agent_spawns
+    summary["agent_questions"] = agent_questions
     summary["peak_input_tokens"] = peak
     summary["tool_failures"] = dict(sorted(tool_failures.items()))
     summary["stopped_by"] = last_call_failure if summary.get("status") != "completed" else None
@@ -402,7 +421,7 @@ def score(predictions, label, out, agent="reagent"):
 
 
 def run_label(label, ids, rows, binary, model, effort, commit, show_label, agent="reagent", codex_dir=None,
-              limits=(MAX_STEPS, MAX_TOOL_CALLS), timeout=1800):
+              limits=(MAX_STEPS, MAX_TOOL_CALLS), timeout=1800, agent_mode=None):
     """Runs and scores one labeled pass over the requested tasks."""
     out = os.path.join(BENCH, "out", label)
     os.makedirs(out, exist_ok=True)
@@ -411,7 +430,8 @@ def run_label(label, ids, rows, binary, model, effort, commit, show_label, agent
     for instance_id in ids:
         print(f"== {prefix}{instance_id}", flush=True)
         task_out = os.path.join(out, instance_id)
-        ran = run_task(rows[instance_id], binary, model, effort, task_out, agent, codex_dir, limits, timeout)
+        ran = run_task(rows[instance_id], binary, model, effort, task_out, agent, codex_dir, limits, timeout,
+                       agent_mode=agent_mode)
         summary = summarize_codex(task_out) if agent == "codex" else summarize_trace(os.path.join(task_out, "events.jsonl"))
         results[instance_id] = {"exit_code": ran["exit_code"], "seconds": ran["seconds"],
                                 "patch_lines": ran["patch"].count("\n"), **summary}
@@ -423,7 +443,7 @@ def run_label(label, ids, rows, binary, model, effort, commit, show_label, agent
     for instance_id, result in results.items():
         result["resolved"] = instance_id in resolved
     with open(os.path.join(out, "summary.json"), "w") as f:
-        json.dump({"label": label, "agent": agent, "commit": commit, "model": model, "effort": effort,
+        json.dump({"label": label, "agent": agent, "agent_mode": agent_mode, "commit": commit, "model": model, "effort": effort,
                    "max_steps": limits[0], "max_tool_calls": limits[1], "task_timeout": timeout,
                    "tasks": results}, f, indent=2)
     print(f"resolved {len(resolved)} of {len(ids)}; summary in {os.path.relpath(out, ROOT)}/summary.json")
@@ -441,6 +461,8 @@ def main():
     parser.add_argument("--repeat", type=positive_int, default=1, metavar="N",
                         help="run the task list N times (default: 1)")
     parser.add_argument("--agent", choices=("reagent", "codex"), default="reagent")
+    parser.add_argument("--agent-mode", choices=AGENT_MODE_FLAGS,
+                        help="re:agent only; omit to keep the selected revision's default")
     parser.add_argument("--codex-dir", help="Codex's unpacked Linux x86-64 build, for --agent codex")
     parser.add_argument("--max-steps", type=int, default=MAX_STEPS, help="re:agent's step budget; 0 lifts it")
     parser.add_argument("--max-tool-calls", type=int, default=MAX_TOOL_CALLS, help="re:agent's tool-call budget; 0 lifts it")
@@ -449,6 +471,8 @@ def main():
     parser.add_argument("ids", nargs="*", help="instance ids; defaults to bench/tasks.txt")
     # Intermixed, so instance ids may follow the options.
     args = parser.parse_intermixed_args()
+    if args.agent == "codex" and args.agent_mode is not None:
+        parser.error("--agent-mode is only supported with --agent reagent")
     if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("API_PROXY_URL"):
         sys.exit("set OPENAI_API_KEY, or API_PROXY_URL and API_PROXY_PROVIDER")
 
@@ -478,7 +502,7 @@ def main():
         commit = build(args.ref, binary)
     for label in labels:
         run_label(label, ids, rows, binary, args.model, args.effort, commit, len(labels) > 1, args.agent,
-                  args.codex_dir, (args.max_steps, args.max_tool_calls), args.task_timeout)
+                  args.codex_dir, (args.max_steps, args.max_tool_calls), args.task_timeout, agent_mode=args.agent_mode)
 
 
 if __name__ == "__main__":

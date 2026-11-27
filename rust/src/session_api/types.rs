@@ -20,6 +20,8 @@ pub struct SessionOptions {
     pub plan: bool,
     /// agents enables parent-controlled delegation for live providers.
     pub agents: bool,
+    /// agent_questions lets child agents pause for an answer from their parent; ignored without agents.
+    pub agent_questions: bool,
     /// checkpoint enables persistence for live providers.
     pub checkpoint: bool,
     /// max_steps limits requests per Run, with zero meaning unlimited.
@@ -51,6 +53,7 @@ impl Default for SessionOptions {
             read_only: false,
             plan: false,
             agents: true,
+            agent_questions: false,
             checkpoint: true,
             max_steps: 0,
             max_tool_calls: 0,

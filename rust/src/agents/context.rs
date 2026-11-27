@@ -79,9 +79,8 @@ pub(super) fn prepare(
         && config["model"] == session.config["model"]
     {
         prompt = format!(
-            "# Agent task\n\n{}{}\nFixed agent authority: {}; inherited plan mode: {}.\n{}",
-            include_str!("../prompts/agent_instructions.txt"),
-            super::policy(config),
+            "{}\nFixed agent authority: {}; inherited plan mode: {}.\n{}",
+            context::agent_task(config),
             authority,
             config["plan"].as_bool().unwrap_or(false),
             prompt
@@ -97,7 +96,7 @@ pub(super) fn prepare(
             projected.extend(history.into_iter().skip(entries));
             history = projected;
         }
-        let request = context::build_context(
+        let mut request = context::build_context(
             &session.config,
             crate::run_loop::scope("", "", 0),
             &history,
@@ -109,6 +108,20 @@ pub(super) fn prepare(
             .unwrap_or_default();
         if !history.is_empty() && points.len() < 3 && points.last() != Some(&json!(history.len())) {
             points.push(json!(history.len()));
+        }
+        // Keep even nondispatchable parent declarations in their original order.
+        let tools = request["tools"].as_array_mut().unwrap();
+        if config["agent_questions"] == true
+            && !tools.iter().any(|tool| tool["name"] == "ask_parent")
+        {
+            if let Some(question) = crate::tools::specs(config)
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|tool| tool["name"] == "ask_parent")
+            {
+                tools.push(question.clone());
+            }
         }
         config["agent_prefix"] = json!({"instructions":request["instructions"],"tools":request["tools"],"cache_entries":points});
         mode = "fork_native";
@@ -773,6 +786,39 @@ mod tests {
                 .unwrap_err()
                 .contains("uncertain tool effects")
         );
+    }
+
+    #[test]
+    fn native_forks_keep_the_parent_prefix_and_append_only_the_enabled_question() {
+        let arguments = args(json!({"fork":true}));
+        for enabled in [false, true] {
+            let (_directory, mut parent) = session();
+            parent.config["agent_questions"] = json!(enabled);
+            let root_instructions = context::instructions(&parent.config);
+            let mut expected = crate::tools::specs(&parent.config);
+            let child = super::super::child_config(&parent, &arguments, "read");
+            if enabled {
+                let child_tools = crate::tools::specs(&child);
+                let question = child_tools
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["name"] == "ask_parent")
+                    .unwrap();
+                expected.as_array_mut().unwrap().push(question.clone());
+            }
+            for _ in 0..2 {
+                let mut config = super::super::child_config(&parent, &arguments, "read");
+                let (history, task, _) = prepare(&parent, &mut config, &arguments, "read").unwrap();
+                let request = first_request(&parent, &config, &history, &task);
+                assert_eq!(request["tools"], expected);
+                assert_eq!(request["instructions"], root_instructions);
+                assert_eq!(task.contains("ask_parent"), enabled);
+                parent = Session::new(config).unwrap();
+                parent.history = history;
+                parent.history.push(user(&task));
+            }
+        }
     }
 
     #[test]

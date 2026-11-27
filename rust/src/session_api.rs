@@ -282,6 +282,7 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
         "reasoning_effort":options.reasoning_effort.unwrap_or_else(|| "auto".into()),
         "scripted":scripted.unwrap_or(""), "read_only":options.read_only, "plan":options.plan,
         "agents":options.agents && scripted.is_none(), "checkpoint_enabled":options.checkpoint && scripted.is_none(),
+        "agent_questions":options.agent_questions,
         "max_steps":i64::try_from(options.max_steps).map_err(|_| error("invalid_argument", "max_steps is too large"))?,
         "max_tool_calls":i64::try_from(options.max_tool_calls).map_err(|_| error("invalid_argument", "max_tool_calls is too large"))?,
         "git_do":"recipe", "context_gc":true
