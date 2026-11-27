@@ -404,12 +404,28 @@ fn pooled_post_is_not_replayed_after_the_peer_receives_it() {
         .body(b"non-idempotent".to_vec())
         .send()
         .is_err());
+    drop(client);
     let listener = server.join().unwrap();
+    // Exercise an unused connection deterministically: opening a socket is not a POST.
+    drop(std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap());
     listener.set_nonblocking(true).unwrap();
-    assert_eq!(
-        listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                assert_eq!(
+                    stream.read(&mut [0]).unwrap(),
+                    0,
+                    "unexpected request bytes"
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) => panic!("accept: {e}"),
+        }
+    }
 }
 
 #[test]
