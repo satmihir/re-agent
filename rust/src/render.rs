@@ -134,6 +134,46 @@ fn line(text: &str) -> (String, String, String) {
     }
     (indent.into(), indent.into(), spans(content))
 }
+#[derive(Default)]
+struct LineStyle<'a> {
+    sgr: String,
+    link: Option<&'a str>,
+}
+
+impl<'a> LineStyle<'a> {
+    fn observe(&mut self, text: &'a str, compact_underline: bool) {
+        for (seq, ch) in terminal_parts(text) {
+            if ch.is_some() {
+                continue;
+            }
+            if seq.starts_with("\x1b]8;;") {
+                self.link = (seq != LINK_CLOSE).then_some(seq);
+            } else if seq == RESET {
+                self.sgr.clear();
+            } else if compact_underline && seq == UNDERLINE_OFF {
+                // Closed links must not accumulate replay commands in a long cell.
+                self.sgr = self.sgr.replace(UNDERLINE, "");
+            } else if seq.ends_with('m') {
+                self.sgr.push_str(seq);
+            }
+        }
+    }
+
+    fn resume(&self, row: &mut String) {
+        row.push_str(&self.sgr);
+        row.push_str(self.link.unwrap_or_default());
+    }
+
+    fn close(&self, row: &mut String) {
+        if self.link.is_some() {
+            row.push_str(LINK_CLOSE);
+        }
+        if !self.sgr.is_empty() {
+            row.push_str(RESET);
+        }
+    }
+}
+
 /// Wrap preserves styled words while fitting subsequent rows to a hanging prefix.
 pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<String> {
     if columns == 0 || width(&format!("{first}{body}")) <= columns {
@@ -143,22 +183,17 @@ pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<S
     let mut row = first.to_string();
     let mut cells = width(first);
     let mut words = 0;
-    let mut open = String::new();
-    let mut link = String::new();
+    let mut style = LineStyle::default();
     for word in body.split(' ') {
         if word.is_empty() && words == 0 && !rows.is_empty() {
             continue;
         }
         let w = width(word);
         if words > 0 && cells + 1 + w > columns {
-            if !link.is_empty() {
-                row.push_str(LINK_CLOSE);
-            }
-            if !open.is_empty() {
-                row.push_str(RESET)
-            }
+            style.close(&mut row);
             rows.push(row);
-            row = format!("{hang}{open}{link}");
+            row = hang.into();
+            style.resume(&mut row);
             cells = width(hang);
             words = 0
         }
@@ -169,25 +204,7 @@ pub(crate) fn wrap(first: &str, hang: &str, body: &str, columns: usize) -> Vec<S
         row.push_str(word);
         cells += w;
         words += 1;
-        let mut rest = word;
-        while !rest.is_empty() {
-            if let Some(seq) = terminal_sequence(rest) {
-                if seq.starts_with("\x1b]8;;") {
-                    link = if seq == LINK_CLOSE {
-                        String::new()
-                    } else {
-                        seq.into()
-                    };
-                } else if seq == RESET {
-                    open.clear();
-                } else if seq.ends_with('m') {
-                    open.push_str(seq);
-                }
-                rest = &rest[seq.len()..];
-                continue;
-            }
-            rest = &rest[rest.chars().next().unwrap().len_utf8()..];
-        }
+        style.observe(word, false);
     }
     rows.push(row);
     rows
@@ -217,6 +234,76 @@ fn table_cells(row: &str) -> Vec<String> {
     cells.push(cell.trim().into());
     cells
 }
+fn fit_table_widths(widths: &mut [usize], minimums: &[usize], available: usize) -> bool {
+    if minimums.iter().sum::<usize>() > available {
+        return false;
+    }
+    // Raise a shared ceiling until the budget is used; short columns stop at natural width.
+    let used = |cap| {
+        widths
+            .iter()
+            .zip(minimums)
+            .map(|(&w, &m)| w.min(cap).max(m))
+            .sum::<usize>()
+    };
+    let (mut low, mut high) = (0, available + 1);
+    while high - low > 1 {
+        let cap = low + (high - low) / 2;
+        if used(cap) <= available {
+            low = cap;
+        } else {
+            high = cap;
+        }
+    }
+    let mut spare = available - used(low);
+    for (w, &min) in widths.iter_mut().zip(minimums) {
+        let cap = low + usize::from(spare > 0 && *w > low && min <= low);
+        spare -= cap - low;
+        *w = (*w).min(cap).max(min);
+    }
+    true
+}
+
+fn cell_break(cell: &str, limit: usize) -> usize {
+    let (mut end, mut cells) = (0, 0);
+    let (mut gap, mut on_space) = (None, false);
+    for (part, ch) in terminal_parts(cell) {
+        if let Some(c) = ch {
+            if c == ' ' && !on_space && cells > 0 {
+                gap = Some(end);
+            }
+            on_space = c == ' ';
+            cells += rune_width(c);
+            if cells > limit {
+                return gap.unwrap_or(end);
+            }
+        }
+        end += part.len();
+    }
+    end
+}
+
+fn wrap_cell(mut cell: &str, limit: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut style = LineStyle::default();
+    while !cell.is_empty() {
+        let cut = cell_break(cell, limit);
+        debug_assert!(cut > 0, "the column must fit any one character");
+        let (part, rest) = cell.split_at(cut);
+        let mut row = String::new();
+        style.resume(&mut row);
+        row.push_str(part);
+        style.observe(part, true);
+        style.close(&mut row);
+        rows.push(row);
+        cell = rest.trim_start_matches(' ');
+        if terminal_parts(cell).all(|(_, ch)| ch.is_none()) {
+            break;
+        }
+    }
+    rows
+}
+
 fn table(lines: &[&str], columns: usize) -> Vec<String> {
     let indent = &lines[0][..lines[0].len() - lines[0].trim_start_matches([' ', '\t']).len()];
     let align = table_cells(lines[1]);
@@ -228,45 +315,99 @@ fn table(lines: &[&str], columns: usize) -> Vec<String> {
             continue;
         }
         let cells = table_cells(line);
-        let mut row = vec![String::new(); count];
-        for c in 0..count {
-            if let Some(cell) = cells.get(c) {
-                row[c] = spans(cell)
-            }
-            widths[c] = widths[c].max(width(&row[c]));
+        let row: Vec<_> = widths
+            .iter_mut()
+            .enumerate()
+            .map(|(c, widest)| {
+                let cell = cells.get(c).map_or_else(String::new, |cell| spans(cell));
+                let natural = width(&cell);
+                *widest = (*widest).max(natural);
+                (cell, natural)
+            })
+            .collect();
+        rows.push(row);
+    }
+    let structure = width(indent) + 3 * count.saturating_sub(1);
+    let constrained = columns > 0 && structure + widths.iter().sum::<usize>() > columns;
+    if constrained {
+        if structure > columns {
+            return lines.iter().map(|l| spans(l)).collect();
         }
-        rows.push(row)
+        let mut minimums = vec![0; count];
+        for row in &rows {
+            for ((cell, _), min) in row.iter().zip(&mut minimums) {
+                if *min < 2 {
+                    *min = (*min).max(
+                        terminal_parts(cell)
+                            .filter_map(|(_, ch)| ch)
+                            .map(rune_width)
+                            .max()
+                            .unwrap_or(0),
+                    );
+                }
+            }
+        }
+        // Preserve all content as Markdown if even the dividers and widest glyphs cannot fit.
+        if !fit_table_widths(&mut widths, &minimums, columns - structure) {
+            return lines.iter().map(|l| spans(l)).collect();
+        }
     }
-    let total = width(indent) + 3 * count.saturating_sub(1) + widths.iter().sum::<usize>();
-    if columns > 0 && total > columns {
-        return lines.iter().map(|l| spans(l)).collect();
-    }
+    // Tabs are measured as one cell. Don't let terminal tab stops move wrapped dividers.
+    let indent = if constrained && indent.contains('\t') {
+        std::borrow::Cow::Owned(indent.replace('\t', " "))
+    } else {
+        std::borrow::Cow::Borrowed(indent)
+    };
+    let divider = format!(" {DIM}│{RESET} ");
     let mut out = Vec::new();
-    for (r, row) in rows.iter().enumerate() {
-        let mut cells = Vec::new();
-        for c in 0..count {
-            let mut cell = row[c].clone();
-            if r == 0 {
-                cell = format!(
-                    "{BOLD}{}{RESET}",
-                    cell.replace(RESET, &format!("{RESET}{BOLD}"))
-                )
-            }
-            let pad = widths[c] - width(&cell);
-            let (left, right) = if align[c].starts_with(':') && align[c].ends_with(':') {
-                (pad / 2, pad - pad / 2)
-            } else if align[c].ends_with(':') {
-                (pad, 0)
-            } else {
-                (0, pad)
-            };
-            cells.push(format!("{}{cell}{}", " ".repeat(left), " ".repeat(right)))
+    for (r, row) in rows.into_iter().enumerate() {
+        let row: Vec<_> = row
+            .into_iter()
+            .zip(&widths)
+            .map(|((mut cell, natural), &limit)| {
+                if constrained && cell.contains('\t') {
+                    cell = cell.replace('\t', " ");
+                }
+                let mut fragments = if natural > limit {
+                    wrap_cell(&cell, limit)
+                } else {
+                    vec![cell]
+                };
+                if r == 0 {
+                    for cell in &mut fragments {
+                        *cell = format!(
+                            "{BOLD}{}{RESET}",
+                            cell.replace(RESET, &format!("{RESET}{BOLD}"))
+                        );
+                    }
+                }
+                fragments
+            })
+            .collect();
+        for line in 0..row.iter().map(Vec::len).max().unwrap_or(0) {
+            let cells: Vec<_> = row
+                .iter()
+                .zip(&widths)
+                .zip(&align)
+                .map(|((cell, &limit), align)| {
+                    let cell = cell.get(line).map_or("", String::as_str);
+                    let pad = limit - width(cell);
+                    let left = if !align.ends_with(':') {
+                        0
+                    } else if align.starts_with(':') {
+                        pad / 2
+                    } else {
+                        pad
+                    };
+                    format!("{}{cell}{}", " ".repeat(left), " ".repeat(pad - left))
+                })
+                .collect();
+            out.push(
+                format!("{indent}{}", cells.join(&divider))
+                    .trim_end_matches(' ')
+                    .into(),
+            );
         }
-        out.push(
-            format!("{indent}{}", cells.join(&format!(" {DIM}│{RESET} ")))
-                .trim_end_matches(' ')
-                .into(),
-        );
         if r == 0 {
             out.push(format!(
                 "{indent}{DIM}{}{RESET}",
@@ -416,19 +557,25 @@ fn terminal_sequence(text: &str) -> Option<&str> {
     None
 }
 
-/// Width ignores terminal styles and hyperlinks while measuring terminal cells.
-pub fn width(mut text: &str) -> usize {
-    let mut n = 0;
-    while !text.is_empty() {
+fn terminal_parts(mut text: &str) -> impl Iterator<Item = (&str, Option<char>)> {
+    std::iter::from_fn(move || {
         if let Some(seq) = terminal_sequence(text) {
             text = &text[seq.len()..];
-            continue;
+            return Some((seq, None));
         }
-        let c = text.chars().next().unwrap();
-        text = &text[c.len_utf8()..];
-        n += rune_width(c);
-    }
-    n
+        let c = text.chars().next()?;
+        let (part, rest) = text.split_at(c.len_utf8());
+        text = rest;
+        Some((part, Some(c)))
+    })
+}
+
+/// Width ignores terminal styles and hyperlinks while measuring terminal cells.
+pub fn width(text: &str) -> usize {
+    terminal_parts(text)
+        .filter_map(|(_, c)| c)
+        .map(rune_width)
+        .sum()
 }
 /// Truncate shortens text to cells and appends an ellipsis if necessary.
 pub fn truncate(text: &str, cells: usize) -> String {
@@ -1717,6 +1864,85 @@ mod tests {
             width("\x1b]8;;https://example.invalid\x07界e\u{301}\x1b]8;;\x07"),
             3
         );
+    }
+
+    fn visible_table(output: &str) -> String {
+        terminal_parts(output).filter_map(|(_, c)| c).collect()
+    }
+
+    #[test]
+    fn table_wraps_an_overflowing_cell_but_keeps_a_short_column_and_exact_fit() {
+        let source = "| A | B |\n| --- | --- |\n| xxxxxxxxxxxxxxxxxxxx | **z** |";
+        let wrapped = display(source, true, 23);
+        assert_eq!(
+            visible_table(&wrapped),
+            "A                   │ B\n────────────────────┼──\nxxxxxxxxxxxxxxxxxxx │ z\nx                   │"
+        );
+        assert!(wrapped.contains(&format!("{BOLD}z{RESET}")));
+        let exact = display(source, true, 24);
+        assert_eq!(exact, display(source, true, 80));
+        assert_eq!(
+            visible_table(&exact),
+            "A                    │ B\n─────────────────────┼──\nxxxxxxxxxxxxxxxxxxxx │ z"
+        );
+    }
+
+    #[test]
+    fn table_wraps_words_and_aligns_each_physical_line() {
+        let source = "| header word | Mid | R |\n| --- | :---: | ---: |\n| alpha beta gamma | a | z |\n| q | abcd | 123 |";
+        let rendered = display(source, true, 20);
+        assert_eq!(
+            visible_table(&rendered),
+            "header  │ Mid  │   R\nword    │      │\n────────┼──────┼────\nalpha   │  a   │   z\nbeta    │      │\ngamma   │      │\nq       │ abcd │ 123"
+        );
+        assert!(rendered.contains(&format!("{BOLD}word{RESET}")));
+        assert!(rendered.lines().all(|row| width(row) <= 20));
+        assert_eq!(
+            visible_table(&display("| L | R |\n| --- | ---: |\n| aa bbb cccc | ddddd eeee fff |", true, 16)),
+            "L       │      R\n────────┼───────\naa bbb  │  ddddd\ncccc    │   eeee\n        │    fff"
+        );
+    }
+
+    #[test]
+    fn table_hard_wraps_wide_characters_and_reopens_inline_styles_and_links() {
+        let url = "https://example.invalid/long-destination";
+        let source =
+            format!("| A | B |\n| --- | --- |\n| **界界e\u{301}界** | [onetwosix]({url}) |");
+        let rendered = display(&source, true, 13);
+        assert_eq!(
+            visible_table(&rendered),
+            "A     │ B\n──────┼──────\n界界e\u{301} │ onetw\n界    │ osix"
+        );
+        let open = format!("\x1b]8;;{url}\x1b\\");
+        for (i, (row, (left, right))) in rendered
+            .lines()
+            .skip(2)
+            .zip([("界界e\u{301}", "onetw"), ("界", "osix")])
+            .enumerate()
+        {
+            assert!(row.starts_with(&format!("{BOLD}{left}{RESET}")), "{row:?}");
+            let active_link = if i == 0 {
+                format!("{open}{UNDERLINE}")
+            } else {
+                format!("{UNDERLINE}{open}")
+            };
+            assert!(row.contains(&format!("{active_link}{right}")), "{row:?}");
+            assert_eq!(row.matches(LINK_CLOSE).count(), 1);
+            assert!(width(row) <= 13);
+        }
+    }
+
+    #[test]
+    fn table_falls_back_only_below_its_structural_minimum() {
+        let source = "  | A | B |\n  | --- | --- |\n  | 界界 | *z* |";
+        let fallback = display(source, true, 7);
+        assert_eq!(visible_table(&fallback), source.replace('*', ""));
+        assert!(fallback.contains(&format!("{ITALIC}z{RESET}")));
+        assert_eq!(
+            visible_table(&display(source, true, 8)),
+            "  A  │ B\n  ───┼──\n  界 │ z\n  界 │"
+        );
+        assert_eq!(display(source, false, 8), source);
     }
 
     #[test]
