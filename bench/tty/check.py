@@ -2007,6 +2007,36 @@ for name, options in [("fresh-prompt-no-color", {"no_color": True}),
         ],
     }
 
+# The short, styled second column needs just one cell plus the three-cell separator.
+for name, size, first_width, body, chunks in [
+    ("markdown-table-wrap", (24, 23), 19, "x" * 20, ["x" * 19, "x"]),
+    ("markdown-table-fits", (24, 80), 20, "x" * 20, ["x" * 20]),
+    ("markdown-table-wrap-narrow-tall", (24, 16), 12, "red green blue gold", ["red green", "blue gold"]),
+    # This table fits the physical TTY, but not the reply renderer's 100-cell cap.
+    ("markdown-table-wrap-at-cap", (24, 132), 96, "y" * 96 + "tail", ["y" * 96, "tail"]),
+]:
+    markdown_rows = ["| A | B |", "| --- | --- |", f"| {body} | **Z** |"]
+    table_rows = [f"{'A':<{first_width}} │ B", RULE * (first_width + 1) + "┼" + RULE * 2]
+    table_rows += [f"{chunk:<{first_width}} │" + (" Z" if i == 0 else "")
+                   for i, chunk in enumerate(chunks)]
+    if name == "markdown-table-wrap-narrow-tall":
+        for number in range(40):
+            markdown_rows.append(f"| row {number:02} | Z |")
+            table_rows.append(f"{'row %02d' % number:<{first_width}} │ Z")
+    SCENARIOS[name] = {
+        "size": size,
+        "script": [reply("\n".join(["Table start.", "", *markdown_rows, "", "Table end."]))],
+        "steps": [
+            ("wait", "Ctrl-D exit", 5),
+            ("type", "Show a table"), ("key", "enter"),
+            ("wait_regex", r"^✓ ", 5),
+            ("show", "Styled Markdown table after the scripted reply"),
+            ("expect", "markdown_table_rows", table_rows),
+            ("expect", "raw_has", "\x1b[1mZ\x1b[0m"),
+            ("key", "ctrl-d"), ("exit", 0, "", 5),
+        ],
+    }
+
 KEYS = {"enter": "\r", "ctrl-c": "\x03", "ctrl-u": "\x15", "ctrl-l": "\x0c", "esc": "\x1b",
         "left": "\x1b[D", "up": "\x1b[A", "down": "\x1b[B", "tab": "\t", "backspace": "\x7f",
         "ctrl-left": "\x1b[1;5D", "ctrl-right": "\x1b[1;5C", "alt-backspace": "\x1b\x7f",
@@ -2413,6 +2443,16 @@ def check_markdown_links(s):
     return None
 
 
+def check_markdown_table_rows(s, expected):
+    # Compare every physical row, including any unintended PTY wrap or duplicate.
+    text = s.term.text()
+    if text.count("Table start.") != 1 or text.count("Table end.") != 1:
+        return "expected exactly one pair of Markdown table markers"
+    actual = text[text.index("Table start.") + 1:text.index("Table end.")]
+    expected = ["", *expected, ""]
+    return None if actual == expected else "Markdown table rows %r, expected %r" % (actual, expected)
+
+
 def check_palette(s):
     raw = s.raw.decode("utf-8", "replace")
     if s.no_color:
@@ -2456,6 +2496,7 @@ CHECKS = {
     "agent_notice_once": check_agent_notice_once,
     "palette": check_palette,
     "markdown_links": check_markdown_links,
+    "markdown_table_rows": check_markdown_table_rows,
     "region_after_output": check_region_after_output,
     "input_at_top": check_input_at_top,
     "status_row_last": check_status_row_last,
