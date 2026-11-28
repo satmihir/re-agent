@@ -159,6 +159,7 @@ pub(crate) fn supports_images(config: &Value) -> bool {
                 | "gpt-6.1-sol"
                 | "gpt-6-astra"
                 | "gpt-6-sol"
+                | "gpt-6.2-sol"
                 | "gpt-6.2-astra"
         ) | (
             "anthropic",
@@ -516,6 +517,12 @@ mod tests {
         assert_eq!(sol["provider"], "openai");
         assert_eq!(sol["effort"], "high");
         assert_eq!(sol["verbosity"], "low");
+        assert!(supports_images(
+            &json!({"provider":"openai","model":"gpt-6.2-sol"})
+        ));
+        assert!(!supports_fast(
+            &json!({"provider":"openai","model":"gpt-6.2-sol"})
+        ));
         let earlier = model_info("gpt-6.1-sol");
         assert_eq!(sol["context_window"], earlier["context_window"]);
         assert_eq!(sol["efforts"], earlier["efforts"]);
