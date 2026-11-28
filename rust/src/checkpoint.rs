@@ -13,7 +13,7 @@ use std::sync::{Mutex, OnceLock};
 mod legacy;
 mod listing;
 
-pub(crate) use listing::{list, SavedSession};
+pub(crate) use listing::{first_message, list, read, scan, SavedSession};
 
 #[derive(Default)]
 struct Leases {
@@ -114,11 +114,33 @@ fn open(id: &str, create: bool, opening: Opening) -> Result<PathBuf, String> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(dir.join("lock"))
         .map_err(|e| format!("open session lock: {}", crate::errors::stable_io(&e)))?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(format!("session {id} is already open or cannot be locked"));
+    // `owned` may hold the lock for an instant from another process; outlast it, not an owner.
+    let mut tries = 0;
+    while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        tries += 1;
+        if tries == 20 {
+            return Err(format!("session {id} is already open or cannot be locked"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     locks.files.insert(id.into(), lock);
     Ok(dir)
+}
+
+/// Owned reports whether a live process, this one included, holds the Session's checkpoint lease.
+pub(crate) fn owned(id: &str) -> bool {
+    let Ok(dir) = directory(id) else {
+        return false;
+    };
+    let Ok(lock) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(dir.join("lock"))
+    else {
+        return false;
+    };
+    // Taking the lock proves nobody holds it; closing the file gives it straight back.
+    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 }
 }
 
 /// Claim_api reserves exclusive API ownership atomically against legacy resume and API openings.
@@ -355,6 +377,7 @@ const FIELDS: &[&str] = &[
     "origin",
     "tool_free",
     "instructions",
+    "host_tools",
     "web_search",
     "image_generation",
     "no_exec",
@@ -392,6 +415,8 @@ const FIELDS: &[&str] = &[
     "handoff",
     "compacted_plan",
     "blocked",
+    "last_status",
+    "last_reason",
     "last_trace",
     "last_request",
     "tokens_per_byte",
@@ -470,6 +495,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
                 "origin",
                 "tool_free",
                 "instructions",
+                "host_tools",
                 "web_search",
                 "image_generation",
                 "no_exec",
@@ -503,6 +529,7 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "origin",
             "tool_free",
             "instructions",
+            "host_tools",
             "web_search",
             "image_generation",
             "no_exec",
@@ -519,6 +546,8 @@ fn state(session: &crate::runtime::Session, phase: &str, in_flight: &str) -> Val
             "auto_fallback_effort",
             "pending_submission",
             "first_message",
+            "last_status",
+            "last_reason",
             "handoff",
             "in_flight",
             "prompt",
@@ -765,7 +794,7 @@ fn valid_checkpoint_type(value: &mut Value, kind: &str) -> bool {
 fn checkpoint_fields(kind: &str) -> &'static str {
     match kind {
         "checkpoint" => "version:int id:string provider:string model:string effort:string fast:bool \
-            launch:string active:string origin:string tool_free:bool instructions:string web_search:bool image_generation:bool no_exec:bool read_only:bool plan:bool no_project_instructions:bool \
+            launch:string active:string origin:string tool_free:bool instructions:string host_tools:raw web_search:bool image_generation:bool no_exec:bool read_only:bool plan:bool no_project_instructions:bool \
             project_instructions:string launch_instructions:string max_steps:int max_tool_calls:int \
             model_retry_window:int in_run_compact:bool context_window_tokens:int \
             context_gc_age_steps:int context_gc_consolidate:bool context_gc:bool gc_state:gc \
@@ -773,7 +802,7 @@ fn checkpoint_fields(kind: &str) -> &'static str {
             report_friction:bool auto:bool auto_enabled:bool auto_fallback_model:string \
             auto_fallback_effort:string auto_usage:usage auto_attempts:int auto_compact_off:bool \
             history:[]entry pending_submission:user first_message:string seen:map:bool handoff:handoff \
-            compacted_plan:string blocked:string last_trace:string last_request:usage \
+            compacted_plan:string blocked:string last_status:string last_reason:string last_trace:string last_request:usage \
             tokens_per_byte:float usage:usage phase:string in_flight:string prompt:prompt outstanding_jobs:[]job",
         "job" => "id:string workspace:string",
         "entry" => "kind:string user:user assistant:response tool:tool shell:shell summary:summary",
@@ -1010,6 +1039,7 @@ fn restored(id: &str, cp: Value) -> Value {
         "origin",
         "tool_free",
         "instructions",
+        "host_tools",
         "web_search",
         "image_generation",
         "no_exec",
@@ -1483,6 +1513,26 @@ mod tests {
         }
         convert_raw(&mut persisted, true).unwrap();
         assert_eq!(persisted, original);
+    }
+
+    #[test]
+    fn restored_host_tools_are_declared_again_but_not_to_agents() {
+        let mut original = cp();
+        original["host_tools"] = json!([{"name":"session_list","description":"List coding Sessions.","input_schema":{"type":"object"},"read_only":true}]);
+        original["last_status"] = json!("cancelled");
+        let saved = restored("0123456789abcdef", original);
+        assert_eq!(saved["state"]["last_status"], "cancelled");
+        let declared = |config: &Value| {
+            crate::tools::specs(config)
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == "session_list" && tool["effect"] == "read")
+        };
+        assert!(declared(&saved["config"]));
+        let mut agent = saved["config"].clone();
+        agent["agent"] = json!(true);
+        assert!(!declared(&agent));
     }
 
     #[test]

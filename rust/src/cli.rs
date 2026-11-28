@@ -4,7 +4,7 @@ use std::io::{self, Read, Write};
 
 mod startup;
 
-const TOP: &str = "re:agent: a small, readable agent harness\n\nusage:\n  reagent [chat flags]             start chat on a terminal\n  reagent --continue               resume this workspace's latest session\n  reagent --resume [ID]            choose a saved session, or resume by ID\n  reagent run  [flags] \"prompt\"    one task, then exit\n  reagent chat [flags]             a conversation, one turn per line\n  reagent help [run|chat|friction-export]  this text, or a command's flags\n  reagent friction-export [flags] export local friction reports to S3\n  reagent version                  the build's version\n  reagent login                    sign in with ChatGPT\n  reagent logout                   disconnect ChatGPT\n  reagent auth status              account, plan usage, expiry and models\n\nexamples:\n  reagent chat --workspace ./repo\n  reagent run --workspace ./repo \"Set the default timeout to 30s.\"\n  reagent run --workspace . --show-context \"Where is the budget?\" | jq .\n\nenvironment:\n  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run\n  GEMINI_API_KEY                     Gemini Interactions API credential\n  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,\n                                      with no key; the provider must be openai\n  TYPESAFE_API_KEY                    router key for --auto or --git-do jev\n  REAGENT_MODEL                       default model\n  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)\n  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)\n  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)\n  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)\n  REAGENT_GEMINI_BASE_URL            Interactions API base URL (default https://generativelanguage.googleapis.com/v1beta)\n  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)\n  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)\n  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)\n  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)\n  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume\n  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables\n  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false\n                                      experiments are exclusive and require --context-gc\n                                      empty is unset; validated on resume, saved settings win\n  NO_COLOR                            turn off styling\n";
+const TOP: &str = "re:agent: a small, readable agent harness\n\nusage:\n  reagent [chat flags]             start chat on a terminal\n  reagent --continue               resume this workspace's latest session\n  reagent --resume [ID]            choose a saved session, or resume by ID\n  reagent run  [flags] \"prompt\"    one task, then exit\n  reagent chat [flags]             a conversation, one turn per line\n  reagent serve [flags]            serve a Session's API on a Unix socket\n  reagent help [run|chat|serve|friction-export]  this text, or a command's flags\n  reagent friction-export [flags] export local friction reports to S3\n  reagent version                  the build's version\n  reagent login                    sign in with ChatGPT\n  reagent logout                   disconnect ChatGPT\n  reagent auth status              account, plan usage, expiry and models\n\nexamples:\n  reagent chat --workspace ./repo\n  reagent run --workspace ./repo \"Set the default timeout to 30s.\"\n  reagent run --workspace . --show-context \"Where is the budget?\" | jq .\n\nenvironment:\n  OPENAI_API_KEY, ANTHROPIC_API_KEY   credentials, read only for a live run\n  GEMINI_API_KEY                     Gemini Interactions API credential\n  API_PROXY_URL, API_PROXY_PROVIDER   send OpenAI requests to this full URL instead,\n                                      with no key; the provider must be openai\n  TYPESAFE_API_KEY                    router key for --auto or --git-do jev\n  REAGENT_MODEL                       default model\n  REAGENT_OPENAI_AUTH                 auto, key or chatgpt (--openai-auth overrides)\n  REAGENT_OPENAI_BASE_URL             inference API base URL (default https://api.openai.com/v1)\n  REAGENT_OPENAI_AUTH_ISSUER          OAuth issuer (default https://auth.openai.com)\n  REAGENT_ANTHROPIC_BASE_URL          Messages API base URL (default https://api.anthropic.com/v1)\n  REAGENT_GEMINI_BASE_URL            Interactions API base URL (default https://generativelanguage.googleapis.com/v1beta)\n  REAGENT_JEV_BASE_URL                Jev API base URL (default https://api.typesafe.ai/v1)\n  REAGENT_RESPONSE_HEADER_TIMEOUT     header timeout in whole seconds, 1–3600 (default 600)\n  REAGENT_RESPONSE_IDLE_TIMEOUT       body-idle timeout in whole seconds, 1–3600 (default 300)\n  REAGENT_WORKSPACE_GIT_TIMEOUT       workspace-snapshot Git probe timeout in whole seconds, 1–3600 (default 2)\n  REAGENT_CONTEXT_WINDOW_TOKENS       positive testing window cap; saved across resume\n  REAGENT_CONTEXT_GC_AGE_STEPS        GC experiment: 0 disables, integer > 3 enables\n  REAGENT_CONTEXT_GC_CONSOLIDATE      GC experiment: true, false, 1 or 0; default false\n                                      experiments are exclusive and require --context-gc\n                                      empty is unset; validated on resume, saved settings win\n  NO_COLOR                            turn off styling\n";
 
 fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
     vec![
@@ -36,11 +36,14 @@ fn flags() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("continue", "", "resume the latest saved session for the current workspace", json!(false)),
         ("max-steps", "N", "maximum model requests in one run (0 means unlimited)", json!(0)),
         ("max-tool-calls", "N", "maximum accepted tool calls in one run (0 means unlimited)", json!(0)),
+        ("idle-exit", "DURATION", "close and exit after this long with no Run and no request", json!(600_000_000_000i64)),
     ]
 }
 
 fn help(command: &str) -> String {
-    let mut out = if command == "run" {
+    let mut out = if command == "serve" {
+        "usage: reagent serve [flags]\n       reagent serve --resume ID\n\nOpens a Session, or resumes one, and serves its Session API as JSON lines on the\nUnix socket `socket` in the Session's private folder, printing one JSON line with\nthe Session ID and the socket once it listens. It exits after --idle-exit with no\nRun and no request, or on SIGINT or SIGTERM, cancelling any Run still going.\n".to_string()
+    } else if command == "run" {
         "usage: reagent run [flags] \"prompt\"\n       reagent run [flags] --prompt-file PATH\n\nRuns one task to completion and exits. The reply goes to stdout; progress\nand tool activity go to stderr. The run summary always prints.\n--recap also shows the completed run's operation recap. Flags go before the prompt.\n".to_string()
     } else {
         "usage: reagent chat [flags]\n       reagent [flags]          on a terminal\n\nHolds a conversation, one turn per line typed. /help inside lists its commands.\n--continue resumes this workspace's latest session; --resume opens a picker.\n".to_string()
@@ -103,6 +106,9 @@ fn help(command: &str) -> String {
     if command == "chat" {
         groups.push(("Resume", vec!["continue", "resume"]));
     }
+    if command == "serve" {
+        groups.push(("Serve", vec!["resume", "idle-exit"]));
+    }
     groups.push((
         "Offline",
         if command == "run" {
@@ -134,6 +140,9 @@ fn help(command: &str) -> String {
             }
             if name == "model-retry-window" {
                 text.push_str(" (default 0s)");
+            }
+            if name == "idle-exit" {
+                text.push_str(" (default 10m)");
             }
             let mut prefix = format!("  {:width$}  ", label(name));
             while !text.is_empty() {
@@ -231,7 +240,7 @@ fn parse(args: &[String]) -> Result<(Value, BTreeSet<String>, Vec<String>, bool)
             .ok_or_else(|| format!("unknown flag --{name}"))?;
         let expected = if f.3.is_boolean() {
             "a boolean (true or false)"
-        } else if name == "model-retry-window" {
+        } else if matches!(name, "model-retry-window" | "idle-exit") {
             "a duration (for example 30s or 12h)"
         } else if f.3.is_number() {
             "an integer"
@@ -255,7 +264,7 @@ fn parse(args: &[String]) -> Result<(Value, BTreeSet<String>, Vec<String>, bool)
                 "false" | "FALSE" | "False" | "0" => Some(json!(false)),
                 _ => None,
             }
-        } else if name == "model-retry-window" {
+        } else if matches!(name, "model-retry-window" | "idle-exit") {
             duration(text).map(Value::from)
         } else if f.3.is_number() {
             text.parse::<i64>().ok().map(Value::from)
@@ -347,13 +356,13 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
                 print!("{}", crate::friction_export::HELP);
                 return 0;
             }
-            if args.len() == 2 && matches!(args[1].as_str(), "run" | "chat") {
+            if args.len() == 2 && matches!(args[1].as_str(), "run" | "chat" | "serve") {
                 print!("{}", help(&args[1]));
                 return 0;
             }
             return usage(
                 "help",
-                "help takes an optional command: run, chat or friction-export",
+                "help takes an optional command: run, chat, serve or friction-export",
             );
         }
         "version" | "--version" => {
@@ -365,7 +374,7 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
             return 0;
         }
         "friction-export" => return crate::friction_export::command(&args[1..]),
-        "run" | "chat" => {}
+        "run" | "chat" | "serve" => {}
         "login" | "logout" | "auth" => return crate::auth::command(&args),
         _ => {
             eprintln!("error: unknown command {command}");
@@ -413,6 +422,14 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         Some("--resume applies to chat only")
     } else if command == "run" && used.contains("continue") {
         Some("--continue applies to chat only")
+    } else if command == "serve" && used.contains("continue") {
+        Some("--continue applies to chat only")
+    } else if command == "serve" && used.contains("resume") && text(&cfg, "resume").is_empty() {
+        Some("serve --resume needs a Session ID")
+    } else if command == "serve" && scripted {
+        Some("serve keeps its socket beside its checkpoint, which --scripted replay never saves")
+    } else if command == "serve" && (!prompt.is_empty() || !text(&cfg, "prompt_file").is_empty()) {
+        Some("serve takes no prompt; send messages over its socket")
     } else if continuing && used.contains("resume") {
         Some("--continue and --resume are mutually exclusive")
     } else if command == "run" && prompt.is_empty() && text(&cfg, "prompt_file").is_empty() {
@@ -421,7 +438,7 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         Some("give the prompt as an argument or with --prompt-file, not both")
     } else if command == "chat" && (!prompt.is_empty() || !text(&cfg, "prompt_file").is_empty()) {
         Some("chat reads its turns from stdin and takes no prompt")
-    } else if command == "chat" && (preview || !text(&cfg, "trace_file").is_empty()) {
+    } else if command != "run" && (preview || !text(&cfg, "trace_file").is_empty()) {
         Some("--show-context and --trace-file apply to run; chat writes one trace per turn")
     } else if command == "run" && !text(&cfg, "trace_dir").is_empty() {
         Some("--trace-dir applies to chat; run takes --trace-file")
@@ -452,7 +469,7 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
             .filter(|name| {
                 !matches!(
                     name.as_str(),
-                    "resume" | "continue" | "recap" | "trace-dir" | "openai-auth"
+                    "resume" | "continue" | "recap" | "trace-dir" | "openai-auth" | "idle-exit"
                 ) && !(continuing && name.as_str() == "workspace")
             })
             .last()
@@ -481,7 +498,14 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
             Ok(saved) => {
                 let local = cfg;
                 cfg = saved["config"].clone();
-                for k in ["resume", "recap", "trace_dir", "openai_auth", "git_do"] {
+                for k in [
+                    "resume",
+                    "recap",
+                    "trace_dir",
+                    "openai_auth",
+                    "git_do",
+                    "idle_exit",
+                ] {
                     cfg[k] = local[k].clone();
                 }
                 cfg["restore"] = saved;
@@ -607,7 +631,12 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
             return usage(command, "Auto fallback needs a catalog model with a known window and supported explicit effort");
         }
     }
-    cfg["_display"] = json!(true);
+    // A served Session has no terminal; its host shows what it does. Its socket lives in its
+    // checkpoint folder, and its host reads its progress from the checkpoint, so it always saves.
+    cfg["_display"] = json!(command != "serve");
+    if command == "serve" {
+        cfg["checkpoint_enabled"] = json!(true);
+    }
     if command == "chat" {
         return crate::chat::run(cfg);
     }
@@ -615,6 +644,14 @@ fn main_input(args: Vec<String>, raw_args: Option<Vec<Vec<u8>>>) -> i32 {
         Ok(api) => api,
         Err(error) => return startup(&error.to_string()),
     };
+    if command == "serve" {
+        // Durations are parsed to nanoseconds, as Go's were.
+        let idle = std::time::Duration::from_nanos(number(&cfg, "idle_exit").max(1) as u64);
+        return match crate::session_socket::serve(api, idle) {
+            Ok(()) => 0,
+            Err(error) => startup(&error),
+        };
+    }
     let snapshot = api.get_snapshot().unwrap();
     cfg["session_id"] = json!(snapshot.session.session_id);
     crate::render::header(&cfg, false);
