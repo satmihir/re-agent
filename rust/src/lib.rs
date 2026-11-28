@@ -37,6 +37,8 @@ pub mod runtime;
 pub mod schemas;
 /// Trusted-local ownership and concurrent control of root Sessions.
 pub mod session_api;
+/// JSON lines over a Unix socket, so another process can use a served Session's API.
+pub mod session_socket;
 pub(crate) mod skills;
 pub mod terminal;
 pub mod tool_exec;

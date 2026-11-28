@@ -1084,6 +1084,9 @@ impl Session {
         if !matches!(status, "completed" | "refused") && !flag(&self.state["resumable"]) {
             self.state["blocked"] = json!(status);
         }
+        // A reader of the saved Session can then tell a stopped Run from a finished one.
+        self.state["last_status"] = json!(status);
+        self.state["last_reason"] = json!(reason);
         let error = string(&self.state["persistence_error"]).to_owned();
         let saved = if error.is_empty() {
             self.state["last_trace"] = json!(self.trace.path());

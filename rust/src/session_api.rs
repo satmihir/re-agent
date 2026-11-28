@@ -5,21 +5,25 @@ mod btw_capture;
 mod consent;
 mod consent_types;
 mod controls;
+mod host_tools;
 /// Trusted user guidance applied by the conversation owner at settled boundaries.
 pub(crate) mod steering;
 /// Live trusted-local human workspace-consent ownership.
 pub use consent::WorkspaceConsentApi;
 /// Typed human requests, decisions and bounded approval references.
 pub use consent_types::*;
+pub use host_tools::HostToolHandler;
 mod observation_types;
 mod observations;
 mod preview;
+mod saved;
 mod types;
 /// Bounded owned records for structured Session observations.
 pub use observation_types::*;
 pub(crate) use preview::ReplyPreview;
 /// Speculative reply text of a running conversation Run.
 pub use preview::{PreviewCursor, PreviewPage};
+pub use saved::{read_saved_entries, saved_sessions, SavedEntryPage, SavedSession};
 /// Owned records used by the in-process Session interface.
 pub use types::*;
 
@@ -157,6 +161,8 @@ struct State {
     events: VecDeque<ObservationEvent>,
     events_exhausted: bool,
     consent_owner: Option<consent::Binding>,
+    /// host_tools answers this opening's host tool calls once the host sets it.
+    host_tools: Option<Arc<HostToolHandler>>,
     workspace_approval: Option<consent::Pending>,
     replacement: Option<Replacement>,
     commands: Vec<Command>,
@@ -275,6 +281,7 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
             ));
         }
     }
+    host_tools::check(&options.host_tools, options.tool_free)?;
     if options.tool_free && options.plan {
         return Err(error(
             "invalid_argument",
@@ -317,6 +324,9 @@ pub fn open_session(options: SessionOptions) -> Result<SessionApi, ApiError> {
     }
     if let Some(text) = options.instructions {
         config["instructions"] = json!(text);
+    }
+    if !options.host_tools.is_empty() {
+        config["host_tools"] = json!(options.host_tools);
     }
     crate::provider::configure(&mut config).map_err(|e| error("unavailable", e))?;
     open_resolved(config, None)
@@ -457,6 +467,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
             events: VecDeque::new(),
             events_exhausted: false,
             consent_owner: None,
+            host_tools: None,
             workspace_approval: None,
             replacement: None,
             commands: Vec::new(),
@@ -486,6 +497,7 @@ fn new_shared(session: &Session, notice: Option<String>) -> Arc<Shared> {
 fn start(mut owner: Owner, notice: Option<String>) -> Result<SessionApi, ApiError> {
     let shared = new_shared(&owner.session, notice);
     consent::bind(&mut owner.session, &shared);
+    host_tools::bind(&mut owner.session, &shared);
     let worker = shared.clone();
     std::thread::Builder::new()
         .name("reagent-session".into())
@@ -1687,6 +1699,7 @@ fn replace_owner(
     finish_switch_trace(audit, None);
     let replacement = new_shared(session, None);
     consent::bind(session, &replacement);
+    host_tools::bind(session, &replacement);
     let mut state = shared.state.lock().unwrap();
     observations::install(&mut state, retired);
     let mut successor = replacement.state.lock().unwrap();

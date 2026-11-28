@@ -41,6 +41,8 @@ pub struct SessionOptions {
     pub image_generation: bool,
     /// exec offers commands (`exec` and `git_do`); off, the model works with files only.
     pub exec: bool,
+    /// host_tools are tools the host answers through `set_host_tools`, declared after re:agent's own.
+    pub host_tools: Vec<HostTool>,
 }
 
 impl Default for SessionOptions {
@@ -63,8 +65,39 @@ impl Default for SessionOptions {
             web_search: false,
             image_generation: false,
             exec: true,
+            host_tools: Vec::new(),
         }
     }
+}
+
+/// HostTool declares a tool that the host application answers instead of re:agent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HostTool {
+    /// name is lowercase ASCII letters, digits and underscores, and no re:agent tool's name.
+    pub name: String,
+    pub description: String,
+    /// input_schema is the JSON Schema object the model's arguments are checked against.
+    pub input_schema: Value,
+    /// read_only says the tool changes nothing, so plan and read-only Sessions keep it.
+    pub read_only: bool,
+}
+
+/// HostToolCall is one accepted call of a host tool, with its arguments decoded.
+#[derive(Clone, Debug)]
+pub struct HostToolCall {
+    pub name: String,
+    pub arguments: Value,
+    /// cancelled becomes true when the Run is cancelled; a long answer should give up.
+    pub cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// HostToolOutcome is the host's answer, returned to the model as the call's ToolOutcome.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostToolOutcome {
+    pub ok: bool,
+    /// message says what went wrong when `ok` is false.
+    pub message: String,
+    pub data: Value,
 }
 
 /// ApiError describes rejected admission or unavailable local Session state.

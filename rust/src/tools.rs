@@ -34,6 +34,10 @@ pub enum WorkspaceConsentError {
 pub type WorkspaceConsent =
     dyn FnMut(&Value, &WorkspaceDestination) -> Result<bool, WorkspaceConsentError> + Send;
 
+/// HostToolAnswer asks the host application for a host tool's outcome, given the tool's name,
+/// its decoded arguments and the Session configuration.
+pub type HostToolAnswer = dyn FnMut(&str, Value, &Value) -> Value + Send;
+
 pub struct ToolState {
     pub workspace: Workspace,
     /// Background commands live with this opening, independently of individual Runs.
@@ -43,6 +47,8 @@ pub struct ToolState {
     approved: Vec<WorkspaceDestination>,
     /// workspace_consent is an owner-installed human adapter, never checkpointed or model-configured.
     pub workspace_consent: Option<Box<WorkspaceConsent>>,
+    /// host_tool is the owner-installed way to reach the host for its tools; none fails them.
+    pub host_tool: Option<Box<HostToolAnswer>>,
 }
 impl ToolState {
     /// forget_seen clears write authorization in every retained workspace without revoking grants.
@@ -88,6 +94,7 @@ impl ToolState {
                 handles: HashMap::new(),
                 approved: vec![],
                 workspace_consent: None,
+                host_tool: None,
             });
         }
         let workspace = Workspace::open(config["workspace"].as_str().unwrap_or("."))?;
@@ -130,6 +137,7 @@ impl ToolState {
             handles: HashMap::new(),
             approved,
             workspace_consent: None,
+            host_tool: None,
         })
     }
 }
@@ -187,7 +195,52 @@ pub fn specs(config: &Value) -> Value {
     if config["tool_free"] == true {
         return json!([]);
     }
-    (*cached_specs(config)).clone()
+    let mut specs = (*cached_specs(config)).clone();
+    specs.as_array_mut().unwrap().extend(host_specs(config));
+    specs
+}
+
+/// host_specs declares the host's tools, never to agents, and only reading ones when read-only.
+fn host_specs(config: &Value) -> Vec<Value> {
+    if config["agent"] == true {
+        return Vec::new();
+    }
+    let tools = config["host_tools"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    tools
+        .iter()
+        .filter(|tool| tool["read_only"] == true || config["read_only"] != true)
+        .map(|tool| {
+            let effect = if tool["read_only"] == true { "read" } else { "write" };
+            json!({"name":tool["name"],"description":tool["description"],"input_schema":tool["input_schema"],"effect":effect})
+        })
+        .collect()
+}
+
+/// builtin reports whether re:agent itself has a tool of this name, in any configuration.
+pub(crate) fn builtin(name: &str) -> bool {
+    static NAMES: LazyLock<Vec<String>> = LazyLock::new(|| {
+        let listed: Vec<Value> = serde_json::from_str(include_str!("tool_specs.json")).unwrap();
+        let fixed = [
+            "exec",
+            "exec_job",
+            "git_inspect",
+            "view_image",
+            "generate_image",
+            "load_skill",
+            "git_do",
+            "recall",
+            "echo",
+        ];
+        listed
+            .iter()
+            .chain(crate::agents::specs().iter())
+            .filter_map(|spec| spec["name"].as_str().map(str::to_owned))
+            .chain(fixed.iter().map(|name| (*name).to_owned()))
+            .collect()
+    });
+    NAMES.iter().any(|known| known == name)
 }
 
 fn cached_specs(config: &Value) -> Arc<Value> {
@@ -593,6 +646,19 @@ pub fn execute_in_region(
     }
     if config["tool_free"] == true {
         return Ok(fail("permission_denied", "This Session has no tools"));
+    }
+    if let Some(spec) = host_specs(config).into_iter().find(|s| s["name"] == name) {
+        let args = match decode_arguments(arguments, &spec["input_schema"]) {
+            Ok(args) => args,
+            Err(bad) => return Ok(bad),
+        };
+        return Ok(match state.host_tool.as_mut() {
+            Some(answer) => answer(name, args, config),
+            None => fail(
+                "host_unavailable",
+                &format!("{name} is answered by the application that opened this Session, which is not connected"),
+            ),
+        });
     }
     let all = cached_specs(config);
     let spec = all.as_array().unwrap().iter().find(|s| s["name"] == name);

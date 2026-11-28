@@ -6,8 +6,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const MAX_PAGE_BYTES: usize = 256 << 10;
-const PAGE_HEADROOM: usize = 16 << 10;
+pub(super) const MAX_PAGE_BYTES: usize = 256 << 10;
+pub(super) const PAGE_HEADROOM: usize = 16 << 10;
 const ITEM_CONTENT_BYTES: usize = 8 << 10;
 const MAX_BLOCKS: usize = 32;
 const MAX_EVENTS: usize = 256;
@@ -103,7 +103,7 @@ fn block(value: &Value, remaining: &mut usize) -> BlockView {
     }
 }
 
-fn entry(
+pub(super) fn entry(
     value: &Value,
     index: usize,
     size: u64,

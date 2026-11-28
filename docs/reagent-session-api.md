@@ -88,6 +88,23 @@ must not be given to untrusted clients. Transport authorization is not implement
 not a claim that every field or method already exists. `wait_run` and `close` are
 local conveniences while that broader observation/control boundary is extracted.
 
+## Implemented host tools, saved-Session reads and the socket
+
+These were added for Covalent's coding Sessions (Covalent's
+`docs/covalent-coding-sessions-plan.md`); the overview's Host tools, Saved Sessions and Serving
+paragraphs describe them.
+
+- `SessionOptions.host_tools: Vec<HostTool>` and `SessionApi::set_host_tools(handler)`. The
+  handler is `Fn(&HostToolCall) -> HostToolOutcome`, called on the worker thread with the State
+  lock released; `HostToolCall.cancelled` is the Run's cancellation flag. It lives in State, not
+  the checkpoint, so every opening (and Reset successor) registers its own.
+- `saved_sessions()` and `read_saved_entries()` read checkpoint files only. Entry views from a
+  saved Session carry no Run, Step or live opening (`instance_id` is empty).
+- `session_socket::{serve, call, Request, socket_path}`: one thread per connection, blocking
+  `std` sockets, no new dependency. A waiting call holds its connection; clients open one per
+  call. Error codes are mapped back to the API's static vocabulary, unknown ones to
+  `unavailable`.
+
 ## Implemented isolated BTW questions
 
 `ask(request_id, question: &[u8])` reserves a `RunKind::Btw` Run with its own

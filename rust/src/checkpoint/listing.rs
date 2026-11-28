@@ -19,53 +19,10 @@ pub(crate) struct SavedSession {
     pub(crate) first_message: String,
 }
 
-/// list discovers private checkpoints newest first without locking or changing them.
+/// list discovers the CLI's own checkpoints newest first without locking or changing them.
 pub(crate) fn list() -> Result<Vec<SavedSession>, String> {
-    let root = crate::cache::directory().ok_or("user cache directory is unavailable")?;
-    let store = root.join("reagent/sessions");
-    match fs::symlink_metadata(&store) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        _ => {}
-    }
-    private(&store, false).map_err(|error| format!("list session store: {error}"))?;
-    let entries = fs::read_dir(&store)
-        .map_err(|error| format!("list session store: {}", crate::errors::stable_io(&error)))?;
     let mut sessions = Vec::new();
-    for entry in entries.flatten() {
-        let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Ok(dir) = directory(&id) else {
-            continue;
-        };
-        if private(&dir, false).is_err() {
-            continue;
-        }
-        let path = dir.join("checkpoint.json");
-        // Nonblocking also keeps an invalid FIFO from stalling startup.
-        let Ok(mut file) = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&path)
-        else {
-            continue;
-        };
-        let Ok(info) = file.metadata() else {
-            continue;
-        };
-        if !info.is_file() || info.permissions().mode() & 0o777 != 0o600 {
-            continue;
-        }
-        let Ok(modified) = info.modified() else {
-            continue;
-        };
-        let mut bytes = Vec::new();
-        if file.read_to_end(&mut bytes).is_err() {
-            continue;
-        }
-        let Ok(cp) = parse(&id, &bytes) else {
-            continue;
-        };
+    for (id, modified, cp) in scan()? {
         // A labelled Session belongs to the host that opened it; `--resume ID` still reaches it.
         if cp["origin"]
             .as_str()
@@ -80,12 +37,57 @@ pub(crate) fn list() -> Result<Vec<SavedSession>, String> {
             first_message: first_message(&cp, cp["history"].as_array().map_or(&[], Vec::as_slice)),
         });
     }
-    sessions.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.id.cmp(&b.id)));
     Ok(sessions)
 }
 
+/// scan reads every valid private checkpoint, any host's included, newest first, without
+/// locking or changing them; corrupt or unsafe entries are skipped.
+pub(crate) fn scan() -> Result<Vec<(String, SystemTime, Value)>, String> {
+    let root = crate::cache::directory().ok_or("user cache directory is unavailable")?;
+    let store = root.join("reagent/sessions");
+    match fs::symlink_metadata(&store) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        _ => {}
+    }
+    private(&store, false).map_err(|error| format!("list session store: {error}"))?;
+    let entries = fs::read_dir(&store)
+        .map_err(|error| format!("list session store: {}", crate::errors::stable_io(&error)))?;
+    let mut sessions = Vec::new();
+    for entry in entries.flatten() {
+        let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if let Some((modified, cp)) = read(&id) {
+            sessions.push((id, modified, cp));
+        }
+    }
+    sessions.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(sessions)
+}
+
+/// read returns one valid private checkpoint and when it was saved, without locking or
+/// changing it; a missing, corrupt or unsafe one is None.
+pub(crate) fn read(id: &str) -> Option<(SystemTime, Value)> {
+    let dir = directory(id).ok()?;
+    private(&dir, false).ok()?;
+    // Nonblocking also keeps an invalid FIFO from stalling startup.
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(dir.join("checkpoint.json"))
+        .ok()?;
+    let info = file.metadata().ok()?;
+    if !info.is_file() || info.permissions().mode() & 0o777 != 0o600 {
+        return None;
+    }
+    let modified = info.modified().ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some((modified, parse(id, &bytes).ok()?))
+}
+
 /// first_message prefers a durable preview, falling back to the first retained user input.
-pub(super) fn first_message(state: &Value, history: &[Value]) -> String {
+pub(crate) fn first_message(state: &Value, history: &[Value]) -> String {
     let text = state["first_message"]
         .as_str()
         .filter(|text| !text.is_empty())
